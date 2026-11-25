@@ -421,10 +421,7 @@ if(WIN32 AND NOT NEXUS_WINDOW)
     # src/platform_win.cpp, is still compiled (never linked) so CI holds it to the same warnings.
     add_library(nexus_platform_win_check OBJECT src/platform_win.cpp)
     target_compile_options(nexus_platform_win_check PRIVATE ${NEXUS_WARNINGS})
-    # Prax's headers by path, not by linking prax::app: any link to it (even $<COMPILE_ONLY:...>) makes the Visual
-    # Studio generator build pr_app, which does not compile at the pin.
-    target_include_directories(nexus_platform_win_check PRIVATE ${prax_SOURCE_DIR}/lib/core/include
-        ${prax_SOURCE_DIR}/lib/app/include)
+    target_link_libraries(nexus_platform_win_check PRIVATE prax::surface)
 endif()
 
 enable_testing()
