@@ -1,6 +1,6 @@
 # ![nexus](docs/nexus-banner.png)
 
-**Talk to your AIs in one keyboard-driven window on your Mac.** Press ⌘ and the backtick key from any app. Your conversations are right there.
+**Talk to your AIs in one keyboard-driven window on your Mac.** Press ⌘ and the backtick key from any app. Your AIs are right there.
 
 ## What you get
 
