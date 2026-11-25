@@ -1,8 +1,9 @@
 // nexus on iOS and iPadOS: the window as a UIKit app (Prax's UIKit backend through its Studio app), filling its scene
 // on iPhone and iPad. A second client of nexus-server, a thin portal as the desktop window is (AGENTS.md): it sends the
 // person's input and shows the server's state. There is no overlay and no hotkey (an app's window is the system's to
-// show), and what an iOS app cannot run is left out of this build (platform.h NEXUS_PROCESSES): no terminal tabs and no
-// attachment upload. The sprint tab shows the board at the address the server sends (board.h offer).
+// show), and what an iOS app cannot run is left out of this build (platform.h NEXUS_PROCESSES): no shell of its own (a
+// terminal tab shows one that runs on the server, remote_terminals.h) and no attachment upload. The sprint tab shows
+// the board at the address the server sends (board.h offer).
 //
 // It reaches nexus-server as the desktop window does, over mosh's transport after `nexus-server new` over ssh
 // (link/client.h), with the ssh inside the app (link/inapp_ssh.h): the server is `--server user@host`, the client
@@ -241,8 +242,8 @@ bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
     return a.host.event(*e);
 }
 
-// The window above the on-screen keyboard: while it shows, the window is laid out in the part of the viewport it leaves,
-// so that the prompt and the transcript's end stay in sight, as a desktop window shorter by that much would
+// The window above the on-screen keyboard: while it shows, the window is laid out in the part of the viewport it
+// leaves, so that the prompt and the transcript's end stay in sight, as a desktop window shorter by that much would
 // (FrameHost::buildAbove).
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 extent) {
     App& a = appOf(context);

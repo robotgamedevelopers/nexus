@@ -2,9 +2,10 @@
 // input, as the iOS window draws it: the window's frame code (frame_host.h) over a kit with no window, the server's
 // state through a fake link, and the on-screen keyboard as iOS gives it, shown while the last frame edited text and
 // laid out above (FrameHost::buildAbove, main_ios.cpp). Nothing may move while nothing happens: the focus stays where
-// it is, the keyboard stays up, the tab's title keeps its place, and no frame asks for another. A focus taken back every
-// frame (the screen's, then the window's) brought the keyboard up and down each frame on an iPad, and the title with
-// it.
+// it is, the keyboard stays up, the tab's title keeps its place, and no frame asks for another. The window built
+// straight into its root while no keyboard showed, and above the keyboard while one did, so its nodes were new ones
+// each time the keyboard came or went: the terminal lost the focus, took it back, and the keyboard went up and down
+// every frame (FrameHost::buildAbove).
 //
 // No clock (the frames' time is made up), no process, no socket, no network: the screen is painted from the state.
 

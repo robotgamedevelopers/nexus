@@ -1005,7 +1005,11 @@ namespace nexus {
 
 namespace {
 
-// The part of the window above the on-screen keyboard.
+// The part of the window above the on-screen keyboard: all of it while no keyboard shows. The window is built in it in
+// every frame, keyboard or none, so that its nodes keep their place in the tree as the keyboard comes and goes. Built
+// straight into the root while no keyboard showed, the window's nodes were new ones in the frame the keyboard came up:
+// the terminal's screen lost the focus, so the keyboard went down, the nodes moved back, the screen took the focus
+// again and the keyboard came up, every frame (tests/window/test_terminal_frames.cpp).
 struct AboveKeyboard {
     static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
     float width;
