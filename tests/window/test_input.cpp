@@ -3278,8 +3278,12 @@ int main(int argc, char** argv) {
         CHECK(h.active().draft.empty() && !h.view.accountPicker);
         CHECK(h.view.accounts.dialog == AccountMenuView::Dialog::Login);
         CHECK(link.sent.size() == sent);
+        const int hidesBeforeEscape = h.hides;
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
         h.frame();
+        // Escape is the dialog's: it closes, the overlay stays, and the prompt has the focus again.
+        CHECK(h.view.accounts.dialog == AccountMenuView::Dialog::None && h.hides == hidesBeforeEscape);
+        CHECK(prUiFocus(h.ui) == h.view.prompt);
         h.type("/help");
         h.enter();
         h.frame();

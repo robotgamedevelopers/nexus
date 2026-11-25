@@ -2208,8 +2208,10 @@ struct Builder {
             }
         }
         view.prompt = edit;
-        // The focus is the secret dialog's while it shows (secretDialog).
-        if (!pickerInput && asking == nullptr && prUiFocus(ui) != edit && !view.promptDismissed)
+        // The focus is the secret dialog's while it shows (secretDialog), and the account dialog's while it shows
+        // (accountDialog): Prax's modal takes focus into its content, and its Escape closes it.
+        if (!pickerInput && asking == nullptr && view.accounts.dialog == AccountMenuView::Dialog::None &&
+                prUiFocus(ui) != edit && !view.promptDismissed)
             prUiSetFocus(ui, edit);
         PrStringView changed{};
         const bool coming = view.cutComing;
@@ -2559,8 +2561,10 @@ struct Builder {
         // only while no tab is being dragged: a claim comes before Prax's own Escape, which cancels a drag (ui.cpp
         // routeKey), so during a drag Escape cancels it and hides nothing. While composing it is the input method's.
         // While the secret dialog shows, Escape is the dialog's (it cancels the request) and hides nothing.
+        // So is it the account dialog's while that shows: Escape closes it, changes nothing and hides nothing.
         asking = view.secrets != nullptr ? view.secrets->showing() : nullptr;
-        if (hides && !pickerInput && asking == nullptr && prUiDragging(ui) == nullptr &&
+        if (hides && !pickerInput && asking == nullptr && view.accounts.dialog == AccountMenuView::Dialog::None &&
+                prUiDragging(ui) == nullptr &&
                 prUiKeyPressed(ui, keys, PrAppKey_Escape, 0) && !composing && view.hide)
             view.hide();
         std::erase_if(view.sentFlashes, [&](const View::SentFlash& flash) {
