@@ -122,6 +122,39 @@ void aMisheardNameCalledWithAComma() {
     CHECK(to("Zhe, hello").route == Route::Current);
 }
 
+void aNameHeardAsOtherWords() {
+    // The recognizer does not know "Zhi Ya Wen" and writes the words it hears; the sound of the joined words names her.
+    CHECK(named(to("She Yawen, how is the build?"), "zhi", "how is the build?"));
+    const std::vector<SpokenAI> ais = {{"rowan", {}}, {"emma", {}}, {"stella", {}}, {"johnny-grok", {}},
+        {"aurora", {}}, {"alex", {}}, {"zhi-ya-wen", {}}};
+    CHECK(named(to("She Yawen, how is the build?", ais), "zhi-ya-wen", "how is the build?"));
+    CHECK(named(to("she ya wen how is the build", ais), "zhi-ya-wen", "how is the build"));
+    CHECK(named(to("Hey Jiyawen, status", ais), "zhi-ya-wen", "status"));
+    CHECK(named(to("How is the build, Shi Yawen?", ais), "zhi-ya-wen", "How is the build?"));
+    // Ordinary speech and other names do not sound like her.
+    CHECK(to("Sheila, how is the build?", ais).route == Route::Current);
+    CHECK(to("show me the wins", ais).route == Route::Current);
+    CHECK(to("She, hello", ais).route == Route::Current);
+    CHECK(to("She went home", ais).route == Route::Current);
+    CHECK(to("See you at ten", ais).route == Route::Current);
+    // The names spelled as they are keep their AIs.
+    CHECK(named(to("Rowan, ship it", ais), "rowan", "ship it"));
+    CHECK(named(to("Emma, status", ais), "emma", "status"));
+    CHECK(named(to("Stella, hi", ais), "stella", "hi"));
+    CHECK(named(to("Johnny, run", ais), "johnny-grok", "run"));
+    CHECK(named(to("Aurora, draw", ais), "aurora", "draw"));
+    CHECK(named(to("Alex, hi", ais), "alex", "hi"));
+    CHECK(named(to("Zhi, hi", ais), "zhi-ya-wen", "hi"));
+    // A name of one word is never matched by sound alone ("Sow" is not "Zhou").
+    CHECK(to("Sow, hi", {{"zhou", {}}, {"rowan", {}}}).route == Route::Current);
+    // Two names that sound alike: nothing is guessed, and each spelled name still wins.
+    const std::vector<SpokenAI> alike = {{"zhi-ya-wen", {}}, {"shi-ya-wen", {}}};
+    const auto r = to("She Yawen, hi", alike);
+    CHECK(r.route == Route::Ambiguous);
+    CHECK((r.candidates == std::vector<std::string>{"zhi-ya-wen", "shi-ya-wen"}));
+    CHECK(named(to("Shi Ya Wen, hi", alike), "shi-ya-wen", "hi"));
+}
+
 void punctuationFromTheRecognizer() {
     CHECK(named(to("Emma — what's up?"), "emma", "what's up?"));
     CHECK(named(to("“Emma”, what's up?"), "emma", "what's up?"));
@@ -156,6 +189,7 @@ int main() {
     twoAIsSharingAFirstWord();
     aSharedAliasIsAmbiguous();
     aMisheardNameCalledWithAComma();
+    aNameHeardAsOtherWords();
     punctuationFromTheRecognizer();
     noAIsRoutesNothing();
     foldingAndForms();
