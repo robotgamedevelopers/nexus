@@ -1988,7 +1988,7 @@ struct Builder {
         }
     }
 
-    PrColor promptPulse(bool visible) {
+    PrColor promptPulse(bool visible, double amplitude) {
         const bool animate = !prUiUserPreferences(ui).reducedMotion && (!view.savingPower || view.time - view.lastInput < 2);
         view.energyAnimating |= visible && animate;
         const double phase = std::fmod(view.time, look.prompt.caretSeconds);
@@ -2001,7 +2001,7 @@ struct Builder {
         const double wave = !animate ? 1 : look.prompt.caretCurve.empty() ?
             (1 - std::cos(3.141592653589793 * ramp)) / 2 : sampleMotion(look.prompt.caretCurve, phase / look.prompt.caretSeconds);
         const double peak = std::clamp(prUiDisplay(ui).headroom, 1.f, look.prompt.caretPeak);
-        const double gain = std::round(64 * (0.48 + (peak - 0.48) * wave)) / 64;
+        const double gain = std::round(64 * (0.48 + (peak - 0.48) * (0.5 + amplitude * (wave - 0.5)))) / 64;
         return linearGain(rgb(look.prompt.caretInk), gain);
     }
 
@@ -2044,7 +2044,7 @@ struct Builder {
         const float alignedTop = std::clamp(top + look.prompt.caretOffsetY * k(), field.top, field.bottom - height);
         box.inset[PrRectSide_Top] = px(alignedTop - origin.top - 1);
         auto decoration = prLayoutDecorationStyleDefault();
-        decoration.background = prColor16FromColor(promptPulse(true));
+        decoration.background = prColor16FromColor(promptPulse(true, 1.0));
         radius(decoration, look.prompt.caretRadius * k());
         auto hit = prLayoutColorStyleDefault();
         hit.pointerEvents = PrLayoutPointerEvents_None;
@@ -2085,7 +2085,7 @@ struct Builder {
         const auto savedHighlight = highlight;
         const bool focused = !pickerInput && !asking && view.prompt != kPrLayoutNodeNone && prUiFocus(ui) == view.prompt;
         const auto selected = focused ? prUiTextEditSelection(ui, view.prompt) : PrUiTextSelection{};
-        highlight = faded(promptPulse(selected.anchor != selected.caret), 0.42f);
+        highlight = faded(promptPulse(selected.anchor != selected.caret, 0.25), 0.42f);
         PrLayoutNode edit = prKitTextArea(kit, box, area, PrKitFieldStyle{});
         highlight = savedHighlight;
         PrKitPlace fill{};
