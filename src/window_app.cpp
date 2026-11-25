@@ -422,8 +422,7 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
                 !readPoints(doc, drop, {"hover_opacity", 13}, menu.hoverOpacity, 0, 1) ||
                 !readColor(doc, drop, {"fill", 4}, menu.fill) || !readColor(doc, drop, {"ink", 3}, menu.ink) ||
                 !readColor(doc, drop, {"hover_fill", 10}, menu.hoverFill) ||
-                !readColor(doc, drop, {"mark_ink", 8}, menu.markInk) ||
-                !readColor(doc, drop, {"divider", 7}, menu.divider)) return false;
+                !readColor(doc, drop, {"mark_ink", 8}, menu.markInk)) return false;
         const auto mark = prJsonMember(doc, drop, {"mark", 4});
         if (mark != kPrJsonMissing) {
             if (prJsonKind(doc, mark) != PrJsonKind_String || stringAt(doc, mark).size() > 16) return false;
