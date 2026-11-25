@@ -64,9 +64,9 @@ bool readPng(const char* path, std::vector<uint8_t>* pixels, PrUVec2* extent, st
     return ok;
 }
 
-// The shot against the golden image: the same size, and at most 1 pixel in 500 differing by more than 24 in a channel
+// The shot against the golden image: the same size, and at most 1 pixel in 2000 differing by more than 24 in a channel
 // (antialiasing and text rasterization may move a little between simulator runtimes; a changed layout, a missing tab
-// or a different state moves far more). Prints what it found.
+// or a different state moves far more: a missing line of small text on an iPad is about 1 in 700). Prints what it found.
 bool matches(const char* shot, const char* golden) {
     std::vector<uint8_t> a, b;
     PrUVec2 ea{}, eb{};
@@ -89,7 +89,7 @@ bool matches(const char* shot, const char* golden) {
         }
     }
     const std::size_t total = a.size() / 4;
-    const std::size_t allowed = total / 500;
+    const std::size_t allowed = total / 2000;
     std::printf("nexus_ios_shot: %zu of %zu pixels differ from %s (at most %zu may)\n", differing, total, golden,
         allowed);
     return differing <= allowed;

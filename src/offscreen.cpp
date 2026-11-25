@@ -74,8 +74,10 @@ OffscreenFrame::OffscreenFrame(View& view, PrFontSet* fonts, PrVec2 extent, floa
     shaper_ = prTextShaperCreate(PrTextShaperBackend_Default);
     PrLayoutTreeDesc treeDesc{.shaper = shaper_, .targetPixelRatio = ratio};
     tree_ = prLayoutTreeCreate(&treeDesc);
-    // The window paints its fill once over the transparent canvas, as in the live overlay.
-    PrKitTheme theme = windowTheme(fonts, seeThrough);
+    // The window paints its fill once over the transparent canvas, as in the live overlay; at the text scale the view
+    // asks for, as the live window's first frame takes it (view.h beginWindowFrame).
+    if (view_.look != nullptr) view_.look->textSteps = view_.askedTextSteps;
+    PrKitTheme theme = windowTheme(fonts, seeThrough, view_.askedTextSteps);
     ui_ = prUiCreate(tree_);
     kit_ = prKitCreate(ui_, &theme);
     display_ = prAppDisplayDefault();
