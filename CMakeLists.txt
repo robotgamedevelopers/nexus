@@ -548,7 +548,7 @@ if(TARGET nexus AND NOT NEXUS_TEST_AUTHENTICATOR)
         COMMAND ${CMAKE_COMMAND} -DBINARY=${CMAKE_CURRENT_SOURCE_DIR}/cmake/no_test_authenticator.cmake
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/no_test_authenticator.cmake)
     set_tests_properties(nexus_no_test_authenticator_detects PROPERTIES LABELS unit TIMEOUT 30
-        PASS_REGULAR_EXPRESSION "holds the lock's stand-in authenticator")
+        PASS_REGULAR_EXPRESSION "no_test_authenticator:FOUND")
 endif()
 if(TARGET nexus_policy)
     add_executable(policy_reload_test tests/policy/reload.cpp)

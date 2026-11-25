@@ -8,7 +8,8 @@ if(NOT DEFINED BINARY OR NOT EXISTS "${BINARY}")
 endif()
 file(STRINGS "${BINARY}" found REGEX "TEST BUILD's authenticator|lock-test-answer")
 if(found)
-    message(FATAL_ERROR "no_test_authenticator: ${BINARY} holds the lock's stand-in authenticator, which unlocks with "
-        "no real check; a build that ships must have NEXUS_TEST_AUTHENTICATOR OFF")
+    # The first word is one token, so that CMake's wrapping of the message never splits what the test looks for.
+    message(FATAL_ERROR "no_test_authenticator:FOUND ${BINARY} holds the lock's stand-in authenticator, which unlocks "
+        "with no real check; a build that ships must have NEXUS_TEST_AUTHENTICATOR OFF")
 endif()
 message(STATUS "no_test_authenticator: ${BINARY} has none of the stand-in")
