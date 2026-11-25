@@ -1,6 +1,6 @@
 # CI for nexus: the build with its unit and functional tests, the model under the sanitizers, the Claude driver
-# (drivers/claude) and the tab label's trace checks, as jobs in parallel on the fleet's macOS runners (never
-# GitHub-hosted); and the build without the window, its unit and functional tests and the sanitizers' programs, the
+# (drivers/claude) and the tab label's trace checks, on prebuilt macOS runners for the native build and standard GitHub runners for driver checks;
+# and the build without the window, its unit and functional tests and the sanitizers' programs, the
 # TLA+ models with their trace checks (in parallel shards), and the code generated from
 # schema/Nexus.schema regenerated at schema's pin, on the fleet's Linux runners; the functional tests inside WSL2 on
 # captain (wsl2-functional), where nexus runs everything but the overlay on Windows; the Windows build with its unit
@@ -391,7 +391,7 @@ jobs:
   # Claude executable the tests never run. The live test (npm run test:live) spends a subscription and never runs here.
   server-policy:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Linux, X64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -410,7 +410,7 @@ jobs:
 
   claude-driver:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, macOS, ARM64]
+    runs-on: macos-26
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -456,7 +456,7 @@ jobs:
       fail-fast: false
       matrix:
         run: [whole-wall, without-the-hook, "limited,limited-nohook"]
-    runs-on: [self-hosted, fleet, macOS, ARM64]
+    runs-on: macos-26
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -510,8 +510,7 @@ jobs:
         run: [whole-wall, without-the-hook, "limited,limited-nohook"]
         include:
           - where: ubuntu
-            # The native Ubuntu pool has the Android SDK. TLC alone also selects WSL2.
-            labels: [self-hosted, fleet, Linux, X64, tlc, android]
+            labels: ubuntu-24.04
           - where: wsl2
             labels: [self-hosted, fleet, Linux, X64, wsl2]
     runs-on: ${{ matrix.labels }}
