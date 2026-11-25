@@ -100,6 +100,11 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.sha || github.sha }}
+      # Go for the shim's build (the hosted images do not all carry it), at the pinned version, so Go fetches no other.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.27.4'
+          cache: false
       # The pins' key directory, from the cache cache-warm saved on main (a hosted runner starts empty).
       - name: Restore the cache for these pins
         id: restore
@@ -222,6 +227,11 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.sha || github.sha }}
+      # Go for the shim's build (the hosted images do not all carry it), at the pinned version, so Go fetches no other.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.27.4'
+          cache: false
       # The pins' key directory, from the cache cache-warm saved on main (a hosted runner starts empty).
       - name: Restore the cache for these pins
         id: restore
@@ -326,6 +336,11 @@ jobs:
           ref: ${{ inputs.sha || github.sha }}
       # Refresh files already present in a prepared checkout with their pinned LF attributes.
       - run: git checkout-index --force -- src/tailscale/pins.cmake src/tailscale/go.mod src/tailscale/go.sum
+      # Go for the shim's build (the hosted images do not all carry it), at the pinned version, so Go fetches no other.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.27.4'
+          cache: false
       # The pins' key directory, from the cache cache-warm saved on main (a hosted runner starts empty).
       - name: Restore the cache for these pins
         id: restore
