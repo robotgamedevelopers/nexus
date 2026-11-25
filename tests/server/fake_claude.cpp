@@ -9,7 +9,7 @@
 // - It listens on loopback (on <port> with one, else any port), on 127.0.0.1 alone, and makes up a sign-in URL whose
 //   redirect_uri is http://localhost:<that port>/callback; with mode `forward` the redirect names another, free port,
 //   as on another machine, and the test's replay port is <port>; `forward6` is the same listening on [::1] alone.
-// - It hands the URL to $BROWSER (modes `helper`, `account`, `forward`, `forward6`, `deny`, `apikey`, `quick`, `group`), or prints
+// - It hands the URL to $BROWSER (modes `helper`, `forward`, `forward6`, `deny`, `apikey`, `quick`, `group`), or prints
 //   it in its terminal (`print`), or does both (`both`), the way the real program falls back; `silent` gives it to
 //   nobody.
 // - With mode `quick` it exits the moment its token is printed; with `group` it first starts a process of its own, in
@@ -17,8 +17,6 @@
 // - It takes the one GET on /callback: with its state and code `fakeCode...`, it prints a made-up token (an API key's
 //   shape with `apikey`), between terminal escapes, and exits 0; with `error=...` it prints that sign-in was declined
 //   and exits 1; any other request (a wrong path or state) ends it: exit 5, as a wrong request would end a real login.
-// - With mode `account` the token it prints is that account's own: the account's name (CLAUDE_CONFIG_DIR is
-//   <account>/.signin) written over the token's first letters after its prefix.
 // - With mode `late` it prints its token only once it is told to end (SIGTERM), as a program whose flow's deadline
 //   passed while the browser was sent back.
 // - With no callback in 60 s it exits 4, so that no test hangs.
@@ -157,8 +155,10 @@ void openInBrowser(const std::string& url) {
 
 int main(int argc, char** argv) {
     const char* config = std::getenv("CLAUDE_CONFIG_DIR");
-    const bool authLogin = argc == 6 && std::strcmp(argv[1], "auth") == 0 && std::strcmp(argv[2], "login") == 0 &&
-        std::strcmp(argv[3], "--claudeai") == 0 && std::strcmp(argv[4], "--email") == 0 && config;
+    // `auth login --claudeai [--email <hint>]`: the hint is optional, as for an account with no email set.
+    const bool authLogin = (argc == 4 || (argc == 6 && std::strcmp(argv[4], "--email") == 0)) &&
+        std::strcmp(argv[1], "auth") == 0 && std::strcmp(argv[2], "login") == 0 &&
+        std::strcmp(argv[3], "--claudeai") == 0 && config;
     if (argc == 4 && std::strcmp(argv[1], "auth") == 0 && std::strcmp(argv[2], "status") == 0 &&
             std::strcmp(argv[3], "--json") == 0 && config) {
         std::ifstream identity(std::string(config) + "/test-browser-email");
@@ -261,12 +261,19 @@ int main(int argc, char** argv) {
     }
     if (authLogin) {
         // Simulate the identity chosen in the browser, independently of the --email hint used to open it.
-        const char* email = first.find(std::string(kCode) + "Other") != std::string::npos
+        // A code of kCode + "As" + <name> (up to the next & or space) signs in as <name>@example.test.
+        std::string email = first.find(std::string(kCode) + "Other") != std::string::npos
                           ? "other@example.test" : "work@example.test";
+        if (const std::size_t as = first.find(std::string(kCode) + "As"); as != std::string::npos) {
+            const std::size_t from = as + std::strlen(kCode) + 2;
+            email = first.substr(from, first.find_first_of("& ", from) - from) + "@example.test";
+        }
         std::ofstream identity(std::string(config) + "/test-browser-email");
         identity << email;
         std::ofstream grant(std::string(config) + "/.credentials.json");
-        grant << R"({"claudeAiOauth":{"accessToken":"fixture-access","refreshToken":"fixture-refresh",)"
+        // The grant is the identity's own: its access token names the address's local part.
+        grant << R"({"claudeAiOauth":{"accessToken":"fixture-access-)" << email.substr(0, email.find('@'))
+              << R"(","refreshToken":"fixture-refresh",)"
                  R"("expiresAt":4102444800000,"scopes":["user:profile","user:inference"]}})";
         return identity.good() && grant.good() ? 0 : 3;
     }
@@ -277,20 +284,9 @@ int main(int argc, char** argv) {
         int sig = 0;
         sigwait(&term, &sig);
     }
-    // Mode `account`: a token of the account being signed in (its name, from CLAUDE_CONFIG_DIR <account>/.signin,
-    // written over the token's first letters after its prefix), so that a test can tell whose login is whose.
-    std::string token = mode == "apikey" ? kApiKey : kToken;
-    if (mode == "account") {
-        const std::string dir = config;
-        const std::string parent = dir.substr(0, dir.rfind('/'));
-        const std::string account = parent.substr(parent.rfind('/') + 1);
-        const std::size_t at = std::strlen("sk-ant-oat01-");
-        if (account.empty() || account.size() > 8) return 3;
-        token.replace(at, account.size(), account);
-    }
     std::printf("\x1b[32m\xe2\x9c\x93 Long-lived authentication token created successfully!\x1b[0m\r\n\r\n"
                 "Your OAuth token (valid for 1 year):\r\n\r\n\x1b[33m%s\x1b[0m\r\n\r\n"
-                "Store this token securely.\r\n", token.c_str());
+                "Store this token securely.\r\n", mode == "apikey" ? kApiKey : kToken);
     std::fflush(stdout);
     if (mode == "quick") {
         return 0;       // at once: what it printed is still in the terminal when its exit is seen
