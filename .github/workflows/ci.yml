@@ -57,6 +57,11 @@ jobs:
     # The build compiles Metal shaders (Prax) and needs Xcode's Metal toolchain. Today only the runners labelled
     # `services` have Xcode; drop the extra label when every macOS runner has it.
     runs-on: [self-hosted, fleet, macOS, ARM64, services]
+    name: ${{ matrix.check }}
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [build-and-unit, frame-budget]
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -100,12 +105,18 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "${launcher[@]}" \
             "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-cache_path_lto,$NEXUS_CACHES/lto" \
             "-DNEXUS_E2E_TAILNET=$tailnet"
+      - name: Build the frame-budget test
+        if: matrix.check == 'frame-budget'
+        run: cmake --build build --parallel "$JOBS" --target nexus_frame_tests
       - name: Build
+        if: matrix.check == 'build-and-unit'
         run: cmake --build build --parallel "$JOBS"
       - name: Unit tests
+        if: matrix.check == 'build-and-unit'
         run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
       # Record real FrameHost callbacks and outbound SetAccount actions with the frame target already built here.
       - name: Account picker model traces
+        if: matrix.check == 'build-and-unit'
         shell: bash
         run: |
           set -euo pipefail
@@ -119,8 +130,10 @@ jobs:
       # The frame budget (docs/frame-budget.md) times the frame thread on the real clock, so it runs after the others,
       # alone, and with every nova-reserve slot on this host when it can have them within 20 s; else shared.
       - name: Functional tests
+        if: matrix.check == 'build-and-unit'
         run: ctest --test-dir build -L functional -E '^window_frame_budget$' -j "$TEST_JOBS" --output-on-failure
       - name: Frame budget, alone
+        if: matrix.check == 'frame-budget'
         shell: bash
         run: |
           set -uo pipefail
