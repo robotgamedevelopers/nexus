@@ -8,7 +8,7 @@
 //   server.log        the log of a server `new` started
 //   signin.sock       in-app sign-in's helper socket, mode 0600 (server/signin_runner.h)
 //   signin-bin/       the browser-helper programs in-app sign-in puts first on `claude setup-token`'s PATH
-//   nexus-config/     the accounts and ais: accounts.json and ais.json, a git repository of their own
+//   nexus-config/     the accounts and AIs: accounts.json and ais.json, a git repository of their own
 //                     (server/config_repo.h, docs/accounts.md); no credential is ever in it
 //   accounts/<name>/  one harness login per directory: the Claude driver's --account (drivers/claude), always
 //                     under $HOME/.nexus/server, whatever --dir says; secrets only, which no AI's tool reaches

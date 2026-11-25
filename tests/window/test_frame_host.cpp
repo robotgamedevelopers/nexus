@@ -76,7 +76,7 @@ void removedTabIsNoChoice() {
     CHECK(w.model.select_tab(w.tabOf("bo")));
     w.round();
     CHECK(w.chosen == 2);
-    // bo goes from the server's ais: ada shows again, by the strip, not by the person.
+    // bo goes from the server's AIs: ada shows again, by the strip, not by the person.
     w.link.ais({"ada"});
     w.host.pollLink();
     CHECK(w.model.tab(w.model.active()).name == "ada");
