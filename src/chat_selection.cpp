@@ -48,12 +48,14 @@ void ChatSelection::select(PrLayoutTextPosition end) {
         std::swap(first, last); std::swap(start, stop);
     }
     ranges_.clear(); text_.clear();
+    PrLayoutNode previous = kPrLayoutNodeNone;
     for (auto it = first; it <= last; ++it) {
         const auto s = prLayoutNodeText(tree_, it->node);
         const uint32_t a = it == first ? std::min<size_t>(start,s.size) : 0;
         const uint32_t b = it == last ? std::min<size_t>(stop,s.size) : s.size;
-        if (it != first && it->paragraph != (it-1)->paragraph) text_ += "\n\n";
         if (b > a) {
+            if (previous && previous != it->paragraph) text_ += "\n\n";
+            previous = it->paragraph;
             ranges_.push_back({it->node,a,b,std::string(s.data,s.size)});
             text_.append(s.data+a,b-a);
         }
@@ -113,12 +115,33 @@ bool ChatSelection::event(const PrAppEvent& e, PrLayoutNode viewport, const std:
     float nearestColumn = std::numeric_limits<float>::infinity();
     PrLayoutTextPosition hit{};
     for (auto p : paragraphs_) {
-        const auto r = prLayoutRectToPx(prLayoutNodeBounds(tree_, p, PrLayoutCoordinates_Viewport));
+        auto r = prLayoutRectToPx(prLayoutNodeBounds(tree_, p, PrLayoutCoordinates_Viewport));
+        PrLayoutTextPosition first{}, last{};
+        textNodes(tree_, p, [&](PrLayoutNode leaf) {
+            const auto length = prLayoutNodeText(tree_, leaf).size;
+            if (!length) return;
+            const auto bounds = prLayoutRectToPx(prLayoutNodeBounds(tree_, leaf, PrLayoutCoordinates_Viewport));
+            if (!first.node) {
+                first = {leaf, 0};
+                r.top = bounds.top;
+                r.bottom = bounds.bottom;
+            } else {
+                r.top = std::min(r.top, bounds.top);
+                r.bottom = std::max(r.bottom, bounds.bottom);
+            }
+            last = {leaf, static_cast<uint32_t>(length)};
+        });
+        if (!first.node) continue;
         const float dx = std::max({r.left-pos.x, pos.x-r.right, 0.0f});
         const float dy = std::max({r.top-pos.y, pos.y-r.bottom, 0.0f});
         if (dy > nearestLine || (dy == nearestLine && dx >= nearestColumn)) continue;
         PrLayoutTextPosition candidate{};
-        if (prLayoutTextPositionFromPoint(tree_, p, {prLayoutUnitFromPx(pos.x),prLayoutUnitFromPx(pos.y)}, &candidate)) {
+        if (pos.y < r.top || pos.y >= r.bottom) {
+            candidate = pos.y < r.top ? first : last;
+        } else {
+            prLayoutTextPositionFromPoint(tree_, p, {prLayoutUnitFromPx(pos.x),prLayoutUnitFromPx(pos.y)}, &candidate);
+        }
+        if (candidate.node) {
             nearestLine = dy; nearestColumn = dx; hit = candidate;
         }
     }

@@ -1158,6 +1158,19 @@ void copyMarkdownConversation() {
     CHECK(prLayoutNodeHighlights(h.tree, hello, nullptr, 0) == 0);
     CHECK(prLayoutNodeHighlights(h.tree, world, nullptr, 0) == 0);
 
+    // Both endpoints are in vertical whitespace over the middle of the same word.
+    const float mid = (end.left + end.right) / 2;
+    const PrVec2 above{mid, end.top - 3}, below{mid, end.bottom + 3};
+    CHECK(event(pointerEvent(PrAppEventKind_PointerDown, above)));
+    CHECK(event(pointerEvent(PrAppEventKind_PointerMove, below)));
+    CHECK(event(pointerEvent(PrAppEventKind_PointerUp, below)));
+    CHECK(event(keyEvent(PrAppEventKind_KeyDown, 'C', PrAppKeyCode_KeyC, style::kCommand)));
+    CHECK(copied == "world");
+    CHECK(event(pointerEvent(PrAppEventKind_PointerDown, {mid, (end.top + end.bottom) / 2})));
+    CHECK(event(pointerEvent(PrAppEventKind_PointerUp, below)));
+    CHECK(event(keyEvent(PrAppEventKind_KeyDown, 'C', PrAppKeyCode_KeyC, style::kCommand)));
+    CHECK(copied.size() < 5 && !copied.empty() && std::string("world").ends_with(copied));
+
     // Start in the right margin beside the final word, then drag up across both speakers.
     const auto port = h.bounds(h.view.transcript);
     const PrVec2 blank{port.right - 8, (end.top + end.bottom) / 2};
