@@ -182,3 +182,16 @@ Mechanisms taken from pi (earendil-works/pi, MIT), bottom up, each secured befor
 [Source data](roadmap.sexp)
 
 <!-- nova-work:apple-watch:end -->
+
+## Client lock
+
+<!-- nova-work:client-lock:start -->
+
+| feature | done |
+|---|:---:|
+| Bind the lock trace check to the view's real lock screen and input gate: the walk drives WindowLock and FrameHost::event, not ClientLock alone. | ❌ |
+| complete | 0% |
+
+[Source data](roadmap.sexp)
+
+<!-- nova-work:client-lock:end -->

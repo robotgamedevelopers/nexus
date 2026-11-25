@@ -2,9 +2,9 @@
 ; The layers of nexus, bottom up. Each is secured before the next starts.
 (:schema 1
  :root "goal"
- :page (:roadmaps ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi" "apple-watch"))
+ :page (:roadmaps ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi" "apple-watch" "client-lock"))
  :nodes
- ((:id "goal" :type :work-set :children ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi" "apple-watch"))
+ ((:id "goal" :type :work-set :children ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi" "apple-watch" "client-lock"))
   (:id "takeover" :type :roadmap :title "Takeover: a new build replaces the running server, rebuilt bottom up"
    :rows (
      ("takeover-store-lock" "1. Store lock: at most one process ever has the store open for writing, enforced by the operating system (an exclusive flock on the store's directory itself, taken before the store is read, held for the life of the process, released by the OS however it ends; the store reached only through that directory's descriptor after); the server starts in the order probe, lock and replay, socket, drivers restored, waiting a bounded time for a writer that holds the lock without answering; only a start refused by a live server exits 0; readers take the lock shared, change nothing and give up past a limit; the lock checked where it lives, and network filesystems refused")
@@ -212,6 +212,14 @@
      ("watch-mac-xcode" "done" "t-watch-mac-xcode")
      ("watch-real-device" "done" "t-watch-real-device")
      ))
+  (:id "client-lock" :type :roadmap :title "Client lock"
+   :rows (
+     ("lock-trace-real-view" "Bind the lock trace check to the view's real lock screen and input gate: the walk drives WindowLock and FrameHost::event, not ClientLock alone.")
+     )
+   :columns (("done" "done"))
+   :cells (
+     ("lock-trace-real-view" "done" "t-lock-trace-real-view")
+     ))
   (:id "lessons-from-pi" :type :roadmap :title "Lessons from pi, bottom up"
    :rows (
      ("pi-protocol" "1. Driver protocol additions: steer (taken in after the current turn's tool calls, before the next model call) and follow-up (taken in only when the run would otherwise end) as their own kinds beside send; an explicit settled event, since the end of one model run is not done while retries, compaction or queued messages can follow; the full queue sent on each change; each driver says in hello which native features its harness has, so a harness's own features keep working and the server offers only what the driver can do. TLA+ model and fake driver first")
@@ -363,4 +371,5 @@
   (:id "t-watch-model-extend" :type :task :title "Extend Relay.tla and relay_walk to the lock, events and replies, audio, a watch switch and an unknown AI; three review plants escaped (relay.cpp:452, 360, 272)" :state :todo)
   (:id "t-watch-audio" :type :task :title "Speak recorder failures aloud, and validate the audio format; the model tests are too slow under load" :state :todo)
   (:id "t-watch-mac-xcode" :type :task :title "A fleet Mac with Xcode (mini-m5) for the nightly speech test" :state :todo)
-  (:id "t-watch-real-device" :type :task :title "Run on a real paired watch" :state :todo)))
+  (:id "t-watch-real-device" :type :task :title "Run on a real paired watch" :state :todo)
+  (:id "t-lock-trace-real-view" :type :task :title "Bind the lock trace check to the view's real lock screen and input gate: the walk drives WindowLock and FrameHost::event, not ClientLock alone." :state :todo)))
