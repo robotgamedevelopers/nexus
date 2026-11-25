@@ -902,8 +902,58 @@ bool FrameHost::stageFile(std::string name, std::string bytes) {
     return true;
 }
 
+bool isInputEvent(const PrAppEvent& e) {
+    switch (e.kind) {
+    case PrAppEventKind_PointerMove:
+    case PrAppEventKind_PointerDown:
+    case PrAppEventKind_PointerUp:
+    case PrAppEventKind_PointerCancel:
+    case PrAppEventKind_PointerEnter:
+    case PrAppEventKind_PointerLeave:
+    case PrAppEventKind_Scroll:
+    case PrAppEventKind_Gesture:
+    case PrAppEventKind_TrackpadTouches:
+    case PrAppEventKind_KeyDown:
+    case PrAppEventKind_KeyUp:
+    case PrAppEventKind_Text:
+    case PrAppEventKind_Paste:
+    case PrAppEventKind_CompositionUpdate:
+    case PrAppEventKind_CompositionEnd:
+    case PrAppEventKind_DragEnter:
+    case PrAppEventKind_DragOver:
+    case PrAppEventKind_DragLeave:
+    case PrAppEventKind_Drop:
+    case PrAppEventKind_DragEnd:
+    case PrAppEventKind_DragPromise:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool lockScreenTakes(const PrAppEvent& e) {
+    switch (e.kind) {
+    case PrAppEventKind_PointerMove:
+    case PrAppEventKind_PointerDown:
+    case PrAppEventKind_PointerUp:
+    case PrAppEventKind_PointerCancel:
+    case PrAppEventKind_PointerEnter:
+    case PrAppEventKind_PointerLeave:
+        return true;
+    case PrAppEventKind_KeyDown:
+    case PrAppEventKind_KeyUp:
+        return (e.modifiers & ~PrAppModifierFlag_CapsLock) == 0 &&
+            (e.keyboard.key == PrAppKey_Enter || e.keyboard.key == PrAppKey_Escape);
+    default:
+        return false;
+    }
+}
+
 bool FrameHost::event(const PrAppEvent& e) {
     HitchScope scope(hitch, Phase::Input);
+    // While locked (View::lockScreen) no input reaches anything but the lock screen: no key reaches a terminal's shell,
+    // the Dashboard's page or the prompt, and nothing is pasted or dropped. What is not input (a resize, a timer) passes.
+    if (view->lockScreen && isInputEvent(e)) return !lockScreenTakes(e);
     // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
     // reaches the sprint tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {

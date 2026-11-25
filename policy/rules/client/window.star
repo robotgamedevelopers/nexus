@@ -107,6 +107,8 @@ def _panels(state):
 def handle(event, state, config):
     if event == "overlay":
         return config.get("overlay_hotkey", {"modifiers": "Command", "code": "Backquote"})
+    if event == "lock":
+        return {"idle_minutes": config.get("lock_idle_minutes", 10)}
     if event == "window":
         shortcuts = _shortcuts()
         count = state.get("tab_count", 0)
