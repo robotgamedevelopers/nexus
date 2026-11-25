@@ -9,8 +9,8 @@
 (* rest of the window) with a seeded random walk of presses, moves, lifts  *)
 (* and cancels, and writes AccountMenuTraceData.tla beside this module:    *)
 (* Trace, one record per step, the event (where it is, and for a move      *)
-(* whether it went sideways past the threshold from the press) and the     *)
-(* gesture after it (its phase, the row lit, the row chosen).              *)
+(* how far it went from the press: still, down or sideways) and the       *)
+(* gesture after it (its phase, the row lit, the row chosen, decided).     *)
 (*                                                                         *)
 (* Each step pins the spec's next state to the record and takes the        *)
 (* action the record names. A step the spec cannot take to that state has  *)
@@ -18,15 +18,15 @@
 (***************************************************************************)
 EXTENDS Naturals, Sequences, AccountMenuTraceData
 
-VARIABLES phase, hovered, chosen, moving, last, l
+VARIABLES phase, hovered, chosen, moving, decided, last, l
 
 M == INSTANCE AccountMenu WITH Rows <- {"r1", "r2"}, None <- "none"
 
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
-traceVars == <<phase, hovered, chosen, moving, last, l>>
+traceVars == <<phase, hovered, chosen, moving, decided, last, l>>
 
-Pin(s) == phase' = s.phase /\ hovered' = s.hovered /\ chosen' = s.chosen
+Pin(s) == phase' = s.phase /\ hovered' = s.hovered /\ chosen' = s.chosen /\ decided' = s.decided
 
 Step(s) ==
     CASE s.op = "press"  -> M!PressAt(s.at)
@@ -54,5 +54,6 @@ ChoiceOnlyByLiftOnARow == M!ChoiceOnlyByLiftOnARow
 LiftCloses == M!LiftCloses
 TabMoveNeverChooses == M!TabMoveNeverChooses
 SidewaysIsTheTabsMove == M!SidewaysIsTheTabsMove
+DecidedStaysTheMenu == M!DecidedStaysTheMenu
 LitOnlyWhileOpen == M!LitOnlyWhileOpen
 =============================================================================

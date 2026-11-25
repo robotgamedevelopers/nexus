@@ -7,6 +7,7 @@ BrokenPress == \E at \in Places :
     /\ hovered' = None
     /\ chosen' = None
     /\ moving' = FALSE
+    /\ decided' = FALSE
     /\ Did("press", at)
 
 BrokenSpec == Init /\ [][NextWith(BrokenPress, Move, Lift)]_vars

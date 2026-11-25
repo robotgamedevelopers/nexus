@@ -4,11 +4,13 @@
 // and the frame host feeds it the pointer (frame_host.cpp routeAccountMenu). models/AccountMenu.tla is the gesture's
 // model; tests/window/account_menu_walk.cpp binds this code to it by its traces.
 //
-// The gesture, Glenn's (2026-11-25): a press on the active AI's tab opens the menu at once, directly under the tab's
+// The gesture, the owner's (2026-11-25): a press on the active AI's tab opens the menu at once, directly under the tab's
 // highlight; the finger slides down onto an account and lifts to choose it. Lifting anywhere that is not a row closes
 // the menu and changes nothing: no menu is left open for a tap. A movement from the press that is mostly sideways, past
-// the tab-move threshold, closes the menu and becomes the tab's move, as a drag of a tab always was. A press on another
-// tab never opens it. Nothing here changes how the tab or its label is drawn.
+// the tab-move threshold, closes the menu and becomes the tab's move, as a drag of a tab always was. The first movement
+// past the threshold decides: once it went down onto the menu, the press is the menu's until the lift, and a slide across
+// a wide row never moves the tab. A press on another tab never opens it. Nothing here changes how the tab or its label
+// is drawn.
 
 #pragma once
 
@@ -199,6 +201,7 @@ public:
     // that AI has accounts to show. Only that press opens the menu, and it is the menu's alone.
     Step down(float x, float y, bool onActiveAnchor) {
         Step s;
+        decided_ = false;
         if (phase_ == Phase::Open) {        // a second finger, or a press the host missed the release of: closes
             phase_ = Phase::Closed;
             hovered_.reset();
@@ -216,23 +219,28 @@ public:
         return s;
     }
 
-    // The finger moved. Open: mostly sideways past the threshold, the menu closes and the press becomes the tab's move;
-    // otherwise it stays the menu's, and the row under the finger is lit.
+    // The finger moved. Open and not yet decided: mostly sideways past the threshold, the menu closes and the press
+    // becomes the tab's move; mostly down past it, the press is the menu's from then on (decided). Either way, while
+    // open, the row under the finger is lit.
     Step move(float x, float y, const AccountMenuLayout& layout) {
         Step s;
         if (phase_ != Phase::Open) return s;
-        const float dx = x - ox_, dy = y - oy_;
-        if (std::fabs(dx) > threshold_ && std::fabs(dx) > std::fabs(dy)) {
+        const float dx = std::fabs(x - ox_), dy = std::fabs(y - oy_);
+        if (!decided_ && dx > threshold_ && dx > dy) {
             phase_ = Phase::TabMove;
             hovered_.reset();
             s.closed = true;
             s.startTabMove = true;
             return s;
         }
+        if (dy > threshold_ && dy >= dx) decided_ = true;
         hovered_ = layout.rowAt(x, y);
         s.consumed = true;
         return s;
     }
+
+    // Whether the first movement past the threshold went down onto the menu: the press is the menu's until the lift.
+    bool decided() const { return decided_; }
 
     // The finger lifted. Open: on a row, that row is chosen; anywhere else nothing changes. Either way the menu closes.
     Step up(float x, float y, const AccountMenuLayout& layout) {
@@ -262,6 +270,7 @@ private:
     Phase phase_ = Phase::Closed;
     float ox_ = 0, oy_ = 0;
     float threshold_;
+    bool decided_ = false;
     std::optional<std::size_t> hovered_;
 };
 

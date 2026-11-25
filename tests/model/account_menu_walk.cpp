@@ -6,14 +6,15 @@
 //
 // The layout is fixed, in points: the active tab at 100..200 x 0..40, another tab at 210..310 x 0..40, and the menu
 // laid out under the active tab by layoutAccountMenu (two rows). Each step is a press, a move, a lift or a cancel at one
-// of the places (the active tab, the other tab, a row, anywhere else); a move is sideways past the threshold from the
-// press, or not. The walk is a pure function of its arguments (splitmix64), with no clock.
+// of the places (the active tab, the other tab, a row, anywhere else); a move is still (within the threshold from the
+// press), down or sideways (past it, mostly that way). The walk is a pure function of its arguments (splitmix64), with no clock.
 //
-// --faulty-sideways walks a test-only gesture that keeps the menu on a sideways move (the tab never moves). TLC must
-// reject its traces: the negative check that shows the binding can fail.
+// --faulty-sideways walks a gesture that keeps the menu on a sideways move before the press is decided (the tab never
+// moves). TLC must reject its traces: the negative check that shows the binding can fail.
 
 #include "account_menu.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -76,7 +77,7 @@ int main(int argc, char** argv) {
     AccountMenuGesture gesture(style.tabMoveThreshold);
     out << "---- MODULE AccountMenuTraceData ----\nTrace == <<\n";
     out << "[op |-> \"init\", at |-> \"off\", way |-> \"down\", phase |-> \"closed\", hovered |-> \"none\", "
-           "chosen |-> \"none\"]";
+           "chosen |-> \"none\", decided |-> FALSE]";
     for (int i = 0; i < steps; ++i) {
         const unsigned kind = rng.below(10);
         const Spot& spot = spots[rng.below(5)];
@@ -87,35 +88,35 @@ int main(int argc, char** argv) {
             step = gesture.down(spot.x, spot.y, kActive.contains(spot.x, spot.y));
         } else if (kind < 7) {
             op = "move";
-            // Sideways: from the press, far to the side at the press's height (past the threshold); else straight to
-            // the spot, which from the active tab to a row or anywhere below is mostly downward.
-            const bool sideways = rng.below(3) == 0;
+            // Where to: a spot as it is (from the press on the tab, a row is down, the other tab sideways); the far right
+            // of a row (across a wide row: diagonal, either way); or to the side of the press at its height. The way is
+            // worked out here from the distance, as the model has it, apart from the code's own test.
             float x = spot.x, y = spot.y;
-            if (sideways) {
-                way = "sideways";
-                x = gesture.originX() + (rng.below(2) ? 1 : -1) * (style.tabMoveThreshold + 30);
-                y = gesture.originY();
-            } else if (gesture.open()) {
-                // Keep a downward move downward: from the press straight down to the spot's height.
-                x = gesture.originX();
+            const unsigned where = rng.below(4);
+            if (where == 0) {
+                x = gesture.originX() + (rng.below(2) ? 1.0f : -1.0f) * (style.tabMoveThreshold + float(rng.below(60)) + 1);
+                y = gesture.originY() + float(rng.below(5));
+            } else if (where == 1) {
+                const auto& row = layout.rows[rng.below(2)];
+                x = row.right - 5;
+                y = (row.top + row.bottom) / 2;
             }
-            if (faulty && sideways && gesture.open()) {
+            const float dx = std::fabs(x - gesture.originX()), dy = std::fabs(y - gesture.originY());
+            const float t = style.tabMoveThreshold;
+            way = dx > t && dx > dy ? "sideways" : dy > t && dy >= dx ? "down" : "still";
+            if (faulty && way == "sideways" && gesture.open() && !gesture.decided()) {
                 step = gesture.move(gesture.originX(), gesture.originY(), layout);    // the menu stays
             } else {
                 step = gesture.move(x, y, layout);
             }
             // What the record says is where the finger is, as the model abstracts it.
-            const char* at = "off";
-            for (const Spot& s : spots) {
-                const bool inRow = std::string(s.name)[0] == 'r';
-                if ((inRow && layout.rowAt(x, y) == std::optional<std::size_t>(s.name[1] - '1')) ||
-                    (std::string(s.name) == "active" && kActive.contains(x, y)) ||
-                    (std::string(s.name) == "other" && kOther.contains(x, y)))
-                    at = s.name;
-            }
+            std::string at = "off";
+            if (kActive.contains(x, y)) at = "active";
+            else if (kOther.contains(x, y)) at = "other";
+            else if (const auto row = layout.rowAt(x, y)) at = rowName(row);
             out << ",\n[op |-> \"move\", at |-> \"" << at << "\", way |-> \"" << way << "\", phase |-> \""
                 << phaseName(gesture.phase()) << "\", hovered |-> \"" << rowName(gesture.hovered())
-                << "\", chosen |-> \"none\"]";
+                << "\", chosen |-> \"none\", decided |-> " << (gesture.decided() ? "TRUE" : "FALSE") << "]";
             continue;
         } else if (kind < 9) {
             op = "lift";
@@ -126,7 +127,8 @@ int main(int argc, char** argv) {
         }
         out << ",\n[op |-> \"" << op << "\", at |-> \"" << (op == "cancel" ? "off" : spot.name) << "\", way |-> \"down\", "
             << "phase |-> \"" << phaseName(gesture.phase()) << "\", hovered |-> \"" << rowName(gesture.hovered())
-            << "\", chosen |-> \"" << rowName(step.chosen) << "\"]";
+            << "\", chosen |-> \"" << rowName(step.chosen) << "\", decided |-> " << (gesture.decided() ? "TRUE" : "FALSE")
+            << "]";
     }
     out << "\n>>\n====\n";
     return out ? 0 : 1;
