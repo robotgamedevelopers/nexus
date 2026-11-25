@@ -72,7 +72,7 @@ struct Window {
     PrUi* ui = nullptr;
     PrKit* kit = nullptr;
     Look look;
-    Model model{std::vector<AIInfo>{}, true};
+    Model model{std::vector<AIInfo>{}};
     View view;
     FrameHost host;
     test::FakeLink link;
@@ -99,6 +99,7 @@ struct Window {
         host.ui = ui;
         host.connect(&link, "server.test");
         link.ais({"rowan", "stella"});
+        link.dashboards({{"Dashboard", "http://dashboard.test/"}});
     }
 
     ~Window() {
@@ -172,7 +173,7 @@ struct Window {
 void firstSwitch(PrVec2 size, const char* device, const Arrival& a) {
     Window w(size);
     for (int i = 0; i < 10; ++i) w.frame(a);
-    CHECK(w.model.tab_count() > 0 && w.model.tab(w.model.active()).kind == TabKind::Sprint);
+    CHECK(w.model.tab_count() > 0 && w.model.tab(w.model.active()).kind == TabKind::Dashboard);
     CHECK(!w.editing);                      // the Dashboard edits no text: the keyboard is down
     const std::size_t rowan = w.tabOf("rowan");
     CHECK(rowan < w.model.tab_count());
