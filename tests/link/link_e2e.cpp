@@ -407,7 +407,7 @@ private:
 // One headless window over a ClientSession of its own, driven by the test's loop.
 struct Window {
     std::unique_ptr<link::ClientSession> session;
-    Model model{kAIs, true};
+    Model model{kAIs, {"sprint"}};
     sync::Mirror mirror;
     std::uint64_t mirroredNum = ~std::uint64_t(0);
     void after() {
@@ -1157,7 +1157,7 @@ int secret(const std::string& binary, const std::string& dir, const std::string&
 // told of each tab removed.
 struct ServerWindow {
     std::unique_ptr<link::ClientSession> session;
-    Model model{{}, false};
+    Model model{{}};
     sync::Mirror mirror;
     sync::AIStrip strip;
     std::uint64_t mirroredNum = ~std::uint64_t(0);
