@@ -44,6 +44,7 @@
 namespace {
 
 using namespace nexus;
+using namespace nexus::sync;
 
 const std::string kAccount = "g1";
 const std::string kProvider = "antigravity";
