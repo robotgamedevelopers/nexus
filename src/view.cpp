@@ -1210,6 +1210,15 @@ struct Builder {
         view.prompt = kPrLayoutNodeNone;
         view.promptBox = kPrLayoutNodeNone;
         HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(tab.id));
+        // A terminal that comes to show drops the focus the tab before it left. The terminal's view is the first element
+        // under `window`, as is what the tab before declared there (with the centred account menu, an AI's panels,
+        // which hold the prompt), so it is the same node: while the focus stood on the gone prompt, the terminal found
+        // the focus within its view (prUiIsFocusWithin) and asked for none, the round ended with no focus, and what was
+        // typed went nowhere.
+        if (view.terminalShown != tab.id) {
+            view.terminalShown = tab.id;
+            prUiSetFocus(ui, kPrLayoutNodeNone);
+        }
         // A shell that cannot run here at all (on Windows, no WSL2): the line that says what is missing, centred as the
         // sprint tab's is.
         const std::string problem = view.terminals->problem(tab.id);
@@ -2610,6 +2619,8 @@ struct Builder {
             view.prompt = kPrLayoutNodeNone;
             view.promptBox = kPrLayoutNodeNone;
         }
+        if (std::find(panels.begin(), panels.end(), Panel::Terminal) == panels.end())
+            view.terminalShown = ~std::size_t(0);
         if (view.windowApp.surface.items && !asking) window = element(window, Part::FriendPanels);
         for (const auto panel : panels) {
             switch (panel) {

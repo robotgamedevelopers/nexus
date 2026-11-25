@@ -93,6 +93,14 @@ std::vector<FriendInfo> friendsNamed(std::size_t count) {
     return out;
 }
 
+// An AI's tab title in the shipped profile: its name with the first letter capitalised (policy/rules/config.json
+// centered_account_menu, policy/rules/client/window.star tab_titles).
+std::string titled(const std::string& name) {
+    std::string out = name;
+    if (!out.empty() && out[0] >= 'a' && out[0] <= 'z') out[0] = char(out[0] - 'a' + 'A');
+    return out;
+}
+
 // The terminal tabs' shells with no process: it records what the view asks of it.
 struct FakeTerminals final : Terminals {
     std::set<std::size_t> running;              // opened and not closed
@@ -115,9 +123,31 @@ struct FakeTerminals final : Terminals {
         running.erase(id);
         closed.push_back(id);
     }
+    // With `ui`, the one that shows takes the focus as a terminal does (terminals.cpp PraxTerminals::show, then Prax's
+    // terminal.cpp prTerminalFrame): one not focused asks for the focus; its view is the first element under the
+    // parent, with key 0; the request stands until the focus is within the view; and it counts itself focused, so that
+    // what is typed goes to it (PraxTerminals::hold, deliver), while the focus is within the view.
+    PrUi* ui = nullptr;
+    PrLayoutNode node = kPrLayoutNodeNone;
+    bool focused = false;
+    bool asked = false;
+
     void show(std::size_t id, PrLayoutNode p) override {
         shown.push_back(id);
         parent = p;
+        if (ui == nullptr)
+            return;
+        if (!focused)
+            asked = true;
+        const PrLayoutStyle style = prLayoutStyleDefault();
+        node = prUiElement(ui, p, 0, prLayoutStyleIntern(prUiTree(ui), &style), PrUiFlag_Pressable | PrUiFlag_Focusable);
+        if (asked) {
+            if (prUiIsFocusWithin(ui, node))
+                asked = false;
+            else
+                prUiSetFocus(ui, node);
+        }
+        focused = prUiIsFocusWithin(ui, node);
     }
     void update(std::size_t id) override { ++updates[id]; }
     bool ended(std::size_t id) override { return finished.count(id) != 0; }
@@ -407,21 +437,34 @@ void typingFillsTheActiveDraft() {
     CHECK(h.model.tab(1).draft.empty());
 }
 
-void enterSendsExactlyTheText() {
+// The shipped profile holds on Enter (policy/rules/config.json hold_on_enter): Enter keeps the line in the tab, held,
+// and Enter on an empty draft sends what is held, exactly as typed.
+void enterHoldsAndEmptyEnterSendsExactlyTheText() {
     Harness h;
     h.type("hello");
+    h.enter();
+    CHECK(h.active().held == "hello" && h.active().draft.empty() && h.active().transcript.empty());
     h.enter();
     if (h.active().transcript.size() == 1 && h.active().transcript[0].text != "hello")
         std::fprintf(stderr, "  sent %s\n", shown(h.active().transcript[0].text).c_str());
     CHECK(h.active().transcript.size() == 1);
     CHECK(h.active().transcript.size() == 1 && h.active().transcript[0].kind == EntryKind::Person);
     CHECK(h.active().transcript.size() == 1 && h.active().transcript[0].text == "hello");
+    CHECK(h.active().held.empty() && h.active().queue.empty());
     if (!h.active().draft.empty())
         std::fprintf(stderr, "  draft after send %s\n", shown(h.active().draft).c_str());
     CHECK(h.active().draft.empty());
     // The prompt is empty after the send, and the next message starts clean.
     h.type("again");
     CHECK(h.active().draft == "again");
+    // Lines held one after another go as one message, in order, one per line.
+    h.enter();
+    h.type("and more");
+    h.enter();
+    CHECK(h.active().held == "again\nand more" && h.active().transcript.size() == 1);
+    h.enter();
+    CHECK(h.active().transcript.size() == 2 && h.active().transcript[1].text == "again\nand more");
+    CHECK(h.active().held.empty() && h.active().draft.empty());
 }
 
 void logoutRequiresAnExplicitEnterAndNeverBecomesChat() {
@@ -430,16 +473,18 @@ void logoutRequiresAnExplicitEnterAndNeverBecomesChat() {
     h.view.signOut = [&] { ++commands; return true; };
     h.type("/logout");
     h.enter(style::kCommand);
-    CHECK(commands == 0 && h.active().queue.empty() && h.active().transcript.empty());
+    CHECK(commands == 0 && h.active().queue.empty() && h.active().transcript.empty() && h.active().held.empty());
     CHECK(h.active().draft == "/logout");
     h.view.activateSignIn = [] { return true; };
     h.enter();
-    CHECK(commands == 1 && h.active().draft.empty() && h.active().transcript.empty());
+    CHECK(commands == 1 && h.active().draft.empty() && h.active().transcript.empty() && h.active().held.empty());
     h.view.activateSignIn = {};
     h.type("Explain /logout");
     h.enter();
+    CHECK(commands == 1 && h.active().held == "Explain /logout" && h.active().transcript.empty());
+    h.enter();
     CHECK(commands == 1 && h.active().transcript.size() == 1);
-    CHECK(h.active().transcript.front().text == "Explain /logout");
+    CHECK(!h.active().transcript.empty() && h.active().transcript.front().text == "Explain /logout");
 
     Harness offline;
     offline.type("/logout");
@@ -447,34 +492,42 @@ void logoutRequiresAnExplicitEnterAndNeverBecomesChat() {
     CHECK(offline.active().transcript.empty() && offline.active().queue.empty() && !offline.view.problem.empty());
 }
 
-void enterStartsSignInBeforeEditingTheDraft() {
+// In the shipped profile the account surface is the policy's (centered_account_menu: policy/rules/client/accounts.star),
+// so Enter in the prompt never goes to the sign-in hook: signing in is the account menu's Enter or click
+// (window_application, --centered-accounts). Enter keeps the draft, untrimmed, held for the person, and the empty
+// Enter that follows sends it as it was typed.
+void enterInThePromptLeavesSignInToTheAccountMenu() {
     Harness h;
-    bool needed = true;
     int attempts = 0;
-    h.view.activateSignIn = [&] { ++attempts; return needed; };
+    h.view.activateSignIn = [&] { ++attempts; return true; };
     h.enter();
-    CHECK(attempts == 1 && h.active().draft.empty() && h.active().transcript.empty());
+    CHECK(attempts == 0 && h.active().draft.empty() && h.active().held.empty() && h.active().transcript.empty());
     h.type("  ready after login  ");
     h.enter();
-    CHECK(attempts == 2 && h.active().draft == "  ready after login  " && h.active().transcript.empty());
-    needed = false;
+    CHECK(attempts == 0 && h.active().held == "  ready after login  " && h.active().draft.empty());
+    CHECK(h.active().transcript.empty());
     h.enter();
-    CHECK(attempts == 3 && h.active().draft.empty());
-    CHECK(h.active().transcript.size() == 1 && h.active().transcript.front().text == "  ready after login  ");
+    CHECK(attempts == 0 && h.active().draft.empty() && h.active().held.empty());
+    CHECK(h.active().transcript.size() == 1 && !h.active().transcript.empty() &&
+          h.active().transcript.front().text == "  ready after login  ");
 }
 
-void commandEnterQueues() {
+// Command-Enter puts the current draft last after what is held and sends them at once, as one message: nothing is left
+// held or queued in the tab.
+void commandEnterSendsTheHeldAndTheDraft() {
     Harness h;
     h.type("later");
     h.enter(style::kCommand);
-    CHECK((h.active().queue == std::vector<std::string>{"later"}));
-    CHECK(h.active().transcript.empty());     // the queue, not the transcript
-    CHECK(h.active().draft.empty());
-    CHECK(h.model.tab(1).queue.empty());
+    CHECK(h.active().transcript.size() == 1 && !h.active().transcript.empty() && h.active().transcript[0].text == "later");
+    CHECK(h.active().queue.empty() && h.active().held.empty() && h.active().draft.empty());
+    CHECK(h.model.tab(1).queue.empty() && h.model.tab(1).transcript.empty());
+    h.type("first");
+    h.enter();
     h.type("then this");
     h.enter(style::kCommand);
-    CHECK((h.active().queue == std::vector<std::string>{"later", "then this"}));
-    CHECK(h.active().transcript.empty());
+    CHECK(h.active().transcript.size() == 2);
+    CHECK(h.active().transcript.size() == 2 && h.active().transcript[1].text == "first\nthen this");
+    CHECK(h.active().queue.empty() && h.active().held.empty() && h.active().draft.empty());
 }
 
 void shiftEnterInsertsOneLineFeed() {
@@ -542,11 +595,13 @@ void capsLockKeepsTheBindings() {
     Harness h;
     h.type("hi", PrAppModifierFlag_CapsLock);
     h.enter(PrAppModifierFlag_CapsLock);
+    CHECK(h.active().held == "hi" && h.active().transcript.empty());
+    h.enter(PrAppModifierFlag_CapsLock);
     CHECK(h.active().transcript.size() == 1 && h.active().transcript[0].text == "hi");
     h.type("x", PrAppModifierFlag_CapsLock);
     h.enter(PrAppModifierFlags(style::kCommand | PrAppModifierFlag_CapsLock));
-    CHECK(h.active().transcript.size() == 1);
-    CHECK((h.active().queue == std::vector<std::string>{"x"}));
+    CHECK(h.active().transcript.size() == 2 && h.active().transcript[1].text == "x");
+    CHECK(h.active().queue.empty() && h.active().held.empty());
     h.commandDigit(2, PrAppModifierFlag_CapsLock);
     CHECK(h.model.active() == 1);
     h.commandDigit(1, PrAppModifierFlag_CapsLock);
@@ -565,8 +620,10 @@ void eachTabKeepsItsDraft() {
     CHECK(h.model.tab(0).draft == "one!");
     h.commandDigit(2);
     h.enter();
+    CHECK(h.model.tab(1).held == "two" && h.model.tab(0).held.empty());
+    h.enter();
     CHECK(h.model.tab(1).transcript.size() == 1 && h.model.tab(1).transcript[0].text == "two");
-    CHECK(h.model.tab(0).transcript.empty());
+    CHECK(h.model.tab(0).transcript.empty() && h.model.tab(0).held.empty());
     CHECK(h.model.tab(0).draft == "one!");
 }
 
@@ -583,8 +640,10 @@ void enterWhileComposingCommitsOnly() {
     h.push(textEvent(PrAppEventKind_Text, PrStringView{kana, 3}));
     h.push(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Enter, PrAppKeyCode_Enter));
     h.frame();
-    CHECK(h.active().transcript.empty());
+    CHECK(h.active().transcript.empty() && h.active().held.empty());
     CHECK(h.active().draft == kana);
+    h.enter();
+    CHECK(h.active().held == kana && h.active().transcript.empty());
     h.enter();
     CHECK(h.active().transcript.size() == 1 && h.active().transcript[0].text == kana);
 }
@@ -672,11 +731,11 @@ void textKeysWorkWithCapsLock() {
 }
 
 // Escape asks for the overlay to hide and does not stop; Command-Escape stops and does not hide. With Caps Lock on, both
-// still do. Neither types anything or changes a draft, transcript, queue or the active tab.
+// still do. Neither types anything or changes a draft, what is held, the transcript, queue or the active tab.
 void escapeHidesAndCommandEscapeStops() {
     Harness h;
     h.type("draft");
-    h.enter(style::kCommand);
+    h.enter();              // held (hold_on_enter)
     h.type("more");
     h.model.append(0, Entry{EntryKind::Friend, "a reply"});
     h.commandDigit(2);
@@ -697,11 +756,12 @@ void escapeHidesAndCommandEscapeStops() {
         const Tab& was = i == 0 ? before0 : before1;
         const Tab& now = h.model.tab(i);
         CHECK(now.draft == was.draft);
+        CHECK(now.held == was.held);
         CHECK(now.queue == was.queue);
         CHECK(now.transcript.size() == was.transcript.size());
     }
     CHECK(h.model.tab(0).draft == "more");
-    CHECK((h.model.tab(0).queue == std::vector<std::string>{"draft"}));
+    CHECK(h.model.tab(0).held == "draft" && h.model.tab(0).transcript.size() == 1);
     // The prompt still has focus and takes typing after them.
     h.type("!");
     CHECK(h.model.tab(0).draft == "more!");
@@ -762,7 +822,7 @@ void dragMovesATab() {
     for (std::size_t j = 0; j < t.size() && j < h.model.tab_count(); ++j) {
         PrLayoutNode only = prLayoutNodeFirstChild(h.tree, t[j]);
         CHECK(only != kPrLayoutNodeNone && prLayoutNodeNextSibling(h.tree, only) == kPrLayoutNodeNone);
-        CHECK(h.hasText(t[j], h.model.tab(j).name));
+        CHECK(h.hasText(t[j], titled(h.model.tab(j).name)));
     }
     // The tabs stand left to right in the new order.
     CHECK(t.size() == 4 && h.bounds(t[0]).right <= h.bounds(t[1]).left + 0.5f);
@@ -1013,12 +1073,13 @@ void checkPromptBox(const Harness& h) {
     PrRect area = h.bounds(h.view.prompt);
     CHECK(inside(area, outer));
     CHECK(near(area.left - outer.left, style::kPromptPadX * k + 1));
-    // One line: the box is kPromptHeight tall. It is kPromptPercent of the window wide, centred, and the transcript's
-    // column kColumnPercent.
+    // One line: the box is kPromptHeight tall. It is the shipped prompt_style width (98%) of the window wide, centred,
+    // and so is the transcript's column.
     CHECK(near(outer.bottom - outer.top, style::kPromptHeight * k));
+    CHECK(h.look.prompt.width == 98);
     PrRect window = h.bounds(prLayoutNodeParent(h.tree, h.view.transcript));
     const float width = window.right - window.left;
-    CHECK(near(outer.right - outer.left, width * style::kPromptPercent / 100));
+    CHECK(near(outer.right - outer.left, width * 98 / 100));
     CHECK(near(outer.left - window.left, window.right - outer.right));
     PrRect column = h.bounds(prLayoutNodeFirstChild(h.tree, h.view.transcript));
     CHECK(near(column.right - column.left, width * h.look.prompt.width / 100));
@@ -1070,9 +1131,11 @@ void promptSegmentTracksInsertionAndUsesHeadroom() {
         h.frame();
         return fillOf(h, cell()).r;
     };
-    const double rise = (1.5 - 0.2) / 1.5;
+    // The shipped caret (prompt_style): a 1.5 s cycle, 0.1 s held at the top, 0.2 s at the bottom, falling in half the
+    // time it rises.
+    const double rise = (1.5 - 0.1 - 0.2) / 1.5;
     const float floor = redAt(0);
-    CHECK(floor < 1 && redAt(1.401) == floor && redAt(1.499) == floor);
+    CHECK(floor < 1 && redAt(1.301) == floor && redAt(1.401) == floor && redAt(1.499) == floor);
     const float crest = redAt(rise);
     CHECK(crest > 1 && redAt(rise + 0.095) == crest);
     CHECK(std::abs(redAt(rise / 2) - redAt(rise + 0.1 + rise / 4)) < 0.01);
@@ -1142,6 +1205,7 @@ bool colorMatches(PrColor color, unsigned rgb) {
 // a tag inside a bubble from a tag somewhere else on the same-colored background.
 PrLayoutNode checkTextPaint(const Harness& h, const std::string& text, unsigned ink, unsigned fill) {
     const auto leaf = h.findText(h.window(), text);
+    if (leaf == kPrLayoutNodeNone) std::fprintf(stderr, "no text %s\n", shown(text).c_str());
     CHECK(leaf != kPrLayoutNodeNone);
     if (leaf == kPrLayoutNodeNone) return leaf;
     const auto label = prLayoutNodeParent(h.tree, leaf);
@@ -1178,10 +1242,10 @@ void switchNoticeBubble() {
     h.model.append(0, Entry{EntryKind::Notice, prefix + email + suffix, end});
     h.frame();
     h.frame();
-    const TranscriptStyle stock;
-    const auto bubble = checkTextPaint(h, prefix, stock.statusInk, h.look.tabs.fill);
-    CHECK(bubble == checkTextPaint(h, email, stock.switchEmailInk, h.look.tabs.fill));
-    CHECK(bubble == checkTextPaint(h, suffix, stock.statusInk, h.look.tabs.fill));
+    const TranscriptStyle& shipped = h.look.transcriptStyle;
+    const auto bubble = checkTextPaint(h, prefix, shipped.statusInk, h.look.tabs.fill);
+    CHECK(bubble == checkTextPaint(h, email, shipped.switchEmailInk, h.look.tabs.fill));
+    CHECK(bubble == checkTextPaint(h, suffix, shipped.statusInk, h.look.tabs.fill));
     const auto prefixBounds = h.bounds(h.findText(h.window(), prefix));
     const auto emailBounds = h.bounds(h.findText(h.window(), email));
     const auto suffixBounds = h.bounds(h.findText(h.window(), suffix));
@@ -1197,7 +1261,7 @@ void copyMarkdownConversation() {
     h.frame();
     const auto hello = h.findText(h.window(), "Hello");
     const auto world = h.findText(h.window(), "world");
-    checkTextPaint(h, "world", TranscriptStyle{}.ink, TranscriptStyle{}.codeFill);
+    checkTextPaint(h, "world", h.look.transcriptStyle.ink, h.look.transcriptStyle.codeFill);
     CHECK(hello && world);
     if (!hello || !world) return;
     const auto span = prLayoutNodeParent(h.tree, world);
@@ -1256,15 +1320,15 @@ void namedBusBubbles() {
         h.view.windowApp.transcriptStyle.linkInk = 0x00ff00;
         h.frame();
     }
-    const TranscriptStyle stock;
+    const TranscriptStyle& shipped = h.look.transcriptStyle;
     CHECK(h.look.transcriptStyle.linkInk == 0x00ff00);
-    const auto first = checkTextPaint(h, "sage", stock.busInk, stock.fill);
-    CHECK(checkTextPaint(h, "Build passed", stock.busInk, stock.fill) == first);
-    CHECK(checkTextPaint(h, "logs", stock.busInk, stock.fill) == first);
-    const auto second = checkTextPaint(h, "birch", stock.busInk, stock.fill);
-    CHECK(checkTextPaint(h, "message.txt (4097 bytes)", stock.busInk, stock.fill) == second);
+    const auto first = checkTextPaint(h, "sage", shipped.busInk, shipped.fill);
+    CHECK(checkTextPaint(h, "Build passed", shipped.busInk, shipped.fill) == first);
+    CHECK(checkTextPaint(h, "logs", shipped.busInk, shipped.fill) == first);
+    const auto second = checkTextPaint(h, "birch", shipped.busInk, shipped.fill);
+    CHECK(checkTextPaint(h, "message.txt (4097 bytes)", shipped.busInk, shipped.fill) == second);
     CHECK(first != second);
-    const auto human = checkTextPaint(h, "nova-bus: this is ordinary human text", stock.personInk, stock.fill);
+    const auto human = checkTextPaint(h, "nova-bus: this is ordinary human text", shipped.personInk, shipped.fill);
     CHECK(h.bounds(first).left < h.bounds(human).left);
     CHECK(h.bounds(h.findText(h.window(), "sage")).bottom <= h.bounds(h.findText(h.window(), "Build passed")).top + 1);
 }
@@ -1374,91 +1438,107 @@ void conversationBubblesAndSignInCard() {
     CHECK(entries.size() == 4);
     if (entries.size() != 4) return;
     const auto bubble = [&](std::size_t i) { return prLayoutNodeFirstChild(h.tree, entries[i]); };
-    CHECK(colorMatches(fillOf(h, bubble(0)), TranscriptStyle{}.fill));
+    CHECK(colorMatches(fillOf(h, bubble(0)), h.look.transcriptStyle.fill));
     CHECK(colorMatches(fillOf(h, h.view.conversation), h.look.tabs.fill));
     CHECK(fillOf(h, bubble(1)).a == 0 && fillOf(h, bubble(3)).a == 0);
     CHECK(h.bounds(bubble(0)).left > h.bounds(bubble(1)).left);
     CHECK(near(h.bounds(bubble(1)).left, h.bounds(bubble(3)).left));
     // A stored, closed Notice uses the same model entry after hydration. Live status and chat keep distinct colors.
-    const TranscriptStyle stock;
-    checkTextPaint(h, "Hello", stock.ink, stock.fill);
-    checkTextPaint(h, "A reply.", stock.ink, h.look.tabs.fill);
-    checkTextPaint(h, "Usage limit reached.", stock.noticeInk, h.look.tabs.fill);
-    checkTextPaint(h, live, stock.ink, h.look.tabs.fill);
-    CHECK(stock.noticeInk == 0xffb4b4 && stock.ink != stock.noticeInk && stock.statusInk != stock.noticeInk);
+    const TranscriptStyle& shipped = h.look.transcriptStyle;
+    checkTextPaint(h, "Hello", shipped.ink, shipped.fill);
+    checkTextPaint(h, "A reply.", shipped.ink, h.look.tabs.fill);
+    checkTextPaint(h, "Usage limit reached.", shipped.noticeInk, h.look.tabs.fill);
+    checkTextPaint(h, live, shipped.ink, h.look.tabs.fill);
+    // The shipped transcript_style (policy/rules/config.json) is what the window draws with.
+    CHECK(shipped.ink == 0xffffff && shipped.personInk == 0xffffff && shipped.fill == 0x252525);
+    CHECK(shipped.noticeInk == 0xff4455 && shipped.statusInk == 0xd8d8d8 && shipped.busInk == 0x86c5ff);
+    CHECK(shipped.ink != shipped.noticeInk && shipped.statusInk != shipped.noticeInk);
 
+}
+
+// The shipped sign-in surface (centered_account_menu, sign_in_on_select): a friend whose account needs signing in shows,
+// in place of the conversation, the centred account card asking for it, painted in the shipped message_card, with the
+// account's long address wrapped inside the card on a narrow overlay; Enter starts that account's sign-in, and once
+// signed in the conversation comes back.
+void signInCardInTheShippedMenu() {
+    Harness h(friendsNamed(2), true, true);
+    test::FakeLink link;
+    FrameHost host;
+    host.model = &h.model;
+    host.view = &h.view;
+    host.connect(&link, "test");
+    h.view.selected = [&] { host.personSelected(); };
     const std::string email = "a.long.selected.account.for.the.narrow.overlay@example.test";
-    h.view.signInAccount = [&] { return SignInAccount{"work", "Work", email}; };
-    int activations = 0;
-    h.view.activateSignIn = [&] { ++activations; return true; };
+    const auto publish = [&](bool signedOut) {
+        auto session = std::make_shared<sync::SessionView>();
+        session->id = 23;
+        session->info = {"f1", "codex", "work", "", ""};
+        link.state.phase = sync::LinkPhase::Connected;
+        link.state.loopback = true;
+        link.state.sessions = sync::Sessions({session});
+        link.state.sessions.setFriends({{"f1", {{"work", "Work", signedOut, email}, {"home", "Home", false, "home@example.test"}}},
+                                      {"f2"}});
+        link.changed = true;
+        host.pollLink();
+        h.frame();
+        h.frame();
+    };
+    h.model.append(1, Entry{EntryKind::Friend, "A reply."});
+    publish(true);
+    h.commandDigit(2);
     h.frame();
-    h.frame();
-    CHECK(!h.hasText(h.window(), "A reply."));
-    CHECK(h.view.prompt != kPrLayoutNodeNone);
-    auto area = prLayoutNodeFirstChild(h.tree, h.window());
-    while (area != kPrLayoutNodeNone && !h.hasText(area, "Sign in to Work"))
-        area = prLayoutNodeNextSibling(h.tree, area);
-    CHECK(area != kPrLayoutNodeNone);
-    if (area == kPrLayoutNodeNone) return;
-    const auto button = prLayoutNodeFirstChild(h.tree, area);
-    const auto fill = fillOf(h, button);
-    CHECK(colorMatches(fill, h.look.messageCard.fill));
-    const std::string hint = "Press Enter or click to sign in.";
-    CHECK(h.hasText(button, hint));
-    const auto title = prLayoutNodeFirstChild(h.tree, button);
-    const auto address = prLayoutNodeNextSibling(h.tree, title);
-    const auto instruction = prLayoutNodeNextSibling(h.tree, address);
-    CHECK(h.hasText(title, "Sign in to Work") && h.hasText(address, email) && h.hasText(instruction, hint));
-    CHECK(prLayoutNodeNextSibling(h.tree, instruction) == kPrLayoutNodeNone);
-    checkTextPaint(h, "Sign in to Work", h.look.messageCard.ink, h.look.messageCard.fill);
-    checkTextPaint(h, email, h.look.messageCard.emailInk, h.look.messageCard.fill);
-    checkTextPaint(h, hint, h.look.messageCard.ink, h.look.messageCard.fill);
-    CHECK(near(h.centre(button).x, h.centre(area).x));
-    CHECK(near(h.centre(button).y, h.centre(area).y));
-    CHECK(h.height(area) > 2 * h.height(button));
-    h.pointer(PrAppEventKind_PointerDown, h.centre(button));
-    h.pointer(PrAppEventKind_PointerUp, h.centre(button));
-    CHECK(activations == 1);
+    CHECK(h.view.transcript == kPrLayoutNodeNone && !h.hasText(h.window(), "A reply."));
+    CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.view.accountAnchor == kPrLayoutNodeNone);
+    if (h.view.accountMenu == kPrLayoutNodeNone) return;
+    CHECK(h.hasText(h.view.accountMenu, "Please sign in to codex") && h.hasText(h.view.accountMenu, email));
+    CHECK(h.view.accountRows.size() == 2 && h.view.signInAccount().name == "work" && link.sent.empty());
+    CHECK(colorMatches(fillOf(h, h.view.accountMenu), h.look.messageCard.fill));
+    CHECK(h.look.messageCard.fill == 0x303030 && h.look.messageCard.ink == 0xffffff);
+    checkTextPaint(h, "home@example.test", h.look.messageCard.ink, h.look.messageCard.fill);
+    const auto card = h.bounds(h.view.accountMenu);
+    CHECK(std::abs((card.left + card.right) / 2 - h.extent.x / 2) < 2);
+    // On a narrow overlay the long address wraps inside the card.
     h.extent = h.view.extent = {440, 780};
     h.frame();
     h.frame();
-    const auto narrowAddress = prLayoutNodeParent(h.tree, h.findText(h.window(), email));
-    const auto narrowButton = prLayoutNodeParent(h.tree, narrowAddress);
-    const auto narrowArea = prLayoutNodeParent(h.tree, narrowButton);
-    if (!(h.height(narrowAddress) > 2 * h.look.messageCard.textSize)) {
-        const auto addr = h.bounds(narrowAddress), box = h.bounds(narrowButton), areaBox = h.bounds(narrowArea);
-        std::fprintf(stderr, "narrow email geometry: address %.0f x %.0f, card %.0f x %.0f, area %.0f x %.0f\n",
-            addr.right - addr.left, addr.bottom - addr.top, box.right - box.left, box.bottom - box.top,
-            areaBox.right - areaBox.left, areaBox.bottom - areaBox.top);
-    }
-    CHECK(h.height(narrowAddress) > 2 * h.look.messageCard.textSize);
-    CHECK(h.bounds(narrowAddress).left >= h.bounds(narrowArea).left &&
-          h.bounds(narrowAddress).right <= h.bounds(narrowArea).right);
-    h.view.signInAccount = [] { return SignInAccount{"legacy", "", ""}; };
+    const auto address = h.findText(h.view.accountMenu, email);
+    CHECK(address != kPrLayoutNodeNone);
+    if (address == kPrLayoutNodeNone) return;
+    const auto narrow = h.bounds(h.view.accountMenu);
+    CHECK(h.bounds(address).left >= narrow.left - 0.5f && h.bounds(address).right <= narrow.right + 0.5f);
+    PrLayoutRect lines[8]{};
+    CHECK(prLayoutNodeTextRangeBoxes(h.tree, address, 0, uint32_t(email.size()), PrLayoutCoordinates_Viewport, lines, 8) > 1);
+    // Enter, on the account in use, starts its sign-in: the window claims it from the server.
+    h.enter();
     h.frame();
-    h.frame();
-    const auto legacy = prLayoutNodeParent(h.tree, h.findText(h.window(), "Sign in to legacy"));
-    const auto legacyHint = prLayoutNodeNextSibling(h.tree, legacy);
-    CHECK(h.hasText(legacyHint, hint) && prLayoutNodeNextSibling(h.tree, legacyHint) == kPrLayoutNodeNone);
-    h.view.signInAccount = {};
-    h.frame();
-    CHECK(h.hasText(h.window(), "A reply."));
-    CHECK(!h.hasText(h.window(), "Sign in to Work"));
+    CHECK(link.sent.size() == 1 && link.sent[0].kind == sync::ActionKind::SignInClaim && link.sent[0].account == "work" &&
+          link.sent[0].session == 23);
+    CHECK(h.active().held.empty() && h.active().transcript.size() == 1);
+    // Signed in, the conversation is back and the card is gone.
+    publish(false);
+    CHECK(h.view.accountMenu == kPrLayoutNodeNone && h.view.transcript != kPrLayoutNodeNone);
+    CHECK(h.hasText(h.window(), "A reply.") && !h.hasText(h.window(), "Please sign in to codex"));
 }
-
 void overlayKeepsAllButTheBackgroundOpaque() {
     Harness h(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}, true);
     h.type("sent");
-    h.enter();
+    h.enter();          // held (hold_on_enter)
+    h.enter();          // and sent
     h.type("held");
-    h.model.hold_draft(h.model.active());
+    h.enter();
+    CHECK(h.active().transcript.size() == 1 && h.active().held == "held");
     h.time = 1008; // crest of the 2.8-second unsent-text pulse
     h.frame();
-    PrLayoutNode window = prLayoutNodeParent(h.tree, h.view.transcript);
-    CHECK(near(fillOf(h, window).a * 100, 60.0f));
+    // The shipped overlay_opacity (policy/rules/config.json): 70%.
+    // The window, the surface's one child: in the shipped profile the transcript stands in its conversation panel
+    // (transcript_style panel_fill), which draws no background of its own over the window's.
+    PrLayoutNode window = h.window();
+    CHECK(prLayoutNodeParent(h.tree, prLayoutNodeParent(h.tree, h.view.transcript)) == window);
+    CHECK(fillOf(h, prLayoutNodeParent(h.tree, h.view.transcript)).a == 0);
+    CHECK(near(fillOf(h, window).a * 100, 70.0f));
     CHECK(prColorFromColor16(prLayoutTreeCanvasColor(h.tree)).a == 0);
     CHECK(fillOf(h, prLayoutNodeParent(h.tree, window)).a == 0);
-    CHECK(near(h.kit->theme.palette.bg0.a * 100, style::kOverlayOpacity * 100));
+    CHECK(near(h.kit->theme.palette.bg0.a * 100, 70.0f));
     CHECK(near(h.kit->theme.palette.bg1.a * 100, style::kOverlayStripFill * 100));
     CHECK(fillOf(h, h.view.promptBox).a == 1);
     for (int side = 0; side < PrRectSide_Count; ++side)
@@ -1469,10 +1549,15 @@ void overlayKeepsAllButTheBackgroundOpaque() {
         PrLayoutNode bubble = prLayoutNodeFirstChild(h.tree, entry);
         CHECK(fillOf(h, bubble).a == 1);
     }
-    const TranscriptStyle stock;
-    const auto queued = checkTextPaint(h, "held", stock.ink, stock.fill);
+    const TranscriptStyle& shipped = h.look.transcriptStyle;
+    const auto queued = checkTextPaint(h, "held", shipped.ink, shipped.fill);
     CHECK(!h.hasText(queued, "queued"));
-    const auto border = prLayoutNodeLastChild(h.tree, queued);
+    const auto border = queued != kPrLayoutNodeNone ? prLayoutNodeLastChild(h.tree, queued) : kPrLayoutNodeNone;
+    // The held text's pulsing border: a painter, so a replaced node.
+    const bool painted = border != kPrLayoutNodeNone && prLayoutNodeKind(h.tree, border) == PrLayoutNodeKind_Replaced;
+    CHECK(painted);
+    if (!painted)
+        return;
     const auto before = prLayoutNodeContent(h.tree, border);
     CHECK(before.kind == PrLayoutContentKind_Painter);
     h.time += 0.25;
@@ -1576,10 +1661,12 @@ void primaryChatUsesTheOrdinaryComposer() {
     CHECK(prLayoutNodeFirstChild(h.tree, h.view.promptBox) == h.view.prompt);
     CHECK(link.sent.empty());
     h.type("Where shall we start?");
-    h.enter();
+    h.enter();          // held in the window (hold_on_enter): nothing reaches the server yet
+    CHECK(link.sent.empty() && h.active().held == "Where shall we start?");
+    h.enter();          // released: the held message goes to the server in order (view.cpp Release: a Queue action)
     CHECK(link.sent.size() == 1);
     if (link.sent.size() != 1) return;
-    CHECK(link.sent.front().kind == sync::ActionKind::Send && link.sent.front().session == 41 &&
+    CHECK(link.sent.front().kind == sync::ActionKind::Queue && link.sent.front().session == 41 &&
         link.sent.front().text == "Where shall we start?");
 
     auto question = std::make_shared<const sync::SessionEntry>(
@@ -1627,10 +1714,14 @@ void toolLinesAreOneCompactLine() {
     if (e.size() != 3) {
         return;
     }
-    const TranscriptStyle stock;
-    checkTextPaint(h, "Bash: ls src", stock.statusInk, stock.fill);
-    checkTextPaint(h, std::string(400, 'x'), h.look.tabs.selectedFill, stock.fill);
-    checkTextPaint(h, "Let me look.", stock.ink, h.look.tabs.fill);
+    const TranscriptStyle& shipped = h.look.transcriptStyle;
+    // The shipped tool_prompts and command_ink: a Bash line reads as a shell command, in the command ink.
+    CHECK(shipped.toolPrompts.count("Bash") == 1 && shipped.toolPrompts.at("Bash") == "$ ");
+    CHECK(shipped.commandInk && *shipped.commandInk == 0xdc7334);
+    CHECK(!h.hasText(h.window(), "Bash: ls src"));
+    checkTextPaint(h, "$ ls src", 0xdc7334, shipped.fill);
+    checkTextPaint(h, std::string(400, 'x'), h.look.tabs.selectedFill, shipped.fill);
+    checkTextPaint(h, "Let me look.", shipped.ink, h.look.tabs.fill);
     std::vector<PrLayoutNode> lines;
     for (PrLayoutNode n = prLayoutNodeFirstChild(h.tree, e[1]); n != kPrLayoutNodeNone;
             n = prLayoutNodeNextSibling(h.tree, n)) {
@@ -1843,8 +1934,8 @@ void nothingAroundTheOpenPrompt() {
     h.view.status = "Connecting to studio";
     h.frame();
     CHECK(h.view.promptBox == kPrLayoutNodeNone && h.hasText(prLayoutTreeRoot(h.tree), "Connecting to studio"));
-    const TranscriptStyle stock;
-    checkTextPaint(h, "Connecting to studio", stock.statusInk, stock.fill);
+    const TranscriptStyle& shipped = h.look.transcriptStyle;
+    checkTextPaint(h, "Connecting to studio", shipped.statusInk, shipped.fill);
     CHECK(h.entries().empty());
 }
 
@@ -2191,75 +2282,75 @@ void accountPickerIsAnExplicitChoice() {
         return p.tab == tabId && p.session == 17 && p.current == current && p.highlighted < p.options.size() &&
                p.options[p.highlighted].name == wanted;
     };
+    // An opening chord (Command-Down) opens the menu on the account in use, centred over the window and anchored to no
+    // tab; it sends nothing and keeps the draft.
     arrow(true, style::kCommand);
-    CHECK(preview("c", "b"));
-    CHECK(link.sent.empty() && signIns == 0 && h.active().id == tabId);
-    CHECK(h.view.accountAnchor != kPrLayoutNodeNone && h.view.accountMenu != kPrLayoutNodeNone);
-    if (h.view.accountAnchor == kPrLayoutNodeNone || h.view.accountMenu == kPrLayoutNodeNone) return;
-    const PrRect tab = h.bounds(h.tabs()[h.model.active()]);
-    const PrRect anchor = h.bounds(h.view.accountAnchor);
+    CHECK(preview("b", "b"));
+    CHECK(link.sent.empty() && signIns == 0 && h.active().id == tabId && h.active().draft == "keep my draft");
+    CHECK(h.view.accountAnchor == kPrLayoutNodeNone && h.view.accountMenu != kPrLayoutNodeNone);
+    if (h.view.accountMenu == kPrLayoutNodeNone) return;
     const PrRect menu = h.bounds(h.view.accountMenu);
-    CHECK(anchor.left >= tab.left - 1 && anchor.right <= tab.right + 1);
-    if (menu.top < anchor.bottom - 1 || menu.top > anchor.bottom + 16)
-        std::fprintf(stderr, "picker anchor top/bottom %.1f, %.1f; tab bottom %.1f; menu top/bottom %.1f, %.1f\n",
-                     anchor.top, anchor.bottom, tab.bottom, menu.top, menu.bottom);
-    CHECK(menu.top >= anchor.bottom - 1 && menu.top <= anchor.bottom + 16);
-    CHECK(menu.left < anchor.right && menu.right > anchor.left);
+    CHECK(std::abs((menu.left + menu.right) / 2 - h.extent.x / 2) < 2);
+    CHECK(menu.top >= h.bounds(h.tabs()[h.model.active()]).bottom);
+    CHECK(h.view.accountRows.size() == 3);
     for (const char* label : {"Personal", "Work", "Archive"}) CHECK(h.hasText(h.view.accountMenu, label));
+    // Open, the arrows alone and with Command move the highlight, and only that.
+    arrow(true, 0);
+    CHECK(preview("c", "b"));
     arrow(false, 0);
     CHECK(preview("b", "b"));
     arrow(false, style::kCommand);
     CHECK(preview("a", "b") && link.sent.empty());
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     h.frame();
-    CHECK(!h.view.accountPicker && h.hides == 0 && h.active().draft == "keep my draft");
+    CHECK(!h.view.accountPicker && h.view.accountMenu == kPrLayoutNodeNone && h.hides == 0);
+    CHECK(h.active().draft == "keep my draft" && link.sent.empty());
 
-    arrow(true, style::kCommand);
+    // Down alone opens it too (account_picker_shortcuts); Enter chooses the highlighted account, and only then is
+    // anything sent.
+    arrow(true, 0);
+    CHECK(preview("b", "b") && link.sent.empty());
+    arrow(true, 0);
     CHECK(preview("c", "b") && link.sent.empty());
     h.enter();
     h.frame();
-    CHECK(!h.view.accountPicker && signIns == 0 && h.active().draft == "keep my draft");
+    CHECK(!h.view.accountPicker && signIns == 0 && h.active().draft == "keep my draft" && h.active().held.empty());
     CHECK(link.sent.size() == 1 && link.sent[0].kind == sync::ActionKind::SetAccount &&
           link.sent[0].session == 17 && link.sent[0].text == "c");
+    // Archive needs signing in, and the shipped profile signs in on select (sign_in_on_select): once the server has
+    // the session on it, the window claims its sign-in, and the menu stands open asking for it.
     publish("c");
+    CHECK(link.sent.size() == 2 && link.sent[1].kind == sync::ActionKind::SignInClaim && link.sent[1].account == "c" &&
+          link.sent[1].session == 17);
+    CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.view.accountRows.size() == 3);
     arrow(false, style::kCommand);
     CHECK(preview("b", "c"));
     h.commandDigit(3);
     h.frame();
-    CHECK(h.active().name == "f2" && !h.view.accountPicker && link.sent.size() == 1);
+    CHECK(h.active().name == "f2" && !h.view.accountPicker && h.view.accountMenu == kPrLayoutNodeNone);
+    CHECK(link.sent.size() == 2);
     h.commandDigit(2);
+    CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.active().draft == "keep my draft");
     arrow(true, style::kCommand);
     CHECK(preview("a", "c"));
     CHECK(h.view.accountRows.size() == 3);
     if (h.view.accountRows.size() != 3) return;
+    // A click on a row chooses it.
     const auto point = h.centre(h.view.accountRows[1]);
     h.pointer(PrAppEventKind_PointerDown, point);
     h.pointer(PrAppEventKind_PointerUp, point);
     CHECK(!h.view.accountPicker && signIns == 0 && h.active().draft == "keep my draft");
-    CHECK(link.sent.size() == 2 && link.sent[1].kind == sync::ActionKind::SetAccount && link.sent[1].text == "b");
-    // With a capable server the first row becomes "auto". It remains distinct from the concrete account in use.
-    publish("a", false, true);
-    arrow(false, style::kCommand);
-    CHECK(preview(sync::kAutoAccountTarget, "a") && link.sent.size() == 2);
-    CHECK(h.view.accountRows.size() == 4);
-    if (h.view.accountRows.size() != 4) return;
-    CHECK(h.hasText(h.view.accountRows.front(), "auto"));
-    h.enter();
-    h.frame();
-    CHECK(link.sent.size() == 3 && link.sent.back().text == sync::kAutoAccountTarget);
+    CHECK(link.sent.size() == 3 && link.sent[2].kind == sync::ActionKind::SetAccount && link.sent[2].text == "b");
+    publish("b");
+    CHECK(h.view.accountMenu == kPrLayoutNodeNone && link.sent.size() == 3);
+    // The shipped menu lists the linked accounts only: automatic choice is the server's (auto_accounts), never a row.
     publish("a", true, true);
-    CHECK(h.hasText(h.view.accountAnchor, "Account · auto (Personal)"));
-    arrow(true, style::kCommand);
-    CHECK(preview("a", sync::kAutoAccountTarget));
-    // Pinning the account already serving the conversation changes the selection mode.
-    const auto sameAccount = h.centre(h.view.accountRows[1]);
-    h.pointer(PrAppEventKind_PointerDown, sameAccount);
-    h.pointer(PrAppEventKind_PointerUp, sameAccount);
-    CHECK(link.sent.size() == 4 && link.sent.back().text == "a");
-    publish("c", true, true);
-    CHECK(h.hasText(h.view.accountAnchor, "Account · auto (Archive)"));
-    CHECK(h.view.signInAccount().name == "c");
-
+    arrow(false, style::kCommand);
+    CHECK(preview("a", "a") && h.view.accountRows.size() == 3);
+    for (const auto row : h.view.accountRows) CHECK(!h.hasText(row, "auto"));
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    h.frame();
+    CHECK(link.sent.size() == 3 && h.active().draft == "keep my draft");
 }
 
 void fableLimitOffersKeyboardAndMouseChoices() {
@@ -2347,16 +2438,21 @@ void arrowsFollowTheActiveTab() {
     right();
     CHECK(h.active().name == "f1");
     h.type("unsent draft");
+    // In the shipped profile Command-Up/Down are the account menu's (accountPickerIsAnExplicitChoice), bound only to
+    // a friend's tab with an account list from its server: with none here they reach no account command, and never
+    // move the tab or touch the draft.
+    std::vector<std::string> accountActions;
+    h.view.accountAction = [&](const std::string& action) { accountActions.push_back(action); };
     down();
     up();
-    CHECK(pickerCommands == std::vector<std::string>({"next", "previous"}));
-    CHECK(h.active().draft == "unsent draft");
+    CHECK(pickerCommands.empty() && accountActions.empty());
+    CHECK(h.active().name == "f1" && h.active().draft == "unsent draft");
     right();
     CHECK(h.active().name == "f2");
     h.commandT();
     CHECK(h.active().kind == TabKind::Terminal);
     down();
-    CHECK(pickerCommands.size() == 2);
+    CHECK(pickerCommands.empty() && accountActions.empty() && h.active().kind == TabKind::Terminal);
     h.model.open_extension("fixture", "Testing", "Plugin");
     h.frame();
     const auto plugin = h.model.active();
@@ -2520,6 +2616,35 @@ void hiddenTerminalsAreServiced() {
     CHECK(h.terminals.updates[2] > 0 && h.terminals.updates[3] > 0);
 }
 
+// A terminal that opens from an AI's tab takes the focus, so that what is typed reaches its shell. With the centred
+// account menu (the shipped profile), an AI's panels stand in one element that holds the prompt, and the terminal's
+// view is the same node: the terminal found the focus within it while the focus stood on the gone prompt, asked for
+// none, and the frame ended with no focus while the terminal counted itself focused, so the keys typed next went
+// nowhere (a shell that never saw them).
+void aTerminalTakesTheFocusFromTheAITabBefore() {
+    Harness h;
+    h.terminals.ui = h.ui;
+    CHECK(h.view.windowApp.surface.items.has_value());  // the AI's panels, round the prompt
+    CHECK(h.view.prompt != kPrLayoutNodeNone && prUiFocus(h.ui) == h.view.prompt);
+    h.commandT();   // 2, shows
+    CHECK(h.active().kind == TabKind::Terminal);
+    CHECK(h.terminals.node != kPrLayoutNodeNone);
+    if (h.terminals.focused && prUiFocus(h.ui) != h.terminals.node)
+        std::fprintf(stderr, "  the terminal counts itself focused, and the focus is %llu, not its view %llu\n",
+            static_cast<unsigned long long>(prUiFocus(h.ui)), static_cast<unsigned long long>(h.terminals.node));
+    CHECK(!h.terminals.focused || prUiFocus(h.ui) == h.terminals.node);
+    h.frame();
+    CHECK(h.terminals.focused && prUiFocus(h.ui) == h.terminals.node);
+    // Back to the AI and to the terminal again: the same.
+    h.commandDigit(1);
+    CHECK(h.active().kind == TabKind::Friend && prUiFocus(h.ui) == h.view.prompt);
+    h.commandDigit(3);
+    CHECK(h.active().kind == TabKind::Terminal);
+    CHECK(!h.terminals.focused || prUiFocus(h.ui) == h.terminals.node);
+    h.frame();
+    CHECK(h.terminals.focused && prUiFocus(h.ui) == h.terminals.node);
+}
+
 // A terminal whose shell ended closes by itself, shown or not.
 void anEndedTerminalCloses() {
     Harness h;
@@ -2600,11 +2725,11 @@ void dragsStayInTheirZone() {
 // ---------------------------------------------------------------------------------------------------------------------
 // The sprint tab, first, as the app runs.
 
-// The sprint tab is first, labelled "sprint", shown at launch and Command-1; the friends are Command-2 onward, and the
+// The sprint tab is first, titled "Dashboard" (tab_labels), shown at launch and Command-1; the friends are Command-2 onward, and the
 // terminals follow them. Its page shows, below the strip, and no prompt.
 void sprintTabIsFirstAndCommandOne() {
     Harness h = withSprint();
-    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "f1", "f2"}));
+    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "F1", "F2"}));
     CHECK(h.active().kind == TabKind::Sprint);
     CHECK(h.board.shows > 0 && h.view.prompt == kPrLayoutNodeNone && h.view.promptBox == kPrLayoutNodeNone);
     CHECK(h.board.extent.x == 1000 && h.board.extent.y > 600 && h.board.extent.y < 780);
@@ -2668,7 +2793,7 @@ void choosingTheSprintTabGoesHome() {
 // the sprint tab from a friend (whose prompt had the focus); a digit past the last tab changes nothing.
 void commandDigitsWorkFromTheSprintTab() {
     Harness h = withSprint(3);
-    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "f1", "f2", "f3"}));
+    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "F1", "F2", "F3"}));
     const auto positions = [&] {
         std::vector<float> left;
         const auto names = h.labels();
@@ -2763,7 +2888,7 @@ void sprintTabNeverMoves() {
     CHECK(h.model.tab(0).kind == TabKind::Sprint && h.saves == 0);
     h.dragTab(1, 3);
     CHECK(h.ids() == "3 1 2 0" && h.saves == 1);
-    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "f2", "f3", "f1"}));
+    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "F2", "F3", "F1"}));
 }
 
 // The owner's report: alex dragged to the end of the friends, the overlay hidden on the sprint tab and shown again
@@ -2779,7 +2904,7 @@ void hideAndShowKeepTheSelectedTab() {
     h.pointer(PrAppEventKind_PointerMove, PrVec2{start.x + 10, start.y});
     h.pointer(PrAppEventKind_PointerMove, end);
     h.pointer(PrAppEventKind_PointerUp, end);
-    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "emma", "f3", "alex"}));
+    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "Emma", "F3", "Alex"}));
     CHECK(h.active().kind == TabKind::Sprint);
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);             // hide
     CHECK(h.hides == 1);
@@ -2795,7 +2920,7 @@ void hideAndShowKeepTheSelectedTab() {
     h.commandDigit(2);
     CHECK(h.active().name == "emma");
     h.dragTab(1, 3);                                         // emma to the end, past alex
-    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "f3", "alex", "emma"}));
+    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "F3", "Alex", "Emma"}));
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     h.frame();
     CHECK(h.active().name == "emma" && prUiFocus(h.ui) == h.view.prompt);
@@ -2805,7 +2930,7 @@ void hideAndShowKeepTheSelectedTab() {
 void launchWithAlexLastShowsTheSprintTab() {
     std::vector<FriendInfo> loaded{{"alex", "m"}, {"emma", "m"}, {"rowan", "m"}};
     Harness h(applyTabOrder(loaded, {"rowan", "emma", "alex"}), true, true);
-    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "rowan", "emma", "alex"}));
+    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "Rowan", "Emma", "Alex"}));
     CHECK(h.active().kind == TabKind::Sprint);
     h.key(PrAppKey(' '), PrAppKeyCode_Space, 0, " ");
     CHECK(h.active().kind == TabKind::Sprint && prUiFocus(h.ui) != h.tabs()[3]);
@@ -2882,10 +3007,18 @@ void checkTranscriptStyleValidation(nexus::policy::Host& host) {
     CHECK(window.overlayOpacity == 0.25f && window.messageCard.emailInk == 0x557799);
     window.update(host, "friend", "", true, false, 0, 1, "verify-sign-in", {"b", "Work \"team\"", "second@example.test"});
     CHECK(window.overlayOpacity != 0.25f && window.signInAccount.name == "b");
+    // A window application the window rejects falls back to the stock one, which is the shipped profile's
+    // (policy/rules/config.json transcript_style).
+    nexus::policy::Host stockHost("client");
+    nexus::WindowApplication stock;
+    stock.update(stockHost, "friend", "", true, false, 0, 1, "validate-style");
+    const nexus::TranscriptStyle shipped = stock.transcriptStyle;
+    CHECK(shipped.ink == 0xffffff && shipped.noticeInk == 0xff4455 && shipped.fill == 0x252525);
+    CHECK(shipped.toolPrompts.count("Bash") == 1);
     for (std::size_t i = 0; i < 14; ++i) {
         window.update(host, "friend", "", true, false, i, 14, "validate-style");
         CHECK((window.overlayOpacity == 0.125f) == (i < 4));
-        nexus::TranscriptStyle expected;
+        nexus::TranscriptStyle expected = i < 4 ? nexus::TranscriptStyle{} : shipped;
         if (i == 2) {
             expected.ink = expected.personInk = 0xaabbcc;
             expected.radius = 0;
@@ -3230,9 +3363,13 @@ int main(int argc, char** argv) {
         CHECK(h.view.nativeTabs.empty());
         h.view.nativeTabs.emplace("text_editor", drawTabTextArea);
         h.view.application->watch(argv[1]);
+        // Before the fork is activated the window runs the shipped profile, which holds on Enter (hold_on_enter):
+        // the line is held, and the empty Enter after it sends it.
         h.type("before");
         h.enter();
-        CHECK(h.active().transcript.size() == 1);
+        CHECK(h.active().held == "before" && h.active().transcript.empty());
+        h.enter();
+        CHECK(h.active().transcript.size() == 1 && h.active().held.empty());
         std::filesystem::copy_file(argv[2], argv[1]);
         // Wait for the running window to observe the atomic activation.
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
@@ -3297,7 +3434,9 @@ int main(int argc, char** argv) {
             styled.model.append(0, {EntryKind::Tool, "Bash: git status"});
             styled.frame();
             styled.frame();
-            CHECK(styled.hasText(styled.window(), "Fixture notice") && styled.hasText(styled.window(), "Bash: git status"));
+            // The shipped profile shows notices and tools, a Bash line as a shell command (tool_prompts).
+            CHECK(styled.hasText(styled.window(), "Fixture notice") && styled.hasText(styled.window(), "$ git status"));
+            CHECK(!styled.hasText(styled.window(), "Bash: git status"));
             const std::string styleFile = std::string(argv[1]) + ".styles";
             styled.view.application->watch(styleFile);
             std::filesystem::copy_file(argv[2], styleFile);
@@ -3355,10 +3494,10 @@ int main(int argc, char** argv) {
     textKeysZoomTheBoard();
     dashboardKeepsRosterDiagnosticsOffscreen();
     typingFillsTheActiveDraft();
-    enterSendsExactlyTheText();
+    enterHoldsAndEmptyEnterSendsExactlyTheText();
     logoutRequiresAnExplicitEnterAndNeverBecomesChat();
-    enterStartsSignInBeforeEditingTheDraft();
-    commandEnterQueues();
+    enterInThePromptLeavesSignInToTheAccountMenu();
+    commandEnterSendsTheHeldAndTheDraft();
     shiftEnterInsertsOneLineFeed();
     blankDraftsSendNothing();
     commandDigitSelectsATabAndTypesNothing();
@@ -3393,6 +3532,7 @@ int main(int argc, char** argv) {
     markdownListsAndLinks();
     longInlineCommandWrapsInTheReply();
     conversationBubblesAndSignInCard();
+    signInCardInTheShippedMenu();
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();
     noFriendsShowsTheNotice();
@@ -3419,6 +3559,7 @@ int main(int argc, char** argv) {
     anEndedTerminalElsewhereKeepsTheSelection();
     escapeOnATerminalHidesNothing();
     hiddenTerminalsAreServiced();
+    aTerminalTakesTheFocusFromTheAITabBefore();
     anEndedTerminalCloses();
     aTerminalThatCannotStartLeavesNoTab();
     aTerminalWithNoShellShowsItsLine();
