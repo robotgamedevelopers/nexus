@@ -21,6 +21,8 @@
 #               for label_walk, before the one that takes the label to return to at a session's first observation
 #   NOSPRINT    with WALK: ON walks a model made without the sprint tab
 #   CHURN       with WALK: ON walks the friends coming and going (trace_walk --friends-churn)
+#   VOICEWALK   optional, in place of WALK: tests/voice's voice_walk; it is run first and writes VoiceTurnTraceData.tla
+#               into WORK, with SEED and STEPS, and FAULTY turn-end for the turn that keeps an AI awaited
 #   LINKWALK    optional, in place of WALK: tests/sync's link_walk program; it is run first and writes
 #               LinkTraceData.tla into WORK, with SEED, STEPS and WINDOWS (its windows), and FAULTY one of applier,
 #               mirror, tail, close or ensure
@@ -350,6 +352,19 @@ elseif(DEFINED GLIDEWALK AND NOT "${GLIDEWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "glide_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED VOICEWALK AND NOT "${VOICEWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "turn-end")
+        list(APPEND walk_args --faulty-turn-end)
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not turn-end")
+    endif()
+    execute_process(COMMAND "${VOICEWALK}" ${walk_args} "${WORK}/VoiceTurnTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "voice_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED LINKWALK AND NOT "${LINKWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}" "${WINDOWS}")

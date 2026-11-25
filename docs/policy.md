@@ -191,6 +191,22 @@ the sign-in card. A same-AI copy inherits the source selection mode. Named defau
 `account_default`, either `"first"` (stock) or `"preferred"`. Forks can set `auto_accounts` to false to use
 named defaults for every new session.
 
+## The iPhone's form
+
+The client's `window` event receives `ui.idiom` (`phone`, `pad` or `desktop`), `ui.menu` (true while the phone shows
+its list of AIs) and `ui.voice` (`listening`, `speaking`, and `reply`: `text`, `voice` or `both`). On a phone the
+stock `client/window.star` (`_phone`) returns:
+
+- `panels`: `["menu"]` on the list of AIs. In a tab, `back` first, then the tab's panels with `voice` before `prompt`
+  (and `spacer` in place of `transcript` when replies are voice only). Up to six panels.
+- `show_tabs` and `reorder_tabs` false, and `tab_titles` for the menu's rows.
+- `focus_prompt` false: the prompt takes the focus only when tapped, so the keyboard does not cover the microphone.
+  It is true by default on the iPad and the desktop.
+- `voice_reply`, the first reply mode, and `voice_names`, more spoken forms of each AI's name.
+
+The client config's `phone` object sets these: `"phone": {"reply": "voice", "voice": true, "voice_names": {"zhi":
+["zhi ya wen"]}}`. `"voice": false` leaves the microphone out. How a voice turn works is in [voice.md](voice.md).
+
 ## Fable limit choices
 
 When the provider reports a Fable-specific limit, the AI tab keeps the transcript visible and holds its draft while you choose how to continue. Press Command-Shift-A to switch to the offered account or Command-Shift-O to use the offered model on the current account. Each button also responds to a click. The server supplies the available choices and validates the choice against the interrupted turn.

@@ -12,8 +12,21 @@
 // Launched with `--state FILE`, the window shows a server's state file as the desktop's `--screenshot --state` draws
 // it (state_window.h), live; `--lost` with it shows it as once the server is lost.
 //
-// Usage (as the simulator or devicectl passes a launch's arguments): nexus [--server USER@HOST | --state FILE [--lost]]
+// On an iPhone the window takes the phone's form (docs/voice.md): a menu of the tabs, one tab at a time, and voice: the
+// microphone's speech recognized on the device and sent as the prompt, to the AI named or the one showing, and the
+// reply spoken back (voice_window.h). `--idiom phone|pad` gives a device's form in place of its own; `--tab N` opens
+// the phone on tab N rather than its menu; `--voice-file AUDIO` recognizes the audio file in place of the microphone
+// (the same recognizer: for trying voice in the simulator, which has no microphone of its own); and
+// `--recognize AUDIO [--ais a,b]` only recognizes the file, prints what was heard and where it goes, and exits
+// (tests/ios, the speech functional test).
+//
+// Usage (as the simulator or devicectl passes a launch's arguments):
+//   nexus [--server USER@HOST | --state FILE [--lost]] [--idiom phone|pad] [--tab N] [--voice-file AUDIO]
+//   nexus --recognize AUDIO [--ais NAME,NAME]
 
+#include <CoreFoundation/CoreFoundation.h>
+
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +34,8 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "pr/app_select.h"
 #include "pr/app_device.h"
@@ -40,6 +55,7 @@
 #include "client_home.h"
 #include "frame_host.h"
 #include "hitch.h"
+#include "idiom.h"
 #include "link/client_port.h"
 #include "link/inapp_ssh.h"
 #include "model.h"
@@ -50,6 +66,8 @@
 #include "tab_order.h"
 #include "url_opener.h"
 #include "view.h"
+#include "voice/speech.h"
+#include "voice_window.h"
 
 #if NEXUS_PROCESSES
 #error "src/main_ios.cpp is the iOS app's: build it for iOS only (cmake/ios.cmake)"
@@ -69,6 +87,7 @@ struct App {
     FrameHost host;
     std::atomic<PrApp*> wakeApp{nullptr};   // while the window is open: for the link's thread to wake it
     std::unique_ptr<link::ClientPort> link;
+    std::unique_ptr<VoiceWindow> voice;
     HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
         HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
 };
@@ -172,6 +191,7 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
     a.hitch.begin();
     a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
+    if (a.voice) a.voice->frame(f->time);
 }
 
 bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
@@ -268,11 +288,86 @@ void keepHome(App& a, const std::string& home) {
     };
 }
 
+// The microphone's speech, with a recorded file in place of the microphone: the same on-device recognizer, permission
+// and synthesizer (speech.h), for trying voice where there is no microphone (the simulator).
+class FileSpeech final : public voice::Speech {
+public:
+    FileSpeech(voice::SpeechInbox& inbox, std::string path)
+        : inbox_(inbox), path_(std::move(path)), apple_(voice::makeAppleSpeech(inbox)) {}
+    void askPermission() override { apple_->askPermission(); }
+    void startListening() override { voice::recognizeFile(inbox_, path_); }
+    void stopListening() override {}
+    void speak(std::string_view text) override { apple_->speak(text); }
+    void stopSpeaking() override { apple_->stopSpeaking(); }
+
+private:
+    voice::SpeechInbox& inbox_;
+    std::string path_;
+    std::unique_ptr<voice::Speech> apple_;
+};
+
+// --recognize: asks for speech recognition, recognizes the file on the device, and prints what it heard and where the
+// matcher sends it among `ais` (comma separated). Exits 0 with a final transcript, 1 with the reason it failed.
+int recognizeAndRoute(const char* path, std::string_view ais) {
+    std::vector<voice::SpokenAI> list;
+    for (std::size_t at = 0; at <= ais.size();) {
+        const auto comma = std::min(ais.find(',', at), ais.size());
+        if (comma > at) list.push_back({std::string(ais.substr(at, comma - at)), {}});
+        at = comma + 1;
+    }
+    voice::SpeechInbox inbox;
+    auto speech = voice::makeAppleSpeech(inbox);
+    speech->askPermission();
+    bool asked = false;
+    const double deadline = double(prTimeMonotonicMilliseconds()) + 90000;
+    while (double(prTimeMonotonicMilliseconds()) < deadline) {
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, true); // the OS's answers come on the main queue
+        for (const auto& event : inbox.drain()) {
+            switch (event.kind) {
+                case voice::SpeechEvent::Kind::Permission:
+                    if (!event.ok && event.text.find("microphone") == std::string::npos) {
+                        std::printf("refused: %s\n", event.text.c_str());
+                        return 1;
+                    }
+                    if (!asked) voice::recognizeFile(inbox, path); // a file needs no microphone
+                    asked = true;
+                    break;
+                case voice::SpeechEvent::Kind::Heard:
+                    if (!event.ok) {
+                        std::printf("partial: %s\n", event.text.c_str());
+                        break;
+                    }
+                    {
+                        std::printf("heard: %s\n", event.text.c_str());
+                        const auto r = voice::route(event.text, list);
+                        const char* how = r.route == voice::Route::Named ? "named" :
+                                          r.route == voice::Route::Ambiguous ? "ambiguous" : "current";
+                        std::printf("route: %s %s | %s\n", how, r.aiName.c_str(), r.prompt.c_str());
+                        std::fflush(stdout);
+                        return 0;
+                    }
+                case voice::SpeechEvent::Kind::Failed:
+                    std::printf("failed: %s\n", event.text.c_str());
+                    return 1;
+                case voice::SpeechEvent::Kind::Spoken: break;
+            }
+        }
+        std::fflush(stdout);
+    }
+    std::printf("failed: no final transcript within 90 s\n");
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     const char* state = nullptr;
     const char* server = nullptr;
+    const char* idiom = nullptr;
+    const char* voiceFile = nullptr;
+    const char* recognize = nullptr;
+    const char* ais = "";
+    long tab = -1;
     bool lost = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--state") == 0 && i + 1 < argc) {
@@ -281,11 +376,24 @@ int main(int argc, char** argv) {
             server = argv[++i];
         } else if (std::strcmp(argv[i], "--lost") == 0) {
             lost = true;
+        } else if (std::strcmp(argv[i], "--idiom") == 0 && i + 1 < argc &&
+                   (std::strcmp(argv[i + 1], "phone") == 0 || std::strcmp(argv[i + 1], "pad") == 0)) {
+            idiom = argv[++i];
+        } else if (std::strcmp(argv[i], "--tab") == 0 && i + 1 < argc) {
+            tab = std::strtol(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--voice-file") == 0 && i + 1 < argc) {
+            voiceFile = argv[++i];
+        } else if (std::strcmp(argv[i], "--recognize") == 0 && i + 1 < argc) {
+            recognize = argv[++i];
+        } else if (std::strcmp(argv[i], "--ais") == 0 && i + 1 < argc) {
+            ais = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: nexus [--server USER@HOST | --state FILE [--lost]]\n");
+            std::fprintf(stderr, "usage: nexus [--server USER@HOST | --state FILE [--lost]] [--idiom phone|pad] [--tab N] "
+                "[--voice-file AUDIO]\n       nexus --recognize AUDIO [--ais NAME,NAME]\n");
             return 2;
         }
     }
+    if (recognize != nullptr) return recognizeAndRoute(recognize, ais);
     if ((lost && state == nullptr) || (state != nullptr && server != nullptr)) {
         std::fprintf(stderr, "nexus: --lost needs --state, and --state shows a file without --server\n");
         return 2;
@@ -298,6 +406,10 @@ int main(int argc, char** argv) {
     a.host.model = &model;
     a.host.view = &a.view;
     a.host.hitch = &a.hitch;
+    a.view.idiom = idiom != nullptr ? idiom : deviceIdiom();
+    a.voice = std::make_unique<VoiceWindow>(model, a.view);
+    a.voice->setSpeech(voiceFile != nullptr ? std::make_unique<FileSpeech>(a.voice->inbox(), voiceFile)
+                                            : voice::makeAppleSpeech(a.voice->inbox()));
     if (state != nullptr) {
         sync::Sessions held;
         std::string why;
@@ -306,6 +418,7 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    if (tab >= 0 && model.select_tab(std::size_t(tab))) a.view.phoneMenu = false;
     // The link, unless the window shows a state file: to --server, the client config's server, or the server the
     // person gave the window (server_choice.h), which it asks for when none is kept.
     static AskedServer asked;

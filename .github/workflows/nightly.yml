@@ -174,9 +174,9 @@ jobs:
             build: secrets_walk
           # The board's scroller, the overlay and terminal foreground synchronization: their specs, witnesses and walks
           # (short tests), split from window, which ran 50 s at p50 and 112 s at worst with them.
-          - shard: glide-overlay
-            run: '^tlc_(glide|overlay|watch)_'
-            build: overlay_walk glide_walk watch_walk
+          - shard: glide-overlay-voice
+            run: '^tlc_(glide|overlay|watch|voice)_'
+            build: overlay_walk glide_walk watch_walk voice_walk
           # The Tailscale shim's node lifecycle (models/Tailscale.tla): the three liveness instances (47,169 to 74,329
           # states) each in a shard of their own on eight workers, then the witnesses, recorded orders and Go walks.
           - shard: tailscale-spec
@@ -238,7 +238,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk service_process_functional
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass|bus_delivery)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|voice|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass|bus_delivery)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

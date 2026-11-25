@@ -20,6 +20,8 @@ The schema above belongs to the shipped [window application](../policy/rules/cli
 change how its config is interpreted or implement a registration in code inside `handle("window", state, config)`.
 Return `tab_types`, ordered `tab_groups`, the active tab’s boolean `closable`, `panels` and `shortcuts`. An `open_tab` shortcut takes a key chord, the operation name and the registered type ID. The other operations are `select_tab` (zero-based index), `move_tab` (−1 or +1 position), `zoom`
 (signed delta), `open_terminal`, `close_tab`, `account_command`, `stop` and `invoke_service`. Older bundles can still use `close_terminal`.
+On a phone the window also takes the panels `menu` (the list of AIs), `back` and `voice` (the microphone), chosen by
+`ui.idiom` ([the iPhone's form](policy.md#the-iphones-form), [voice.md](voice.md)).
 
 A native UI developer registers a C++ draw function in the [view](../src/view.h)'s `nativeTabs` registry.
 The draw function gets Prax's kit and parent node, the model and permission to take keyboard focus. A native

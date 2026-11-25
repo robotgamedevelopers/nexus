@@ -431,7 +431,29 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
             !readFlag(doc, box, {"show_plus", 9}, prompt.showPlus))) return false;
     if (!readFlag(doc, 0, {"prompt_command", 14}, surface.promptCommand) ||
             !readFlag(doc, 0, {"show_tabs", 9}, surface.showTabs) ||
-            !readFlag(doc, 0, {"reorder_tabs", 12}, surface.reorderTabs)) return false;
+            !readFlag(doc, 0, {"reorder_tabs", 12}, surface.reorderTabs) ||
+            !readFlag(doc, 0, {"focus_prompt", 12}, surface.focusPrompt)) return false;
+    const auto reply = prJsonMember(doc, 0, {"voice_reply", 11});
+    if (reply != kPrJsonMissing) {
+        surface.voiceReply = std::string(stringAt(doc, reply));
+        if (surface.voiceReply != "text" && surface.voiceReply != "voice" && surface.voiceReply != "both") return false;
+    }
+    const auto names = prJsonMember(doc, 0, {"voice_names", 11});
+    if (names != kPrJsonMissing) {
+        if (prJsonKind(doc, names) != PrJsonKind_Object || prJsonCount(doc, names) > 256) return false;
+        for (auto at = prJsonFirst(doc, names); at != kPrJsonMissing; at = prJsonAfter(doc, names, at)) {
+            const auto key = stringAt(doc, at);
+            const auto forms = prJsonMember(doc, names, {key.data(), key.size()});
+            if (prJsonKind(doc, forms) != PrJsonKind_Array || prJsonCount(doc, forms) > 16 || key.empty() || key.size() > 64)
+                return false;
+            auto& list = surface.voiceNames[std::string(key)];
+            for (uint32_t j = 0; j < prJsonCount(doc, forms); ++j) {
+                const auto form = stringAt(doc, prJsonElement(doc, forms, j));
+                if (form.empty() || form.size() > 128) return false;
+                list.emplace_back(form);
+            }
+        }
+    }
     const auto titles = prJsonMember(doc, 0, {"tab_titles", 10});
     if (titles != kPrJsonMissing) {
         if (prJsonKind(doc, titles) != PrJsonKind_Array || prJsonCount(doc, titles) > 1024) return false;
@@ -501,8 +523,8 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
     const auto rows = prJsonMember(d, 0, {"shortcuts", 9});
     const auto list = prJsonMember(d, 0, {"panels", 6});
     if (prJsonKind(d, rows) != PrJsonKind_Array || prJsonKind(d, list) != PrJsonKind_Array ||
-            prJsonCount(d, rows) > 128 || prJsonCount(d, list) > 5) {
-        why = "return arrays of up to 128 shortcuts and 5 panels";
+            prJsonCount(d, rows) > 128 || prJsonCount(d, list) > 6) {
+        why = "return arrays of up to 128 shortcuts and 6 panels";
         return false;
     }
     const auto records = prJsonMember(d, 0, {"tab_types", 9});
@@ -564,6 +586,9 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
             panel = Panel::LimitChoice;
         }
         else if (name == "status") panel = Panel::Status;
+        else if (name == "menu") panel = Panel::Menu;
+        else if (name == "back" && tab != "empty") panel = Panel::Back;
+        else if (name == "voice" && tab == "friend") panel = Panel::Voice;
         else if (name == "service_reply" && tab == "extension") panel = Panel::ServiceReply;
         else if (name == "native" && tab == "extension") panel = Panel::Native;
         else if (name == "text_area" && tab == "extension") panel = Panel::TextArea;

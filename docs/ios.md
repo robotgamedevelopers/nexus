@@ -34,6 +34,13 @@ To see the app in the simulator: `xcrun simctl install booted build-ios-sim/nexu
 `xcrun simctl launch booted com.robotgamedevelopers.nexus`. With `--state FILE` after the identifier it shows a server's
 state file, as `nexus --screenshot --state FILE` draws it on the desktop.
 
+## On an iPhone: Talk to your AIs
+
+On an iPhone the app opens on a list of your AIs, and a tab's main input is your voice, recognized on the phone and
+sent as an ordinary prompt. The form comes from the client policy by device idiom; an iPad keeps the desktop's strip.
+See [voice.md](voice.md) for the form, the voice turn, its tests (`ctest -L speech` on a simulator) and how a watch
+reuses it.
+
 ## Reaching the server
 
 The app reaches nexus-server as the desktop window does: over ssh it runs `nexus-server new` on the server's machine, then
