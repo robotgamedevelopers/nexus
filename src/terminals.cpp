@@ -485,22 +485,23 @@ bool PraxTerminals::applyBackground(PrTerminal* terminal) const {
     return changed;
 }
 
-void PraxTerminals::show(std::size_t id, PrLayoutNode parent) {
-    if (auto pending = awaitingSize_.find(id); pending != awaitingSize_.end()) {
-        auto node = prKitBox(kit_, parent, {}, {.place = {.flex = PrKitFlex_Fill}});
-        if (prUiExtent(kit_->ui, node, PrUiAxisFlag_Both, &pending->second.extent) &&
-                pending->second.extent.x > 0 && pending->second.extent.y > 0) {
-            pending->second.scale = scale_;
-            pending->second.ratio = prLayoutTreeTargetPixelRatio(kit_->tree);
-            {
-                std::lock_guard lock(mutex_);
-                starts_.push_back(std::move(pending->second));
-            }
-            awaitingSize_.erase(pending);
-            wake_.notify_one();
+void PraxTerminals::startPending(PrVec2 extent) {
+    if (awaitingSize_.empty() || extent.x <= 0 || extent.y <= 0) return;
+    {
+        std::lock_guard lock(mutex_);
+        for (auto& entry : awaitingSize_) {
+            auto& pending = entry.second;
+            pending.extent = extent;
+            pending.scale = scale_;
+            pending.ratio = prLayoutTreeTargetPixelRatio(kit_->tree);
+            starts_.push_back(std::move(pending));
         }
-        return;
+        awaitingSize_.clear();
     }
+    wake_.notify_one();
+}
+
+void PraxTerminals::show(std::size_t id, PrLayoutNode parent) {
     PrTerminal* terminal = find(id);
     if (terminal == nullptr) {
         return;     // starting: the tab shows the window's background until its shell is there; what is typed meanwhile

@@ -74,6 +74,7 @@ public:
     // if no shell can start here (no launcher); a shell that fails to start prints why and ends (ended).
     bool openIn(std::size_t id, const std::string& dir);
     void close(std::size_t id) override;        // hands its terminal to the start thread to end
+    void startPending(PrVec2 extent) override;
     void show(std::size_t id, PrLayoutNode parent) override;
     void update(std::size_t id) override;
     bool ended(std::size_t id) override;

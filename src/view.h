@@ -59,6 +59,7 @@ struct Terminals {
     virtual void close(std::size_t id) = 0;     // ends its shell and frees it
     // Declares the one that shows this round under `parent`, filling the room the parent's other children leave, and
     // gives it focus.
+    virtual void startPending(PrVec2) {}
     virtual void show(std::size_t id, PrLayoutNode parent) = 0;
     virtual void update(std::size_t id) = 0;    // services one that does not show this round
     virtual bool ended(std::size_t id) = 0;     // its shell exited and all of its output was read

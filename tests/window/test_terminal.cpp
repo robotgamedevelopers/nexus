@@ -217,7 +217,13 @@ void aTerminalComesBackInItsDirectory() {
     const std::size_t first = h.model.add_terminal();
     const std::size_t second = h.model.add_terminal();
     CHECK(h.terminals->openIn(first, saved[0]) && h.terminals->openIn(second, saved[1]));
-    CHECK(h.until([&] { return h.terminals->text(second).find('$') != std::string::npos; }));
+    CHECK(h.model.select_tab(0));
+    CHECK(h.until([&] {
+        return !h.terminals->title(first).empty() && !h.terminals->title(second).empty() &&
+            h.terminals->text(first).find('$') != std::string::npos &&
+            h.terminals->text(second).find('$') != std::string::npos;
+    }));
+    CHECK(h.model.select_tab(2));
     PrRawString home = prFileUserDirectory(PrFileUserDirectory_Home);
     PrStringView hv = prRawStringView(&home);
     const std::string homeName = std::filesystem::path(std::string(hv.data, hv.size)).filename().string();

@@ -2266,6 +2266,12 @@ struct Builder {
         });
         const auto beforeStrip = model.active();
         strips(window);
+        if (view.terminals) {
+            PrVec2 content = view.extent;
+            if (view.windowApp.surface.showTabs && model.tab_count())
+                content.y -= look.tabs.height * k() + 1 + 2; // strip and divider
+            view.terminals->startPending(content);
+        }
         // A click on the sprint tab, selected already or not, takes its page back to the board (Board::home).
         if (beforeStrip == model.active() && view.windowApp.surface.showTabs && view.board && model.tab_count() && model.tab(model.active()).kind == TabKind::Sprint &&
                 prUiClicked(ui, view.tabNodes[model.active()], 0))
