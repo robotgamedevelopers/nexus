@@ -220,7 +220,8 @@ struct Window {
         if (text == kPrLayoutNodeNone) return l;
         const auto t = prLayoutNodeText(tree, text);
         l.text.assign(t.data, t.size);
-        const auto record = prLayoutStyleRecord(tree, prLayoutNodeStyle(tree, text));
+        // A text run has no style of its own: its element (the parent) holds its font and colour.
+        const auto record = prLayoutStyleRecord(tree, prLayoutNodeStyle(tree, prLayoutNodeParent(tree, text)));
         const auto font = prLayoutFontStyleRecord(tree, record.groups[PrLayoutGroup_Font]);
         l.font = font.font;
         if (font.font) {
