@@ -86,7 +86,7 @@ struct Window {
     PrUi* ui = nullptr;
     PrKit* kit = nullptr;
     Look look;
-    Model model{std::vector<AIInfo>{}, true};
+    Model model{std::vector<AIInfo>{}};
     View view;
     FrameHost host;
     test::FakeLink link;
