@@ -844,6 +844,17 @@ void draftAndScrollStayWithTheirFriend() {
     h.frame();
     const float scrolled = prLayoutUnitToPx(prLayoutNodeScroll(h.tree, h.view.transcript).y);
     CHECK(scrolled < -100 || scrolled > 100);
+    // In mid-history the content extends past both edges. The viewport clips just the two bottom corners.
+    auto hitsConversation = [&](float x, float y) {
+        PrLayoutNode hits[64]{};
+        auto count = prLayoutTreeHitTest(h.tree, {prLayoutUnitFromPx(x), prLayoutUnitFromPx(y)}, hits, 64);
+        return std::find(hits, hits + std::min(count, 64u), h.view.conversation) != hits + std::min(count, 64u);
+    };
+    CHECK(hitsConversation(port.left + 1, port.top + 1));
+    CHECK(hitsConversation(port.right - 2, port.top + 1));
+    CHECK(hitsConversation(middle.x, port.bottom - 2));
+    CHECK(!hitsConversation(port.left + 1, port.bottom - 2));
+    CHECK(!hitsConversation(port.right - 2, port.bottom - 2));
     h.commandDigit(2);
     h.type("for f2");
     h.dragTab(0, 3);                         // f1 to the end

@@ -48,6 +48,7 @@ enum class Part : unsigned char {
     Window,
     Transcript,
     TranscriptAtEnd,
+    PanelColumn,
     Column,
     Conversation,
     AssistantMessage,
@@ -155,15 +156,20 @@ struct BoxRecipe {
                 box.minHeight = px(0);
                 box.overflowX = PrLayoutOverflow_Hidden;
                 box.overflowY = PrLayoutOverflow_Scroll;
+                if (look.transcriptStyle.conversationPanel) {
+                    box.width = prLayoutLengthPercent(look.prompt.width);
+                    box.margin[PrRectSide_Left] = box.margin[PrRectSide_Right] = prLayoutLengthAuto();
+                }
                 // At the end, the transcript follows it (prUiFollowEnd), and the items in sight slide as entries arrive:
                 // anchoring would hold the view on what showed instead, so it is off there.
                 box.overflowAnchor =
                     part == Part::TranscriptAtEnd ? PrLayoutOverflowAnchor_None : PrLayoutOverflowAnchor_Auto;
                 break;
+            case Part::PanelColumn:
             case Part::Column:
                 box.position = PrLayoutPosition_Relative;
                 box.display = PrLayoutDisplay_Flex;
-                box.width = prLayoutLengthPercent(look.prompt.width);
+                box.width = prLayoutLengthPercent(part == Part::PanelColumn ? 100 : look.prompt.width);
                 box.minHeight = prLayoutLengthPercent(100);
                 box.margin[PrRectSide_Left] = prLayoutLengthAuto();
                 box.margin[PrRectSide_Right] = prLayoutLengthAuto();
@@ -314,6 +320,14 @@ struct DecorationRecipe {
             case Part::Window:
                 d.background = prColor16FromColor(look.overlay ? faded(kBackground, look.overlayOpacity) : kBackground);
                 break;
+            case Part::Transcript:
+            case Part::TranscriptAtEnd:
+                // The lower edge stays in place while the top of the conversation scrolls with history.
+                if (look.transcriptStyle.conversationPanel) {
+                    for (const auto corner : {PrRectCorner_BottomLeft, PrRectCorner_BottomRight})
+                        d.radii[2 * corner] = d.radii[2 * corner + 1] = px(look.transcriptStyle.radius * k);
+                }
+                break;
             case Part::Conversation:
                 d.background = prColor16FromColor(rgb(look.transcriptStyle.panelFill.value_or(look.tabs.fill)));
                 radius(d, look.transcriptStyle.radius * k);
@@ -385,6 +399,7 @@ struct FlexRecipe {
                 flex.basis = px(0);
                 break;
             case Part::Conversation:
+            case Part::PanelColumn:
             case Part::Column:
                 flex.direction = PrLayoutFlexDirection_Column;
                 flex.justifyContent = PrLayoutAlignment_FlexEnd;
@@ -1651,7 +1666,7 @@ struct Builder {
 
     void transcript(PrLayoutNode window) {
         PrLayoutNode scroller = element(window, Part::Transcript, PrUiFlag_Scrollable);
-        PrLayoutNode column = element(scroller, Part::Column);
+        PrLayoutNode column = element(scroller, look.transcriptStyle.conversationPanel ? Part::PanelColumn : Part::Column);
         if (model.tab_count() == 0) {
             PrLayoutNode centered = element(column, Part::Centered);
             caption(centered, view.notice, textStyle(PrKitTextRole_Body, kStatusTone, PrKitTextAlign_Center));
