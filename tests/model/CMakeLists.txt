@@ -58,6 +58,14 @@ if(NEXUS_SERVER_PARTS)
     target_compile_options(watch_walk PRIVATE ${warnings})
 
     add_dependencies(model_checks trace_walk glide_walk overlay_walk strip_walk watch_walk)
+
+    # The walk checks that the strip's dashboards are the server's list after each sync_dashboards: shown failing on
+    # a model whose sync never removes one (trace_walk --faulty-sync-keep). It must exit with that check's line; a
+    # usage error, a crash or a pass does not match.
+    add_test(NAME trace_walk_sync_keep_refused COMMAND trace_walk 1 300 3 --boards-churn --faulty-sync-keep
+        sync-keep.tla WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    set_tests_properties(trace_walk_sync_keep_refused PROPERTIES LABELS unit TIMEOUT 30
+        PASS_REGULAR_EXPRESSION "the strip's dashboards are not the server's list")
 endif()
 
 add_test(NAME model_unit COMMAND model_test)

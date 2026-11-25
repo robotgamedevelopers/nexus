@@ -5,7 +5,7 @@
 //   trace_walk <seed> <steps> <ais> [--boards <0..3>] [--ais-churn] [--boards-churn] [--faulty | --faulty-queue |
 //              --faulty-move | --faulty-queue-cap | --faulty-send-trim | --faulty-send-dedup | --faulty-close |
 //              --faulty-board-move | --faulty-board-close | --faulty-close-fallback | --faulty-remove-ai |
-//              --faulty-add-board | --faulty-remove-board] <out.tla>
+//              --faulty-add-board | --faulty-remove-board | --faulty-sync-keep] <out.tla>
 //
 // The model is made with the dashboards of kBoardLists[--boards] first (1 unless given: one dashboard, as a server
 // with one dashboard line makes the window's strip; 0 is the window's model before the server's list arrives; 3 is a
@@ -15,7 +15,7 @@
 // remove_ai at every position, among the other steps. With --boards-churn the dashboards do (Model::sync_dashboards):
 // add_dashboard with each of kBoardArrivals (TraceBoardArrivals) and remove_dashboard at every position, and every
 // 50th step a sync_dashboards to a list drawn from them (its removes and adds recorded as the steps they are, and the
-// walk fails if the model does not end as those steps leave it).
+// walk fails if the model does not end as those steps leave it, or if the strip's dashboards are then not the list's).
 //
 // The walk is a pure function of its arguments: its random numbers come from the seed (splitmix64), never from
 // the clock or the OS. Each step calls one operation, with positions in range and out of it (move_tab's two among
@@ -39,7 +39,10 @@
 // --faulty-add-board (with --boards-churn) walks FaultyAddBoardModel: its add_dashboard puts the tab at the AIs' end.
 // --faulty-remove-board (with --boards-churn) walks FaultyRemoveBoardModel: its remove_dashboard leaves the tab's id in
 // the selection history. TLC must reject each one's traces; that is the negative check that shows the binding can
-// fail.
+// fail. --faulty-sync-keep (with --boards-churn) walks FaultySyncKeepModel: its sync_dashboards adds the list's new
+// names but removes none. Its steps are each a lawful add, so TLC could not see it: the walk itself fails at the first
+// sync whose list drops a dashboard (the check after each sync below), which ctest's
+// trace_walk_sync_keep_refused requires.
 
 #include "model.h"
 
@@ -228,6 +231,21 @@ public:
     }
 };
 
+// The test-only sync fault: sync_dashboards adds the list's new names but never removes a dashboard the list dropped.
+// Hides Model::sync_dashboards.
+class FaultySyncKeepModel : public Model {
+public:
+    using Model::Model;
+    DashboardChanges sync_dashboards(const std::vector<std::string>& names) {
+        DashboardChanges changes;
+        for (const std::string& name : names) {
+            if (add_dashboard(name))
+                changes.added.push_back(name);
+        }
+        return changes;
+    }
+};
+
 // The test-only queue-length fault: past four queued prompts, the queue drops its oldest. Hides Model::queue.
 class FaultyQueueCapModel : public Model {
 public:
@@ -285,6 +303,7 @@ constexpr const char* kFault = std::is_same_v<M, FaultyModel> ? ", faulty model"
                              : std::is_same_v<M, FaultyBoardCloseModel> ? ", faulty board-close model"
                              : std::is_same_v<M, FaultyAddBoardModel> ? ", faulty add-board model"
                              : std::is_same_v<M, FaultyRemoveBoardModel> ? ", faulty remove-board model"
+                             : std::is_same_v<M, FaultySyncKeepModel> ? ", faulty sync-keep model"
                              : std::is_same_v<M, FaultyCloseFallbackModel> ? ", faulty close-fallback model"
                              : std::is_same_v<M, FaultyRemoveAIModel> ? ", faulty remove-ai model" : "";
 
@@ -601,6 +620,22 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t ai_count, std::size_
             }
             M replay = m;
             const auto changes = m.sync_dashboards(list);
+            // Then the strip's dashboards are the server's list: each name in it once (the empty name is no dashboard,
+            // add_dashboard refuses it), and no other. A sync that keeps a dropped dashboard or misses a new one fails
+            // here, whatever the steps it reports.
+            std::vector<std::string> want;
+            for (const std::string& name : list) {
+                if (!name.empty())
+                    want.push_back(name);
+            }
+            std::vector<std::string> have = board_names(m);
+            std::sort(want.begin(), want.end());
+            std::sort(have.begin(), have.end());
+            if (have != want) {
+                std::fprintf(stderr, "trace_walk: after sync_dashboards at step %zu the strip's dashboards are not the "
+                             "server's list\n", s);
+                return 1;
+            }
             for (const std::string& name : changes.removed) {
                 std::size_t at = 0;
                 while (!(replay.tab(at).kind == nexus::TabKind::Dashboard && replay.tab(at).name == name))
@@ -751,7 +786,8 @@ int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
     const std::vector<std::string> faults = {"--faulty", "--faulty-queue", "--faulty-move", "--faulty-queue-cap",
         "--faulty-send-trim", "--faulty-send-dedup", "--faulty-close", "--faulty-board-move", "--faulty-board-close",
-        "--faulty-close-fallback", "--faulty-remove-ai", "--faulty-add-board", "--faulty-remove-board"};
+        "--faulty-close-fallback", "--faulty-remove-ai", "--faulty-add-board", "--faulty-remove-board",
+        "--faulty-sync-keep"};
     std::string fault;
     int faultCount = 0;
     std::uint64_t board_list = 1;
@@ -779,17 +815,21 @@ int main(int argc, char** argv) {
     if (rest.size() != 4 || !boards_ok || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) ||
         !parse(rest[2].c_str(), ai_count) || ai_count > kAIs.size() || faultCount > 1 ||
         (fault == "--faulty-remove-ai" && !churn) ||
-        ((fault == "--faulty-add-board" || fault == "--faulty-remove-board") && !board_churn)) {
+        ((fault == "--faulty-add-board" || fault == "--faulty-remove-board" || fault == "--faulty-sync-keep") &&
+         !board_churn)) {
         std::fprintf(stderr, "usage: trace_walk <seed> <steps> <ais 0..%zu> [--boards <0..%zu>] [--ais-churn] "
                      "[--boards-churn] [--faulty | --faulty-queue | --faulty-move | --faulty-queue-cap | "
                      "--faulty-send-trim | --faulty-send-dedup | --faulty-close | --faulty-board-move | "
                      "--faulty-board-close | --faulty-close-fallback | --faulty-remove-ai (with --ais-churn) | "
-                     "--faulty-add-board | --faulty-remove-board (with --boards-churn)] <out.tla>\n",
+                     "--faulty-add-board | --faulty-remove-board | --faulty-sync-keep (with --boards-churn)] "
+                     "<out.tla>\n",
                      kAIs.size(), kBoardLists.size() - 1);
         return 2;
     }
     const char* out = rest[3].c_str();
     const std::size_t b = static_cast<std::size_t>(board_list);
+    if (fault == "--faulty-sync-keep")
+        return walk<FaultySyncKeepModel>(seed, steps, ai_count, b, churn, board_churn, out);
     if (fault == "--faulty-remove-board")
         return walk<FaultyRemoveBoardModel>(seed, steps, ai_count, b, churn, board_churn, out);
     if (fault == "--faulty-add-board")
