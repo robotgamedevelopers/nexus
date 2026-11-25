@@ -21,6 +21,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <random>
 #include <string>
 
 #include "pr/app_select.h"
@@ -53,6 +54,7 @@
 #include "style.h"
 #include "tab_order.h"
 #include "url_opener.h"
+#include "remote_terminals.h"
 #include "view.h"
 
 #if NEXUS_PROCESSES
@@ -76,6 +78,8 @@ struct App {
     bool linked = false;                    // the window reaches a server (not a state file): it has the sprint tab
     std::string home;                       // the client home, for the board's storage
     std::unique_ptr<PraxBoard> board;       // the sprint tab's page, while the window is open
+    // The terminal tabs, whose shells run on the server (remote_terminals.h), while the window is open and linked.
+    std::unique_ptr<RemoteTerminals> terminals;
     float keyboardCover = 0;                // px of the viewport's foot that the on-screen keyboard covers, this frame
     HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
         HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
@@ -136,6 +140,15 @@ struct AskedServer : ServerChoice {
     }
 };
 
+// A token of this launch's, which names the terminals this window asks the server for (TerminalView::opener): random,
+// so that two devices' windows never take each other's new terminal for their own.
+std::string windowToken() {
+    std::random_device random;
+    char token[33];
+    std::snprintf(token, sizeof token, "%08x%08x%08x%08x", random(), random(), random(), random());
+    return std::string("ios-") + token;
+}
+
 App& appOf(void* context) {
     return *static_cast<App*>(context);
 }
@@ -169,6 +182,11 @@ bool open(void* context, PrStudioWindow* window) {
         a.board = std::make_unique<PraxBoard>(board);
         a.view.board = a.board.get();
         a.host.board = a.board.get();
+        a.terminals = std::make_unique<RemoteTerminals>(prStudioWindowApp(window), a.fonts, windowToken());
+        a.terminals->setLink(a.link.get());
+        a.terminals->setKit(prStudioWindowKit(window));
+        a.view.terminals = a.terminals.get();
+        a.view.newTerminalButton = true;
     }
     PrAppDisplayInfo info{};
     a.hitch.setRefreshRate(prAppDisplays(prStudioWindowApp(window), &info, 1) != 0 ? double(info.refreshRate) : 0);
@@ -186,6 +204,8 @@ void closeWindow(void* context, PrStudioWindow*, PrStatus) {
     a.host.board = nullptr;
     a.view.board = nullptr;
     a.board.reset();
+    a.view.terminals = nullptr;
+    a.terminals.reset();
     a.urls.reset();
 }
 
@@ -387,6 +407,7 @@ int main(int argc, char** argv) {
                     prAppWake(app);
             };
             a.link = std::make_unique<link::ClientPort>(std::move(options));
+            if (a.terminals) a.terminals->setLink(a.link.get());
             a.host.connect(a.link.get(), serverHost);
         };
         a.linked = true;

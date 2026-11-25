@@ -33,6 +33,9 @@
 #include "native_tabs.h"
 
 namespace nexus {
+namespace sync {
+class Sessions;
+}
 
 // How the window's own records are drawn. Its address owns the window's records (pr/ui_records.h).
 struct Look {
@@ -72,6 +75,21 @@ struct Terminals {
     // Its tab's label, or empty: the title its shell set, or while ssh runs in it the machine it reaches (remote.h).
     virtual std::string title(std::size_t id) = 0;
     virtual void setTextScale(float k) = 0;     // every terminal's font, at the text scale k
+    // Whether a new terminal can be opened now (on iOS: the server runs them and is heard; remote_terminals.h).
+    virtual bool available() const { return true; }
+    // Terminals whose shells run on the server (remote_terminals.h): the state each frame's link brings
+    // (`connected`: while the server is heard), and a key, text or paste typed while the terminal `id` shows (true:
+    // taken, sent to its shell). The desktop's own terminals take neither.
+    virtual void received(const sync::Sessions& state, bool connected, Model& model) {
+        (void)state;
+        (void)connected;
+        (void)model;
+    }
+    virtual bool typed(std::size_t id, const PrAppEvent& e) {
+        (void)id;
+        (void)e;
+        return false;
+    }
 };
 
 // The sprint tab's page: nova-sprint's served board. Our own seam, as Terminals is, so that the tab logic runs in tests
@@ -184,6 +202,7 @@ struct View {
     Model* model = nullptr;
     Look* look = nullptr;
     Terminals* terminals = nullptr;             // the terminal tabs' shells; unset, Command-T adds none
+    bool newTerminalButton = false;             // a + after the last tab opens a terminal (iOS: no Command-T to hand)
     Board* board = nullptr;                     // the sprint tab's page; unset, the tab says it has none
     PrVec2 extent{};                            // the window's extent in px, which the host sets before each frame
     std::shared_ptr<policy::Host> application = std::make_shared<policy::Host>("client");

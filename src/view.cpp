@@ -1115,7 +1115,10 @@ struct Builder {
             [](const TabGroup& group) { return !group.acceptsFrom.empty(); });
         if (const PrUiPayload* dragging = prUiDragging(ui)) view.draggingTab = dragging->value;
         const bool many = model.tab_count() && model.tab(0).group != model.tab(model.tab_count() - 1).group;
-        const PrLayoutNode row = many ? element(window, Part::StripRow) : window;
+        // The + after the last tab, where a window has no Command-T to hand (the iPad's, newTerminalButton): a new
+        // terminal, while one can be opened. It shares a row with the strips.
+        const bool plus = view.newTerminalButton && view.terminals != nullptr && view.terminals->available();
+        const PrLayoutNode row = many || plus ? element(window, Part::StripRow) : window;
         for (std::size_t first = 0; first < model.tab_count();) {
             const auto& group = model.tab(first).group;
             auto end = first + 1;
@@ -1128,7 +1131,7 @@ struct Builder {
             if (!tabs) tabs.reset(prKitTabsCreate());
             if (many && extensions) caption(row, group, textStyle(PrKitTextRole_BodySmall, kStatusTone));
             strip(row, tabs.get(), first, end, group, exchanges,
-                  many && end == model.tab_count() ? PrKitFlex_Fill : PrKitFlex_Fixed);
+                  many && !plus && end == model.tab_count() ? PrKitFlex_Fill : PrKitFlex_Fixed);
             first = end;
         }
         if (drop.id) {
@@ -1138,6 +1141,11 @@ struct Builder {
                     break;
                 }
             }
+        }
+        if (plus) {
+            const PrLayoutNode button = prKitButton(kit, row, {.key = prHashString(sv("new-terminal"), 0),
+                .text = sv("+")}, {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Lg});
+            if (prKitActivated(kit, button)) openTerminal();
         }
         if (model.tab_count() > 0) element(window, Part::TabDivider);
         if (!prUiDragging(ui)) view.draggingTab = 0;
@@ -2437,6 +2445,9 @@ struct Builder {
             prJsonWriterEndObject(w);
         }
         prJsonWriterEndArray(w);
+        // A new terminal can be opened now (Terminals::available): the phone's list offers its New terminal row.
+        prJsonWriterKey(w, sv("terminals"));
+        prJsonWriterBool(w, view.terminals != nullptr && view.terminals->available());
         prJsonWriterKey(w, sv("dismissed"));
         prJsonWriterBool(w, view.dismissedSignIn.has_value());
         prJsonWriterKey(w, sv("help_visible"));
@@ -2509,6 +2520,16 @@ struct Builder {
         }
     }
 
+    // A new terminal tab, at the end of the terminals, with its shell (Command-T, the strip's + on iOS, the phone's New
+    // terminal row); a shell that cannot start takes its tab away again, having said why.
+    void openTerminal() {
+        if (!view.terminals) return;
+        const auto id = model.add_terminal();
+        HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
+        if (!view.terminals->open(id))
+            model.close_tab(model.active());
+    }
+
     void shortcut(const Shortcut& key) {
         switch (key.command) {
             case WindowCommand::ScrollTranscript: {
@@ -2573,12 +2594,7 @@ struct Builder {
                     key.argument, -kTextStepsDown, kTextStepsUp);
                 break;
             case WindowCommand::OpenTerminal:
-                if (view.terminals) {
-                    const auto id = model.add_terminal();
-                    HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
-                    if (!view.terminals->open(id))
-                        model.close_tab(model.active());
-                }
+                openTerminal();
                 break;
             case WindowCommand::OpenTab: {
                 auto found = view.windowApp.types.find(key.type);

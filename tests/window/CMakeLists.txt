@@ -16,6 +16,14 @@ if(NEXUS_WINDOW_LOGIC)
     add_test(NAME stock_window_unit COMMAND nexus_stock_window_tests)
     set_tests_properties(stock_window_unit PROPERTIES LABELS unit)
 
+    # The terminal tabs whose shells run on the server (src/remote_terminals.h, the iOS app's): through a fake link,
+    # with no screen drawn. Pure logic.
+    add_executable(nexus_remote_terminals_tests test_remote_terminals.cpp ${PROJECT_SOURCE_DIR}/src/remote_terminals.cpp)
+    target_compile_options(nexus_remote_terminals_tests PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_remote_terminals_tests PRIVATE nexus_view nexus_sync prax::studio_terminal prax::vterm)
+    add_test(NAME remote_terminals_unit COMMAND nexus_remote_terminals_tests)
+    set_tests_properties(remote_terminals_unit PROPERTIES LABELS unit)
+
     # The server a window asks for where nothing names one (src/server_choice.h): the address's checks, server.txt and
     # the kept server through a store in memory. Pure logic.
     add_executable(nexus_server_choice_tests test_server_choice.cpp)

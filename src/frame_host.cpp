@@ -287,6 +287,8 @@ void FrameHost::pollLink() {
         takeFriends(s.sessions);
     }
     mirror.apply(*model, s.sessions);
+    // The server's terminals, for a window whose terminal tabs are the server's (remote_terminals.h).
+    if (view->terminals != nullptr) view->terminals->received(s.sessions, s.phase == sync::LinkPhase::Connected, *model);
     if (s.phase == sync::LinkPhase::Connected) {
         for (std::size_t i = 0; i < model->tab_count(); ++i) {
             const auto id = model->tab(i).id;
@@ -946,6 +948,13 @@ bool FrameHost::event(const PrAppEvent& e) {
     }
     if (board != nullptr && board->event(e)) {
         return true;
+    }
+    // Typed while a terminal tab whose shell is the server's shows: sent to that shell (remote_terminals.h).
+    if (view->terminals != nullptr && model->tab_count() != 0) {
+        const Tab& tab = model->tab(model->active());
+        if (tab.kind == TabKind::Terminal && view->terminals->typed(tab.id, e)) {
+            return true;
+        }
     }
 #if NEXUS_PROCESSES
     // Typed into a terminal tab before its screen can take it: held for its shell, in order.
