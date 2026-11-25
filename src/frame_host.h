@@ -123,6 +123,12 @@ private:
     std::uint64_t gateFlow_ = 0;
 };
 
+// The client lock's input gate (FrameHost::event, View::lockScreen). isInputEvent: the person's input (pointer, scroll,
+// keys, text, paste, composition, drag and drop), as against the window's and the app's own events. lockScreenTakes:
+// the input a locked window lets through to its lock screen: the pointer, and Return and Escape with no modifier.
+bool isInputEvent(const PrAppEvent& e);
+bool lockScreenTakes(const PrAppEvent& e);
+
 inline constexpr size_t kMaxAttachmentBytes = 32 * 1024 * 1024;
 struct StagedFile {
     size_t tab;

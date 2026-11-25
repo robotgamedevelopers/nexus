@@ -2302,7 +2302,57 @@ struct Builder {
 
     bool pickerInput = false;
 
+    // The lock screen (View::lockScreen): one centred card with the lock's title and message, and nothing else of the
+    // window. The nodes the rounds keep for the window's other parts are cleared, so nothing (the host's routing of
+    // pastes and pointers into the prompt, the selection) reaches a part that is not drawn. The board is told it is
+    // hidden, and the terminals are serviced as hidden tabs, so that their shells and page keep running unseen.
+    void lockScreen(PrLayoutNode parent) {
+        view.prompt = kPrLayoutNodeNone;
+        view.promptBox = kPrLayoutNodeNone;
+        view.transcript = kPrLayoutNodeNone;
+        view.conversation = kPrLayoutNodeNone;
+        view.boardBox = kPrLayoutNodeNone;
+        view.secretField = kPrLayoutNodeNone;
+        view.energyAnimating = false;
+        view.breathing = false;
+        view.dialogVisible = false;
+        if (view.board != nullptr) view.board->hidden();
+        if (view.terminals != nullptr) {
+            for (std::size_t i = model.tab_count(); i-- > 0;) {
+                const Tab& tab = model.tab(i);
+                if (tab.kind != TabKind::Terminal) continue;
+                if (view.terminals->ended(tab.id)) {
+                    view.terminals->close(tab.id);
+                    model.close_tab(i);
+                } else {
+                    view.terminals->update(tab.id);
+                }
+            }
+        }
+        PrLayoutNode window = element(parent, Part::Window);
+        PrLayoutNode box = element(window, Part::BoardBox);
+        PrLayoutNode column = element(box, Part::Column);
+        PrLayoutNode centered = element(column, Part::Centered);
+        const auto card = prKitButton(kit, centered, {.key = prHashString(sv("lock-screen"), 0)}, {});
+        prLayoutTreeFrameSetStyle(tree, card, style(ui, look, Part::MessageCard));
+        auto large = textStyle(PrKitTextRole_Display, PrKitTone_Inverse, PrKitTextAlign_Center);
+        large.wrap = PrKitWrap_Wrap;
+        label(card, view.lockScreen->title, large);
+        auto small = textStyle(PrKitTextRole_BodySmall, PrKitTone_Inverse, PrKitTextAlign_Center);
+        small.wrap = PrKitWrap_Wrap;
+        label(card, view.lockScreen->message, small);
+        // The keys are claimed on the outermost node of the round, as build does (no node has the focus here).
+        const PrLayoutNode claim = parent != kPrLayoutNodeNone ? parent : window;
+        const bool enter = prUiKeyPressed(ui, claim, PrAppKey_Enter, 0);
+        if ((prKitActivated(kit, card) || enter) && view.unlock) view.unlock();
+        if (prUiKeyPressed(ui, claim, PrAppKey_Escape, 0) && view.hide) view.hide();
+    }
+
     void build(PrLayoutNode parent) {
+        if (view.lockScreen) {
+            lockScreen(parent);
+            return;
+        }
         if (view.pendingBoardId && view.board) {
             if (view.board->prepared()) {
                 for (std::size_t i = 0; i < model.tab_count(); ++i) {

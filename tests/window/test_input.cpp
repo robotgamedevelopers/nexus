@@ -2471,6 +2471,83 @@ void arrowsFollowTheActiveTab() {
     CHECK(h.model.active() == count - 1);
 }
 
+// ---- The client lock (client_lock.h, View::lockScreen) ----
+
+// Every text in the window's tree.
+std::vector<std::string> allTexts(const Harness& h) {
+    std::vector<std::string> out;
+    textsUnder(h, prLayoutTreeRoot(h.tree), out);
+    return out;
+}
+
+bool anyTextHas(const std::vector<std::string>& texts, const std::string& part) {
+    for (const auto& t : texts)
+        if (t.find(part) != std::string::npos) return true;
+    return false;
+}
+
+// Locked, the window draws the lock screen and nothing else (Glenn, 2026-11-25: "no dashboard, no talk to ais, no
+// terminals. nothing."): no tab strip and no AI's name, no transcript, prompt or draft, no terminal, no Dashboard. The
+// terminals and the board are serviced unseen. Typing reaches nothing; Return asks the system, Escape hides. Unlocked
+// again, the same window shows the AIs' names and the draft, so the checks above can see them when they are there.
+void lockedWindowDrawsOnlyTheLockScreen() {
+    Harness h(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}, true, true);
+    h.commandT();
+    const std::size_t terminal = h.active().id;
+    CHECK(h.active().kind == TabKind::Terminal);
+    CHECK(h.model.select_tab(1));
+    h.frame();
+    CHECK(h.active().kind == TabKind::Friend);
+    h.type("secret plan");
+    const std::string draft = h.active().draft;
+    CHECK(draft == "secret plan");
+    // Shown unlocked: the names and the draft are drawn.
+    auto texts = allTexts(h);
+    CHECK(anyTextHas(texts, "alex") && anyTextHas(texts, "emma") && anyTextHas(texts, "secret plan"));
+
+    int unlocks = 0;
+    h.view.unlock = [&] { ++unlocks; };
+    h.view.lockScreen = View::LockScreen{"nexus is locked", "Press Return or click here to unlock with Touch ID."};
+    const auto shown = h.terminals.shown.size();
+    const auto boardShows = h.board.shows;
+    const auto boardHiddens = h.board.hiddens;
+    const auto updates = h.terminals.updates[terminal];
+    h.frame();
+    h.frame();
+    texts = allTexts(h);
+    CHECK(texts.size() == 2);
+    CHECK(anyTextHas(texts, "nexus is locked"));
+    CHECK(anyTextHas(texts, "Touch ID"));
+    for (const auto& t : texts)
+        CHECK(t == "nexus is locked" || t == "Press Return or click here to unlock with Touch ID.");
+    CHECK(!anyTextHas(texts, "alex") && !anyTextHas(texts, "emma") && !anyTextHas(texts, "secret"));
+    CHECK(h.view.prompt == kPrLayoutNodeNone && h.view.promptBox == kPrLayoutNodeNone);
+    CHECK(h.view.transcript == kPrLayoutNodeNone && h.view.boardBox == kPrLayoutNodeNone);
+    CHECK(h.terminals.shown.size() == shown);           // no terminal drawn
+    CHECK(h.terminals.updates[terminal] > updates);     // its shell still serviced, unseen
+    CHECK(h.board.shows == boardShows);                 // no Dashboard drawn
+    CHECK(h.board.hiddens > boardHiddens);
+    // Typed text, a tab key and a terminal key reach nothing.
+    h.type("x");
+    h.commandDigit(1);
+    h.commandT();
+    CHECK(h.model.active() == 1 && h.active().draft == draft);
+    CHECK(h.terminals.running.size() == 1);
+    CHECK(unlocks == 0 && h.hides == 0);
+    h.enter();
+    CHECK(unlocks == 1);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    CHECK(h.hides == 1);
+    CHECK(h.active().draft == draft);
+
+    // Unlocked: everything is back, the draft kept.
+    h.view.lockScreen.reset();
+    h.frame();
+    h.frame();
+    texts = allTexts(h);
+    CHECK(anyTextHas(texts, "alex") && anyTextHas(texts, "emma") && anyTextHas(texts, "secret plan"));
+}
+
 // ---- Terminal tabs ----
 
 // Command-T adds a terminal tab at the end, shows it below the strip at the window's full width, with no prompt and
@@ -3509,6 +3586,7 @@ int main(int argc, char** argv) {
     textScaleIsClamped();
     textScaleChangesAreSaved();
     textKeysWorkWithCapsLock();
+    lockedWindowDrawsOnlyTheLockScreen();
     escapeHidesAndCommandEscapeStops();
     escapeWindowedHidesNothing();
     escapeWhileComposingDoesNotHide();

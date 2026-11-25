@@ -148,6 +148,9 @@ else()
 endif()
 option(NEXUS_LINK "Build nexus-server and the window's --server over mosh's transport (needs protobuf)"
     ${nexus_link_default})
+# The client lock's stand-in authenticator (src/lock_test_authenticator.cpp), for running the window where no one can
+# authenticate. A build with it unlocks with no real check: never on, never shipped (docs/security.md).
+option(NEXUS_TEST_AUTHENTICATOR "Build the app with the lock's stand-in authenticator (testing only, never shipped)" OFF)
 if(WIN32)
     if(NEXUS_LINK)
         message(FATAL_ERROR "nexus: on Windows nexus-server and the mosh link run as the Linux build inside WSL2, and "
@@ -206,7 +209,7 @@ include(cmake/policy.cmake)
 
 # The non-drawing logic: tabs, transcripts, drafts, send and queue, and when the overlay shows and hides (overlay.h).
 # No OS, no time.
-add_library(nexus_model STATIC src/model.cpp src/overlay.cpp src/cursor.cpp)
+add_library(nexus_model STATIC src/model.cpp src/overlay.cpp src/cursor.cpp src/client_lock.cpp)
 target_include_directories(nexus_model PUBLIC src)
 target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 
@@ -449,7 +452,7 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
     # The app: on macOS a real bundle, nexus.app; on Windows a GUI program (no console window opens at launch, so
     # launch shows nothing), which still starts at main(). The system's part of the overlay is src/platform.h.
     if(APPLE)
-        add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm)
+        add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm src/lock_mac.mm)
         set(NEXUS_MAC_SIGN_IDENTITY "" CACHE STRING "Signing identity for local nexus.app builds")
         if(NEXUS_MAC_SIGN_IDENTITY)
             add_custom_command(TARGET nexus POST_BUILD
@@ -457,7 +460,8 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
                 VERBATIM)
         endif()
         set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-        target_link_libraries(nexus PRIVATE "-framework AppKit")
+        set_source_files_properties(src/lock_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        target_link_libraries(nexus PRIVATE "-framework AppKit" "-framework LocalAuthentication")
         # The app's name is nexus: the bundle's name and display name (cmake/Info.plist.in, CMake's
         # template with CFBundleDisplayName added), the executable (the process's name in Activity Monitor and the app
         # menu's About, Hide and Quit) and the window's title (main.cpp).
@@ -468,10 +472,20 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
             MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
             MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
     else()
-        add_executable(nexus WIN32 src/main.cpp src/platform_win.cpp)
+        add_executable(nexus WIN32 src/main.cpp src/platform_win.cpp src/lock_win.cpp)
         if(MSVC)
             target_link_options(nexus PRIVATE /ENTRY:mainCRTStartup)
         endif()
+        # Windows Hello (UserConsentVerifier, C++/WinRT) and the session notices (lock_win.cpp).
+        target_link_libraries(nexus PRIVATE windowsapp wtsapi32)
+    endif()
+    # The client lock (client_lock.h): the system's authenticator, or with NEXUS_TEST_AUTHENTICATOR (a test build that
+    # checks no one, for running and screenshotting the window where no one can touch the sensor; never a release) the
+    # stand-in in lock_test_authenticator.cpp.
+    if(NEXUS_TEST_AUTHENTICATOR)
+        message(WARNING "NEXUS_TEST_AUTHENTICATOR is ON: this nexus unlocks with no real check. Never ship it.")
+        target_sources(nexus PRIVATE src/lock_test_authenticator.cpp)
+        target_compile_definitions(nexus PRIVATE NEXUS_TEST_AUTHENTICATOR=1)
     endif()
     target_sources(nexus PRIVATE src/ui_audio.cpp)
     target_link_libraries(nexus PRIVATE prax::audio prax::png)
@@ -487,9 +501,9 @@ endif()
 if(WIN32 AND NOT NEXUS_WINDOW)
     # The app does not build on Windows until Prax's Win32 backend does (NEXUS_WINDOW above); its Windows part,
     # src/platform_win.cpp, is still compiled (never linked) so CI holds it to the same warnings.
-    add_library(nexus_platform_win_check OBJECT src/platform_win.cpp)
+    add_library(nexus_platform_win_check OBJECT src/platform_win.cpp src/lock_win.cpp)
     target_compile_options(nexus_platform_win_check PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_platform_win_check PRIVATE prax::surface)
+    target_link_libraries(nexus_platform_win_check PRIVATE prax::surface nexus_model)
 endif()
 
 enable_testing()
