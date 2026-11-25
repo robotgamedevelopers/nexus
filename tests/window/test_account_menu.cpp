@@ -44,7 +44,7 @@ int failures = 0;
     } while (0)
 
 constexpr sync::SessionId kRowan = 7, kStella = 8;
-const std::string kLong = "glenn.fiedler.with.a.really.long.work.address.for.the.menu@robotgamedevelopers-example.test";
+const std::string kLong = "a.person.with.a.really.long.work.address.for.the.menu@robotgamedevelopers-example.test";
 
 PrAppEvent pointerEvent(PrAppEventKind kind, PrVec2 at) {
     PrAppEvent e{};
@@ -94,7 +94,7 @@ struct Window {
     bool editing = false;
     bool wantsFrame = false;
     std::vector<sync::AccountChoice> rowan{
-        {"a1", "Home", false, "glenn@home.test"},
+        {"a1", "Home", false, "person@home.test"},
         {"a2", "Work", false, kLong},
         {"a3", "Spare", true, "spare@example.test"},
     };
@@ -207,7 +207,7 @@ struct Window {
     // The first text node under `node`.
     PrLayoutNode textIn(PrLayoutNode node) const {
         if (node == kPrLayoutNodeNone) return node;
-        if (prLayoutNodeText(tree, node).size) return node;
+        if (prLayoutNodeKind(tree, node) == PrLayoutNodeKind_Text) return node;
         for (PrLayoutNode n = prLayoutNodeFirstChild(tree, node); n != kPrLayoutNodeNone; n = prLayoutNodeNextSibling(tree, n)) {
             const auto found = textIn(n);
             if (found != kPrLayoutNodeNone) return found;
@@ -246,6 +246,10 @@ struct Window {
         return out;
     }
     bool menuShows() const { return view.accounts.node != kPrLayoutNodeNone; }
+    // The point on row i straight below the press, from: a finger slides down from the tab onto a row.
+    PrVec2 below(PrVec2 from, std::size_t i) const {
+        return PrVec2{from.x, centre(view.accounts.rowNodes[i]).y};
+    }
 };
 
 // A press on the active AI's tab opens the menu in that same frame. Plant: open on the lift instead.
@@ -262,10 +266,11 @@ void pressOnTheActiveTabOpensTheMenu() {
 // the row under the press rather than under the lift.
 void pressSlideAndLiftSwitches() {
     Window w;
-    w.press(w.centre(w.tabNode("rowan")));
+    const PrVec2 at = w.centre(w.tabNode("rowan"));
+    w.press(at);
     CHECK(w.view.accounts.rowNodes.size() == 3);
     if (w.view.accounts.rowNodes.size() != 3) return;
-    const PrVec2 row2 = w.centre(w.view.accounts.rowNodes[1]);
+    const PrVec2 row2 = w.below(at, 1);
     w.slide(PrVec2{row2.x, row2.y - 10});
     w.slide(row2);
     CHECK(w.view.accounts.gesture.hovered() == std::optional<std::size_t>(1));
@@ -292,6 +297,30 @@ void pressAndLiftClosesAndChangesNothing() {
     w.slide(PrVec2{at.x, menu.bottom + 40});
     w.lift(PrVec2{at.x, menu.bottom + 40});
     CHECK(!w.menuShows() && w.switches().empty());
+}
+
+// Press, slide down onto the menu, then across the wide row to its far end: the press went down first, so it stays the
+// menu's, the row stays lit, and the lift chooses it; the tab never moves. Plant: let a sideways move close the menu
+// after the press went down (no deciding, AccountMenuGesture::move).
+void downThenAcrossStaysTheMenu() {
+    Window w;
+    const PrVec2 at = w.centre(w.tabNode("rowan"));
+    const auto order = w.tabOf("rowan");
+    w.press(at);
+    if (w.view.accounts.rowNodes.size() != 3) {
+        CHECK(w.view.accounts.rowNodes.size() == 3);
+        return;
+    }
+    const PrVec2 down = w.below(at, 1);
+    w.slide(down);
+    const PrRect row = w.bounds(w.view.accounts.rowNodes[1]);
+    const PrVec2 across{row.right - 4, down.y};
+    w.slide(across);
+    CHECK(w.menuShows());
+    CHECK(w.view.accounts.gesture.hovered() == std::optional<std::size_t>(1));
+    w.lift(across);
+    CHECK((w.switches() == std::vector<std::string>{"7:a2"}));
+    CHECK(w.tabOf("rowan") == order);
 }
 
 // Press, then a drag mostly sideways past the threshold: the menu closes and the tab moves, as a tab's drag always did.
@@ -396,7 +425,7 @@ void theLabelNeverChanges() {
     CHECK(w.looks(tab) == before);
     w.frame();
     CHECK(w.looks(tab) == before);
-    const PrVec2 row = w.centre(w.view.accounts.rowNodes[0]);
+    const PrVec2 row = w.below(at, 0);
     w.slide(PrVec2{at.x, (at.y + row.y) / 2});
     CHECK(w.looks(tab) == before);
     w.slide(row);
@@ -471,7 +500,7 @@ void accountCommandOpensTheSelector() {
 void signInRowRunsLogin() {
     Window w;
     w.press(w.centre(w.tabNode("rowan")));
-    const PrVec2 last = w.centre(w.view.accounts.rowNodes[2]);
+    const PrVec2 last = w.below(w.centre(w.tabNode("rowan")), 2);
     w.slide(last);
     w.lift(last);
     CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::Login);
@@ -533,7 +562,7 @@ void logoutConfirmsThenMoves() {
     Window w;
     w.command("/logout");
     CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::Logout);
-    CHECK(w.view.accounts.logoutShown == "glenn@home.test");
+    CHECK(w.view.accounts.logoutShown == "person@home.test");
     CHECK(w.view.accounts.logoutNext == kLong);
     for (const auto& a : w.link.sent) CHECK(a.kind != sync::ActionKind::SignOut);
     CHECK(w.view.logout());
@@ -581,6 +610,7 @@ int main() {
     pressOnTheActiveTabOpensTheMenu();
     pressSlideAndLiftSwitches();
     pressAndLiftClosesAndChangesNothing();
+    downThenAcrossStaysTheMenu();
     pressThenSidewaysDragMovesTheTab();
     pressOnAnotherTabNeverOpens();
     theCurrentAccountIsMarked();
