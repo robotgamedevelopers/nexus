@@ -124,7 +124,7 @@ void clientHomeFiles() {
 // identity. The same snapshot respects a fork which disallows the prior cross-group move.
 static void mixedLayout() {
     const SavedLayout wanted{"extension:8", {
-        {"sprint", "dashboards", ""}, {"extension:4", "ais", "notes"}, {"ai:ada", "ais", ""},
+        {"dashboard:Dashboard", "dashboards", ""}, {"extension:4", "ais", "notes"}, {"ai:ada", "ais", ""},
         {"terminal:2", "ais", "/same"}, {"terminal:3", "terminals", "/same"}, {"extension:8", "writing", "notes"}}};
     SavedLayout read;
     CHECK(parseLayout(formatLayout(wanted), &read) && read == wanted);
@@ -145,8 +145,8 @@ static void mixedLayout() {
         return true;
     };
     for (bool crossing : {true, false}) {
-        Model model({}, {"sprint"});
-        model.set_tab_groups({{"dashboards", {"sprint"}}, {"ais", {"ai"}, false,
+        Model model({}, {"Dashboard"});
+        model.set_tab_groups({{"dashboards", {"dashboard"}}, {"ais", {"ai"}, false,
             crossing ? std::vector<std::string>{"terminals", "writing"} : std::vector<std::string>{}},
             {"terminals", {"terminal"}, true}, {"writing", {"notes"}, true}});
         TabLayout layout(read);
@@ -175,7 +175,7 @@ static void mixedLayout() {
     }
     // A plugin may become available after launch. Respect a focus choice made while waiting for it.
     TabLayout delayed(wanted);
-    Model partial({}, {"sprint"});
+    Model partial({}, {"Dashboard"});
     delayed.reopenTerminals(partial);
     delayed.restore(partial, [](const auto&, auto*, auto*) { return false; }, false);
     delayed.capture(partial, {"/same", "/same"}, false);
@@ -185,11 +185,11 @@ static void mixedLayout() {
     delayed.restore(partial, extension, true);
     CHECK(partial.tab(partial.active()).kind == TabKind::Dashboard);
     delayed.capture(partial, {"/same", "/same"}, true);
-    CHECK(delayed.saved().selected == "sprint" && delayed.saved().tabs.size() == 5);
+    CHECK(delayed.saved().selected == "dashboard:Dashboard" && delayed.saved().tabs.size() == 5);
     SavedLayout aiFocus = wanted;
     aiFocus.selected = "ai:ada";
     TabLayout pending(aiFocus);
-    Model waiting({}, {"sprint"});
+    Model waiting({}, {"Dashboard"});
     pending.reopenTerminals(waiting);
     pending.restore(waiting, extension, false);
     pending.capture(waiting, {"/same", "/same"}, false);

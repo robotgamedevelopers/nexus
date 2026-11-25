@@ -154,7 +154,7 @@ struct App {
     bool backdrop = false;          // --backdrop: the screenshot is see-through over stripes
     std::unique_ptr<PraxTerminals> terminals;   // over the window's kit, from open() to close()
     std::vector<Machine> machines;  // the fleet's machines, which name a terminal tab in ssh to one (remote.h)
-    std::unique_ptr<PraxBoard> board;           // the sprint tab's page, over the window's kit, from open() to close()
+    std::unique_ptr<PraxBoard> board;           // a dashboard tab's page, over the window's kit, from open() to close()
     // The sign-in page and the board's links, opened in the system's browser off the frame thread, open() to close().
     std::unique_ptr<UrlOpener> urls;
     bool statePages = true;         // false with --state: a screenshot of a state file loads no dashboard's page
@@ -597,7 +597,7 @@ void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
     }
 }
 
-// While the sprint tab shows, its page takes the events it is routed (sprint.h routeBoardEvent); the rest go to the
+// While a dashboard tab shows, its page takes the events it is routed (sprint.h routeBoardEvent); the rest go to the
 // window's tree.
 bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
     auto& a = appOf(context);
@@ -980,8 +980,12 @@ int main(int argc, char** argv) {
     static Model model({});
 #if NEXUS_LINK
     if (fromState) {
+        // The state file's dashboards as a server's are taken (frame_host.h takeDashboards): each one checked.
+        std::vector<std::string> refused;
         std::vector<std::string> dashboards;
-        for (const sync::Dashboard& d : held.dashboards()) dashboards.push_back(d.name);
+        for (const sync::Dashboard& d : sync::shownDashboards(held.dashboards(), &refused)) dashboards.push_back(d.name);
+        for (const std::string& why : refused)
+            std::fprintf(stderr, "nexus: the state file has %s\n", loggable(why).c_str());
         model.sync_dashboards(dashboards);
         sync::AIStrip{}.take(model, held);
         if (!tabGiven) tab = model.active() + 1;
@@ -993,17 +997,14 @@ int main(int argc, char** argv) {
     bool haveLayout = false;
     bool layoutReadable = true;
     if (live) {
+        // A refused layout file is kept aside and the window saves its own (tab_order.h loadLayout): never silent, and
+        // never a reason to stop saving for good.
         layoutStore = writer.wrap(fileLayoutStore());
-        std::string text, error;
-        if (layoutStore.read(&text, &error)) {
-            haveLayout = parseLayout(text, &savedLayout);
-            if (!haveLayout) error = "unrecognized or malformed layout";
-        }
-        if (!error.empty()) {
-            layoutReadable = false;
-            std::fprintf(stderr, "nexus: %s could not be restored (%s); leaving the file in place\n",
-                         layoutStore.where.c_str(), error.c_str());
-        }
+        LayoutLoad load = loadLayout(layoutStore, fileRefusedLayoutStore());
+        if (!load.warning.empty()) std::fprintf(stderr, "nexus: %s\n", load.warning.c_str());
+        savedLayout = std::move(load.layout);
+        haveLayout = load.have;
+        layoutReadable = load.keep;
     }
     TabLayout layout(std::move(savedLayout));
     if (tabGiven) layout.personSelected();
