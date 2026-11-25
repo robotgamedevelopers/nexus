@@ -63,6 +63,7 @@ struct SessionsChange {
     std::vector<ServerAI> ais;
     std::vector<SignInOffer> offers;
     std::uint64_t nextAction = 0;
+    std::vector<Dashboard> dashboards;  // the dashboards the server offers, in order (format 4 on; none before)
 };
 
 // Formats 1 to 3. A format that lacks a field does not write it (activity before 2, the instance before 2, the

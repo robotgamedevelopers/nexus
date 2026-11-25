@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "model.h"
+#include "sync/dashboards.h"
 #include "sync/formats.h"
 #include "sync/secrets.h"
 #include "sync/signin.h"
@@ -172,6 +173,10 @@ public:
     // First action from this client still unapplied when the server built this exact state. Zero on older links.
     std::uint64_t nextAction() const { return nextAction_; }
     void setNextAction(std::uint64_t next) { nextAction_ = next; }
+    // The dashboards the server offers (sync/dashboards.h), in order: one tab each at the head of a window's strip.
+    // On a table link (format 4 on); a link of 1 to 3 carries none, and a window then reads none.
+    const std::vector<Dashboard>& dashboards() const { return dashboards_; }
+    void setDashboards(std::vector<Dashboard> list) { dashboards_ = std::move(list); }
     const SessionView* find(SessionId id) const;
     // The AI's first session: the one with the lowest id. Null when the AI has none.
     const SessionView* first(const std::string& aiName) const;
@@ -211,6 +216,7 @@ private:
     std::uint32_t format_ = kStateFormat;
     int unknown_ = 0;
     std::uint64_t nextAction_ = 0;
+    std::vector<Dashboard> dashboards_;
 };
 
 // A state kept in a file, for `nexus --state` (a screenshot of what a server's state draws) and tests' fixtures: the

@@ -1012,6 +1012,15 @@ struct Builder {
         return cached.advance;
     }
 
+    // A dialog that is typed into: at the window's top where the view asks for it (View::dialogsAtTop, iOS), where the
+    // on-screen keyboard never covers it; centred otherwise. A modal is placed over the whole window, which knows
+    // nothing of the keyboard's room.
+    PrKitDialogStyle typedDialogStyle() const {
+        PrKitDialogStyle style{};
+        if (view.dialogsAtTop) style.modal.placement = PrKitModalPlacement_Top;
+        return style;
+    }
+
     PrVec2 boardExtent() const {
         return {view.extent.x, std::max(0.0f, view.extent.y - (look.tabs.height * k() + 1))};
     }
@@ -1253,11 +1262,16 @@ struct Builder {
                 extent = PrVec2{last.right - last.left, last.bottom - last.top};
         }
         view.boardBox = box;
-        std::string problem = "this build has no sprint board";
+        std::string problem = "this build has no dashboard";
         if (view.board == nullptr || !view.board->show(box, extent, &problem)) {
             PrLayoutNode column = element(box, Part::Column);
             PrLayoutNode centered = element(column, Part::Centered);
             caption(centered, problem, textStyle(PrKitTextRole_Body, kNoticeTone, PrKitTextAlign_Center));
+            // A dashboard waits on the server, so the link's own line shows under it while there is one: connecting,
+            // lost, or why it failed (a host key that changed, a key the server did not take), never hidden behind
+            // the wait.
+            if (!view.status.empty())
+                caption(centered, view.status, textStyle(PrKitTextRole_BodySmall, kStatusTone, PrKitTextAlign_Center));
         }
     }
 
@@ -2175,7 +2189,7 @@ struct Builder {
         }
         view.prompt = edit;
         // The focus is the secret dialog's while it shows (secretDialog).
-        if (!pickerInput && asking == nullptr && prUiFocus(ui) != edit)
+        if (!pickerInput && asking == nullptr && prUiFocus(ui) != edit && !view.promptDismissed)
             prUiSetFocus(ui, edit);
         PrStringView changed{};
         const bool coming = view.cutComing;
@@ -2242,7 +2256,7 @@ struct Builder {
         dialog.key = prHashString(sv("secret"), 0);
         const std::string title = asking->account + ": " + asking->what;
         dialog.title = sv(title);
-        const PrLayoutNode body = prKitDialog(kit, window, dialog, PrKitDialogStyle{});
+        const PrLayoutNode body = prKitDialog(kit, window, dialog, typedDialogStyle());
         if (body == kPrLayoutNodeNone) {
             // The person closed it (Escape, the close button, a press outside): the request is cancelled.
             view.secretField = kPrLayoutNodeNone;
@@ -2374,6 +2388,55 @@ struct Builder {
         view.displayedLimit = view.windowApp.limitOffer;
         if (!view.accountPicker) view.lastHighlightedAccount.clear();
         secretDialog(window);
+        serverDialog(window);
+    }
+
+    // The server dialog (server_choice.h), on iOS where nothing names the server: Prax's dialog, titled Server, saying
+    // what to type, one field with the kept server or what is typed, and the reason the last Enter was not taken.
+    // Enter checks it: a good address is kept and used; a bad one stays, with its reason under the field. Closing it
+    // keeps the server there was; with none kept it opens again, as the window has nothing to connect to.
+    void serverDialog(PrLayoutNode window) {
+        ServerChoice* choice = view.serverChoice;
+        if (choice == nullptr || !choice->asking() || asking != nullptr) {
+            if (view.serverShown) {
+                prKitSetOpen(kit, window, false);
+                view.serverShown = false;
+            }
+            return;
+        }
+        const bool fresh = !view.serverShown;
+        if (fresh) {
+            prKitSetOpen(kit, window, true);
+            view.serverShown = true;
+        }
+        PrKitDialog dialog{};
+        dialog.key = prHashString(sv("server"), 0);
+        dialog.title = sv("Server");
+        const PrLayoutNode body = prKitDialog(kit, window, dialog, typedDialogStyle());
+        if (body == kPrLayoutNodeNone) {
+            if (!fresh) choice->cancel();
+            view.serverShown = false;
+            return;
+        }
+        auto about = textStyle(PrKitTextRole_Body, PrKitTone_Primary);
+        about.wrap = PrKitWrap_Wrap;
+        label(body, "The nexus-server this device connects to, as user@host.", about);
+        const bool enter = prUiKeyCaptured(ui, body, PrAppKey_Enter, 0);
+        PrKitTextField field{};
+        field.key = prHashString(sv("server-field"), 0);
+        const std::string_view typed = choice->typed();
+        field.text = sv(typed);
+        field.inputKind = PrAppTextInputKind_Email;   // a keyboard with @, and no capitals put in
+        const PrLayoutNode edit = prKitTextField(kit, body, field, PrKitFieldStyle{});
+        if (prUiFocus(ui) != edit) prUiSetFocus(ui, edit);
+        PrStringView changed{};
+        if (prKitTextChanged(kit, edit, &changed)) choice->type(std::string_view(changed.data, changed.size));
+        if (!choice->problem().empty()) {
+            auto problem = textStyle(PrKitTextRole_BodySmall, kNoticeTone);
+            problem.wrap = PrKitWrap_Wrap;
+            label(body, std::string(choice->problem()), problem);
+        }
+        if (enter) choice->submit();
     }
 
     std::string policyUiState(const Tab* active) {
@@ -2664,6 +2727,14 @@ struct Builder {
                 case Panel::Status:
                     caption(element(window, Part::Footer), view.status,
                         textStyle(PrKitTextRole_BodySmall, kStatusTone, PrKitTextAlign_Center));
+                    // Where the window asks for its server (iOS), the way to change it, under the line that says how
+                    // the link to it goes.
+                    if (view.serverChoice != nullptr && !view.serverChoice->current().empty()) {
+                        const auto button = prKitButton(kit, element(window, Part::Footer),
+                            {.key = prHashString(sv("change-server"), 0), .text = sv("Change server")}, {});
+                        if (asking == nullptr && !view.serverChoice->asking() && prKitActivated(kit, button))
+                            view.serverChoice->change();
+                    }
                     break;
             }
         }
@@ -2736,23 +2807,30 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     Look& look = *view.look;
     const bool scaleChanged = look.textSteps != view.askedTextSteps;
     const bool opacityChanged = look.overlay && look.overlayOpacity != view.windowApp.overlayOpacity;
-    const bool cardChanged = look.messageCard != view.windowApp.messageCard || look.tabs != view.windowApp.surface.tabs || look.prompt != view.windowApp.surface.prompt;
-    const bool transcriptChanged = look.transcriptStyle != view.windowApp.transcriptStyle;
+    // The prompt as the policy gives it, at the share of its width this screen takes (View::columnScale).
+    PromptStyle askedPrompt = view.windowApp.surface.prompt;
+    askedPrompt.width *= view.columnScale;
+    // The transcript as the policy gives it, with the replies at the column's full width where the view asks for it
+    // (View::fullWidthReplies).
+    TranscriptStyle askedTranscript = view.windowApp.transcriptStyle;
+    if (view.fullWidthReplies) askedTranscript.replyWidth = 100;
+    const bool cardChanged = look.messageCard != view.windowApp.messageCard || look.tabs != view.windowApp.surface.tabs || look.prompt != askedPrompt;
+    const bool transcriptChanged = look.transcriptStyle != askedTranscript;
     if (!scaleChanged && !opacityChanged && !cardChanged && !transcriptChanged) return false;
     if (scaleChanged || cardChanged) view.tabWidths.clear();
     if (opacityChanged || cardChanged || transcriptChanged) {
-        if (look.transcriptStyle.showNotices != view.windowApp.transcriptStyle.showNotices ||
-            look.transcriptStyle.showTools != view.windowApp.transcriptStyle.showTools ||
-            look.transcriptStyle.codeSizeOffset != view.windowApp.transcriptStyle.codeSizeOffset ||
-            look.transcriptStyle.listItemGapLines != view.windowApp.transcriptStyle.listItemGapLines ||
-            look.transcriptStyle.listGap != view.windowApp.transcriptStyle.listGap ||
-            look.transcriptStyle.replyWidth != view.windowApp.transcriptStyle.replyWidth ||
-            look.prompt.width != view.windowApp.surface.prompt.width)
+        if (look.transcriptStyle.showNotices != askedTranscript.showNotices ||
+            look.transcriptStyle.showTools != askedTranscript.showTools ||
+            look.transcriptStyle.codeSizeOffset != askedTranscript.codeSizeOffset ||
+            look.transcriptStyle.listItemGapLines != askedTranscript.listItemGapLines ||
+            look.transcriptStyle.listGap != askedTranscript.listGap ||
+            look.transcriptStyle.replyWidth != askedTranscript.replyWidth ||
+            look.prompt.width != askedPrompt.width)
             view.items.clear();
-        look.transcriptStyle = view.windowApp.transcriptStyle;
+        look.transcriptStyle = askedTranscript;
         look.messageCard = view.windowApp.messageCard;
         look.tabs = view.windowApp.surface.tabs;
-        look.prompt = view.windowApp.surface.prompt;
+        look.prompt = askedPrompt;
         if (opacityChanged) look.overlayOpacity = view.windowApp.overlayOpacity;
         prUiForget(kit->ui, &look);
     }

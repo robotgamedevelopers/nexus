@@ -1,0 +1,78 @@
+# iOS and iPadOS (cmake/ios.cmake, docs/ios.md): the client built for devices and for the simulator, and the
+# simulator build's tests run on a simulator device (Prax's runner, ctest's emulator). In a workflow of its own, beside
+# ci.yml, with ci.yml's rules: each per-commit job finishes in 2 minutes, warnings are errors (CMakeLists.txt), and
+# compiles go through the machine's ccache with Prax's downloads kept per runner (ci.yml's opening comment says how).
+#
+# The runners labelled `services` have Xcode, its Metal toolchain, an iOS simulator runtime, and rustup with the
+# aarch64-apple-ios and aarch64-apple-ios-sim targets, which Starlark's iOS build needs (cmake/ios.cmake).
+
+name: ios
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ios:
+    # a pull request from a fork never runs on the fleet's runners
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, fleet, macOS, ARM64, services]
+    name: ios-${{ matrix.target }}
+    timeout-minutes: 2
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Devices (arm64): the app and the shot build, signed ad hoc; nothing runs.
+          - target: device
+            sysroot: iphoneos
+          # The simulator: the same, and the unit tests and the iOS tests run on a simulator device.
+          - target: simulator
+            sysroot: iphonesimulator
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Caches outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          caches="$HOME/Library/Caches/nexus-ci"
+          mkdir -p "$caches/ccache" "$caches/$RUNNER_NAME/prax-downloads"
+          {
+            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+            echo "CCACHE_DIR=$caches/ccache"
+            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+            echo "CCACHE_MAXSIZE=4G"
+            echo "JOBS=$(sh .github/job-cores.sh)"
+            echo "CARGO_BUILD_JOBS=$(sh .github/job-cores.sh)"
+            echo "TEST_JOBS=$(sysctl -n hw.ncpu)"
+          } >> "$GITHUB_ENV"
+      - name: Configure (Release, ${{ matrix.sysroot }})
+        shell: bash
+        run: |
+          set -euo pipefail
+          launcher=()
+          if command -v ccache >/dev/null; then
+            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                      -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache)
+          else
+            echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=${{ matrix.sysroot }} -DCMAKE_OSX_ARCHITECTURES=arm64 "${launcher[@]}"
+      - name: Build
+        run: cmake --build build --parallel "$JOBS"
+      - name: Unit and iOS tests on a simulator device
+        if: matrix.target == 'simulator'
+        run: ctest --test-dir build -L 'unit|ios' -j "$TEST_JOBS" --output-on-failure --no-tests=error

@@ -148,10 +148,10 @@ bool parseTextScale(std::string_view text, int* steps, std::string* error);
 // The store in a file, text-scale.txt beside tab-order.txt. `where` is empty if there is no home.
 TabOrderStore fileTextScaleStore();
 
-// The steps to start at: 0 (the default scale) if nothing is saved, and on an unreadable or malformed file, with
-// `warning` one line naming the file, what was wrong and that deleting it resets the scale. A saved number outside `lo`
-// to `hi` is clamped into it, and `warning` says so.
-int loadTextScale(const TabOrderStore& store, int lo, int hi, std::string* warning);
+// The steps to start at: `unsaved` (the platform's default, style.h kDefaultTextSteps) if nothing is saved, and on an
+// unreadable or malformed file, with `warning` one line naming the file, what was wrong and that deleting it resets the
+// scale. A saved number outside `lo` to `hi` is clamped into it, and `warning` says so.
+int loadTextScale(const TabOrderStore& store, int lo, int hi, std::string* warning, int unsaved = 0);
 
 // Saves the steps. Returns false, with one line in `error` naming the file and the cause.
 bool saveTextScale(const TabOrderStore& store, int steps, std::string* error);

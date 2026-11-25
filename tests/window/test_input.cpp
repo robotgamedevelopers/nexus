@@ -2976,6 +2976,83 @@ void dashboardKeepsRosterDiagnosticsOffscreen() {
     CHECK(!h.hasText(prLayoutTreeRoot(h.tree), h.view.notice));
 }
 
+// The dashboard waits on the server: while it has no page, the link's line shows under the board's, so a link that
+// failed (here, a server whose host key changed) says why on the tab that shows, rather than waiting in silence.
+void aFailedLinkShowsOnTheDashboard() {
+    Harness h(std::vector<AIInfo>{}, false, true);
+    h.board.page = false;
+    h.board.problem = "waiting for nexus-server to say which dashboards it offers";
+    h.view.status = "glenn@studio: ssh to glenn@studio: the server's ecdsa-sha2-nistp256 host key is not the one kept";
+    h.frame();
+    h.frame();
+    const PrLayoutNode root = prLayoutTreeRoot(h.tree);
+    CHECK(h.board.shows > 0 && h.hasText(root, h.board.problem) && h.hasText(root, h.view.status));
+    const std::string failed = h.view.status;
+    h.view.status.clear();
+    h.frame();
+    CHECK(h.hasText(root, h.board.problem) && !h.hasText(root, failed));
+}
+
+// An iPad's regular width (View::columnScale, style.h kRegularWidthColumn): the prompt box and the transcript's column
+// stand 10% narrower than the policy's width, centred where they stood, and their left and right edges still line up.
+void regularWidthNarrowsThePromptAndTheColumn() {
+    Harness h;
+    h.frame();
+    h.frame();
+    const PrRect box = h.bounds(h.view.promptBox);
+    const PrRect column = h.bounds(h.view.items[h.active().id].column);
+    const auto near = [](float a, float b) { return std::fabs(a - b) <= 1.f; };
+    CHECK(box.right - box.left > 100);
+    CHECK(near(column.left, box.left) && near(column.right, box.right));
+    h.view.columnScale = style::kRegularWidthColumn;
+    h.frame();
+    h.frame();
+    const PrRect narrow = h.bounds(h.view.promptBox);
+    const PrRect narrowColumn = h.bounds(h.view.items[h.active().id].column);
+    CHECK(near(narrow.right - narrow.left, (box.right - box.left) * style::kRegularWidthColumn));
+    CHECK(near(narrow.left + narrow.right, box.left + box.right));
+    CHECK(near(narrowColumn.left, narrow.left) && near(narrowColumn.right, narrow.right));
+    if (!near(narrow.right - narrow.left, (box.right - box.left) * style::kRegularWidthColumn) ||
+        !near(narrowColumn.left, narrow.left) || !near(narrowColumn.right, narrow.right))
+        std::fprintf(stderr, "prompt %g..%g -> %g..%g, column %g..%g -> %g..%g\n", box.left, box.right, narrow.left,
+            narrow.right, column.left, column.right, narrowColumn.left, narrowColumn.right);
+}
+
+// An iPhone's compact width (View::fullWidthReplies): an AI's reply takes the transcript column's whole width, where
+// the policy's reply_width (two thirds by default) wraps it at about half the screen. The column holds the panel's
+// padding, so the whole width is the panel's inside: a reply half as wide again, and most of the column.
+void compactWidthRepliesTakeTheWholeColumn() {
+    Harness h;
+    h.extent = h.view.extent = {402, 874};
+    const std::string reply = "The nightly went red in the link walk: seed 17 loses a diff when the window reconnects "
+        "while the server is still sending the state it had before the link was made again.";
+    h.model.append(0, {EntryKind::AI, reply});
+    h.frame();
+    h.frame();
+    const auto near = [](float a, float b) { return std::fabs(a - b) <= 1.f; };
+    const auto widths = [&](float* text, float* column) {
+        const auto entries = h.entries();
+        const PrLayoutNode body = entries.empty() ? kPrLayoutNodeNone : h.findText(entries.back(), reply);
+        CHECK(body != kPrLayoutNodeNone);
+        if (body == kPrLayoutNodeNone) return;
+        const PrRect r = h.bounds(body);
+        const PrRect c = h.bounds(h.view.items[h.active().id].column);
+        *text = r.right - r.left;
+        *column = c.right - c.left;
+    };
+    float text = 0, column = 0;
+    widths(&text, &column);
+    CHECK(column > 100 && text < column * 0.7f);
+    h.view.fullWidthReplies = true;
+    h.frame();
+    h.frame();
+    float fullText = 0, fullColumn = 0;
+    widths(&fullText, &fullColumn);
+    CHECK(near(fullColumn, column) && fullText > text * 1.4f && fullText > fullColumn * 0.8f);
+    if (!(fullText > text * 1.4f && fullText > fullColumn * 0.8f))
+        std::fprintf(stderr, "reply %g of column %g -> %g of %g\n", text, column, fullText, fullColumn);
+}
+
 } // namespace
 
 // The test bundle in tests/policy/window.cmake returns one candidate appearance per active tab.
@@ -3471,6 +3548,9 @@ int main(int argc, char** argv) {
     sprintTabSaysWhyThereIsNoPage();
     textKeysZoomTheBoard();
     dashboardKeepsRosterDiagnosticsOffscreen();
+    regularWidthNarrowsThePromptAndTheColumn();
+    compactWidthRepliesTakeTheWholeColumn();
+    aFailedLinkShowsOnTheDashboard();
     typingFillsTheActiveDraft();
     enterHoldsAndEmptyEnterSendsExactlyTheText();
     logoutRequiresAnExplicitEnterAndNeverBecomesChat();
