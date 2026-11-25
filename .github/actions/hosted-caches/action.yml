@@ -55,8 +55,17 @@ runs:
             brew list --versions "$formula" >/dev/null 2>&1 || need+=("$formula")
           done
           if [ "${#need[@]}" -gt 0 ]; then
+            poured="$RUNNER_TEMP/brew-poured"
+            touch "$poured"
             HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 \
               HOMEBREW_NO_ENV_HINTS=1 brew install --quiet "${need[@]}"
+            # What was just poured (the formulae and their dependencies, protobuf's abseil among them) gets a fixed old
+            # time: the cached programs that link these libraries are then not older than them, and are not relinked
+            # (11 programs, 18 s of build-macos on PR #114, with no source changed).
+            prefix=$(brew --prefix)
+            count=$(find "$prefix/Cellar" "$prefix/lib" "$prefix/include" -newer "$poured" \( -type f -o -type l \) | wc -l)
+            find "$prefix/Cellar" "$prefix/lib" "$prefix/include" -newer "$poured" \( -type f -o -type l \) -exec touch -h -t 202001010000 {} +
+            echo "poured ${need[*]}: $count files set to 2020-01-01"
           fi
         fi
         if [ "$RUNNER_OS" = Linux ]; then

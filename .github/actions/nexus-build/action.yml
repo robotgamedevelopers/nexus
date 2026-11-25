@@ -1,6 +1,9 @@
 # Configure and build nexus on a GitHub-hosted macOS or Linux runner, after hosted-caches. The same steps in ci.yml
 # (against a restored cache) and cache-warm.yml (which saves the result), so a cache is exactly what a job then builds.
-#   mac-release  Release with the link (mosh, protobuf), ThinLTO through the cache under $NEXUS_CACHES/lto
+#   mac-release  Release with the link (mosh, protobuf), ThinLTO through the cache under $NEXUS_CACHES/lto (the
+#                nightly, on the fleet Mac)
+#   mac-debug    Debug with the link: no LTO (Prax turns it on for Release only), asserts on, and no debug information
+#                (-O0 alone: the build tree, its cache and the links are about half the size); ci.yml's macOS build
 #   mac-asan     Debug with AddressSanitizer and UndefinedBehaviorSanitizer, without the window, its logic and the link
 #   linux-release, linux-asan   the same on Linux with clang and lld (no window, no window logic, no link: CMakeLists.txt)
 # Warnings are errors: CMakeLists.txt sets the flags.
@@ -8,7 +11,7 @@ name: nexus-build
 description: Configure and build nexus on a GitHub-hosted runner
 inputs:
   config:
-    description: mac-release, mac-asan, linux-release or linux-asan
+    description: mac-release, mac-debug, mac-asan, linux-release or linux-asan
     required: true
   targets:
     description: the targets to build (empty for all)
@@ -44,6 +47,10 @@ runs:
             cmake -S . -B build ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Release "${launch[@]}" \
               -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-cache_path_lto,$NEXUS_CACHES/lto" \
               -DNEXUS_E2E_TAILNET= ;;
+          mac-debug)
+            cmake -S . -B build ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Debug "${launch[@]}" \
+              -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache -DNEXUS_E2E_TAILNET= \
+              -DCMAKE_C_FLAGS_DEBUG=-O0 -DCMAKE_CXX_FLAGS_DEBUG=-O0 -DCMAKE_OBJC_FLAGS_DEBUG=-O0 -DCMAKE_OBJCXX_FLAGS_DEBUG=-O0 ;;
           mac-asan)
             cmake -S . -B build ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Debug "${off[@]}" "${launch[@]}" \
               -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache "${asan[@]}" ;;
