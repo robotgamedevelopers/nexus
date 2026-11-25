@@ -826,7 +826,7 @@ void remove_dashboard_removes_exactly_that_tab() {
 // An active dashboard's tab removed: the tab selected before it shows, by close's rule.
 void remove_active_dashboard_goes_back_to_the_tab_selected_before() {
     Model m(three(), Names{"sprint", "fleet"});
-    CHECK(m.select_tab(4) && m.select_tab(1));   // AI bo, then fleet
+    CHECK(m.select_tab(3) && m.select_tab(1));   // AI bo, then fleet
     CHECK(history(m) == "3 1 4");
     CHECK(m.remove_dashboard(1));
     CHECK(m.tab(m.active()).id == 1 && m.tab(m.active()).name == "bo" && history(m) == "3 1");
@@ -928,7 +928,7 @@ void remove_ai_removes_exactly_that_tab() {
     CHECK(m.append(2, Entry{EntryKind::AI, "said"}));
     CHECK(m.set_draft(2, "unsent"));
     CHECK(m.remove_ai(2));
-    CHECK(ids(m) == "3 0 2" && names(m) == " ada cy" && m.active() == 0);
+    CHECK(ids(m) == "3 0 2" && names(m) == "sprint ada cy" && m.active() == 0);
     CHECK(history(m) == "3");
     CHECK(m.add_ai({"bo", ""}));   // back: a new tab, empty, with a new id
     CHECK(ids(m) == "3 0 2 4" && m.tab(3).transcript.empty() && m.tab(3).draft.empty());
