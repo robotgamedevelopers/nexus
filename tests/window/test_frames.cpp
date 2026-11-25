@@ -640,11 +640,13 @@ sync::Sessions stateOf(const Model& model, sync::Activity activity, const std::s
     return sync::Sessions(std::move(sessions));
 }
 
+// The server's state as the window hears it: the server's one dashboard, the sprint tab's fixture board, with it.
 LinkState connected(sync::Sessions sessions, std::uint64_t heardMsAgo = 0) {
     LinkState s;
     s.phase = sync::LinkPhase::Connected;
     s.heardMsAgo = heardMsAgo;
     s.sessions = std::move(sessions);
+    s.sessions.setDashboards({sync::Dashboard{"sprint", kUrl}});
     return s;
 }
 

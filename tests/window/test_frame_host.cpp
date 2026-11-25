@@ -40,7 +40,7 @@ struct Window {
         host.view = &view;
         host.strip = sync::AIStrip({}, savedAI, {});
         host.connect(&link, "studio");
-        view.selectedId = model.tab(model.active()).id;
+        if (model.tab_count() != 0) view.selectedId = model.tab(model.active()).id;
     }
 
     // What the view's round does after its strips (view.cpp): a selected tab other than the one at the round before
