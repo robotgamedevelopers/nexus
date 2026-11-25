@@ -195,12 +195,12 @@ void mailboxAppliesInOrder() {
 // The systems' codes: only success grants; cancelling is Cancelled; no way to authenticate is Unavailable; the rest,
 // unknown codes included, fail. Only the session leaving or locking relocks.
 void systemCodesMap() {
-    CHECK(lockAnswerForLAError(kLAErrorAuthenticationFailed) == LockAnswer::Failed);
-    CHECK(lockAnswerForLAError(kLAErrorUserCancel) == LockAnswer::Cancelled);
-    CHECK(lockAnswerForLAError(kLAErrorSystemCancel) == LockAnswer::Cancelled);
-    CHECK(lockAnswerForLAError(kLAErrorAppCancel) == LockAnswer::Cancelled);
-    CHECK(lockAnswerForLAError(kLAErrorPasscodeNotSet) == LockAnswer::Unavailable);
-    CHECK(lockAnswerForLAError(kLAErrorNotInteractive) == LockAnswer::Unavailable);
+    CHECK(lockAnswerForLAError(kLocalAuthErrorAuthenticationFailed) == LockAnswer::Failed);
+    CHECK(lockAnswerForLAError(kLocalAuthErrorUserCancel) == LockAnswer::Cancelled);
+    CHECK(lockAnswerForLAError(kLocalAuthErrorSystemCancel) == LockAnswer::Cancelled);
+    CHECK(lockAnswerForLAError(kLocalAuthErrorAppCancel) == LockAnswer::Cancelled);
+    CHECK(lockAnswerForLAError(kLocalAuthErrorPasscodeNotSet) == LockAnswer::Unavailable);
+    CHECK(lockAnswerForLAError(kLocalAuthErrorNotInteractive) == LockAnswer::Unavailable);
     CHECK(lockAnswerForLAError(0) == LockAnswer::Failed);
     CHECK(lockAnswerForLAError(-8) == LockAnswer::Failed);
     CHECK(lockAnswerForConsent(kConsentVerified) == LockAnswer::Granted);

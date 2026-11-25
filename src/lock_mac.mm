@@ -10,14 +10,14 @@
 #include <utility>
 
 // The codes lockAnswerForLAError (client_lock.h) names, as this SDK defines them.
-static_assert(nexus::kLAErrorAuthenticationFailed == LAErrorAuthenticationFailed, "LAError moved");
-static_assert(nexus::kLAErrorUserCancel == LAErrorUserCancel, "LAError moved");
-static_assert(nexus::kLAErrorUserFallback == LAErrorUserFallback, "LAError moved");
-static_assert(nexus::kLAErrorSystemCancel == LAErrorSystemCancel, "LAError moved");
-static_assert(nexus::kLAErrorPasscodeNotSet == LAErrorPasscodeNotSet, "LAError moved");
-static_assert(nexus::kLAErrorAppCancel == LAErrorAppCancel, "LAError moved");
-static_assert(nexus::kLAErrorInvalidContext == LAErrorInvalidContext, "LAError moved");
-static_assert(nexus::kLAErrorNotInteractive == LAErrorNotInteractive, "LAError moved");
+static_assert(nexus::kLocalAuthErrorAuthenticationFailed == LAErrorAuthenticationFailed, "LAError moved");
+static_assert(nexus::kLocalAuthErrorUserCancel == LAErrorUserCancel, "LAError moved");
+static_assert(nexus::kLocalAuthErrorUserFallback == LAErrorUserFallback, "LAError moved");
+static_assert(nexus::kLocalAuthErrorSystemCancel == LAErrorSystemCancel, "LAError moved");
+static_assert(nexus::kLocalAuthErrorPasscodeNotSet == LAErrorPasscodeNotSet, "LAError moved");
+static_assert(nexus::kLocalAuthErrorAppCancel == LAErrorAppCancel, "LAError moved");
+static_assert(nexus::kLocalAuthErrorInvalidContext == LAErrorInvalidContext, "LAError moved");
+static_assert(nexus::kLocalAuthErrorNotInteractive == LAErrorNotInteractive, "LAError moved");
 
 @interface NexusLockObserver : NSObject
 @property(nonatomic) nexus::LockPost post;

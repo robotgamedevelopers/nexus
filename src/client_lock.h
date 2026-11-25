@@ -98,14 +98,14 @@ std::string lockMessage(LockState state, LockReason why, const std::string& meth
 //
 // LocalAuthentication's LAError (lock_mac.mm): a failed check is Failed; the person, the system or nexus cancelling is
 // Cancelled; no password or no way to show the prompt is Unavailable. Anything else is Failed: try again.
-inline constexpr long kLAErrorAuthenticationFailed = -1;
-inline constexpr long kLAErrorUserCancel = -2;
-inline constexpr long kLAErrorUserFallback = -3;
-inline constexpr long kLAErrorSystemCancel = -4;
-inline constexpr long kLAErrorPasscodeNotSet = -5;
-inline constexpr long kLAErrorAppCancel = -9;
-inline constexpr long kLAErrorInvalidContext = -10;
-inline constexpr long kLAErrorNotInteractive = -1004;
+inline constexpr long kLocalAuthErrorAuthenticationFailed = -1;
+inline constexpr long kLocalAuthErrorUserCancel = -2;
+inline constexpr long kLocalAuthErrorUserFallback = -3;
+inline constexpr long kLocalAuthErrorSystemCancel = -4;
+inline constexpr long kLocalAuthErrorPasscodeNotSet = -5;
+inline constexpr long kLocalAuthErrorAppCancel = -9;
+inline constexpr long kLocalAuthErrorInvalidContext = -10;
+inline constexpr long kLocalAuthErrorNotInteractive = -1004;
 LockAnswer lockAnswerForLAError(long code);
 
 // Windows' UserConsentVerificationResult (lock_win.cpp): Verified is Granted; no device, not set up for this user or
