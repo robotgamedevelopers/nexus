@@ -7,34 +7,21 @@
 #include "client_lock_platform.h"
 #include "ios_lock.h"
 
-// The codes lockAnswerForLAError (client_lock.h) names, read before LocalAuthentication's header, whose kLAError*
-// macros (LAPublicDefines.h) share their names and would replace them.
-namespace {
-constexpr long kNexusFailed = nexus::kLAErrorAuthenticationFailed;
-constexpr long kNexusUserCancel = nexus::kLAErrorUserCancel;
-constexpr long kNexusUserFallback = nexus::kLAErrorUserFallback;
-constexpr long kNexusSystemCancel = nexus::kLAErrorSystemCancel;
-constexpr long kNexusPasscodeNotSet = nexus::kLAErrorPasscodeNotSet;
-constexpr long kNexusAppCancel = nexus::kLAErrorAppCancel;
-constexpr long kNexusInvalidContext = nexus::kLAErrorInvalidContext;
-constexpr long kNexusNotInteractive = nexus::kLAErrorNotInteractive;
-} // namespace
-
 #import <LocalAuthentication/LocalAuthentication.h>
 #import <UIKit/UIKit.h>
 
 #include <mutex>
 #include <utility>
 
-// Those codes, as this SDK defines them.
-static_assert(kNexusFailed == LAErrorAuthenticationFailed, "LAError moved");
-static_assert(kNexusUserCancel == LAErrorUserCancel, "LAError moved");
-static_assert(kNexusUserFallback == LAErrorUserFallback, "LAError moved");
-static_assert(kNexusSystemCancel == LAErrorSystemCancel, "LAError moved");
-static_assert(kNexusPasscodeNotSet == LAErrorPasscodeNotSet, "LAError moved");
-static_assert(kNexusAppCancel == LAErrorAppCancel, "LAError moved");
-static_assert(kNexusInvalidContext == LAErrorInvalidContext, "LAError moved");
-static_assert(kNexusNotInteractive == LAErrorNotInteractive, "LAError moved");
+// The codes lockAnswerForLAError (client_lock.h) names, as this SDK defines them.
+static_assert(nexus::kLocalAuthErrorAuthenticationFailed == LAErrorAuthenticationFailed, "LAError moved");
+static_assert(nexus::kLocalAuthErrorUserCancel == LAErrorUserCancel, "LAError moved");
+static_assert(nexus::kLocalAuthErrorUserFallback == LAErrorUserFallback, "LAError moved");
+static_assert(nexus::kLocalAuthErrorSystemCancel == LAErrorSystemCancel, "LAError moved");
+static_assert(nexus::kLocalAuthErrorPasscodeNotSet == LAErrorPasscodeNotSet, "LAError moved");
+static_assert(nexus::kLocalAuthErrorAppCancel == LAErrorAppCancel, "LAError moved");
+static_assert(nexus::kLocalAuthErrorInvalidContext == LAErrorInvalidContext, "LAError moved");
+static_assert(nexus::kLocalAuthErrorNotInteractive == LAErrorNotInteractive, "LAError moved");
 
 namespace nexus {
 
