@@ -1508,7 +1508,7 @@ void sessions_dashboards_appended() {
     using List = std::vector<Dashboard>;
     const List one{{"Dashboard", "http://100.64.0.1:8080/"}};
     const List several{{"Dashboard", "http://100.64.0.1:8080/"}, {"Build farm", "https://ci.example/board"},
-        {"\xc3\x9cn\xc3\xafcode", "http://h:1/"}};
+        {"\xc3\x9c" "n\xc3\xaf" "code", "http://h:1/"}};
     for (std::uint32_t format : {kTablesFormat, kStateFormat}) {
         for (const List& list : {List{}, one, several}) {
             Sessions a;
