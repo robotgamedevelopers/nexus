@@ -214,7 +214,7 @@ bool isSignIn(ActionKind kind) {
 // action goes as a stop naming session 0 and nothing else, which every server refuses and counts, so that the numbers
 // stay unbroken and nothing of the sign-in leaves on a link of 1 to 3.
 void encodeFramed(Writer& w, const Action& a) {
-    if (isSignIn(a.kind)) {
+    if (isSignIn(a.kind) || isTerminal(a.kind)) {
         Writer stop;
         stop.u64(0);
         stop.str(std::string());
@@ -243,7 +243,7 @@ void encodeFramed(Writer& w, const Action& a) {
 // stop naming session 0, which every server refuses and counts, so that the numbers stay unbroken and the value never
 // leaves.
 void encodeUnframed(Writer& w, const Action& a) {
-    if (isSecret(a.kind) || isSignIn(a.kind) || a.kind == ActionKind::ResolveLimit) {
+    if (isSecret(a.kind) || isSignIn(a.kind) || isTerminal(a.kind) || a.kind == ActionKind::ResolveLimit) {
         w.byte(static_cast<std::uint8_t>(ActionKind::Stop));
         w.u64(0);
         w.str(std::string());
