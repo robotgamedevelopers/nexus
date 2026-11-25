@@ -6,7 +6,7 @@
 //   config            the window's settings (config.h): `nova-config <path>` and `sprint-url <url>`
 //   tab-order.txt, selected-tab.txt, text-scale.txt, terminals.txt
 //                     its saved preferences (tab_order.h)
-//   kept-drafts.txt   the drafts of friends with no tab, by server and friend name (tab_order.h KeptDraftsStore),
+//   kept-drafts.txt   the drafts of AIs with no tab, by server and AI name (tab_order.h KeptDraftsStore),
 //   kept-drafts.lock  and the lock each window's change of them takes
 //   nexus.log         on Windows only, its error lines (platform.h startErrorLog)
 //

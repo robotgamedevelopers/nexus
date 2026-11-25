@@ -1,4 +1,4 @@
-// Functional tests of nexus-server's friends layer (src/server/drivers.h): real driver processes (the fake driver,
+// Functional tests of nexus-server's AIs layer (src/server/drivers.h): real driver processes (the fake driver,
 // tests/driver) over real pipes, behind the hub, on a real store in a directory of the test's own, with short deadlines
 // and the real clock. Each case starts from an empty directory, and checks that every process it started is gone at
 // its end: no child of this process is left, collected or not.
@@ -8,21 +8,21 @@
 // The cases: normal, stop, silent, exit_mid_turn, malformed, ignores_stop, kill (ignores EOF and SIGTERM, so only
 // SIGKILL ends it), flood, fails_first_start, resume, restart (the server killed mid-turn and started again),
 // orphan (what a driver started is ended with it), escaped_output (a driver whose output another process holds open),
-// queue (the open entry while the friend writes, and a queued prompt taken at the turn's end), account (an account
+// queue (the open entry while the AI writes, and a queued prompt taken at the turn's end), account (an account
 // change restarts the session's driver), sign_in and no_credential (what a driver says of its account's login reaches
-// the hub), usage_limit (a usage limit moves the session to its friend's next signed-in account), no_account (a session
-// on no account starts no driver that needs one), friend_removed (a reload that takes the friend out mid-turn stops
+// the hub), usage_limit (a usage limit moves the session to its AI's next signed-in account), no_account (a session
+// on no account starts no driver that needs one), ai_removed (a reload that takes the AI out mid-turn stops
 // the turn and ends the driver, keeps the queue, starts nothing, and one that puts it back lets the queue go on),
-// friend_back_limited (a friend taken out unlimited and put back limited starts its next driver limited),
-// friend_removed_starting, friend_back_before_stop, friend_back_limited_queue, friend_back_moved and
-// friend_back_account (taken out while the driver starts, put back before the stopped turn ends, put back limited with
+// ai_back_limited (an AI taken out unlimited and put back limited starts its next driver limited),
+// ai_removed_starting, ai_back_before_stop, ai_back_limited_queue, ai_back_moved and
+// ai_back_account (taken out while the driver starts, put back before the stopped turn ends, put back limited with
 // prompts queued, put back with its instance moved to another machine or directory, and put back with its account
 // unlinked: each prompt goes once, under the new place, limit and account), no_registry
 // and no_registry_listed (a restart holding no registry sends nothing and starts nothing, and the first registry applied
-// says from itself alone whether the friend is in it),
+// says from itself alone whether the AI is in it),
 // instance_dir, instance_elsewhere, instance_moved and
 // instance_default (a session's instance: its directory, a machine other than this one, a move of its directory or
-// machine while its driver runs, and a session naming none, which takes its friend's default), window (busy with a
+// machine while its driver runs, and a session naming none, which takes its AI's default), window (busy with a
 // reply streaming after tool lines, idle, then down; with a state dir it writes each state there for `nexus --state`),
 // held (a prompt sent while the drivers are held for a batch is written only once they are released), secret_ask (a
 // driver's ask for a secret, refused with no window to take it, then pasted, stored and answered), secret_sign_in
@@ -152,19 +152,19 @@ const char* const kHost = "testhost";
 // ada's session: the first the server makes.
 constexpr sync::SessionId kAda = 1;
 
-// The accounts and friends a server holds unless a case sets its own: ada, linked to the account work (of the fake
+// The accounts and AIs a server holds unless a case sets its own: ada, linked to the account work (of the fake
 // driver's provider), with no default and no instance. A server holds a registry before its drivers start, as
-// nexus-server does once its committed files read; with none no friend is listed (Drivers::listed).
+// nexus-server does once its committed files read; with none no AI is listed (Drivers::listed).
 accounts::Registry adaRegistry() {
     accounts::Registry r;
     r.accounts = {{"work", "fake"}};
-    r.friends = {{"ada", {"work"}, ""}};
+    r.ais = {{"ada", {"work"}, ""}};
     return r;
 }
 
-// nexus-server's friends over a store in `dir`: the store, the hub and the drivers, as the server makes them; with
+// nexus-server's AIs over a store in `dir`: the store, the hub and the drivers, as the server makes them; with
 // `secrets`, the secret dialog too, its files under `dir`/accounts, offered to a window while `takers` holds. With
-// `registry` false, the hub holds no accounts and friends, as when the committed files do not read at the start.
+// `registry` false, the hub holds no accounts and AIs, as when the committed files do not read at the start.
 struct Server {
     std::unique_ptr<store::Fs> fs = store::make_posix_fs();
     DurableStore store;
@@ -207,9 +207,9 @@ struct Server {
         // ada's session, as a window's ensure makes it (none on a restart: the store holds it)
         sync::Action a;
         a.kind = sync::ActionKind::Ensure;
-        a.friendName = "ada";
+        a.aiName = "ada";
         CHECK(hub->apply(a));
-        CHECK(store.find(kAda) != nullptr && store.find(kAda)->info.friendName == "ada");
+        CHECK(store.find(kAda) != nullptr && store.find(kAda)->info.aiName == "ada");
         see();
     }
 
@@ -251,12 +251,12 @@ struct Server {
 
     const Supervisor& sup() { return *drivers->supervisor(kAda); }
 
-    // ada's whole transcript, an entry a line: "P " the person's, "F " the friend's, "T " a tool line, "N " a notice.
+    // ada's whole transcript, an entry a line: "P " the person's, "F " the AI's, "T " a tool line, "N " a notice.
     std::vector<std::string> transcript() const {
         std::vector<std::string> out;
         if (const sync::StoredSession* t = store.find(kAda)) {
             for (const sync::EntryRef& e : t->transcript) {
-                out.push_back(std::string(e->kind == EntryKind::Person ? "P " : e->kind == EntryKind::Friend ? "F " :
+                out.push_back(std::string(e->kind == EntryKind::Person ? "P " : e->kind == EntryKind::AI ? "F " :
                     e->kind == EntryKind::Tool ? "T " :
                     "N ") + e->text);
             }
@@ -293,7 +293,7 @@ void dump(const Server& s) {
 // ada's drivers file and script.
 void setUp(const std::string& dir, const std::string& fake, const std::string& script) {
     writeFile(dir + "/ada.script", script);
-    writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
+    writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nai ada fake " + dir +
         "\n");
 }
 
@@ -341,8 +341,8 @@ void stop(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.drivers->pid(kAda) == first);
 }
 
-// The friend's text growing shows as the tab's open entry, in memory only; a prompt queued meanwhile waits for the
-// turn's end (here a stop), then goes to the driver as the next turn; one queued with the friend idle goes at once.
+// The AI's text growing shows as the tab's open entry, in memory only; a prompt queued meanwhile waits for the
+// turn's end (here a stop), then goes to the driver as the next turn; one queued with the AI idle goes at once.
 void queue(Server& s, const std::string& dir, const std::string& fake) {
     setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Work\"}\nawait-stop\n"
         "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
@@ -431,9 +431,9 @@ void queueUnconfigured(Server& s, const std::string& dir, const std::string& fak
     CHECK(s.store.find(kAda)->queue.empty());
 }
 
-// A friend with no driver configured shows down (steady red), not idle: from the session's making, through a prompt
+// An AI with no driver configured shows down (steady red), not idle: from the session's making, through a prompt
 // refused for want of a driver and one queued, which stays queued. Once the drivers file gives one, the server reads
-// it again within kResolveMs: the friend shows idle, and the queued prompt goes to the new driver without another
+// it again within kResolveMs: the AI shows idle, and the queued prompt goes to the new driver without another
 // action of the person's.
 void unconfigured(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.activity() == sync::Activity::Down);
@@ -625,7 +625,7 @@ void primaryRoute(Server& s, const std::string& dir, const std::string& fake) {
         "on-start 1 emit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
         "on-start 2 emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nexit 0\n");
     std::ostringstream driver;
-    driver << "driver codex /unconfigured-named-friend-driver\nprimary-driver codex ["
+    driver << "driver codex /unconfigured-named-AI-driver\nprimary-driver codex ["
            << std::quoted(fake) << ",\"--script\"," << std::quoted(script) << "]\n";
     const auto route = [&](const std::string& cwd) { return driver.str() + "primary codex personal " + cwd + "\n"; };
     writeFile(dir + "/drivers", route(workspace));
@@ -666,7 +666,7 @@ void primaryRoute(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(has(starts, "resume=\naccount=personal\nlimit=cwd\n"));
     CHECK(has(starts, "resume=reported-1\naccount=personal\nlimit=cwd\n"));
     CHECK(readFile(dir + "/starts") == "2\n");
-    CHECK(s.hub->accounts()->friendNamed(kPrimaryChat) == nullptr);
+    CHECK(s.hub->accounts()->aiNamed(kPrimaryChat) == nullptr);
 
     // A session still held by a window cannot move to the next installation's workspace.
     writeFile(dir + "/drivers", route(dir));
@@ -697,7 +697,7 @@ void resume(Server& s, const std::string& dir, const std::string& fake) {
 // and the next prompt starts one again in the same session, its id, transcript and turn numbers kept. A change of
 // model leaves the driver running.
 // Group commit's hold (Drivers::hold, release): a prompt sent while the drivers are held opens its turn and is kept,
-// its bytes unwritten, for as long as the hold lasts; the friend cannot answer what it was never sent. Released (the
+// its bytes unwritten, for as long as the hold lasts; the AI cannot answer what it was never sent. Released (the
 // batch's flush has returned), it is written once, and the turn is answered as ever. Then a turn whose driver hangs on
 // a stop: held, the stop's line, the end of its input, SIGTERM and SIGKILL are each kept as their deadlines pass, and
 // the driver, which would end at any one of the last three, runs on (were one carried out, serve() would collect the
@@ -783,10 +783,10 @@ void setUpAccounts(Server& s, const std::string& dir, const std::string& fake, c
                    const std::string& provider = "fake") {
     writeFile(dir + "/ada.script", script);
     writeFile(dir + "/drivers", "driver " + provider + " " + fake + " --script " + dir + "/ada.script --account from-the-file\n"
-        "friend ada " + provider + " " + dir + "\n");
+        "ai ada " + provider + " " + dir + "\n");
     accounts::Registry r;
     r.accounts = {{"a1", provider}, {"a2", provider}};
-    r.friends = {{"ada", {"a1", "a2"}, "a1"}};
+    r.ais = {{"ada", {"a1", "a2"}, "a1"}};
     CHECK(s.hub->useAccounts(r, nullptr).empty());
 }
 
@@ -887,7 +887,7 @@ void noCredential(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.serveUntil([&] { return none(s); }, 10));
 }
 
-// A limited friend (ada: no "limit" in her entry) on a driver whose hello does not list "limit": the driver is ended
+// A limited AI (ada: no "limit" in her entry) on a driver whose hello does not list "limit": the driver is ended
 // before any prompt is written to it, and the session is told why. It never runs the prompt unlimited.
 void limitUnsupported(Server& s, const std::string& dir, const std::string& fake) {
     setUpAccounts(s, dir, fake, "record " + dir + "/starts.log\n"
@@ -934,7 +934,7 @@ void usageLimit(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(has(readFile(dir + "/starts.log"), "account=a2\n"));
 }
 
-// Exercise both acknowledged choices through a responding supervisor and two real child processes. The friend
+// Exercise both acknowledged choices through a responding supervisor and two real child processes. The AI
 // links a third subscription which is signed in but belongs to a different driver's provider.
 // Observe the real pipe writes across two account-owned processes. A tool already ran and the interrupted reply
 // was still streaming when the first process reported quota. One visible request yields two distinct sends.
@@ -1028,14 +1028,14 @@ void fableChoice(Server& s, const std::string& dir, const std::string& fake, boo
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nexit 0\n", "claude");
     accounts::Registry r;
     r.accounts = {{"a1", "claude"}, {"foreign", "codex"}, {"a2", "claude"}};
-    r.friends = {{"ada", {"foreign", "a1"}, "a1"}};
+    r.ais = {{"ada", {"foreign", "a1"}, "a1"}};
     CHECK(s.hub->useAccounts(r, nullptr).empty());
-    CHECK(!s.hub->state().friends().front().canAutoAccount);
+    CHECK(!s.hub->state().ais().front().canAutoAccount);
     CHECK(!s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
-    r.friends[0].accounts.push_back("a2");
+    r.ais[0].accounts.push_back("a2");
     CHECK(s.hub->useAccounts(r, nullptr).empty());
     for (const auto& a : r.accounts) s.hub->reportSignedIn(a.name, true);
-    CHECK(s.hub->state().friends().front().canAutoAccount);
+    CHECK(s.hub->state().ais().front().canAutoAccount);
     CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
     CHECK(s.store.find(kAda)->info.account == "a1");
     std::string why;
@@ -1054,7 +1054,7 @@ void fableChoice(Server& s, const std::string& dir, const std::string& fake, boo
     auto choice = s.action(sync::ActionKind::ResolveLimit, switchAccount ? "account" : "model");
     choice.account = offer.account;
     choice.request = offer.limitRequest;
-    choice.friendName = switchAccount ? offer.limitAccount : offer.limitModel;
+    choice.aiName = switchAccount ? offer.limitAccount : offer.limitModel;
     CHECK(s.hub->apply(choice));
     CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 3; }, 10));
 
@@ -1078,7 +1078,7 @@ void fableChoice(Server& s, const std::string& dir, const std::string& fake, boo
     CHECK(std::count(transcript.begin(), transcript.end(), "F Second section done.") == 1);
 }
 
-// A session on no account, whose friend's driver takes one: no driver starts, and the session is told how to link an
+// A session on no account, whose AI's driver takes one: no driver starts, and the session is told how to link an
 // account.
 void noAccount(Server& s, const std::string& dir, const std::string& fake) {
     setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\n" + std::string(kHello) + "send\n"
@@ -1088,7 +1088,7 @@ void noAccount(Server& s, const std::string& dir, const std::string& fake) {
     const auto told = [&] {
         for (const std::string& line : s.transcript()) {
             if (has(line, "runs on no account, and ada's driver needs one, so the prompt was not sent. Link an "
-                          "account to ada in friends.json")) {
+                          "account to ada in ais.json")) {
                 return true;
             }
         }
@@ -1100,10 +1100,10 @@ void noAccount(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(!std::filesystem::exists(dir + "/starts"));
 }
 
-// ada taken out of friends.json mid-turn, by a reload: her turn is stopped (the stop line, then its done) and her driver
+// ada taken out of ais.json mid-turn, by a reload: her turn is stopped (the stop line, then its done) and her driver
 // ended, the session told once; a prompt queued is kept and nothing starts while she is out, and a prompt sent is
 // refused. Put back, the queued prompt goes to a new driver.
-void friendRemoved(Server& s, const std::string& dir, const std::string& fake) {
+void aiRemoved(Server& s, const std::string& dir, const std::string& fake) {
     setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\n" + std::string(kHello) +
         "send\non-start 1 emit {\"kind\":\"text\",\"delta\":\"Work\"}\non-start 1 await-stop\n"
         "on-start 1 emit {\"kind\":\"text-end\"}\non-start 1 emit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
@@ -1115,17 +1115,17 @@ void friendRemoved(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "next")));
     accounts::Registry withAda = *s.hub->accounts();
     accounts::Registry without = withAda;
-    without.friends.clear();
+    without.ais.clear();
     std::vector<std::string> report;
     CHECK(s.hub->applyAccounts(without, "reload", &report));
     CHECK(s.serveUntil([&] { return none(s); }, 10));
     std::vector<std::string> t = s.transcript();
     // The notice is committed at the reload; the text gathered so far is committed when the stopped turn ends.
-    CHECK(t.size() == 4 && t[0] == "P go" && has(t[1], "ada was taken out of friends.json") && t[2] == "F Work" &&
+    CHECK(t.size() == 4 && t[0] == "P go" && has(t[1], "ada was taken out of ais.json") && t[2] == "F Work" &&
           t[3] == "N Stopped.");
     CHECK(s.store.find(kAda)->queue == std::vector<std::string>{"next"} && s.store.find(kAda)->info.account == "a1");
     s.send("now?");
-    CHECK(has(s.transcript().back(), "ada is not in friends.json, so the prompt was not sent"));
+    CHECK(has(s.transcript().back(), "ada is not in ais.json, so the prompt was not sent"));
     s.serveUntil([] { return false; }, 1.5);    // past kResolveMs: nothing starts
     CHECK(s.drivers->pid(kAda) < 0 && s.activity() == sync::Activity::Down);
     CHECK(s.store.find(kAda)->queue == std::vector<std::string>{"next"});
@@ -1134,14 +1134,14 @@ void friendRemoved(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.transcript().back() == "P next");
 }
 
-// ada unlimited, taken out of friends.json, then put back limited: her next driver starts limited, as her record now
+// ada unlimited, taken out of ais.json, then put back limited: her next driver starts limited, as her record now
 // says. While she is out her session reads limited (accounts::Registry::limitedFor); putting her back sets the limit
 // from her record again, so the limit she had when she was taken out is never the one she comes back with.
-void friendBackLimited(Server& s, const std::string& dir, const std::string& fake) {
+void aiBackLimited(Server& s, const std::string& dir, const std::string& fake) {
     setUpAccounts(s, dir, fake, "record " + dir + "/starts.log\n" + std::string(kHello) +
         "send\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
     accounts::Registry unlimited = *s.hub->accounts();
-    unlimited.friends[0].limit = false;
+    unlimited.ais[0].limit = false;
     std::vector<std::string> report;
     CHECK(s.hub->applyAccounts(unlimited, "reload", &report));
     s.hub->reportSignedIn("a1", true);
@@ -1150,11 +1150,11 @@ void friendBackLimited(Server& s, const std::string& dir, const std::string& fak
     CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 2; }, 10));
     CHECK(!has(readFile(dir + "/starts.log"), "limit="));      // unlimited: no --limit
     accounts::Registry without = unlimited;
-    without.friends.clear();
+    without.ais.clear();
     CHECK(s.hub->applyAccounts(without, "reload", &report));
     CHECK(s.serveUntil([&] { return none(s); }, 10));
     accounts::Registry limited = unlimited;
-    limited.friends[0].limit = true;
+    limited.ais[0].limit = true;
     CHECK(s.hub->applyAccounts(limited, "reload", &report));
     s.send("second");
     CHECK(s.serveUntil([&] { return has(readFile(dir + "/starts.log"), "limit=cwd\n"); }, 10));
@@ -1174,7 +1174,7 @@ int sendsOf(const std::string& path, const std::string& prompt) {
 }
 
 // Taken out while its driver starts (the first start never says hello), put back: the waiting prompt goes once.
-void friendRemovedStarting(Server& s, const std::string& dir, const std::string& fake) {
+void aiRemovedStarting(Server& s, const std::string& dir, const std::string& fake) {
     const std::string hello = kHello;
     std::string second;     // the hello, said by the second start only
     std::size_t from = 0;
@@ -1191,7 +1191,7 @@ void friendRemovedStarting(Server& s, const std::string& dir, const std::string&
     CHECK(s.serveUntil([&] { return s.sup().phase() == Phase::Starting; }, 10));
     const accounts::Registry with = *s.hub->accounts();
     accounts::Registry without = with;
-    without.friends.clear();
+    without.ais.clear();
     std::vector<std::string> report;
     CHECK(s.hub->applyAccounts(without, "reload", &report));
     CHECK(s.serveUntil([&] { return none(s); }, 10));
@@ -1204,7 +1204,7 @@ void friendRemovedStarting(Server& s, const std::string& dir, const std::string&
 
 // Taken out mid-turn and put back by the next reload before the stopped turn's done is read; then a prompt queued
 // before and one queued while out each go once.
-void friendBackBeforeStop(Server& s, const std::string& dir, const std::string& fake) {
+void aiBackBeforeStop(Server& s, const std::string& dir, const std::string& fake) {
     const std::string record = "send\nrecord-send " + dir + "/sends\n";
     setUpAccounts(s, dir, fake, std::string(kHello) + record + "emit {\"kind\":\"text\",\"delta\":\"Work\"}\n"
         "await-stop\nemit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n" + record +
@@ -1216,7 +1216,7 @@ void friendBackBeforeStop(Server& s, const std::string& dir, const std::string& 
     CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "next")));
     const accounts::Registry with = *s.hub->accounts();
     accounts::Registry without = with;
-    without.friends.clear();
+    without.ais.clear();
     std::vector<std::string> report;
     CHECK(s.hub->applyAccounts(without, "reload", &report));
     CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "late")));
@@ -1228,7 +1228,7 @@ void friendBackBeforeStop(Server& s, const std::string& dir, const std::string& 
 
 // Unlimited, a turn open and a prompt queued; taken out; a prompt queued while out; put back limited in one reload: the
 // queued prompts go once each, and the driver they go to started limited.
-void friendBackLimitedQueue(Server& s, const std::string& dir, const std::string& fake) {
+void aiBackLimitedQueue(Server& s, const std::string& dir, const std::string& fake) {
     const std::string record = "send\nrecord-send " + dir + "/sends\n";
     setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" +
         std::string(kHello) + record + "on-start 1 emit {\"kind\":\"text\",\"delta\":\"W\"}\non-start 1 await-stop\n"
@@ -1236,7 +1236,7 @@ void friendBackLimitedQueue(Server& s, const std::string& dir, const std::string
         "on-start 2 emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n" + record +
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n" + record + "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
     accounts::Registry unlimited = *s.hub->accounts();
-    unlimited.friends[0].limit = false;
+    unlimited.ais[0].limit = false;
     std::vector<std::string> report;
     CHECK(s.hub->applyAccounts(unlimited, "reload", &report));
     s.hub->reportSignedIn("a1", true);
@@ -1245,12 +1245,12 @@ void friendBackLimitedQueue(Server& s, const std::string& dir, const std::string
     CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
     CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "next")));
     accounts::Registry without = unlimited;
-    without.friends.clear();
+    without.ais.clear();
     CHECK(s.hub->applyAccounts(without, "reload", &report));
     CHECK(s.serveUntil([&] { return none(s); }, 10));
     CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "late")));
     accounts::Registry limited = unlimited;
-    limited.friends[0].limit = true;
+    limited.ais[0].limit = true;
     CHECK(s.hub->applyAccounts(limited, "reload", &report));
     CHECK(s.serveUntil([&] { return s.store.find(kAda)->queue.empty() && idle(s) && s.driver().nextTurn == 4; }, 10));
     CHECK(sendsOf(dir + "/sends", "next") == 1 && sendsOf(dir + "/sends", "late") == 1);
@@ -1263,7 +1263,7 @@ void friendBackLimitedQueue(Server& s, const std::string& dir, const std::string
 // back with the same instance name on another machine (nothing starts here, prompts kept), then taken out and put back
 // with that instance in dir/b: the queued prompts go once each, to a limited driver started afresh in dir/b (never in
 // dir/a or the drivers file's directory).
-void friendBackMoved(Server& s, const std::string& dir, const std::string& fake) {
+void aiBackMoved(Server& s, const std::string& dir, const std::string& fake) {
     std::filesystem::create_directories(dir + "/a");
     std::filesystem::create_directories(dir + "/b");
     const std::string record = "send\nrecord-send " + dir + "/sends\n";
@@ -1274,10 +1274,10 @@ void friendBackMoved(Server& s, const std::string& dir, const std::string& fake)
         "on-start 2 emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n" + record +
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
     writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script --account from-the-file\n"
-        "friend ada fake " + dir + "\n");
+        "ai ada fake " + dir + "\n");
     accounts::Registry inA;
     inA.accounts = {{"a1", "fake"}};
-    inA.friends = {{"ada", {"a1"}, "a1", {{"here", kHost, dir + "/a"}}, true}};
+    inA.ais = {{"ada", {"a1"}, "a1", {{"here", kHost, dir + "/a"}}, true}};
     CHECK(!s.hub->useAccounts(inA, nullptr).empty());
     s.hub->reportSignedIn("a1", true);
     CHECK(s.hub->adoptDefaults().size() == 1);
@@ -1285,14 +1285,14 @@ void friendBackMoved(Server& s, const std::string& dir, const std::string& fake)
     CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
     CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "q1")));
     accounts::Registry without = inA;
-    without.friends.clear();
+    without.ais.clear();
     std::vector<std::string> report;
     CHECK(s.hub->applyAccounts(without, "remove", &report));
     CHECK(s.serveUntil([&] { return none(s); }, 10));
     CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "q2")));
     // Put back on another machine: nothing starts here, and the queue stays as it is.
     accounts::Registry elsewhere = inA;
-    elsewhere.friends = {{"ada", {"a1"}, "a1", {{"here", "macbook", dir + "/b"}}, true}};
+    elsewhere.ais = {{"ada", {"a1"}, "a1", {{"here", "macbook", dir + "/b"}}, true}};
     CHECK(s.hub->applyAccounts(elsewhere, "elsewhere", &report));
     s.serveUntil([] { return false; }, 0.3);
     CHECK(s.drivers->pid(kAda) < 0 && readFile(dir + "/starts") == "1\n" && s.activity() == sync::Activity::Down);
@@ -1302,7 +1302,7 @@ void friendBackMoved(Server& s, const std::string& dir, const std::string& fake)
     // Taken out and put back on this machine in dir/b: the driver starts limited in dir/b, afresh with a summary.
     CHECK(s.hub->applyAccounts(without, "remove again", &report));
     accounts::Registry inB = inA;
-    inB.friends = {{"ada", {"a1"}, "a1", {{"here", kHost, dir + "/b"}}, true}};
+    inB.ais = {{"ada", {"a1"}, "a1", {{"here", kHost, dir + "/b"}}, true}};
     CHECK(s.hub->applyAccounts(inB, "in b", &report));
     CHECK(s.serveUntil([&] { return s.store.find(kAda)->queue.empty() && idle(s) && s.driver().nextTurn == 4; }, 10));
     CHECK(readFile(dir + "/starts") == "2\n");
@@ -1323,7 +1323,7 @@ void friendBackMoved(Server& s, const std::string& dir, const std::string& fake)
 // On account a1, a turn open and a prompt queued; taken out, then put back with a1 unlinked and signed-in a2 in its
 // place: the queued prompt starts its driver on a2, never on a1. Taken out again with a prompt queued and put back on
 // no account: nothing starts while the driver needs an account, and setting the session to a2 once linked lets it go.
-void friendBackAccount(Server& s, const std::string& dir, const std::string& fake) {
+void aiBackAccount(Server& s, const std::string& dir, const std::string& fake) {
     const std::string record = "send\nrecord-send " + dir + "/sends\n";
     setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" +
         std::string(kHello) + record + "on-start 1 emit {\"kind\":\"text\",\"delta\":\"W\"}\non-start 1 await-stop\n"
@@ -1340,12 +1340,12 @@ void friendBackAccount(Server& s, const std::string& dir, const std::string& fak
     CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
     CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "q1")));
     accounts::Registry without = *s.hub->accounts();
-    without.friends.clear();
+    without.ais.clear();
     std::vector<std::string> report;
     CHECK(s.hub->applyAccounts(without, "remove", &report));
     CHECK(s.serveUntil([&] { return none(s); }, 10));
     accounts::Registry onA2 = without;
-    onA2.friends = {{"ada", {"a2"}, "a2"}};
+    onA2.ais = {{"ada", {"a2"}, "a2"}};
     CHECK(s.hub->applyAccounts(onA2, "back on a2", &report));
     CHECK(s.serveUntil([&] { return s.store.find(kAda)->queue.empty() && idle(s) && s.driver().nextTurn == 3; }, 10));
     CHECK(readFile(dir + "/starts") == "2\n");
@@ -1363,7 +1363,7 @@ void friendBackAccount(Server& s, const std::string& dir, const std::string& fak
     CHECK(s.hub->applyAccounts(without, "remove again", &report));
     CHECK(s.serveUntil([&] { return none(s); }, 10));
     accounts::Registry unlinked = without;
-    unlinked.friends = {{"ada", {}, ""}};
+    unlinked.ais = {{"ada", {}, ""}};
     CHECK(s.hub->applyAccounts(unlinked, "back with no account", &report));
     s.serveUntil([] { return false; }, 0.3);
     CHECK(s.drivers->pid(kAda) < 0 && readFile(dir + "/starts") == "2\n" && s.activity() == sync::Activity::Down);
@@ -1382,11 +1382,11 @@ void friendBackAccount(Server& s, const std::string& dir, const std::string& fak
 void setUpInstance(Server& s, const std::string& dir, const std::string& fake, const std::string& script,
                    const accounts::Instance& instance) {
     writeFile(dir + "/ada.script", script);
-    writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
+    writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nai ada fake " + dir +
         "\n");
     accounts::Registry r;
     r.accounts = {{"a1", "fake"}};
-    r.friends = {{"ada", {"a1"}, "a1", {instance}}};
+    r.ais = {{"ada", {"a1"}, "a1", {instance}}};
     CHECK(has(s.hub->useAccounts(r, nullptr), "session 1 (ada): instance none -> " + instance.name));
     CHECK(s.hub->adoptDefaults().size() == 1);
     CHECK(s.store.find(kAda)->info.instance == instance.name && s.store.find(kAda)->info.account == "a1");
@@ -1396,7 +1396,7 @@ void setUpInstance(Server& s, const std::string& dir, const std::string& fake, c
 accounts::Registry withInstance(const accounts::Instance& instance) {
     accounts::Registry r;
     r.accounts = {{"a1", "fake"}};
-    r.friends = {{"ada", {"a1"}, "a1", {instance}}};
+    r.ais = {{"ada", {"a1"}, "a1", {instance}}};
     return r;
 }
 
@@ -1428,7 +1428,7 @@ void instanceMoved(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.hub->applyAccounts(withInstance({"here", "testhost", dir + "/b"}), "moved", &report));
     CHECK(has(report, "session 1 (ada): instance here moved, on testhost in " + dir + "/a -> on testhost in " + dir +
               "/b"));
-    CHECK(told(s, "ada's instance here moved (the accounts and friends were changed: moved)"));
+    CHECK(told(s, "ada's instance here moved (the accounts and AIs were changed: moved)"));
     CHECK(s.serveUntil([&] { return s.drivers->pid(kAda) < 0; }, 10));
     s.send("r");
     CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 3; }, 10));
@@ -1467,7 +1467,7 @@ void instanceRemoved(Server& s, const std::string& dir, const std::string& fake)
     CHECK(s.serveUntil([&] { return s.activity() == sync::Activity::Down; }, 10));
     accounts::Registry none;
     none.accounts = {{"a1", "fake"}};
-    none.friends = {{"ada", {"a1"}, "a1", {}}};
+    none.ais = {{"ada", {"a1"}, "a1", {}}};
     CHECK(s.hub->applyAccounts(none, "no instances", &report));
     CHECK(s.store.find(kAda)->info.instance.empty());
     CHECK(s.serveUntil([&] { return s.activity() == sync::Activity::Idle; }, 10));
@@ -1486,7 +1486,7 @@ void busDefaultInstance(Server& s, const std::string& dir, const std::string& fa
     setUpInstance(s, dir, fake, std::string(kHello) + "send\nrecord-send " + dir +
         "/sends\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n", first);
     auto roster = withInstance(second);
-    roster.friends.front().instances.push_back(first);
+    roster.ais.front().instances.push_back(first);
     CHECK(s.hub->applyAccounts(roster, "change default", nullptr));
     s.hub->reportSignedIn("a1", true);
     CHECK(s.store.size() == 1 && s.store.find(kAda)->info.instance == first.name);
@@ -1498,7 +1498,7 @@ void busDefaultInstance(Server& s, const std::string& dir, const std::string& fa
     CHECK(s.serveUntil([&] { return next->driver.nextTurn == 2 && next->driver.openTurn == 0; }, 10));
     CHECK(s.store.find(kAda)->driver.nextTurn == 1);
 
-    std::swap(roster.friends.front().instances[0], roster.friends.front().instances[1]);
+    std::swap(roster.ais.front().instances[0], roster.ais.front().instances[1]);
     CHECK(s.hub->applyAccounts(roster, "restore default", nullptr));
     CHECK(s.hub->receiveBus("ada", "100-0", "bea", "duplicate", "duplicate", &why));
     CHECK(s.hub->receiveBus("ada", "101-0", "bea", "first workspace", "first workspace", &why));
@@ -1507,8 +1507,8 @@ void busDefaultInstance(Server& s, const std::string& dir, const std::string& fa
     CHECK(readFile(dir + "/sends") == "send 1:\nsecond workspace\nsend 1:\nfirst workspace\n");
 }
 
-// A session that names no instance, while its friend has some (as a store that failed before the session was
-// settled leaves it): its driver works in the friend's default instance's directory, never the drivers file's.
+// A session that names no instance, while its AI has some (as a store that failed before the session was
+// settled leaves it): its driver works in the AI's default instance's directory, never the drivers file's.
 void instanceDefault(Server& s, const std::string& dir, const std::string& fake) {
     std::filesystem::create_directories(dir + "/checkout");
     setUpInstance(s, dir, fake, "record " + dir + "/starts.log\n" + kHello + "send\n"
@@ -1555,7 +1555,7 @@ void instanceElsewhere(Server& s, const std::string& dir, const std::string& fak
 // ada's driver as a shell script, for what the fake driver does not do: start processes of its own.
 void setUpShell(const std::string& dir, const std::string& script) {
     writeFile(dir + "/ada.sh", script);
-    writeFile(dir + "/drivers", "driver sh /bin/sh " + dir + "/ada.sh\nfriend ada sh " + dir + "\n");
+    writeFile(dir + "/drivers", "driver sh /bin/sh " + dir + "/ada.sh\nai ada sh " + dir + "\n");
 }
 
 pid_t readPid(const std::string& path) {
@@ -1623,10 +1623,10 @@ const std::string kFakeToken = "fakeDf7rKsVm" + std::string(64, 'q');
 void setUpClaude(Server& s, const std::string& dir, const std::string& fake, const std::string& script) {
     writeFile(dir + "/ada.script", script);
     writeFile(dir + "/drivers", "driver claude " + fake + " --script " + dir + "/ada.script --account from-the-file\n"
-        "friend ada claude " + dir + "\n");
+        "ai ada claude " + dir + "\n");
     accounts::Registry r;
     r.accounts = {{"a1", "claude"}};
-    r.friends = {{"ada", {"a1"}, "a1"}};
+    r.ais = {{"ada", {"a1"}, "a1"}};
     CHECK(s.hub->useAccounts(r, nullptr).empty());
     CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
 }
@@ -1811,7 +1811,7 @@ void secretSignIn(Server& s, const std::string& dir, const std::string& fake) {
     nowhereElse(s, dir);
 }
 
-// ada taken out of friends.json with a prompt queued; the server restarts holding no registry (its committed files do
+// ada taken out of ais.json with a prompt queued; the server restarts holding no registry (its committed files do
 // not read: Hub::keepWith). Nothing is sent, no driver starts and the prompts are kept (models/Supervisor.tla
 // NoSendUnknown). The first registry applied says, from itself alone, whether ada is in it: without her
 // (`listedFirst` false), nothing goes, and only a later one with her lets the queue go on, each prompt once; with her,
@@ -1828,7 +1828,7 @@ void noRegistry(const std::string& dir, const std::string& fake, bool listedFirs
         CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 2; }, 10));
         with = *s.hub->accounts();
         accounts::Registry without = with;
-        without.friends.clear();
+        without.ais.clear();
         std::vector<std::string> report;
         CHECK(s.hub->applyAccounts(without, "reload", &report));
         CHECK(s.serveUntil([&] { return none(s); }, 10));
@@ -1844,7 +1844,7 @@ void noRegistry(const std::string& dir, const std::string& fake, bool listedFirs
     CHECK(s.activity() == sync::Activity::Down);
     // A prompt sent now is refused, saying why; one queued is kept.
     s.send("now");
-    CHECK(has(s.transcript().back(), "holds no friends list"));
+    CHECK(has(s.transcript().back(), "holds no AIs list"));
     CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "q2")));
     s.serveUntil([] { return false; }, 0.5);
     CHECK(sendsOf(dir + "/sends", "now") == 0 && sendsOf(dir + "/sends", "q2") == 0);
@@ -1852,7 +1852,7 @@ void noRegistry(const std::string& dir, const std::string& fake, bool listedFirs
     std::vector<std::string> report;
     if (!listedFirst) {
         accounts::Registry without = with;
-        without.friends.clear();
+        without.ais.clear();
         CHECK(s.hub->applyAccounts(without, "reload", &report));
         s.serveUntil([] { return false; }, 1.0);
         CHECK(sendsOf(dir + "/sends", "q1") == 0 && sendsOf(dir + "/sends", "q2") == 0);
@@ -1967,10 +1967,10 @@ int main(int argc, char** argv) {
                 {"fable_switch_account", [](Server& s, const std::string& d, const std::string& f) { fableChoice(s, d, f, true); }},
                 {"fable_switch_model", [](Server& s, const std::string& d, const std::string& f) { fableChoice(s, d, f, false); }},
                 {"limit_unsupported", limitUnsupported}, {"no_account", noAccount},
-                {"friend_removed", friendRemoved}, {"friend_back_limited", friendBackLimited},
-                {"friend_removed_starting", friendRemovedStarting}, {"friend_back_before_stop", friendBackBeforeStop},
-                {"friend_back_limited_queue", friendBackLimitedQueue}, {"friend_back_moved", friendBackMoved},
-                {"friend_back_account", friendBackAccount},
+                {"ai_removed", aiRemoved}, {"ai_back_limited", aiBackLimited},
+                {"ai_removed_starting", aiRemovedStarting}, {"ai_back_before_stop", aiBackBeforeStop},
+                {"ai_back_limited_queue", aiBackLimitedQueue}, {"ai_back_moved", aiBackMoved},
+                {"ai_back_account", aiBackAccount},
                 {"instance_dir", instanceDir},
                 {"instance_elsewhere", instanceElsewhere}, {"instance_moved", instanceMoved},
                 {"instance_removed", instanceRemoved}, {"instance_default", instanceDefault}, {"held", held}};

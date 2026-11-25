@@ -128,7 +128,7 @@ struct TranscriptStyle {
 };
 
 struct SignInAccount {
-    std::string name, label, email, provider{}, friendName{};
+    std::string name, label, email, provider{}, aiName{};
     bool operator==(const SignInAccount&) const = default;
 };
 

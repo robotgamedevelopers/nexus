@@ -1,5 +1,5 @@
 // nexus-server: the server the window talks to, on the machine that keeps going when the laptop is closed. It keeps
-// the friend tabs (sync/hub.h) and each window's applied counter on disk (server/durable.h, src/store), so a restart,
+// the AI tabs (sync/hub.h) and each window's applied counter on disk (server/durable.h, src/store), so a restart,
 // or a kill, loses nothing it acknowledged; and serves each window over a mosh session of its own
 // (link/mosh_link.h), several at once.
 //
@@ -15,9 +15,9 @@
 // under their own numbers, the server skips those it applied before. A window that does not name itself gets a
 // counter for that session only. A new session for a client ends that client's earlier session.
 //
-// A prompt sent to a friend's tab goes to the friend's driver, a child process the server starts and supervises
+// A prompt sent to an AI's tab goes to the AI's driver, a child process the server starts and supervises
 // (server/drivers.h, server/supervisor.h, docs/driver-protocol.md); the file `drivers` in the directory says which
-// program each friend's driver is (server/driver_table.h).
+// program each AI's driver is (server/driver_table.h).
 
 #pragma once
 
@@ -30,14 +30,14 @@
 namespace nexus::server {
 
 struct Paths {
-    std::string home;       // $HOME: a friend's ~ in the drivers file
+    std::string home;       // $HOME: an AI's ~ in the drivers file
     std::string top;        // $HOME/.nexus, which holds dir, made 0700 first; empty with --dir
     std::string dir;        // --dir, else $HOME/.nexus/server (server/home.h serverHome)
     std::string config;     // <dir>/config: the server's settings (config.h); it takes none yet
     std::string socket;     // <dir>/server.sock: the control socket
     std::string log;        // <dir>/server.log: a server `new` started writes here
     std::string store;      // <dir>/store: the sessions and the applied counters (src/store)
-    std::string drivers;    // <dir>/drivers: which program is each friend's driver (server/driver_table.h)
+    std::string drivers;    // <dir>/drivers: which program is each AI's driver (server/driver_table.h)
     std::string accounts;   // $HOME/.nexus/server/accounts whatever --dir says: the logins, where the drivers read them
                             // (server/home.h accountsDir)
     std::string build;      // serve: the placed build this program runs from (server/builds.h holdBuild), learnt from
@@ -78,7 +78,7 @@ std::string formatRefusalReply(const Client& client, const sync::Hello& server =
 // the socket's path is longer than a Unix socket's address holds.
 bool paths(const std::string& dir, Paths* out, std::string* why);
 
-// The server: runs until `nexus-server stop`, SIGTERM or SIGINT, then ends every friend's driver and waits for them.
+// The server: runs until `nexus-server stop`, SIGTERM or SIGINT, then ends every AI's driver and waits for them.
 // Returns the exit status (server/start_order.h): 0 when another server answers that it is serving (it says so in one
 // line), and after a stop; 3 when a writer held the store's lock for the whole wait and no server served; 1 when it
 // could not start (readers that did not let go, a store that does not read, a socket that cannot be bound) or its store
@@ -100,7 +100,7 @@ int drain(const Paths& p);
 // `build <hash>` (or `build none`, a program outside the placed builds; ` draining` appended while draining). Exit 0
 // when it serves, else 1.
 int status(const Paths& p);
-// `nexus-server config <verb> ...`: the accounts and friends (server/config_repo.h, docs/accounts.md). path, check,
+// `nexus-server config <verb> ...`: the accounts and AIs (server/config_repo.h, docs/accounts.md). path, check,
 // history and remote work on the files and the repository directly; reload and restore ask the running server, which
 // decides.
 int config(const Paths& p, const std::vector<std::string>& args);

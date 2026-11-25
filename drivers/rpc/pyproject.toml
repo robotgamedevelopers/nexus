@@ -12,4 +12,4 @@ description = "Nexus drivers for Codex, Antigravity, Grok and Muse"
 packages = ["nexus_rpc"]
 
 [tool.setuptools.package-data]
-nexus_rpc = ["friend-setup.txt"]
+nexus_rpc = ["ai-setup.txt"]

@@ -39,7 +39,7 @@ const char* kindName(ActionKind kind) {
         case ActionKind::SetEffort: return "set-effort";
         case ActionKind::AddAccount: return "add-account";
         case ActionKind::RemoveAccount: return "remove-account";
-        case ActionKind::AddFriend: return "add-friend";
+        case ActionKind::AddAI: return "add-ai";
         case ActionKind::LinkAccount: return "link-account";
         case ActionKind::UnlinkAccount: return "unlink-account";
         case ActionKind::SetDefault: return "set-default";

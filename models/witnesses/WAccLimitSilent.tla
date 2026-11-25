@@ -1,5 +1,5 @@
 ------------------------------ MODULE WAccLimitSilent ------------------------------
-\* Reversed witness: a friend's limit changed tells none of its sessions. LimitChangeIsTold must reject it.
+\* Reversed witness: an AI's limit changed tells none of its sessions. LimitChangeIsTold must reject it.
 EXTENDS MCAccounts
 
 BrokenLimit(f, v) ==
@@ -10,5 +10,5 @@ BrokenLimit(f, v) ==
          /\ UNCHANGED <<acct, prov, known, links, dflt, insts, ses, nextSes, bill, run>>
     ELSE Refused("limit", f, None, 0, {})
 
-BrokenSpec == Init /\ [][NextLimitWith(LinkAccount, AddFriend, Start, BrokenLimit, ReloadBilling)]_vars
+BrokenSpec == Init /\ [][NextLimitWith(LinkAccount, AddAI, Start, BrokenLimit, ReloadBilling)]_vars
 =============================================================================

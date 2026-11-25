@@ -9,7 +9,7 @@ BrokenSelect(i) ==
          /\ history' = Touch(history, At(i))
          /\ draft' = [draft EXCEPT ![At(active)] = ""]
          /\ last' = Did("select", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, transcript, queue>>
+         /\ UNCHANGED <<ais, order, transcript, queue>>
     ELSE /\ last' = Did("select", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

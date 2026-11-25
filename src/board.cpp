@@ -956,6 +956,8 @@ void PraxBoard::addPageStyle() {
                     prDomNodeSetTextContent(prDomElementAsNode(element), sv(to));
             };
             auto* root = prDomDocumentAsNode(document);
+            // The sprint dashboard (nova-sprint) names its section and column "friends"; those ids and labels are its
+            // own, so the word stays here only, and nexus shows them as "AIs" and "AI".
             auto* subtitle = prDomNodeGetElementById(root, sv("friends-sub"));
             if (subtitle) rename(prDomNodePreviousElementSibling(prDomElementAsNode(subtitle)), "Friends", "AIs");
             auto* rows = prDomNodeGetElementById(root, sv("friends"));

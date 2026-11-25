@@ -8,7 +8,7 @@ CONSTANT Fault
 Ids == {1, 2}
 \* A genuinely empty registry withdraws the inbox grant as well as every sender.
 \* "other" is a valid registry retaining the inbox but omitting the candidate sender.
-Answers == {"unavailable", "empty", "other", "friend"}
+Answers == {"unavailable", "empty", "other", "ai"}
 VARIABLES id, fresh, history, receipts, stored, decision, expected
 vars == <<id, fresh, history, receipts, stored, decision, expected>>
 Init == /\ id = 0 /\ fresh = "unavailable" /\ history = "unavailable"
@@ -26,14 +26,14 @@ Classify(answer) == IF answer \in {"unavailable", "empty"} THEN "wait" ELSE answ
 Decide(fault) ==
     /\ id \in Ids
     /\ LET correct == IF id \in receipts THEN "replay" ELSE Classify(fresh)
-           used == CASE fault = "use-cache" /\ correct = "wait" /\ history = "friend" -> "friend"
+           used == CASE fault = "use-cache" /\ correct = "wait" /\ history = "ai" -> "ai"
                      [] fault = "filter-outage" /\ correct = "wait" -> "other"
                      [] fault = "stall-unknown" /\ correct = "other" -> "wait"
-                     [] fault = "forget-filter" /\ id \in receipts \ stored /\ fresh = "friend" -> "friend"
+                     [] fault = "forget-filter" /\ id \in receipts \ stored /\ fresh = "ai" -> "ai"
                      [] OTHER -> correct
        IN /\ expected' = correct /\ decision' = used
-          /\ receipts' = IF used \in {"friend", "other"} THEN receipts \cup {id} ELSE receipts
-          /\ stored' = IF used = "friend" THEN stored \cup {id} ELSE stored
+          /\ receipts' = IF used \in {"ai", "other"} THEN receipts \cup {id} ELSE receipts
+          /\ stored' = IF used = "ai" THEN stored \cup {id} ELSE stored
     /\ UNCHANGED <<id, fresh, history>>
 
 Next(fault) == \/ \E i \in Ids : Offer(i)

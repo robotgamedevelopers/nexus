@@ -71,7 +71,7 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
     };
     field(client ? "key" : "intent", intent);
     field("text", state.text);
-    field("friend", state.friendName);
+    field("ai", state.aiName);
     field("model", state.model);
     prJsonWriterKey(w.get(), pr("signed_out"));
     prJsonWriterBool(w.get(), state.signedOut);
@@ -92,9 +92,9 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
         context.pop_back();
         context += ",\"catalog\":" + state.catalog + "}";
     }
-    if (!client && !state.friendInfo.empty()) {
+    if (!client && !state.aiInfo.empty()) {
         context.pop_back();
-        context += ",\"identity\":" + state.friendInfo + "}";
+        context += ",\"identity\":" + state.aiInfo + "}";
     }
     const auto answer = host.decide(path, client ? "app.prompt_key" : "app.message", context, why);
     if (!why.empty())
@@ -186,7 +186,7 @@ int textZoom(Host& host, const std::string& path, int current, int delta, int lo
     return current;
 }
 
-std::string modelAfterLimit(Host& host, const std::string& path, const std::string& friendName,
+std::string modelAfterLimit(Host& host, const std::string& path, const std::string& aiName,
     const std::string& account, const std::string& model) {
     std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);
     prJsonWriterBeginObject(w.get());
@@ -194,7 +194,7 @@ std::string modelAfterLimit(Host& host, const std::string& path, const std::stri
         prJsonWriterKey(w.get(), pr(key));
         prJsonWriterString(w.get(), pr(value));
     };
-    field("friend", friendName);
+    field("ai", aiName);
     field("account", account);
     field("model", model);
     prJsonWriterEndObject(w.get());
@@ -230,7 +230,7 @@ std::string accountCommand(Host& host, const std::string& path, const std::strin
                 return selected;
         }
     }
-    why = "account_command must return one of the friend's linked accounts";
+    why = "account_command must return one of the AI's linked accounts";
     return {};
 }
 

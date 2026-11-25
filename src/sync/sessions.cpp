@@ -142,8 +142,8 @@ const std::shared_ptr<const std::vector<SecretRequest>>& noRequests() {
     return none;
 }
 
-const std::shared_ptr<const std::vector<ServerFriend>>& noFriends() {
-    static const auto none = std::make_shared<const std::vector<ServerFriend>>();
+const std::shared_ptr<const std::vector<ServerAI>>& noAIs() {
+    static const auto none = std::make_shared<const std::vector<ServerAI>>();
     return none;
 }
 
@@ -159,19 +159,19 @@ void Sessions::setRequests(std::vector<SecretRequest> requests) {
         std::make_shared<const std::vector<SecretRequest>>(std::move(requests));
 }
 
-void Sessions::setFriends(std::vector<ServerFriend> friends) {
-    friends_ = friends.empty() ? noFriends() : std::make_shared<const std::vector<ServerFriend>>(std::move(friends));
-    friendsKnown_ = true;
+void Sessions::setAIs(std::vector<ServerAI> ais) {
+    ais_ = ais.empty() ? noAIs() : std::make_shared<const std::vector<ServerAI>>(std::move(ais));
+    aisKnown_ = true;
 }
 
-void Sessions::clearFriends() {
-    friends_ = noFriends();
-    friendsKnown_ = false;
+void Sessions::clearAIs() {
+    ais_ = noAIs();
+    aisKnown_ = false;
 }
 
-void Sessions::shareFriends(const Sessions& from) {
-    friends_ = from.friends_;
-    friendsKnown_ = from.friendsKnown_;
+void Sessions::shareAIs(const Sessions& from) {
+    ais_ = from.ais_;
+    aisKnown_ = from.aisKnown_;
 }
 
 void Sessions::setOffers(std::vector<SignInOffer> offers) {
@@ -195,7 +195,7 @@ bool visibleBus(std::string_view text, const SessionView& view) {
     if (text.empty()) return false;  // a redacted slot, still counted in raw transcript indexes
     const auto separator = text.find('\n');
     // A broadcast can arrive back in its sender's own inbox, including in saved history.
-    if (separator != text.npos && text.substr(0, separator) == view.info.friendName) return false;
+    if (separator != text.npos && text.substr(0, separator) == view.info.aiName) return false;
     if (!view.busSenders) return true;
     return separator != text.npos && std::binary_search(view.busSenders->begin(), view.busSenders->end(),
                                                         text.substr(0, separator));
@@ -239,11 +239,11 @@ SessionView tailOf(SessionId id, SessionInfo info, const std::vector<EntryRef>& 
 }
 
 Sessions::Sessions()
-    : sessions_(std::make_shared<const std::vector<SessionRef>>()), requests_(noRequests()), friends_(noFriends()),
+    : sessions_(std::make_shared<const std::vector<SessionRef>>()), requests_(noRequests()), ais_(noAIs()),
       offers_(noOffers()) {}
 
 Sessions::Sessions(std::vector<SessionRef> sessions)
-    : requests_(noRequests()), friends_(noFriends()), offers_(noOffers()) {
+    : requests_(noRequests()), ais_(noAIs()), offers_(noOffers()) {
     for (std::size_t i = 0; i < sessions.size(); ++i) {
         if (sessions[i]->id == 0) {
             throw std::logic_error("Sessions: a session with id 0");
@@ -252,7 +252,7 @@ Sessions::Sessions(std::vector<SessionRef> sessions)
             throw std::logic_error("Sessions: sessions out of id order or with one id twice: " +
                 std::to_string(sessions[i - 1]->id) + ", " + std::to_string(sessions[i]->id));
         }
-        if (sessions[i]->info.friendName == kPrimaryChat && primaryChat_ == 0) primaryChat_ = sessions[i]->id;
+        if (sessions[i]->info.aiName == kPrimaryChat && primaryChat_ == 0) primaryChat_ = sessions[i]->id;
     }
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));
 }
@@ -262,9 +262,9 @@ const SessionView* Sessions::find(SessionId id) const {
     return it == sessions_->end() ? nullptr : it->get();
 }
 
-const SessionView* Sessions::first(const std::string& friendName) const {
+const SessionView* Sessions::first(const std::string& aiName) const {
     for (const SessionRef& s : *sessions_) {
-        if (s->info.friendName == friendName) {
+        if (s->info.aiName == aiName) {
             return s.get();     // in id order: the first found has the lowest id
         }
     }
@@ -273,7 +273,7 @@ const SessionView* Sessions::first(const std::string& friendName) const {
 
 // A diff: for each session in id order, its id and whether `existing` holds it as it is; if not, the session
 // (sessionChange). A session `existing` holds and this state lacks is not named, which removes it. Then the open secret
-// requests, and the server's friends when it set them (a format before 4 carries none). Written in this state's format
+// requests, and the server's AIs when it set them (a format before 4 carries none). Written in this state's format
 // (sync/codec.h).
 std::string Sessions::diff_from(const Sessions& existing) const {
     if (*this == existing) {
@@ -293,14 +293,14 @@ std::string Sessions::diff_from(const Sessions& existing) const {
         change.sessions.push_back(sessionChange(*b, a, tables));
     }
     change.requests = *requests_;
-    // The friends only when they changed: the reader keeps the list it holds otherwise, so an unchanged list costs no
+    // The AIs only when they changed: the reader keeps the list it holds otherwise, so an unchanged list costs no
     // bytes however long it is. The hub shares one list between its states until a reload sets another, so the
     // comparison is of one pointer in the usual case.
-    if (friendsKnown_ != existing.friendsKnown_ ||
-            (friends_ != existing.friends_ && *friends_ != *existing.friends_)) {
-        change.friendsSent = true;
-        change.friendsKnown = friendsKnown_;
-        change.friends = *friends_;
+    if (aisKnown_ != existing.aisKnown_ ||
+            (ais_ != existing.ais_ && *ais_ != *existing.ais_)) {
+        change.aisSent = true;
+        change.aisKnown = aisKnown_;
+        change.ais = *ais_;
     }
     // The sign-in flows ride only on a link of 5 or later (sync/formats.h); a window below it gets none.
     if (format_ >= kSignInFormat) {
@@ -346,7 +346,7 @@ void Sessions::apply_string(const std::string& diff) {
         } else {
             sessions.push_back(applySession(std::move(c), a));
         }
-        if (sessions.back()->info.friendName == kPrimaryChat && primary == 0) primary = id;
+        if (sessions.back()->info.aiName == kPrimaryChat && primary == 0) primary = id;
     }
     for (std::size_t i = 0; i < change.requests.size(); ++i) {
         const SecretRequest& q = change.requests[i];
@@ -363,10 +363,10 @@ void Sessions::apply_string(const std::string& diff) {
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));
     primaryChat_ = primary;
     setRequests(std::move(change.requests));
-    if (change.friendsSent && change.friendsKnown) {
-        setFriends(std::move(change.friends));
-    } else if (change.friendsSent) {
-        clearFriends();
+    if (change.aisSent && change.aisKnown) {
+        setAIs(std::move(change.ais));
+    } else if (change.aisSent) {
+        clearAIs();
     }
     setOffers(std::move(change.offers));
     nextAction_ = change.nextAction;
@@ -379,7 +379,7 @@ bool Sessions::operator==(const Sessions& x) const {
     if (requests_ != x.requests_ && *requests_ != *x.requests_) {
         return false;
     }
-    if (friendsKnown_ != x.friendsKnown_ || (friends_ != x.friends_ && *friends_ != *x.friends_)) {
+    if (aisKnown_ != x.aisKnown_ || (ais_ != x.ais_ && *ais_ != *x.ais_)) {
         return false;
     }
     if (offers_ != x.offers_ && *offers_ != *x.offers_) {

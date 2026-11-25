@@ -430,7 +430,7 @@ int main(int argc, char** argv) {
                             sid = st->next_session();
                             store::Change mk;
                             mk.kind = store::Change::Kind::SetInfo;
-                            mk.info.friend_name = "friend";
+                            mk.info.ai_name = "ai";
                             mk.info.harness = "claude";
                             changes.push_back(mk);
                         } else {
@@ -458,7 +458,7 @@ int main(int argc, char** argv) {
                             sid = st->next_session();
                             store::Change mk;
                             mk.kind = store::Change::Kind::SetInfo;
-                            mk.info.friend_name = "friend";
+                            mk.info.ai_name = "ai";
                             mk.info.harness = "claude";
                             const store::Change initChanges[] = {mk};
                             (void)st->commit(sid, initChanges);

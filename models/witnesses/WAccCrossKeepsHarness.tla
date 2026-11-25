@@ -3,7 +3,7 @@
 EXTENDS MCAccounts
 
 BrokenSet(s, a) ==
-    IF ses[s].made /\ (a = None \/ a \in Range(links[ses[s].friend]))
+    IF ses[s].made /\ (a = None \/ a \in Range(links[ses[s].ai]))
     THEN /\ ses' = [ses EXCEPT ![s].acct = a]
          /\ Done("set", None, a, s, TRUE) /\ told' = {}
          /\ UNCHANGED <<lim, bill, run, insts, acct, prov, known, links, dflt, nextSes>>

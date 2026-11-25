@@ -10,7 +10,7 @@
 //            ending, after its socket closed). Wait kWaitRetryMs, ask the socket again: a server answers, refused;
 //            else Open again, until `held_wait_ms` has passed since the lock was first found held: Stuck
 //   Listen   the control socket: refused when a server answers on it; else bound
-//   Restore  the sessions settled against the accounts and the friends' drivers restored, which may commit to the
+//   Restore  the sessions settled against the accounts and the AIs' drivers restored, which may commit to the
 //            journal and start a driver for a queued prompt: only now, with the lock and the socket both held
 //   Serve    the loop
 //

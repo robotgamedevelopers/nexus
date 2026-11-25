@@ -9,7 +9,7 @@ BrokenMove(from, to) ==
     THEN /\ order' = Moved(order, from, N - 1)
          /\ active' = MovedIndex(active, from, N - 1)
          /\ last' = DidMove(from, to, FALSE)
-         /\ UNCHANGED <<friends, transcript, draft, queue>>
+         /\ UNCHANGED <<ais, transcript, draft, queue>>
     ELSE MoveTab(from, to)
 
 BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, Send, Queue, AppendEntry, BrokenMove)]_vars

@@ -5,7 +5,7 @@ file(WRITE "${ROOT}/rules/config.json" [=[
 {
   "tab_groups": [
     {"id":"dashboards","types":["sprint"],"closable":true},
-    {"id":"friends","types":["friend"],"closable":true},
+    {"id":"ais","types":["ai"],"closable":true},
     {"id":"terminals","types":["terminal"],"closable":false},
     {"id":"custom","types":["pinned"],"closable":true}
   ],

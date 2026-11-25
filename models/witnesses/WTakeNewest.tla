@@ -4,10 +4,10 @@
 EXTENDS MCWindow
 
 BrokenTake(i) ==
-    IF FriendTab(i) /\ queue[At(i)] /= <<>>
+    IF AITab(i) /\ queue[At(i)] /= <<>>
     THEN /\ queue' = [queue EXCEPT ![At(i)] = SubSeq(@, 1, Len(@) - 1)]
          /\ last' = Did("take", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active, transcript, draft, nextId, history>>
+         /\ UNCHANGED <<ais, order, active, transcript, draft, nextId, history>>
     ELSE /\ last' = Did("take", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

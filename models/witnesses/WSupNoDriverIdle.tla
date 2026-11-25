@@ -1,5 +1,5 @@
 ---------------------------- MODULE WSupNoDriverIdle ----------------------------
-\* Reversed witness: the state cursor's activity forgets that the friend has no driver configured, so a friend whose
+\* Reversed witness: the state cursor's activity forgets that the AI has no driver configured, so an AI whose
 \* driver the drivers file lost shows idle (dark blue), as if waiting for the person, though a prompt to it reaches no
 \* driver. NoDriverShowsDown must reject it.
 EXTENDS MCSupervisor

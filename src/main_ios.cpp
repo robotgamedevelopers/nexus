@@ -262,7 +262,7 @@ void trace(void* context, const PrStudioWindowFrameTimes* t) {
 }
 
 // The client home's files, as the desktop window reads and keeps them (main.cpp): the applied client policy
-// (policy.bundle.json, docs/policy.md), the friends' saved order, the tab layout, the selected tab and the text scale.
+// (policy.bundle.json, docs/policy.md), the AIs' saved order, the tab layout, the selected tab and the text scale.
 void keepHome(App& a, const std::string& home) {
     static StoreWriter writer;
     static TabOrderStore order;
@@ -307,8 +307,8 @@ void keepHome(App& a, const std::string& home) {
         savedTab = loadSavedTab(selection, &warning, &savedSelection);
         if (!warning.empty()) std::fprintf(stderr, "nexus: %s\n", warning.c_str());
     }
-    const bool waitForSaved = savedTab.kind == TabKind::Friend;
-    a.host.strip = sync::FriendStrip(std::move(savedOrder), waitForSaved ? savedTab.name : std::string(), {});
+    const bool waitForSaved = savedTab.kind == TabKind::AI;
+    a.host.strip = sync::AIStrip(std::move(savedOrder), waitForSaved ? savedTab.name : std::string(), {});
     if (savedSelection && !waitForSaved) a.host.strip.personSelected();
     a.view.moved = [&a] {
         if (!a.host.strip.taken()) return;

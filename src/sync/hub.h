@@ -5,16 +5,16 @@
 // what it shows and what it prepares to send.
 //
 // A session's id is minted by the store (SessionStore::nextId): from 1, never reused, across restarts. A session is
-// never removed. Its friend is an attribute: several sessions may be with one friend.
+// never removed. Its AI is an attribute: several sessions may be with one AI.
 //
 // A prompt sent in a session goes to its Responder: in nexus-server, the session's driver supervisor
-// (server/drivers.h), which puts the prompt in the transcript and writes it to the friend's driver, whose replies it
+// (server/drivers.h), which puts the prompt in the transcript and writes it to the AI's driver, whose replies it
 // adds later (commit). Without a Responder (the tests, and the link's walk), the prompt is followed by a placeholder
 // reply, "(received)", so that a round trip shows. A queued prompt goes in its queue (and to the Responder, which takes
 // it from the queue's head at the end of a turn). A stop goes to the Responder at once, and changes no session of its
 // own. A change of account, model or effort goes to the Responder once it is durable: it applies from the next turn.
 //
-// A friend's reply as it grows is a session's open entry (setOpen): the newest entry of the session's state, still
+// An AI's reply as it grows is a session's open entry (setOpen): the newest entry of the session's state, still
 // open, kept in memory only and never in the store. When its block ends, the Responder commits the closed entry (and
 // the open one goes): so the store holds each closed entry once, and a restart loses at most the open one.
 //
@@ -144,7 +144,7 @@ struct Limits {
     std::size_t queueBytes = 32 * 1024;
     std::size_t sessions = 16;
     std::size_t setting = 64;
-    std::size_t friendName = 64;
+    std::size_t aiName = 64;
     Tail tail;
 };
 
@@ -152,15 +152,15 @@ extern const char* const kReceived;         // the placeholder reply: "(received
 extern const char* const kDefaultHarness;   // the harness of a session made with no Responder: "claude"
 
 // What a send, a queue, a stop and a change of a session's settings do once they are within the hub's limits.
-using AccountRoutes = std::map<std::string, std::string>; // friend to installed account-capable provider
+using AccountRoutes = std::map<std::string, std::string>; // AI to installed account-capable provider
 
 class Responder {
 public:
     virtual ~Responder() = default;
-    // What a session made with `friendName` is when it copies from no other: its harness, and the friend's default
+    // What a session made with `aiName` is when it copies from no other: its harness, and the AI's default
     // account, model and effort.
-    virtual SessionInfo defaults(const std::string& friendName) const = 0;
-    // A responder with fixed per-friend drivers advertises them. Others can accept any linked provider.
+    virtual SessionInfo defaults(const std::string& aiName) const = 0;
+    // A responder with fixed per-AI drivers advertises them. Others can accept any linked provider.
     virtual std::optional<AccountRoutes> accountRoutes() const { return std::nullopt; }
     // The changes a send of `prompt` makes to session `id` (the person's entry and anything after it, or a notice that
     // refuses it), which the hub commits in one step with the client's counter.
@@ -172,9 +172,9 @@ public:
         return {};
     }
     // The changes a queue of `prompt` makes: the prompt at the end of the queue first, then anything that follows (the
-    // oldest taken at once, when the friend is free), committed the same way.
+    // oldest taken at once, when the AI is free), committed the same way.
     virtual std::vector<SessionChange> queue(SessionId id, const std::string& prompt) = 0;
-    // The changes a stop of the friend's work in session `id` makes (a start cancelled: its prompt no longer waiting,
+    // The changes a stop of the AI's work in session `id` makes (a start cancelled: its prompt no longer waiting,
     // and a notice; none for an open turn or nothing running), committed the same way.
     virtual std::vector<SessionChange> resetContext(SessionId, const DriverState& state, bool compact) {
         DriverState fresh;
@@ -182,7 +182,7 @@ public:
         fresh.summary = compact;
         return {{nullptr, {}, fresh}};
     }
-    virtual std::string friendInfo(const std::string&) const { return {}; }
+    virtual std::string aiInfo(const std::string&) const { return {}; }
     virtual std::string catalog(const SessionInfo&) const { return {}; }
     virtual std::vector<SessionChange> stop(SessionId id) = 0;
     // Whether the store took the step of the send, queue or stop just given. Only once it did may the responder act
@@ -195,10 +195,10 @@ public:
     // The login of `account` just arrived (the secret dialog stored it): it counts as signed in from now, without a
     // restart, and each of its sessions held back for want of it goes on.
     virtual void signedIn(const std::string& account) { (void)account; }
-    // Session `id`'s friend was just taken out of friends.json (`present` false), its notice durable, or put back
+    // Session `id`'s AI was just taken out of ais.json (`present` false), its notice durable, or put back
     // (true), its session settled: taken out, what runs in it is stopped and its driver ended, its prompts kept; put
-    // back, they go on (models/Supervisor.tla RemoveFriend, AddBack). Also, for every session, once the first registry
-    // is applied after none was held: whether its friend is in it (Learn).
+    // back, they go on (models/Supervisor.tla RemoveAI, AddBack). Also, for every session, once the first registry
+    // is applied after none was held: whether its AI is in it (Learn).
     virtual void present(SessionId id, bool present) {
         (void)id;
         (void)present;
@@ -231,8 +231,8 @@ struct SignInHooks {
     std::function<bool()> takers;
 };
 
-// Where the accounts and friends are kept between runs: nexus-server's config repository (server/config_repo.h), the
-// files accounts.json and friends.json a person or an AI edits by hand. The hub hands it the registry an action makes
+// Where the accounts and AIs are kept between runs: nexus-server's config repository (server/config_repo.h), the
+// files accounts.json and ais.json a person or an AI edits by hand. The hub hands it the registry an action makes
 // before it takes that registry as its own, with a one-line message saying what changed and who asked; refused (with
 // why: the files hold hand edits not yet applied, or the disk failed), the hub keeps the registry it had.
 class AccountsKeeper {
@@ -256,12 +256,12 @@ public:
     // Applies one action (each once: the link's Applier sees to that), deciding against the sessions the store holds.
     // A send gives the responder's changes, or without one the prompt and then the placeholder reply; a queue puts the
     // prompt in the session's queue (with the responder's changes after it); a stop gives the responder's changes, or
-    // none. A create makes a session with its friend, copying the account, model and effort of the session it names,
-    // or the friend's defaults; an ensure does the same with the defaults, only when the friend has no session (else
+    // none. A create makes a session with its AI, copying the account, model and effort of the session it names,
+    // or the AI's defaults; an ensure does the same with the defaults, only when the AI has no session (else
     // it changes nothing, and is not refused). A set changes the session's account, model or effort.
     //
     // Refused, changing no session but counted: an action naming a session the store does not hold (nothing is made
-    // for it); a create or an ensure past the limit on sessions, with a friend name empty or too long, or carrying
+    // for it); a create or an ensure past the limit on sessions, with an AI name empty or too long, or carrying
     // text; a create copying a session the store does not hold; a stop carrying text. Refused with a notice in the
     // session's transcript: a prompt empty or past the limits, a setting too long or not printable. Either way, with
     // `client` given, the store's counter for it becomes action.num in the same step, and `why` says why. Returns
@@ -273,53 +273,53 @@ public:
     bool receiveBus(const std::string& recipient, const std::string& id, const std::string& sender,
                     const std::string& displayBody, const std::string& promptBody, std::string* why = nullptr);
     // Includes receipts admitted in the current batch. The bus acknowledgement still waits for its flush.
-    // Record an authoritative non-friend delivery as handled; it creates no session, transcript or driver turn.
+    // Record an authoritative non-AI delivery as handled; it creates no session, transcript or driver turn.
     bool ignoreBus(const std::string& recipient, const std::string& id, std::string* why, const std::string& source);
     bool hasIgnoredBusReceipt(const std::string& recipient, const std::string& id, const std::string& source) const;
     bool hasBusReceipt(const std::string& recipient, const std::string& id) const;
 
-    // Changes that come from the server rather than a client (a friend's reply), in one step of the store, to a session
+    // Changes that come from the server rather than a client (an AI's reply), in one step of the store, to a session
     // it holds. False, with why, when the store did not take it.
     bool commit(SessionId id, const std::vector<SessionChange>& changes, std::string* why = nullptr);
 
-    // The friend's text still growing in session `id`, its open entry, after the stored transcript (empty: none). In
+    // The AI's text still growing in session `id`, its open entry, after the stored transcript (empty: none). In
     // memory only. A session the store does not hold has none. Within the hub's text limit: longer text is refused
     // (false). Returns true when the state changed.
     bool setOpen(SessionId id, const std::string& text);
 
-    // What the friend of session `id` is doing now (sync/sessions.h Activity), as its Responder works it out: in memory
+    // What the AI of session `id` is doing now (sync/sessions.h Activity), as its Responder works it out: in memory
     // only, Idle until set. A session the store does not hold has none (false). Returns true when the state changed.
     bool setActivity(SessionId id, Activity activity, std::uint32_t agents = 0);
 
     // The state every window receives: the sessions, the open secret requests and, once the hub holds a registry
-    // (useAccounts(), applyAccounts()), its friends in order (Sessions::friends); with no registry, none known.
+    // (useAccounts(), applyAccounts()), its AIs in order (Sessions::ais); with no registry, none known.
     Sessions historyPage(SessionId id, std::uint64_t epoch, std::uint64_t first) const;
     const Sessions& state() const { return state_; }
     const Limits& limits() const { return limits_; }
     bool failed() const { return store_.failed(); }
 
-    // The accounts and friends (models/Accounts.tla). Until useAccounts(), the hub holds none, and a session's account
+    // The accounts and AIs (models/Accounts.tla). Until useAccounts(), the hub holds none, and a session's account
     // is any printable setting, as before accounts. From it on, every decision about a session's account is made
     // against `registry`, the one last applied (the config repository's committed files):
-    //  - a create or an ensure takes the account of the session it copies when that is linked to its friend (or none),
-    //    else the friend's default; a session on an account runs its provider's harness;
-    //  - a set of a session's account takes one linked to its friend, or none, whatever its provider or sign-in, and is
+    //  - a create or an ensure takes the account of the session it copies when that is linked to its AI (or none),
+    //    else the AI's default; a session on an account runs its provider's harness;
+    //  - a set of a session's account takes one linked to its AI, or none, whatever its provider or sign-in, and is
     //    refused with a notice otherwise;
     //  - the account actions (AddAccount ... SetDefault) change the registry, kept by `keeper` first;
     //  - after every change of the registry, and at useAccounts(), the sessions are settled: each on an account no
-    //    longer linked to its friend moves to the friend's default when signed in, else its first signed-in linked
+    //    longer linked to its AI moves to the AI's default when signed in, else its first signed-in linked
     //    account, else none, and each whose account's provider changed takes its harness; each one changed is told,
     //    with a notice in its transcript, and its responder is told the session's new settings;
-    //  - a session whose friend is not in the registry is left as it is (its account, harness and instance), and
-    //    settled like the rest once its friend is back. A change that takes its friend out tells it, in one notice,
+    //  - a session whose AI is not in the registry is left as it is (its account, harness and instance), and
+    //    settled like the rest once its AI is back. A change that takes its AI out tells it, in one notice,
     //    and tells the responder (Responder::present), which stops what runs in it and keeps its prompts; one that
-    //    puts its friend back settles it, then tells the responder, and what waits goes on.
+    //    puts its AI back settles it, then tells the responder, and what waits goes on.
     // Returns the lines that say what settling did (empty: nothing).
     std::vector<std::string> useAccounts(accounts::Registry registry, AccountsKeeper* keeper);
     // The keeper alone, when the registry the server last applied could not be read: the hub holds no accounts until
-    // applyAccounts() gives it some. While it holds none no friend is known to be in friends.json, so the responder
+    // applyAccounts() gives it some. While it holds none no AI is known to be in ais.json, so the responder
     // lists none (server/drivers.h: nothing is sent and no driver starts; prompts are kept); the first registry
-    // applied then tells the responder, for every session, whether its friend is in it (Responder::present), judged
+    // applied then tells the responder, for every session, whether its AI is in it (Responder::present), judged
     // from that registry alone. useAccounts() tells it nothing: it comes before any driver starts, and the drivers read
     // the registry as they start.
     void keepWith(AccountsKeeper* keeper) { keeper_ = keeper; }
@@ -334,10 +334,10 @@ public:
     std::optional<AccountChoice> primaryChoice() const;
 
     // After accounts.json was first made from the drivers file (the accounts its lines passed with --account): each
-    // session on no account whose friend now has a default takes it, told, so that it runs on the account it ran on
+    // session on no account whose AI now has a default takes it, told, so that it runs on the account it ran on
     // before. Returns what it did, a line per session. Idempotent: a session on an account is left as it is, so after a
     // store that failed part way the server runs it again at its next start (server/config_repo.h keepSeed). A
-    // session's instance is settled with the rest (useAccounts): one with none takes its friend's default instance.
+    // session's instance is settled with the rest (useAccounts): one with none takes its AI's default instance.
     std::vector<std::string> adoptDefaults();
 
     // A hand edit of the files (`nexus-server config reload`), or an earlier version of them (`config restore`):
@@ -395,7 +395,7 @@ public:
                      std::function<std::uint64_t()> clock);
     // An ask for `what` of `account`, from `asker` with its one-line reason `why`. Malformed, with no request made and
     // no id minted (false, with `refused` saying why): `account` or `what` is not a name, the hub holds no accounts or
-    // none named `account`, the asker's friend is not linked to it (nexus itself, session 0, asks for any), its
+    // none named `account`, the asker's AI is not linked to it (nexus itself, session 0, asks for any), its
     // provider documents no file `what`, or `why` is not a safe line (isSecretWhy). An asker with an ask open already,
     // or kSecretAsksPerWindow asks in the last kSecretAskWindowMs, is answered busy at once, with no request made and
     // no id minted (the answer's id is 0). Otherwise an id is minted (durable: the store's counter under
@@ -480,18 +480,18 @@ private:
     bool count(const Action& action, std::string* why, const std::string& client);
     bool counted(const Action& action, const std::string& refused, std::string* why, const std::string& client);
     // `before`: the registry the hub held before this change, to find instances moved in place (null: none known).
-    // A friend in `before` and not in the registry now was taken out by this change; one not in it was put back.
+    // An AI in `before` and not in the registry now was taken out by this change; one not in it was put back.
     bool settle(std::vector<std::string>* report, const std::string& cause,
                 const accounts::Registry* before = nullptr);
     bool settleOne(SessionId id, std::vector<std::string>* report, const std::string& cause,
                    const accounts::Registry* before);
-    bool removed(SessionId id, const std::string& friendName, const std::string& cause,
+    bool removed(SessionId id, const std::string& aiName, const std::string& cause,
                  std::vector<std::string>* report);
     void take(accounts::Registry next);
-    void stateFriends();    // the registry's friends into the state (Sessions::setFriends), when they changed
+    void stateAIs();    // the registry's AIs into the state (Sessions::setAIs), when they changed
     EntryRef switchNotice(const std::string& account) const;
     bool moveTo(SessionId id, const SessionInfo& info, const std::string& notice);
-    std::vector<std::string> subscriptionsFor(const std::string& friendName) const;
+    std::vector<std::string> subscriptionsFor(const std::string& aiName) const;
     std::string firstAutoAccount(const std::vector<std::string>& subscriptions) const;
     std::string harnessOf(const std::string& account, const std::string& otherwise) const;
     void offerLimitChoice(SessionId id, const DriverState& driver, SessionInfo& info);

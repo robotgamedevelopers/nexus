@@ -191,7 +191,7 @@ void test('the start is refused before any account is read when the AI\'s sandbo
     assert.ok('account' in prepare(['--account', 'ready', '--cwd', '/w'], () => true, findAny, () => undefined, undefined));
 });
 
-void test('a limited friend starts only where the limit holds, else it is refused before any account is read', () => {
+void test('a limited AI starts only where the limit holds, else it is refused before any account is read', () => {
     let looked = false;
     const findAny = (name: string): Account | AccountRefusal => {
         looked = true;

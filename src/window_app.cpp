@@ -138,7 +138,7 @@ bool readGroups(const PrJson* d, const std::map<std::string, TabType>& types, st
         return false;
     }
     closable = mayClose == PrJsonKind_True;
-    std::set<std::string> members{"friend", "terminal", "sprint"}, ids;
+    std::set<std::string> members{"ai", "terminal", "sprint"}, ids;
     for (const auto& type : types) {
         if (!members.insert(type.first).second) {
             why = "tab type conflicts with a native type: " + type.first;
@@ -550,10 +550,10 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
         if (name == "board" && tab == "sprint") panel = Panel::Board;
         else if (name == "terminal" && tab == "terminal") panel = Panel::Terminal;
         else if (name == "spacer") panel = Panel::Spacer;
-        else if (name == "transcript" && (tab == "friend" || tab == "empty")) panel = Panel::Transcript;
-        else if (name == "prompt" && tab == "friend" && promptOpen) panel = Panel::Prompt;
-        else if (name == "account" && tab == "friend") panel = Panel::Account;
-        else if (name == "limit_choice" && tab == "friend") {
+        else if (name == "transcript" && (tab == "ai" || tab == "empty")) panel = Panel::Transcript;
+        else if (name == "prompt" && tab == "ai" && promptOpen) panel = Panel::Prompt;
+        else if (name == "account" && tab == "ai") panel = Panel::Account;
+        else if (name == "limit_choice" && tab == "ai") {
             label = stringAt(d, prJsonMember(d, 0, {"label", 5}));
             accountLabel = stringAt(d, prJsonMember(d, 0, {"limit_account_label", 19}));
             modelLabel = stringAt(d, prJsonMember(d, 0, {"limit_model_label", 17}));
@@ -653,7 +653,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         field({"label", 5}, signInAccount.label);
         field({"email", 5}, signInAccount.email);
         field({"provider", 8}, signInAccount.provider);
-        field({"friend", 6}, signInAccount.friendName);
+        field({"ai", 2}, signInAccount.aiName);
         prJsonWriterEndObject(json.get());
         const auto text = prJsonWriterText(json.get());
         context.append(text.data, text.size);

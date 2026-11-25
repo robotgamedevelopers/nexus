@@ -130,12 +130,68 @@ pub struct Program {
     application: FrozenModule,
 }
 
+// The names a policy read and wrote before nexus called its AIs "AI" (docs/policy.md, "Names before AI"): the tab
+// kind and context key "friend", now "ai", and the directory "nova_friends", now "nova_ais". The host no longer
+// produces them, so a policy using them would quietly never match: it is refused, naming the place and the new name.
+// The words stay here only.
+const OLD_NAMES: [(&str, &str); 2] = [("friend", "ai"), ("nova_friends", "nova_ais")];
+
+fn old_name_in_config(value: &Value, at: &str) -> Option<String> {
+    match value {
+        Value::String(text) => OLD_NAMES
+            .iter()
+            .find(|(old, _)| text == old)
+            .map(|(old, new)| format!("config.json{at} is \"{old}\"; it is \"{new}\" now")),
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .find_map(|(i, v)| old_name_in_config(v, &format!("{at}[{i}]"))),
+        Value::Object(map) => map.iter().find_map(|(k, v)| {
+            OLD_NAMES
+                .iter()
+                .find(|(old, _)| k == old)
+                .map(|(old, new)| format!("config.json{at} has the key \"{old}\"; it is \"{new}\" now"))
+                .or_else(|| old_name_in_config(v, &format!("{at}.{k}")))
+        }),
+        _ => None,
+    }
+}
+
+fn old_names(bundle: &Bundle) -> Result<()> {
+    for (file, text) in &bundle.sources {
+        for (n, line) in text.lines().enumerate() {
+            for (old, new) in OLD_NAMES {
+                if line.contains(&format!("\"{old}\"")) || line.contains(&format!("'{old}'")) {
+                    bail!(
+                        "{file}:{}: \"{old}\" is \"{new}\" since nexus calls its AIs \"AI\"; rename it there \
+                         (docs/policy.md, \"Names before AI\") and apply the policy again",
+                        n + 1
+                    );
+                }
+            }
+        }
+    }
+    // "nova_ais" is nova-config's snapshot, put in by the host (compile_directory_revision), not the fork's.
+    let mut config = bundle.config.clone();
+    if let Some(map) = config.as_object_mut() {
+        map.remove("nova_ais");
+    }
+    if let Some(found) = old_name_in_config(&config, "") {
+        bail!(
+            "{found}, since nexus calls its AIs \"AI\"; rename it there (docs/policy.md, \"Names before AI\") \
+             and apply the policy again"
+        );
+    }
+    Ok(())
+}
+
 impl Program {
     pub fn new(bundle: Bundle, side: &str) -> Result<Self> {
         ensure!(
             matches!(side, "client" | "server") && bundle.side == side && bundle.version == 1,
             "expected a version 1 {side} policy"
         );
+        old_names(&bundle)?;
         ensure!(
             bundle.config.is_object() && bundle.sources.len() <= 128,
             "expected a config object and at most 128 source files"
@@ -292,10 +348,14 @@ fn compile_directory_revision(
         None => defaults(side)?,
     };
     if let Some(directory) = directory {
-        let data: Value =
-            serde_json::from_slice(directory).context("reading Nova friend directory")?;
-        ensure!(data.is_object(), "expected a Nova friend directory object");
-        bundle.config["nova_friends"] = data;
+        let mut data: Value =
+            serde_json::from_slice(directory).context("reading Nova AI directory")?;
+        ensure!(data.is_object(), "expected a Nova AI directory object");
+        // nova-config's snapshot keys its rows "friends"; the word stays only at this boundary, and policy reads "ais".
+        if let Some(rows) = data.as_object_mut().and_then(|o| o.remove("friends")) {
+            data["ais"] = rows;
+        }
+        bundle.config["nova_ais"] = data;
     }
     Program::new(bundle, side)
 }
@@ -326,6 +386,7 @@ impl Host {
         }
         let side = self.side.clone();
         let initial = self.active.as_ref().unwrap().0.clone();
+        // nova-config friend watch writes nova-friends.json: its name, so the word stays only at this boundary.
         let directory_path = Path::new(&path).with_file_name("nova-friends.json");
         let directory_path = directory_path
             .to_str()
@@ -341,7 +402,7 @@ impl Host {
             Ok(())
         })();
         if let Err(e) = initial_load {
-            eprintln!("nexus: Nova friend directory: {e:#}");
+            eprintln!("nexus: Nova AI directory: {e:#}");
         }
         let worker = thread::Builder::new()
             .name("nexus-policy".into())

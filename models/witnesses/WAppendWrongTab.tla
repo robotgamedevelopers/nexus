@@ -7,7 +7,7 @@ BrokenAppend(i, e) ==
     IF i \in Tabs
     THEN /\ transcript' = [transcript EXCEPT ![At((i + 1) % N)] = Append(@, e)]
          /\ last' = Did("append", i, "", e, TRUE)
-         /\ UNCHANGED <<friends, order, active, draft, queue>>
+         /\ UNCHANGED <<ais, order, active, draft, queue>>
     ELSE /\ last' = Did("append", i, "", e, FALSE)
          /\ UNCHANGED model
 

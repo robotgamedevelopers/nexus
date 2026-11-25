@@ -141,7 +141,7 @@ jobs:
         run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
 
   # The model and its check programs built Debug with AddressSanitizer and UndefinedBehaviorSanitizer, which stop at
-  # the first report: the unit tests, and the trace walks (the window's on every friend count, the overlay's) with every
+  # the first report: the unit tests, and the trace walks (the window's on every AI count, the overlay's) with every
   # fault (no TLC); the same for the link's states (src/sync) and their walks, and the store (store_test, durable_test
   # and journal_walk). Configured without the link's transport (NEXUS_LINK=OFF: mosh and protobuf), which these programs
   # do not use, so any macOS runner will do.
@@ -270,18 +270,18 @@ jobs:
           for fault in --faulty-aba --faulty-stale; do
             walk build/tests/model/watch_walk 1 1000 "$fault"
           done
-          for friends in 0 1 2 3; do
+          for ais in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
-              walk build/tests/model/trace_walk "$seed" 1000 "$friends"
+              walk build/tests/model/trace_walk "$seed" 1000 "$ais"
             done
-            walk build/tests/model/trace_walk 1 1000 "$friends" --no-sprint
+            walk build/tests/model/trace_walk 1 1000 "$ais" --no-sprint
           done
           for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             walk build/tests/model/trace_walk 1 1000 3 "$fault"
           done
-          walk build/tests/model/trace_walk 10 1000 3 --friends-churn
-          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn
-          walk build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend
+          walk build/tests/model/trace_walk 10 1000 3 --ais-churn
+          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --ais-churn
+          walk build/tests/model/trace_walk 1 300 3 --ais-churn --faulty-remove-ai
           for seed in 1 2 3; do
             walk build/tests/model/strip_walk "$seed" 400 2
           done
@@ -328,10 +328,10 @@ jobs:
             walk build/tests/server/supervisor_walk 1 1000 "$fault"
           done
           for seed in 13 14 15; do
-            walk build/tests/server/supervisor_walk "$seed" 600 --friends-churn
+            walk build/tests/server/supervisor_walk "$seed" 600 --ais-churn
           done
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-remove
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-unknown
           for seed in 1 2 3 4 5 6 7 8; do
             walk build/tests/server/pass_walk "$seed" 250
           done
@@ -445,7 +445,7 @@ jobs:
   # Claude executable the pinned SDK ships (so npm ci with the optional per-platform package here), on a fake token,
   # against a fake Messages API on 127.0.0.1, in the OS sandbox, trying every way an AI could read its login. Spends
   # nothing and reaches no outside service. The test's runs in three jobs (NEXUS_WALL_RUN): the whole
-  # wall, the wall without its hook, and together a friend limited to its directory with the hook and without it (two
+  # wall, the wall without its hook, and together an AI limited to its directory with the hook and without it (two
   # short runs in one job: the setup is the cost).
   claude-driver-wall:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -860,19 +860,19 @@ jobs:
           for fault in --faulty-aba --faulty-stale; do
             walk build/tests/model/watch_walk 1 1000 "$fault"
           done
-          for friends in 0 1 2 3; do
+          for ais in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
-              walk build/tests/model/trace_walk "$seed" 1000 "$friends"
+              walk build/tests/model/trace_walk "$seed" 1000 "$ais"
             done
-            walk build/tests/model/trace_walk 1 1000 "$friends" --no-sprint
+            walk build/tests/model/trace_walk 1 1000 "$ais" --no-sprint
           done
           for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             walk build/tests/model/trace_walk 1 1000 3 "$fault"
           done
-          # the friends coming and going, and the friend strip's walks and faults
-          walk build/tests/model/trace_walk 10 1000 3 --friends-churn
-          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn
-          walk build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend
+          # the AIs coming and going, and the AI strip's walks and faults
+          walk build/tests/model/trace_walk 10 1000 3 --ais-churn
+          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --ais-churn
+          walk build/tests/model/trace_walk 1 300 3 --ais-churn --faulty-remove-ai
           for seed in 1 2 3; do
             walk build/tests/model/strip_walk "$seed" 400 2
           done
@@ -930,12 +930,12 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             walk build/tests/server/supervisor_walk 1 1000 "$fault"
           done
-          # the friend taken out of friends.json and put back, and a start holding no friends list, and their faults
+          # the AI taken out of ais.json and put back, and a start holding no AIs list, and their faults
           for seed in 13 14 15; do
-            walk build/tests/server/supervisor_walk "$seed" 600 --friends-churn
+            walk build/tests/server/supervisor_walk "$seed" 600 --ais-churn
           done
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-remove
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-unknown
           # placement's walks on real files (each in walk-files beside its trace) and their faults, at the seeds the
           # trace checks use (tests/server/CMakeLists.txt)
           for seed in 1 2 3; do

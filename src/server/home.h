@@ -3,13 +3,13 @@
 //
 //   config            the server's settings (config.h): `machine <name>`, this machine's name in the fleet, and a
 //                     `dashboard <url> <name>` line for each dashboard the windows show (sync/dashboards.h)
-//   drivers           which program is each friend's driver (server/driver_table.h)
+//   drivers           which program is each AI's driver (server/driver_table.h)
 //   store/            the sessions and the applied counters (src/store)
 //   server.sock       the control socket, mode 0600
 //   server.log        the log of a server `new` started
 //   signin.sock       in-app sign-in's helper socket, mode 0600 (server/signin_runner.h)
 //   signin-bin/       the browser-helper programs in-app sign-in puts first on `claude setup-token`'s PATH
-//   nexus-config/     the accounts and friends: accounts.json and friends.json, a git repository of their own
+//   nexus-config/     the accounts and AIs: accounts.json and ais.json, a git repository of their own
 //                     (server/config_repo.h, docs/accounts.md); no credential is ever in it
 //   accounts/<name>/  one harness login per directory: the Claude driver's --account (drivers/claude), always
 //                     under $HOME/.nexus/server, whatever --dir says; secrets only, which no AI's tool reaches
@@ -29,7 +29,7 @@
 
 namespace nexus::server {
 
-// The keys the server's config takes: machine, the name this machine has in the fleet, which a friend's instance
+// The keys the server's config takes: machine, the name this machine has in the fleet, which an AI's instance
 // here names (accounts/registry.h; by default the short form of its host name); and claude, the absolute path of the
 // `claude` program in-app sign-in runs; and bus-launcher, the absolute path of a local authenticated bus wrapper.
 inline const std::vector<std::string> kServerConfigKeys{"machine", "claude", "bus-launcher"};
@@ -46,12 +46,12 @@ struct ServerSettings {
     std::vector<sync::Dashboard> dashboards;
 };
 
-// The machine this server runs on, by the name a friend's instance gives it: `configured` (the config's machine) when
+// The machine this server runs on, by the name an AI's instance gives it: `configured` (the config's machine) when
 // set, else the short form of `hostName` (gethostname's, cut at its first '.'; empty when gethostname failed); empty
 // when neither gives one, and then no instance is taken to be on this machine.
 std::string serverMachine(const std::string& configured, const std::string& hostName);
 
-// Whether a friend's instance on `machine` runs on this server's machine: the same name, in any case, as `self`
+// Whether an AI's instance on `machine` runs on this server's machine: the same name, in any case, as `self`
 // (serverMachine(): the config's machine, else the short host name) or as `hostName`, the full host name
 // (gethostname's, as `studio.local`). An empty name matches nothing.
 bool sameMachine(const std::string& machine, const std::string& self, const std::string& hostName = std::string());

@@ -35,7 +35,7 @@ If you choose Nova Seed, configure the AI as usual and open its tab. For the fir
 - In **auto**, a subscription usage limit moves the conversation to the next signed-in linked subscription in
   the AI's configured order. Each payer can be tried once for the interrupted request. If every eligible payer
   is exhausted, the session reports that. Selecting a named account pins the conversation to that account.
-- When a change takes an AI out of friends.json, the server stops the work running in each of its sessions (the
+- When a change takes an AI out of ais.json, the server stops the work running in each of its sessions (the
   turn open gets the person's stop; its driver is ended) and tells each session once. The sessions are kept as they
   are (account, harness, instance, transcript and queued prompts); while the AI is out nothing starts in them and
   a prompt sent is refused, and they read as limited. When the AI is added again, its sessions are settled like any
@@ -57,10 +57,18 @@ These rules are `models/Accounts.tla`, and the server's code is checked against 
 
 ```
 ~/.nexus/server/nexus-config/accounts.json
-~/.nexus/server/nexus-config/friends.json
+~/.nexus/server/nexus-config/ais.json
 ```
 
 `nexus-server config path` prints the directory and both files. (With `--dir DIR`, they are under `DIR/nexus-config/`.)
+
+Before nexus called them AIs (2026-11-25), the AIs file was `friends.json`, its list `"friends"`. A nexus-server
+from then on moves an old `friends.json` to `ais.json` once, at its start, in a commit of its own
+(`nexus-server moved friends.json to ais.json`), the text exactly as it was, so a hand edit not yet applied stays one.
+The old `"friends"` list reads as `"ais"` and is written as `"ais"` at the next write; `config history` and
+`config restore` read commits from before under the old name. It refuses, saying how to fix it, when both files are
+there, when changes are staged in the repository, or when `friends.json` was deleted by hand. A nexus-server from
+before the move does not read `ais.json`: going back to one holds no AIs list until the newer server runs again.
 
 **No secret ever goes in these files.** They hold account and AI configuration. Each account's login lives in
 `~/.nexus/server/accounts/<name>/` (a 0700 directory of 0600 files), outside this directory, and is set up by the
@@ -77,7 +85,7 @@ not the transcripts and memory (`projects/`), the shell snapshots, the history o
 wall may hold the token, and never a file the secret dialog stored. Each of the three is copied only when it is a
 regular file of one name (a hard link is refused), at most 1 MiB, and does not hold the account's token; otherwise the
 driver refuses to start in one line naming the file and the fix, and makes no directory. Those not copied stay where
-they were, under the wall, and a session from before does not resume. Editing `accounts.json` and `friends.json` stays open to
+they were, under the wall, and a session from before does not resume. Editing `accounts.json` and `ais.json` stays open to
 the AI: they hold no secret.
 
 ## accounts.json
@@ -119,7 +127,7 @@ the AI: they hold no secret.
 | `accounts` | top | yes | a list of accounts, in any order you like; `[]` for none |
 | `name` | each account | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the accounts |
 | `provider` | each account | yes | 1 to 32 lowercase letters, digits or `-`, as `claude` or `codex` |
-| `billing` | each account | no (`subscription`) | `"subscription"` (the provider's subscription plan) or `"api"` (billed at API rate, per token); an AI on an `api` account is always limited (friends.json's `limit`) |
+| `billing` | each account | no (`subscription`) | `"subscription"` (the provider's subscription plan) or `"api"` (billed at API rate, per token); an AI on an `api` account is always limited (ais.json's `limit`) |
 | `label` | each account | no | Short display text for the account picker. Up to 254 UTF-8 bytes without ASCII control characters. An omitted or empty label displays the stable account name. |
 | `email` | each account | no | Address shown to connected windows for this linked account. For Claude it also selects the identity the browser must authenticate. Changing the email requires a matching verified login before this account can be used. Up to 254 UTF-8 bytes without ASCII control characters. |
 | `sign_in_on_use` | each account | no (`false`) | `true` defers sign-in until the account is selected or needs its driver. Opening the overlay leaves unused accounts alone. |
@@ -129,7 +137,7 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 ### Using two logins with one provider
 
 The example above declares two Claude logins, `work` and `home`. Add each name once to
-`accounts.json`. In `friends.json`, add both to the AI's `accounts` list in the order
+`accounts.json`. In `ais.json`, add both to the AI's `accounts` list in the order
 you want to cycle them. Run `nexus-server config check` and
 `nexus-server config reload`. The same provider driver handles both logins. Each has its own
 sign-in and private account directory. Keep an enrolled account's name when adding another login.
@@ -152,7 +160,7 @@ existing selections, and a copy of a session for the same AI inherits its select
 
 Set `"auto_accounts": false` in the server profile to start fresh sessions on a named account. In that case,
 or with fewer than two subscriptions, the shipped `"account_default": "first"` selects the first linked account.
-Set it to `"preferred"` to use the AI's explicit `default` in `friends.json`. When a roster edit leaves
+Set it to `"preferred"` to use the AI's explicit `default` in `ais.json`. When a roster edit leaves
 an Auto session with only one subscription, that account becomes its named selection.
 
 A change of payer adds a dark transcript bubble, for example **Switched to work@example.org (work)**.
@@ -199,7 +207,7 @@ A configured Claude email also applies to existing accounts at upgrade. An older
 contains no email that Nexus can verify. The first use requires one browser sign-in to establish
 the identity for that slot. The upgrade preserves the old credential file and conversation history.
 
-## friends.json
+## ais.json
 
 ```json
 {
@@ -207,7 +215,7 @@ the identity for that slot. The upgrade preserves the old credential file and co
   "limit_keeps_out": [
     "/data"
   ],
-  "friends": [
+  "ais": [
     {
       "name": "claude",
       "limit": false,
@@ -251,10 +259,10 @@ the identity for that slot. The upgrade preserves the old credential file and co
 | Field | Where | Required | Allowed values |
 |---|---|---|---|
 | `version` | top | yes | the whole number `2` (see Versions) |
-| `limit_keeps_out` | top | no (none) | a list of absolute directories, each once, never `"/"`: more places every limited AI's AI is kept out of, on top of the ones it always is (below, "limit"), as a second data volume or a network mount; it can only add, never let a limited AI read more. Written back only when it holds one |
-| `friends` | top | yes | a list of AIs, at most 256, in every version; `[]` for none. A file with more is refused whole, with the count and the limit, and nothing changes (a version 1 file too, before any upgrade); adding one in the window at the limit is refused the same way |
+| `limit_keeps_out` | top | no (none) | a list of absolute directories, each once, never `"/"`: more places every limited AI is kept out of, on top of the ones it always is (below, "limit"), as a second data volume or a network mount; it can only add, never let a limited AI read more. Written back only when it holds one |
+| `ais` | top | yes | a list of AIs, at most 256, in every version; `[]` for none. A file with more is refused whole, with the count and the limit, and nothing changes (a version 1 file too, before any upgrade); adding one in the window at the limit is refused the same way |
 | `name` | each AI | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the AIs |
-| `limit` | each AI | no (`true`) | `true` or `false`, without quotes: whether the AI's AI reads and writes only in its instance's directory (below, "limit"); `false` is refused for an AI that links an account with `"billing": "api"` |
+| `limit` | each AI | no (`true`) | `true` or `false`, without quotes: whether the AI reads and writes only in its instance's directory (below, "limit"); `false` is refused for an AI that links an account with `"billing": "api"` |
 | `accounts` | each AI | no (none) | a list of account names from accounts.json, each once; the shipped account rotation policy uses this order (see [customizing policy](policy.md)) |
 | `default` | each AI | no (none) | one of the AI's `accounts`, or `null` for none |
 | `instances` | each AI | no (none) | a list of instances, in order; the first is the AI's default instance |
@@ -266,7 +274,7 @@ An AI is known by its `name`, everywhere: the window's tab, the saved tab order,
 the file is a remove of the old name and an add of the new: the old name's tab goes (its draft kept under the old name)
 and the new name gets a new tab, and the old name's sessions stay with the old name, which is out of the file. Rename as
 one change, which would carry the sessions, the tab and its draft to the new name, is not built (`docs/roadmap.sexp`
-`friend-rename`).
+`ai-rename`).
 
 The two files must agree: every account an AI links to is set up in accounts.json, and every default is one of its
 AI's accounts. Moving an instance (its `machine` or `dir`) is an edit like any other, and every session of it is
@@ -310,11 +318,11 @@ driver started after a sign-in runs under its AI's `limit` as every driver start
 
 ## limit: an AI kept to its directory
 
-`"limit": true` keeps the AI's AI, its shell and its file tools, inside the directory of the instance its session
+`"limit": true` keeps the AI, its shell and its file tools, inside the directory of the instance its session
 runs in: it reads and writes there, and nowhere else people keep files. `"limit": false` is the AI as it ran before
 the field existed: under the token wall (docs/secrets.md), but free to read the rest of the home directory.
 
-- **An AI added is limited.** One added in the window, or written into friends.json without a `limit`, is `true`,
+- **An AI added is limited.** One added in the window, or written into ais.json without a `limit`, is `true`,
   whatever the file's version: an AI added by hand to a version 1 file, not yet reloaded, reads limited too (only
   the AIs a version 1 file already held when it was committed read unlimited, as they ran). Set `"limit": false` on
   an AI you want unlimited (yourself as administrator, say) by editing the file.
@@ -331,7 +339,7 @@ the field existed: under the token wall (docs/secrets.md), but free to read the 
   outside its directory and the temporary directories. What stays readable, and the costs, are in docs/secrets.md
   ("A limited AI").
 - **More places to keep out.** Where people keep files somewhere else too (a second volume such as `/data`, a network
-  mount, a WSL2 automount root moved off `/mnt`), name each directory in friends.json's top-level `"limit_keeps_out"`:
+  mount, a WSL2 automount root moved off `/mnt`), name each directory in ais.json's top-level `"limit_keeps_out"`:
   every limited AI is kept out of it as well, by the shell and the file tools alike. A directory that does not
   exist on this machine is left out. It only adds: nothing in it lets a limited AI read more, and it changes
   nothing for an unlimited AI. A reload that changes it tells each limited session; a directory added stops a
@@ -352,7 +360,7 @@ the field existed: under the token wall (docs/secrets.md), but free to read the 
   feature (docs/driver-protocol.md); any other driver is ended before it is given a prompt, and the session says why.
 
 The server decides a session's limit each time it starts the session's driver, from the files as they are then: limited
-when the AI is limited, when its account is billed at API rate, when the AI is not in friends.json at all, or
+when the AI is limited, when its account is billed at API rate, when the AI is not in ais.json at all, or
 when its account is not in accounts.json; and limited when it cannot tell. models/Accounts.tla checks the rules (no
 driver on an API-billed account starts unlimited; none starts weaker than its AI's limit); models/Supervisor.tla
 checks that no session keeps running with a weaker limit than its AI's (tightening stops the open turn, and a
@@ -370,7 +378,7 @@ JSON is read; this is only how it is written back).
    (`would apply: ...`) and `OK`.
 3. `nexus-server config reload` applies them. The server decides, against what it holds when it gets the request; it
    prints one line for each change it made (`applied: ...`, sessions moved included) and `OK`, or each reason it
-   refused (`refused: ...`) and `ERROR nothing was applied; the server keeps the accounts and friends it had`. The same
+   refused (`refused: ...`) and `ERROR nothing was applied; the server keeps the accounts and ais it had`. The same
    lines go to the server's log, `~/.nexus/server/server.log`. An edit is applied whole or not at all.
 
 A reload is explicit: the server never applies a file because it changed on disk, so a half-finished edit is never
@@ -387,16 +395,16 @@ Examples of what the server says:
 
 ```
 $ nexus-server config check
-error: /home/me/.nexus/server/nexus-config/friends.json:4: this is not JSON; fix the text at this line; docs/accounts.md has an example of the whole file
+error: /home/me/.nexus/server/nexus-config/ais.json:4: this is not JSON; fix the text at this line; docs/accounts.md has an example of the whole file
 ERROR 1 problem; nothing was changed
 
 $ nexus-server config check
-error: friends.json: the friend "claude" links to the account "gone", which accounts.json does not set up; add the account there, or take it out of "claude"'s "accounts"
+error: ais.json: the AI "claude" links to the account "gone", which accounts.json does not set up; add the account there, or take it out of "claude"'s "accounts"
 ERROR 1 problem; nothing was changed
 
 $ nexus-server config reload
-applied: friend claude's accounts [work, home] -> [home]
-applied: friend claude's default work -> none
+applied: AI claude's accounts [work, home] -> [home]
+applied: AI claude's default work -> none
 applied: session 3 (claude): account work -> home, harness claude
 OK
 ```
@@ -408,7 +416,7 @@ they need nothing else:
 
 ```
 ssh server-host nexus-server config path
-ssh server-host cat ~/.nexus/server/nexus-config/friends.json
+ssh server-host cat ~/.nexus/server/nexus-config/ais.json
 ssh server-host nexus-server config check
 ssh server-host nexus-server config reload
 ```
@@ -426,15 +434,15 @@ edit applied by a reload (the person's or their AI's), a version restored, or an
 - `nexus-server config restore <commit>` applies the files as that commit held them, as a new commit. History is never
   rewritten, so a restore can itself be undone the same way. It is refused while the files hold edits not yet applied.
 
-Its `.gitignore` admits only `.gitignore`, `accounts.json` and `friends.json`, and every commit names only
-`accounts.json` and `friends.json`. git runs as a child process with a clean environment: no system or global git
+Its `.gitignore` admits only `.gitignore`, `accounts.json` and `ais.json`, and every commit names only
+`accounts.json` and `ais.json`. git runs as a child process with a clean environment: no system or global git
 config (your `~/.gitconfig` is never read), no hooks, no signing, no prompts, never above this directory, the
 transports file, ssh and https only, the identity `nexus`, and a deadline on every call.
 
 A server from before accounts has no accounts.json: at its first start with this version, the accounts and AIs are
 taken from the drivers file (each driver line's `--account <name>` becomes an account whose provider is that line's
 harness, linked to that harness's AIs as their default; and each AI gets one instance, named after this
-machine, on this machine, in the directory its `friend` line gives), committed as an upgrade, and each session moves
+machine, on this machine, in the directory its `ai` line gives), committed as an upgrade, and each session moves
 onto its AI's default account and instance, told, so that it runs as it ran before. The upgrade's commit leaves a
 mark in the repository, taken off only once every session has moved: a server that stops before then (a store that
 failed, say) moves them at its next start, and a session already moved is not moved twice.
@@ -520,7 +528,7 @@ Both files carry `"version"`, from the first release. A nexus-server reads its o
 older file is upgraded in place when the server starts (your entries kept as they were, written in the new version, and
 committed as an upgrade, which the server's log reports), unless the files hold edits not yet applied: those are never
 written over, and the next reload writes the new version. `config check` never writes anything, an upgrade included.
-Version 2 added `billing` (accounts.json) and `limit` (friends.json). A version 1 file is read with every account billed
+Version 2 added `billing` (accounts.json) and `limit` (ais.json). A version 1 file is read with every account billed
 by subscription and every AI it held when committed **not** limited, as it ran before (an AI added by hand to a
 version 1 file while the edit is pending reads limited: it never ran), and the upgrade writes each AI's `"limit"`
 and each account's `"billing": "subscription"` into the files, so that the choice is plain to see and to change.

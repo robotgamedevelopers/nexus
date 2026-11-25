@@ -1,11 +1,11 @@
 ------------------------------ MODULE WAccFallbackNeedsSignIn ------------------------------
-\* Reversed witness: a session moved off an account goes to the friend's default whether or not it is signed in. ServerPicksSignedIn must reject it.
+\* Reversed witness: a session moved off an account goes to the AI's default whether or not it is signed in. ServerPicksSignedIn must reject it.
 EXTENDS MCAccounts
 
 BrokenLanding(nl, nd, f) == IF nd[f] /= None THEN nd[f] ELSE FirstUp(nl[f])
 BrokenSettled(nl, nd, np) ==
     [s \in Ids |-> IF Stray(nl, s)
-                   THEN LET n == BrokenLanding(nl, nd, ses[s].friend) IN
+                   THEN LET n == BrokenLanding(nl, nd, ses[s].ai) IN
                         [ses[s] EXCEPT !.acct = n, !.harness = HarnessFor(n, np, @)]
                    ELSE ses[s]]
 BrokenUnlink(f, a) ==
