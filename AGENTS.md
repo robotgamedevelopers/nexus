@@ -37,6 +37,15 @@ that fix them (such as the sprint tab pinned at Command-1) move into configurati
 All rendering is Prax, at its highest layer that does the job: nexus never hand-rolls UI that Prax has, and a gap in
 Prax goes to Prax's author as a request, never a fork.
 
+## Changing how nexus looks and behaves
+
+Glenn's requests to change nexus, while it is being built, are changes to what every person gets when they start
+nexus: edit the defaults in this repository (`policy/rules/*.star`, `policy/rules/config.json`, the code) and land them
+through a pull request the same day. Never apply them only to the machine you are on (`nexus-policy apply` to
+`~/.nexus/client` or `~/.nexus/server`, or a profile directory outside this repository): a change kept there never
+reaches a release or another device. `nexus-policy apply` is for previewing a change you are also committing here.
+Glenn, 2026-11-25: "I am changing the settings for users to have when they start with nexus".
+
 ## Code
 
 - nexus is C++ built with CMake. Build with `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release` and `cmake --build build -j "$(sysctl -n hw.ncpu)"`.
