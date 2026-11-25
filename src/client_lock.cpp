@@ -60,11 +60,14 @@ std::string lockTitle(LockState state) {
     return state == LockState::Prompting ? "nexus is waiting for you" : "nexus is locked";
 }
 
-std::string lockMessage(LockState state, LockReason why, const std::string& method, const std::string& detail) {
+std::string lockMessage(LockState state, LockReason why, const std::string& method, const std::string& detail,
+                        LockInput input) {
     if (state == LockState::Prompting) {
         return "Confirm it is you with " + method + ".";
     }
-    const std::string again = "Press Return or click here to unlock with " + method + ".";
+    const bool tap = input == LockInput::Tap;
+    const std::string again =
+        (tap ? "Tap to unlock with " : "Press Return or click here to unlock with ") + method + ".";
     switch (why) {
     case LockReason::None:
     case LockReason::Launch: return again;
@@ -80,7 +83,7 @@ std::string lockMessage(LockState state, LockReason why, const std::string& meth
         return "Not unlocked: the prompt was cancelled" + (detail.empty() ? "" : " (" + detail + ")") + ". " + again;
     case LockReason::Unavailable:
         return "Not unlocked: " + method + " is not available" + (detail.empty() ? "" : " (" + detail + ")") +
-            ". Set it up in the system's settings, then press Return or click here.";
+            ". Set it up in the system's settings, then " + (tap ? "tap here." : "press Return or click here.");
     }
     return again;
 }
@@ -115,16 +118,16 @@ namespace nexus {
 
 LockAnswer lockAnswerForLAError(long code) {
     switch (code) {
-    case kLAErrorUserCancel:
-    case kLAErrorUserFallback:
-    case kLAErrorSystemCancel:
-    case kLAErrorAppCancel:
-    case kLAErrorInvalidContext:
+    case kLocalAuthErrorUserCancel:
+    case kLocalAuthErrorUserFallback:
+    case kLocalAuthErrorSystemCancel:
+    case kLocalAuthErrorAppCancel:
+    case kLocalAuthErrorInvalidContext:
         return LockAnswer::Cancelled;
-    case kLAErrorPasscodeNotSet:
-    case kLAErrorNotInteractive:
+    case kLocalAuthErrorPasscodeNotSet:
+    case kLocalAuthErrorNotInteractive:
         return LockAnswer::Unavailable;
-    case kLAErrorAuthenticationFailed:
+    case kLocalAuthErrorAuthenticationFailed:
     default:
         return LockAnswer::Failed;
     }

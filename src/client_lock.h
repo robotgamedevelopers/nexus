@@ -13,6 +13,10 @@
 
 #pragma once
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -88,24 +92,34 @@ private:
     double lastInput_ = 0;
 };
 
+// How the person asks to unlock: a key or a click on the Mac and Windows, a tap on a phone. Chosen at build time
+// (kLockInput); the tests pass each one.
+enum class LockInput { KeyOrClick, Tap };
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+inline constexpr LockInput kLockInput = LockInput::Tap;
+#else
+inline constexpr LockInput kLockInput = LockInput::KeyOrClick;
+#endif
+
 // What the lock screen says: one line for the reason, and what to do. `method` names the system's authentication
 // ("Touch ID or your password", "Windows Hello"). Nothing of nexus's content.
 std::string lockTitle(LockState state);
-std::string lockMessage(LockState state, LockReason why, const std::string& method, const std::string& detail);
+std::string lockMessage(LockState state, LockReason why, const std::string& method, const std::string& detail,
+                        LockInput input = kLockInput);
 
 // The systems' codes, mapped to the lock's terms. Each platform file checks the numbers against its SDK
 // (static_assert), so a change there fails the build rather than the lock.
 //
 // LocalAuthentication's LAError (lock_mac.mm): a failed check is Failed; the person, the system or nexus cancelling is
 // Cancelled; no password or no way to show the prompt is Unavailable. Anything else is Failed: try again.
-inline constexpr long kLAErrorAuthenticationFailed = -1;
-inline constexpr long kLAErrorUserCancel = -2;
-inline constexpr long kLAErrorUserFallback = -3;
-inline constexpr long kLAErrorSystemCancel = -4;
-inline constexpr long kLAErrorPasscodeNotSet = -5;
-inline constexpr long kLAErrorAppCancel = -9;
-inline constexpr long kLAErrorInvalidContext = -10;
-inline constexpr long kLAErrorNotInteractive = -1004;
+inline constexpr long kLocalAuthErrorAuthenticationFailed = -1;
+inline constexpr long kLocalAuthErrorUserCancel = -2;
+inline constexpr long kLocalAuthErrorUserFallback = -3;
+inline constexpr long kLocalAuthErrorSystemCancel = -4;
+inline constexpr long kLocalAuthErrorPasscodeNotSet = -5;
+inline constexpr long kLocalAuthErrorAppCancel = -9;
+inline constexpr long kLocalAuthErrorInvalidContext = -10;
+inline constexpr long kLocalAuthErrorNotInteractive = -1004;
 LockAnswer lockAnswerForLAError(long code);
 
 // Windows' UserConsentVerificationResult (lock_win.cpp): Verified is Granted; no device, not set up for this user or
