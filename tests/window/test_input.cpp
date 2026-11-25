@@ -2877,7 +2877,8 @@ void regularWidthNarrowsThePromptAndTheColumn() {
 }
 
 // An iPhone's compact width (View::fullWidthReplies): an AI's reply takes the transcript column's whole width, where
-// the policy's reply_width (two thirds by default) wraps it at about half the screen.
+// the policy's reply_width (two thirds by default) wraps it at about half the screen. The column holds the panel's
+// padding, so the whole width is the panel's inside: a reply half as wide again, and most of the column.
 void compactWidthRepliesTakeTheWholeColumn() {
     Harness h;
     h.extent = h.view.extent = {402, 874};
@@ -2905,8 +2906,8 @@ void compactWidthRepliesTakeTheWholeColumn() {
     h.frame();
     float fullText = 0, fullColumn = 0;
     widths(&fullText, &fullColumn);
-    CHECK(near(fullColumn, column) && fullText > fullColumn * 0.9f);
-    if (!(fullText > fullColumn * 0.9f))
+    CHECK(near(fullColumn, column) && fullText > text * 1.4f && fullText > fullColumn * 0.8f);
+    if (!(fullText > text * 1.4f && fullText > fullColumn * 0.8f))
         std::fprintf(stderr, "reply %g of column %g -> %g of %g\n", text, column, fullText, fullColumn);
 }
 
