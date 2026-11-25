@@ -61,6 +61,29 @@ add_test(NAME window_ios_server_dialog_planted
     COMMAND nexus_ios_shot - ${work}/server-planted.png 1032 1376 2 --compare ${golden}/server.png)
 set_tests_properties(window_ios_server_dialog_planted PROPERTIES LABELS "functional;ios" TIMEOUT 60 WILL_FAIL TRUE)
 
+# window_ios_account_menu_<device>: the account menu dropped from the active AI's tab, a finger slid onto the second
+# account, at an iPhone's and an iPad's size; window_ios_account_dialog: the /account dialog on an iPad (docs/accounts.md,
+# "Switching accounts"). Their reversed witness, window_ios_account_menu_planted, is the iPad's frame with the dialog
+# in place of the menu, which must not match the menu's golden.
+foreach(device_size "iphone;402;874;3" "ipad;1032;1376;2")
+    list(GET device_size 0 device)
+    list(GET device_size 1 w)
+    list(GET device_size 2 h)
+    list(GET device_size 3 r)
+    add_test(NAME window_ios_account_menu_${device}
+        COMMAND nexus_ios_shot ${state} ${work}/account-menu-${device}.png ${w} ${h} ${r} --accounts menu
+            --compare ${golden}/account-menu-${device}.png)
+    set_tests_properties(window_ios_account_menu_${device} PROPERTIES LABELS "functional;ios" TIMEOUT 60)
+endforeach()
+add_test(NAME window_ios_account_dialog
+    COMMAND nexus_ios_shot ${state} ${work}/account-dialog.png 1032 1376 2 --accounts dialog
+        --compare ${golden}/account-dialog.png)
+set_tests_properties(window_ios_account_dialog PROPERTIES LABELS "functional;ios" TIMEOUT 60)
+add_test(NAME window_ios_account_menu_planted
+    COMMAND nexus_ios_shot ${state} ${work}/account-menu-planted.png 1032 1376 2 --accounts dialog
+        --compare ${golden}/account-menu-ipad.png)
+set_tests_properties(window_ios_account_menu_planted PROPERTIES LABELS "functional;ios" TIMEOUT 60 WILL_FAIL TRUE)
+
 # Writes the golden images again (see above): each shot without --compare, straight into tests/ios/golden.
 if(NEXUS_IOS_SIMULATOR)
     add_custom_target(nexus_ios_goldens
@@ -70,8 +93,14 @@ if(NEXUS_IOS_SIMULATOR)
             --status ${status_line}
         COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE:nexus_ios_shot> - ${golden}/server.png 1032 1376 2
             --ask-server mac
+        COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE:nexus_ios_shot> ${state}
+            ${golden}/account-menu-iphone.png 402 874 3 --accounts menu
+        COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE:nexus_ios_shot> ${state}
+            ${golden}/account-menu-ipad.png 1032 1376 2 --accounts menu
+        COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE:nexus_ios_shot> ${state}
+            ${golden}/account-dialog.png 1032 1376 2 --accounts dialog
         DEPENDS nexus_ios_shot
-        COMMENT "Writing tests/ios/golden/iphone.png, ipad.png, status.png and server.png on the simulator; look at each before committing"
+        COMMENT "Writing tests/ios/golden/iphone.png, ipad.png, status.png, server.png and the account menu's on the simulator; look at each before committing"
         VERBATIM)
 endif()
 
