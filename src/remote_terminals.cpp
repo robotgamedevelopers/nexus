@@ -221,7 +221,8 @@ void RemoteTerminals::show(std::size_t id, PrLayoutNode parent) {
         paint(*t);
     }
     PrLayoutNode row = prKitBox(kit_, column, {.key = prHashString(sv("remote-terminal-keys"), id)},
-        {.direction = PrKitDirection_Row, .gap = 6, .padding = {6, 6, 6, 6}, .place = {.flex = PrKitFlex_Fixed}});
+        {.direction = PrKitDirection_Row, .wrap = true, .gap = 4, .padding = {6, 6, 6, 6},
+         .place = {.flex = PrKitFlex_Fixed}});
     struct KeyCap { const char* label; PrAppKey key; };
     static constexpr KeyCap kKeys[] = {{"esc", PrAppKey_Escape}, {"tab", PrAppKey_Tab}, {"ctrl", PrAppKey(0)},
         {"\xe2\x86\x90", PrAppKey_Left}, {"\xe2\x86\x93", PrAppKey_Down}, {"\xe2\x86\x91", PrAppKey_Up},
