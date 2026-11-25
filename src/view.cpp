@@ -1988,6 +1988,23 @@ struct Builder {
         }
     }
 
+    PrColor promptPulse(bool visible) {
+        const bool animate = !prUiUserPreferences(ui).reducedMotion && (!view.savingPower || view.time - view.lastInput < 2);
+        view.energyAnimating |= visible && animate;
+        const double phase = std::fmod(view.time, look.prompt.caretSeconds);
+        // Reserve a moving part of the cycle even in profiles with a short period and long holds.
+        const double hold = std::min<double>(look.prompt.caretHold, look.prompt.caretSeconds * 0.45);
+        const double rise = (look.prompt.caretSeconds - 2 * hold) / (1 + look.prompt.caretFallRatio);
+        const double travelEnd = look.prompt.caretSeconds - hold;
+        const double ramp = phase < rise ? phase / rise :
+            std::clamp((travelEnd - phase) / (travelEnd - rise - hold), 0.0, 1.0);
+        const double wave = !animate ? 1 : look.prompt.caretCurve.empty() ?
+            (1 - std::cos(3.141592653589793 * ramp)) / 2 : sampleMotion(look.prompt.caretCurve, phase / look.prompt.caretSeconds);
+        const double peak = std::clamp(prUiDisplay(ui).headroom, 1.f, look.prompt.caretPeak);
+        const double gain = std::round(64 * (0.48 + (peak - 0.48) * wave)) / 64;
+        return linearGain(rgb(look.prompt.caretInk), gain);
+    }
+
     void promptCaret(PrLayoutNode parent, PrLayoutNode edit) {
         if (pickerInput || asking || prUiFocus(ui) != edit) return;
         const auto selection = prUiTextEditSelection(ui, edit);
@@ -2028,7 +2045,7 @@ struct Builder {
         view.energyAnimating |= view.caretExpansion != target;
         const float t = view.caretExpansion;
         const float eased = t * t * (3 - 2 * t);
-        const float thin = std::min(width, std::max(1.f, 1.25f * k()));
+        const float thin = std::min(width, std::max(2.f, 2.5f * k()));
         const float drawnWidth = thin + (width - thin) * eased;
         box.width = px(drawnWidth);
         const float offset = afterText ? look.prompt.caretGap * k() * eased : inserting ? -drawnWidth / 2 : 0;
@@ -2036,21 +2053,8 @@ struct Builder {
             std::max(field.left, field.right - drawnWidth)) - origin.left - 1);
         const float alignedTop = std::clamp(top + look.prompt.caretOffsetY * k(), field.top, field.bottom - height);
         box.inset[PrRectSide_Top] = px(alignedTop - origin.top - 1);
-        const bool animate = !prUiUserPreferences(ui).reducedMotion && (!view.savingPower || view.time - view.lastInput < 2);
-        view.energyAnimating |= animate;
-        const double phase = std::fmod(view.time, look.prompt.caretSeconds);
-        // Reserve a moving part of the cycle even in profiles with a short period and long holds.
-        const double hold = std::min<double>(look.prompt.caretHold, look.prompt.caretSeconds * 0.45);
-        const double rise = (look.prompt.caretSeconds - 2 * hold) / (1 + look.prompt.caretFallRatio);
-        const double travelEnd = look.prompt.caretSeconds - hold;
-        const double ramp = phase < rise ? phase / rise :
-            std::clamp((travelEnd - phase) / (travelEnd - rise - hold), 0.0, 1.0);
-        const double wave = !animate ? 1 : look.prompt.caretCurve.empty() ?
-            (1 - std::cos(3.141592653589793 * ramp)) / 2 : sampleMotion(look.prompt.caretCurve, phase / look.prompt.caretSeconds);
-        const double peak = std::clamp(prUiDisplay(ui).headroom, 1.f, look.prompt.caretPeak);
-        const double gain = std::round(64 * (0.48 + (peak - 0.48) * wave)) / 64;
         auto decoration = prLayoutDecorationStyleDefault();
-        decoration.background = prColor16FromColor(linearGain(rgb(look.prompt.caretInk), gain));
+        decoration.background = prColor16FromColor(promptPulse(true));
         radius(decoration, look.prompt.caretRadius * k());
         auto hit = prLayoutColorStyleDefault();
         hit.pointerEvents = PrLayoutPointerEvents_None;
@@ -2087,7 +2091,13 @@ struct Builder {
         area.styleCount = 1;
         area.rows = view.promptRows;
         area.disabled = pickerInput;
+        auto& highlight = kit->theme.palette.textSelection;
+        const auto savedHighlight = highlight;
+        const bool focused = !pickerInput && !asking && view.prompt != kPrLayoutNodeNone && prUiFocus(ui) == view.prompt;
+        const auto selected = focused ? prUiTextEditSelection(ui, view.prompt) : PrUiTextSelection{};
+        highlight = faded(promptPulse(selected.anchor != selected.caret), 0.42f);
         PrLayoutNode edit = prKitTextArea(kit, box, area, PrKitFieldStyle{});
+        highlight = savedHighlight;
         PrKitPlace fill{};
         fill.flex = PrKitFlex_Fill;
         prKitPlace(kit, edit, fill);
