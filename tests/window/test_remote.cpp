@@ -25,13 +25,13 @@ void check(bool ok, const char* what, int line) {
 
 using Argv = std::vector<std::string>;
 
-const std::vector<Machine> kFleet = {{"hetzner2", "100.64.0.2"}, {"space", "space.local"}, {"captain", ""}};
+const std::vector<Machine> kFleet = {{"host-a", "100.64.0.2"}, {"space", "space.local"}, {"captain", ""}};
 
 void findsTheDestination() {
-    CHECK(sshDestination(Argv{"ssh", "hetzner2"}) == "hetzner2");
+    CHECK(sshDestination(Argv{"ssh", "host-a"}) == "host-a");
     CHECK(sshDestination(Argv{"ssh", "space"}) == "space");
-    CHECK(sshDestination(Argv{"/usr/bin/ssh", "-p", "22", "nova@hetzner2.tailbd3740.ts.net"}) ==
-        "nova@hetzner2.tailbd3740.ts.net");
+    CHECK(sshDestination(Argv{"/usr/bin/ssh", "-p", "22", "nova@host-a.example.ts.net"}) ==
+        "nova@host-a.example.ts.net");
     // -J's value is the jump host; the destination follows it.
     CHECK(sshDestination(Argv{"ssh", "-J", "a", "b"}) == "b");
     // Options with values, apart and attached, and flags grouped before a value.
@@ -67,10 +67,10 @@ void findsTheHost() {
 }
 
 void matchesAFleetMachine() {
-    CHECK(remoteLabel("hetzner2", kFleet) == "hetzner2");
-    CHECK(remoteLabel("nova@hetzner2.tailbd3740.ts.net", kFleet) == "hetzner2");
-    CHECK(remoteLabel("HETZNER2.tailbd3740.ts.net.", kFleet) == "hetzner2");
-    CHECK(remoteLabel("100.64.0.2", kFleet) == "hetzner2");
+    CHECK(remoteLabel("host-a", kFleet) == "host-a");
+    CHECK(remoteLabel("nova@host-a.example.ts.net", kFleet) == "host-a");
+    CHECK(remoteLabel("HOST-A.example.ts.net.", kFleet) == "host-a");
+    CHECK(remoteLabel("100.64.0.2", kFleet) == "host-a");
     CHECK(remoteLabel("glenn@space.local", kFleet) == "space");
     CHECK(remoteLabel("ssh://nova@space:22", kFleet) == "space");
     CHECK(remoteLabel("captain", kFleet) == "captain");
@@ -78,16 +78,16 @@ void matchesAFleetMachine() {
     CHECK(remoteLabel("glenn@example.com", kFleet) == "example.com");
     CHECK(remoteLabel("hetzner3", kFleet) == "hetzner3");
     // Not a machine's tailnet name: two labels between, or none.
-    CHECK(remoteLabel("hetzner2.a.b.ts.net", kFleet) == "hetzner2.a.b.ts.net");
-    CHECK(remoteLabel("hetzner2..ts.net", kFleet) == "hetzner2..ts.net");
-    CHECK(remoteLabel("hetzner2.ts.net", kFleet) == "hetzner2.ts.net");
+    CHECK(remoteLabel("host-a.a.b.ts.net", kFleet) == "host-a.a.b.ts.net");
+    CHECK(remoteLabel("host-a..ts.net", kFleet) == "host-a..ts.net");
+    CHECK(remoteLabel("host-a.ts.net", kFleet) == "host-a.ts.net");
     // A machine with no address matches no empty host.
     CHECK(remoteLabel("", kFleet).empty());
     CHECK(remoteLabel("nova@", kFleet).empty());
     // The whole chain, as the terminal runs it.
     CHECK(remoteLabel(sshDestination(Argv{"ssh", "space"}), kFleet) == "space");
-    CHECK(remoteLabel(sshDestination(Argv{"ssh", "-p", "22", "nova@hetzner2.tailbd3740.ts.net"}), kFleet) ==
-        "hetzner2");
+    CHECK(remoteLabel(sshDestination(Argv{"ssh", "-p", "22", "nova@host-a.example.ts.net"}), kFleet) ==
+        "host-a");
     CHECK(remoteLabel(sshDestination(Argv{"-zsh"}), kFleet).empty());
 }
 
@@ -179,7 +179,7 @@ void theLabelFollowsTheSession() {
 void aSessionThatLeavesTheTitleAloneChangesNothing() {
     Frames f;
     f.observe("", "zsh");
-    f.observe("hetzner2", "zsh");
+    f.observe("host-a", "zsh");
     f.observe("", "zsh");
     CHECK(f.l.label("zsh") == "zsh");
     f.wait(kSessionTailSeconds);
@@ -198,14 +198,14 @@ void aSecondSessionKeepsTheFirstLabel() {
     f.wait(kSessionTailSeconds);
     f.observe("", "nova@space: ~");
     // Back in, before anything set a title: the label to return to is still "sh", not the remote's.
-    f.observe("hetzner2", "nova@space: ~");
-    CHECK(f.l.label("x") == "hetzner2");
-    f.observe("", "root@hetzner2");
-    CHECK(f.l.label("root@hetzner2") == "sh");
+    f.observe("host-a", "nova@space: ~");
+    CHECK(f.l.label("x") == "host-a");
+    f.observe("", "root@host-a");
+    CHECK(f.l.label("root@host-a") == "sh");
     // Straight back in, within the first session's tail.
-    f.observe("space", "root@hetzner2");
+    f.observe("space", "root@host-a");
     // One session straight into another, between two observations: the label is the new one.
-    f.observe("captain", "root@hetzner2");
+    f.observe("captain", "root@host-a");
     CHECK(f.l.label("y") == "captain");
     f.observe("", "y");
     CHECK(f.l.label("y") == "sh");

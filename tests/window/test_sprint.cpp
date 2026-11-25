@@ -36,8 +36,8 @@ std::string record(const std::string& argv) {
 }
 
 void parsesTheListenAddress() {
-    SprintBoardAddress a = parseSprintRun(record(R"(["nova-sprint","run","--listen","100.76.29.55:8080"])"));
-    CHECK(a.error.empty() && a.url == "http://100.76.29.55:8080/");
+    SprintBoardAddress a = parseSprintRun(record(R"(["nova-sprint","run","--listen","100.64.0.10:8080"])"));
+    CHECK(a.error.empty() && a.url == "http://100.64.0.10:8080/");
     a = parseSprintRun(record(R"(["nova-sprint","run","--listen=10.0.0.2:9000"])"));
     CHECK(a.error.empty() && a.url == "http://10.0.0.2:9000/");
 }
