@@ -196,6 +196,9 @@ struct FrameHost {
     PrUi* ui = nullptr;                     // the window's tree's context, while the window is open; null cuts nothing
     // One round of the window under `root`.
     void build(PrKit* kit, PrLayoutNode root);
+    // One round of the window under `root`, whose extent is `extent`, in the part above an on-screen keyboard that
+    // covers `cover` of its foot (iOS, main_ios.cpp): view->extent is that part.
+    void buildAbove(PrKit* kit, PrLayoutNode root, PrVec2 extent, float cover);
 
     // Saves the terminal tabs and the selected tab if they changed (and the window keeps them).
     void keepTerminals();

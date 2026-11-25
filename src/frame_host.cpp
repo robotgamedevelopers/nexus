@@ -7,6 +7,9 @@
 #include <utility>
 #include <vector>
 
+#include "pr/hash.h"
+#include "pr/ui_records.h"
+
 #include "platform.h"
 #include "board.h"
 #if NEXUS_PROCESSES
@@ -994,6 +997,41 @@ bool FrameHost::event(const PrAppEvent& e) {
 
 void FrameHost::build(PrKit* kit, PrLayoutNode root) {
     buildWindow(*view, kit, root);
+}
+
+} // namespace nexus
+
+namespace nexus {
+
+namespace {
+
+// The part of the window above the on-screen keyboard.
+struct AboveKeyboard {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
+    float width;
+    float height;
+
+    void make(const View&, PrLayoutBoxStyle& box) const {
+        box.boxSizing = PrLayoutBoxSizing_BorderBox;
+        box.display = PrLayoutDisplay_Flex;
+        box.width = prLayoutLengthPx(width);
+        box.height = prLayoutLengthPx(height);
+    }
+};
+
+} // namespace
+
+void FrameHost::buildAbove(PrKit* kit, PrLayoutNode root, PrVec2 extent, float cover) {
+    cover = std::clamp(cover, 0.0f, extent.y);
+    if (cover <= 0) {
+        view->extent = extent;
+        build(kit, root);
+        return;
+    }
+    view->extent = PrVec2{extent.x, extent.y - cover};
+    const PrLayoutNode above = prUiElement(ui, root, prHashString(PrStringView{"above-keyboard", 14}, 0),
+        pr::uiStyle(ui, *view, AboveKeyboard{view->extent.x, view->extent.y}), 0);
+    build(kit, above);
 }
 
 } // namespace nexus

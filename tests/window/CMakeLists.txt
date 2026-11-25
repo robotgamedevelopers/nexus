@@ -191,6 +191,15 @@ if(NEXUS_WINDOW)
     add_test(NAME frame_host_unit COMMAND nexus_frame_host_tests)
     set_tests_properties(frame_host_unit PROPERTIES LABELS unit TIMEOUT 30)
 
+    # A terminal tab whose shell runs on the server, shown frame after frame with no input as the iOS window shows it
+    # (test_terminal_frames.cpp): the focus, the keyboard and the title stay put. A kit with no window, the system's
+    # fonts, made-up time.
+    add_executable(nexus_terminal_frames_tests test_terminal_frames.cpp ${PROJECT_SOURCE_DIR}/src/remote_terminals.cpp)
+    target_compile_options(nexus_terminal_frames_tests PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_terminal_frames_tests PRIVATE nexus_frame prax::studio_terminal prax::vterm)
+    add_test(NAME terminal_frames_unit COMMAND nexus_terminal_frames_tests)
+    set_tests_properties(terminal_frames_unit PROPERTIES LABELS unit TIMEOUT 30)
+
     if(NEXUS_SERVER_PARTS)
         add_executable(account_picker_trace account_picker_trace.cpp)
         target_compile_options(account_picker_trace PRIVATE ${NEXUS_WARNINGS})
