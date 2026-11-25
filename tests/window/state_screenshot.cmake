@@ -1,6 +1,6 @@
 # `nexus --state` draws from the state file alone (src/main.cpp): run against a fixture state with HOME an empty
 # directory of its own, it exits 0 and writes the PNG, makes no ~/.nexus (no clientHome, no makeClientHome, no error
-# log), reads no nova-config and no saved tab order, and its AI tab is the state's AI.
+# log), reads no nova-config and no saved tab order, and its first tab is the state's AI (the fixture's server lists no dashboards).
 #
 #   cmake -DNEXUS=<nexus> -DSTATE=<file.state> -DWORK=<dir> -P state_screenshot.cmake
 
@@ -8,7 +8,7 @@ file(REMOVE_RECURSE ${WORK})
 file(MAKE_DIRECTORY ${WORK}/home)
 execute_process(
     COMMAND ${CMAKE_COMMAND} -E env HOME=${WORK}/home USERPROFILE=${WORK}/home
-        ${NEXUS} --windowed --tab 2 --state ${STATE} --screenshot ${WORK}/shot.png
+        ${NEXUS} --windowed --tab 1 --state ${STATE} --screenshot ${WORK}/shot.png
     RESULT_VARIABLE result
     OUTPUT_VARIABLE out
     ERROR_VARIABLE err)
