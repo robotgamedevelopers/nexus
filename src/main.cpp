@@ -95,6 +95,7 @@
 #include "hitch.h"
 #include "model.h"
 #include "no_core.h"
+#include "offscreen.h"
 #include "overlay.h"
 #include "platform.h"
 #include "style.h"
@@ -661,87 +662,27 @@ void printStats(const FrameStats& s) {
         s.total / s.frames, s.worstTotal);
 }
 
-// The offscreen frame: the same tree, laid out and painted without a window. ---------------------------------------
-
-struct Offscreen {
-    App* app;
-    PrKit* kit;
-};
-
-void buildOffscreen(void* context, PrUi*, const PrUiRound*) {
-    Offscreen& off = *static_cast<Offscreen*>(context);
-    buildWindow(off.app->view, off.kit, kPrLayoutNodeNone);
-}
-
-bool writePng(std::vector<uint8_t>& bytes, PrUVec2 size, const char* path) {
-    // The render is premultiplied; the encoder takes straight alpha.
-    for (size_t i = 0; i < bytes.size(); i += 4) {
-        uint8_t alpha = bytes[i + 3];
-        if (alpha != 0 && alpha != 255) {
-            for (int c = 0; c < 3; ++c)
-                bytes[i + c] = uint8_t(std::min(255, bytes[i + c] * 255 / alpha));
-        }
-    }
-    PrCompressCodecSet* compress = prCompressCodecSetCreateDefault();
-    PrImageCodecSet* codec = compress != nullptr ? prImageCodecSetCreateDefault(compress) : nullptr;
-    if (codec == nullptr) {
-        std::fprintf(stderr, "nexus: no image codec in this build\n");
-        prCompressCodecSetDestroy(compress);
-        return false;
-    }
-    PrPixelView view{bytes.data(), size_t(size.x) * 4, size};
-    size_t encoded = 0;
-    prImageCodecSetEncode(codec, {"image/png", 9}, view, nullptr, 0, &encoded);
-    std::vector<uint8_t> png(encoded);
-    PrStatus status = prImageCodecSetEncode(codec, {"image/png", 9}, view, png.data(), png.size(), &encoded);
-    prImageCodecSetDestroy(codec);
-    prCompressCodecSetDestroy(compress);
-    if (status != PrStatus_Ok) {
-        std::fprintf(stderr, "nexus: encoding the PNG failed (status %d)\n", int(status));
-        return false;
-    }
-    if (!prFileWrite(PrStringView{path, std::strlen(path)}, PrByteView{png.data(), png.size()})) {
-        std::fprintf(stderr, "nexus: could not write %s\n", path);
-        return false;
-    }
-    std::printf("nexus: wrote %s (%zu bytes)\n", path, png.size());
-    return true;
-}
+// The offscreen frame: the same tree, laid out and painted without a window (offscreen.h). ---------------------------
 
 // Lays the window out at `extent` px for a display of `ratio`, renders it into a pixel buffer, and writes a PNG.
-// A workaround: Prax has no public offscreen render of a UI tree (only its test fixture, tools/harness/kit_fixture.h).
 int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
-    PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
-    PrLayoutTreeDesc treeDesc{.shaper = shaper, .targetPixelRatio = ratio};
-    PrLayoutTree* tree = prLayoutTreeCreate(&treeDesc);
     // With --backdrop the window is drawn as the overlay draws it, see-through; otherwise opaque, since an offscreen
     // frame has nothing behind it to show through.
-    PrKitTheme theme = windowTheme(a.fonts, a.backdrop);
-    // The window paints its fill once over the transparent canvas, as in the live overlay.
-    PrUi* ui = prUiCreate(tree);
-    PrKit* kit = prKitCreate(ui, &theme);
-    Offscreen off{&a, kit};
-    PrAppDisplay display = prAppDisplayDefault();
-    display.pixelRatio = ratio;
-    a.view.extent = extent;
-    auto terminals = std::make_unique<PraxTerminals>(kit, a.fonts, nullptr, nullptr);
+    OffscreenFrame off(a.view, a.fonts, extent, ratio, a.backdrop);
+    auto terminals = std::make_unique<PraxTerminals>(off.kit(), a.fonts, nullptr, nullptr);
     a.view.terminals = terminals.get();
     PraxBoard::Desc boardDesc;
-    boardDesc.kit = kit;
+    boardDesc.kit = off.kit();
     boardDesc.fonts = a.fonts;
     boardDesc.find = a.findBoard;
     auto board = std::make_unique<PraxBoard>(boardDesc);
     a.view.board = board.get();
-    int frames = 0;
     auto frame = [&] {
-        const double time = 1000.0 + frames++ / 60.0;
-        a.view.time = time;
-        board->frame(time, display);
-        board->wait();      // a screenshot waits for the page's thread, so that it shows the page as of this frame
-        PrUiFrameDesc desc{.time = time, .delta = 1 / 60.0, .extent = extent, .maxRounds = 4,
-            .display = display, .preferences = {}};
-        prUiFrame(ui, &desc, buildOffscreen, &off);
-        board->wait();
+        // A screenshot waits for the page's thread, so that it shows the page as of this frame.
+        off.frame([&](double time, const PrAppDisplay& display) {
+            board->frame(time, display);
+            board->wait();
+        }, [&] { board->wait(); });
     };
     if (a.model->tab_count() != 0 && a.model->tab(a.model->active()).kind == TabKind::Sprint) {
         // The board's page, once it has loaded and painted its first answers, within 20 s; or the line that says why
@@ -768,7 +709,7 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
                 PrAppEvent e{};
                 e.kind = PrAppEventKind_Text;
                 e.input.text = PrStringView{command, std::strlen(command)};
-                prUiPushEvent(ui, kPrUiViewportMain, &e);
+                prUiPushEvent(off.ui(), kPrUiViewportMain, &e);
                 typed = true;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -777,55 +718,11 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     // Enough frames for every query to read a layout: the first round routes nothing, and scrolling reads the last one.
     for (int i = 0; i < 4; ++i)
         frame();
-    const PrLayoutScene* scene = prLayoutTreeScene(tree);
-    std::vector<PrLayoutSceneScroll> scrolls(prLayoutSceneScrolls(tree, scene, nullptr, 0));
-    prLayoutSceneScrolls(tree, scene, scrolls.data(), uint32_t(scrolls.size()));
-    PrLayoutScenePlayOptions options = prLayoutScenePlayOptionsDefault();
-    options.scrolls = scrolls.data();
-    options.scrollCount = uint32_t(scrolls.size());
-    PrDrawList* list = prDrawListCreate();
-    prDrawListPushTransformAffine2(list, prAffine2Scale(PrVec2{ratio, ratio}));
-    if (a.backdrop) {
-        // Stripes of four colours, 160 px wide, in place of the screen behind the overlay.
-        const PrColor stripes[] = {{0.93f, 0.45f, 0.18f, 1}, {0.16f, 0.62f, 0.56f, 1}, {0.86f, 0.86f, 0.82f, 1},
-            {0.55f, 0.35f, 0.85f, 1}};
-        for (int i = 0; float(i) * 160 < extent.x; ++i) {
-            PrDrawPaint paint{};
-            paint.color = prColor16FromColor(stripes[i % 4]);
-            prDrawListRect(list, PrRect{float(i) * 160, 0, float(i + 1) * 160, extent.y}, paint);
-        }
-    }
-    prLayoutScenePlay(scene, list, &options);
-    prDrawListPopTransform(list);
-    prLayoutSceneRelease(scene);
-
-    int code = 1;
-    PrGpuDevice* device = prGpuDeviceCreate(PrGpuBackend_Memory, nullptr);
-    PrDrawRenderer* renderer = nullptr;
-    if (!device ||
-            prDrawRendererCreate(PrDrawRendererBackend_Cpu, device, nullptr, &renderer) != PrStatus_Ok) {
-        std::fprintf(stderr, "nexus: no GPU device or renderer for the screenshot\n");
-    } else {
-        PrUVec2 size{uint32_t(extent.x * ratio), uint32_t(extent.y * ratio)};
-        std::vector<uint8_t> bytes(size_t(size.x) * size.y * 4, 0);
-        PrPixels pixels{bytes.data(), size_t(size.x) * 4, size};
-        PrStatus status = prDrawRendererRenderPixels(renderer, list, pixels, PrPixelFormat_Rgba8);
-        if (status != PrStatus_Ok)
-            std::fprintf(stderr, "nexus: rendering the screenshot failed (status %d)\n", int(status));
-        else if (writePng(bytes, size, path))
-            code = 0;
-    }
-    prDrawRendererDestroy(renderer);
-    prGpuDeviceDestroy(device);
-    prDrawListRelease(list);
+    const int code = off.write(path, a.backdrop) ? 0 : 1;
     a.view.board = nullptr;
     board.reset();
     a.view.terminals = nullptr;
     terminals.reset();
-    prKitDestroy(kit);
-    prUiDestroy(ui);
-    prLayoutTreeDestroy(tree);
-    prTextShaperDestroy(shaper);
     return code;
 }
 

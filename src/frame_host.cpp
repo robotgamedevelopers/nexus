@@ -7,8 +7,12 @@
 #include <utility>
 #include <vector>
 
+#include "platform.h"
+#if NEXUS_PROCESSES
 #include "board.h"
+#include "command.h"
 #include "terminals.h"
+#endif
 
 static_assert(nexus::kPromptBytes == nexus::sync::Limits{}.text, "the prompt holds what the server takes");
 
@@ -51,6 +55,7 @@ void FrameHost::keepSelection() {
 void FrameHost::keepTerminals() {
     if (!keep || terminals == nullptr || terminalStore == nullptr)
         return;
+#if NEXUS_PROCESSES
     PraxTerminals* t = terminals;
     std::vector<std::string> directories = terminalDirectories(*model,
         [t](std::size_t id) { return t->workingDirectory(id); });
@@ -75,6 +80,7 @@ void FrameHost::keepTerminals() {
         }
     }
     keepSelection();
+#endif
 }
 
 void FrameHost::personSelected() {
@@ -760,6 +766,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
                 } else link->send(std::move(action));
                 return;
             }
+#if NEXUS_PROCESSES
             const auto friendName = model->tab(i).name;
             const auto instance = current ? current->info.instance : "";
             view->outgoing.push_back({tabId, 0, action.text});
@@ -792,6 +799,12 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
                 if (wake) wake();
             });
             return;
+#else
+            // Unreachable: this build stages no file (stageFile), so no prompt names one.
+            (void)current;
+            link->send(std::move(action));
+            return;
+#endif
         }
         if (!why.empty())
             view->problem = why;
@@ -835,6 +848,7 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
         return true;
     });
     view->hitch = hitch;
+#if NEXUS_PROCESSES
     if (terminals != nullptr) {
         // Each terminal's foreground process, for its tab's label, read where its working directory is read.
         HitchScope scope(hitch, Phase::Terminals);
@@ -843,6 +857,7 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
             terminals->deliver(ui);
         }
     }
+#endif
     {
         HitchScope scope(hitch, Phase::Keep);
         keepTerminals();
@@ -866,15 +881,26 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
         HitchScope scope(hitch, Phase::Layout);
         beginWindowFrame(*view, kit, fonts);
     }
+#if NEXUS_PROCESSES
     if (board != nullptr) {
         HitchScope scope(hitch, Phase::Board);
         board->frame(time, display);
     }
+#else
+    (void)display;
+#endif
 }
 
 bool FrameHost::stageFile(std::string name, std::string bytes) {
     if (!ui || view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt ||
         (view->secrets && view->secrets->showing()) || !model->tab_count()) return false;
+#if !NEXUS_PROCESSES
+    // An attachment goes to the server through a child process (ssh running nexus-receive, the upload worker above),
+    // which this build cannot start (build_parts.h). The in-app ssh (link/inapp_ssh.h) runs only the link's commands.
+    (void)bytes;
+    view->problem = "Attaching " + name + " is not available on iOS yet; nothing was sent.";
+    return false;
+#endif
     if (name.empty() || name == "." || name == ".." || name.size() > 255 ||
         name.find_first_of("/\\") != std::string::npos || std::any_of(name.begin(), name.end(),
             [](unsigned char c) { return c < 32 || c == 127; })) {
@@ -920,6 +946,7 @@ bool FrameHost::event(const PrAppEvent& e) {
                 return false; // Route an application shortcut to the window's capture ahead of the embedded page.
         }
     }
+#if NEXUS_PROCESSES
     if (board != nullptr && board->event(e)) {
         return true;
     }
@@ -930,6 +957,7 @@ bool FrameHost::event(const PrAppEvent& e) {
             return true;
         }
     }
+#endif
     if (ui == nullptr || (e.kind != PrAppEventKind_Text && e.kind != PrAppEventKind_Paste) ||
             view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt) {
         return false;

@@ -33,6 +33,11 @@ FetchContent_Declare(prax
     EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(prax)
 
+# iOS and iPadOS build the client alone (cmake/ios.cmake), and set the options' defaults below for it.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    include(cmake/ios.cmake)
+endif()
+
 # A static library of ours compiles without waiting for the static libraries it links, which only its users' links
 # need: so nexus_sync, and every library over it, compiles beside schema's generated code (nexus_wire) rather than after
 # it, and CI's 2-minute build is not one long chain. Set after Prax, so Prax's own targets keep their order.
@@ -95,7 +100,7 @@ endif()
 # window and the server will share (nexus_wire, docs/formats.md), their unit tests and the WSL2 terminal test
 # (tests/window wsl2_terminal). The model checks' walks are left out there too: TLC runs them on
 # Linux and macOS (tests/model tlc_test).
-if(WIN32)
+if(WIN32 OR NEXUS_IOS)
     set(NEXUS_SERVER_PARTS OFF)
 else()
     set(NEXUS_SERVER_PARTS ON)
@@ -405,7 +410,7 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
             target_link_options(nexus PRIVATE /ENTRY:mainCRTStartup)
         endif()
     endif()
-    target_sources(nexus PRIVATE src/ui_audio.cpp)
+    target_sources(nexus PRIVATE src/ui_audio.cpp src/offscreen.cpp)
     target_link_libraries(nexus PRIVATE prax::audio prax::png)
     target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus PRIVATE nexus_policy nexus_frame nexus_view nexus_terminals nexus_board

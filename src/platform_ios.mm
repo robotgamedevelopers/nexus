@@ -1,0 +1,23 @@
+// The window's system part on iOS and iPadOS (platform.h). An app there has no terminal and no overlay: its error lines
+// stay on stderr (the device's console, and the simulator's spawn), and a scene's window fills the scene by the system's
+// own sizing, so there is nothing to cover.
+#include "platform.h"
+
+#import <UIKit/UIKit.h>
+
+namespace nexus {
+
+std::string startErrorLog(const std::string&) {
+    return {};
+}
+
+void showLaunchError(const std::string&) {}
+
+bool coverScreen(const PrSurface& surface) {
+    if (surface.kind != PrSurfaceKind_UiView || surface.handle == nullptr)
+        return false;
+    UIView* view = (__bridge UIView*)surface.handle;
+    return view.window != nil;
+}
+
+} // namespace nexus

@@ -21,6 +21,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 #include "pr/file.h"
 
@@ -36,6 +39,14 @@ constexpr char kSeparator = '\\';
 #else
 constexpr const char* kHomeVariable = "HOME";
 constexpr char kSeparator = '/';
+#endif
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+// On iOS and iPadOS HOME is the app's own container, whose top an app may not write: the window's home is under the
+// container's Library/Application Support, the system's place for an app's own files, which the system makes on first
+// use only when asked (makeClientHome).
+constexpr const char* kAppData = "/Library/Application Support";
+#else
+constexpr const char* kAppData = "";
 #endif
 
 PrStringView pr(std::string_view s) {
@@ -98,7 +109,7 @@ bool clientHomeFrom(const char* home, std::string* dir, std::string* why) {
     while (d.size() > 1 && (d.back() == '/' || d.back() == kSeparator)) {
         d.pop_back();
     }
-    *dir = d + kSeparator + ".nexus" + kSeparator + "client";
+    *dir = d + kAppData + kSeparator + ".nexus" + kSeparator + "client";
     return true;
 }
 
@@ -122,6 +133,14 @@ bool makeClientHome(const std::string& dir, std::string* why) {
     (void)top;
     return true;
 #else
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    // Library is the container's own; Application Support within it, the system's, may not exist yet.
+    const std::string data = top.substr(0, top.find_last_of(kSeparator));
+    if (mkdir(data.c_str(), 0700) != 0 && errno != EEXIST) {
+        *why = "cannot make " + data + ": " + std::strerror(errno);
+        return false;
+    }
+#endif
     return (top.empty() || ensureDir(top, why)) && ensureDir(dir, why);
 #endif
 }

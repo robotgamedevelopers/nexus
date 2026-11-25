@@ -102,6 +102,9 @@ def _panels(state):
             panels.extend(["account", "prompt"])
         elif state["has_status"]:
             panels.append("status")
+    elif state["has_status"] and state.get("tab_count", 0) == 0:
+        # No tab yet: the link's state (connecting, or why it failed) is all the window has to show.
+        panels.append("status")
     return panels
 
 def handle(event, state, config):
