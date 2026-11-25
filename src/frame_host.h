@@ -114,7 +114,13 @@ public:
     void lost();
     // The overlay was shown: the window may claim one flow.
     void shown() { opener.shown(); }
-    // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open.
+    // The client lock locked the window (client_lock.h): the claim a show allowed is taken back, and no step runs (no
+    // claim, no URL opened, no callback sent up) until it is unlocked; the owner's next show allows one again.
+    void lock() { locked = true; opener.hidden(); }
+    void unlock() { locked = false; }
+    bool locked = false;
+    // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open. None
+    // while locked.
     void step();
     bool gateOpen() const { return gate_ != nullptr; }
 
@@ -126,8 +132,12 @@ private:
 // The client lock's input gate (FrameHost::event, View::lockScreen). isInputEvent: the person's input (pointer, scroll,
 // keys, text, paste, composition, drag and drop), as against the window's and the app's own events. lockScreenTakes:
 // the input a locked window lets through to its lock screen: the pointer, and Return and Escape with no modifier.
+// resetsIdle: the person's deliberate input, which starts the lock's idle time again (a key, text, a press, a scroll, a
+// paste, a drop); a pointer passing over the window, a drag passing over it, a gesture or a touch on the trackpad does
+// not, so that nothing but the person's act keeps the window unlocked.
 bool isInputEvent(const PrAppEvent& e);
 bool lockScreenTakes(const PrAppEvent& e);
+bool resetsIdle(const PrAppEvent& e);
 
 inline constexpr size_t kMaxAttachmentBytes = 32 * 1024 * 1024;
 struct StagedFile {

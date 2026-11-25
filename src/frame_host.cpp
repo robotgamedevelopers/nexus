@@ -161,7 +161,7 @@ bool onThisMachine(const sync::SignInOffer& offer, const void* context) {
 } // namespace
 
 void LinkSignIn::step() {
-    if (port == nullptr) {
+    if (port == nullptr || locked) {
         return;
     }
     // The gate's flow left the state (it ended, or another window took it), or the link was lost: the gate closes.
@@ -251,16 +251,16 @@ void FrameHost::pollLink() {
                         if (choice.name == name) return choice.needsSignIn;
                 return {};
             };
-            if (needed(accountState_) == true && needed(s.sessions) == false && view->playChirp)
-                view->playChirp(view->windowApp.surface.readyChirp);
+            if (needed(accountState_) == true && needed(s.sessions) == false)
+                view->chirp(view->windowApp.surface.readyChirp);
         }
-        if (phase == sync::LinkPhase::Connected && view->playChirp) {
+        if (phase == sync::LinkPhase::Connected) {
             for (const auto& session : s.sessions.sessions()) {
                 const auto* previous = accountState_.find(session->id);
                 if (!previous) continue;
                 for (auto index = std::max(previous->total(), session->first); index < session->total(); ++index) {
                     if (session->entries[index - session->first]->kind == EntryKind::Person)
-                        view->playChirp(view->windowApp.surface.sendChirp);
+                        view->chirp(view->windowApp.surface.sendChirp);
                 }
             }
         }
@@ -588,7 +588,7 @@ void FrameHost::wire() {
             picker->highlighted = static_cast<std::size_t>(option - picker->options.begin());
             view->accountPicker = std::move(picker);
         } else if (op == "select" || op == "sign_in") {
-            if (view->playChirp) view->playChirp(view->windowApp.surface.confirmChirp);
+            view->chirp(view->windowApp.surface.confirmChirp);
             view->accountPicker.reset();
             if (target != picker->current) {
                 setAccount(picker->session, target);
@@ -856,6 +856,8 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
             if (!choice) signIn.activeAccount->clear();
             else if (*signIn.activeAccount != choice->name) *signIn.activeAccount = choice->name;
         }
+        if (view->lockScreen && !signIn.locked) signIn.lock();
+        else if (!view->lockScreen) signIn.unlock();
         signIn.step();
         if (!signIn.problem.empty()) {
             view->problem = std::move(signIn.problem);
@@ -944,6 +946,20 @@ bool lockScreenTakes(const PrAppEvent& e) {
     case PrAppEventKind_KeyUp:
         return (e.modifiers & ~PrAppModifierFlag_CapsLock) == 0 &&
             (e.keyboard.key == PrAppKey_Enter || e.keyboard.key == PrAppKey_Escape);
+    default:
+        return false;
+    }
+}
+
+bool resetsIdle(const PrAppEvent& e) {
+    switch (e.kind) {
+    case PrAppEventKind_KeyDown:
+    case PrAppEventKind_Text:
+    case PrAppEventKind_PointerDown:
+    case PrAppEventKind_Scroll:
+    case PrAppEventKind_Paste:
+    case PrAppEventKind_Drop:
+        return true;
     default:
         return false;
     }

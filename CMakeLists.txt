@@ -400,7 +400,7 @@ if(NEXUS_WINDOW)
 
     # What the window does around the view each frame (src/frame_host.h), and its links opened in the system's browser
     # off the frame thread (src/url_opener.h): built by the app, and driven by the frame-budget test.
-    add_library(nexus_frame STATIC src/frame_host.cpp src/url_opener.cpp)
+    add_library(nexus_frame STATIC src/frame_host.cpp src/url_opener.cpp src/window_lock.cpp)
     target_include_directories(nexus_frame PUBLIC src)
     target_compile_options(nexus_frame PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_frame PUBLIC nexus_view nexus_terminals nexus_board nexus_sync nexus_hitch
@@ -482,10 +482,25 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
     # The client lock (client_lock.h): the system's authenticator, or with NEXUS_TEST_AUTHENTICATOR (a test build that
     # checks no one, for running and screenshotting the window where no one can touch the sensor; never a release) the
     # stand-in in lock_test_authenticator.cpp.
+    # A Release build (any optimised build type, or a multi-config generator, which can build Release) or a signed one
+    # is what ships: the stand-in in it is a configure error, not a warning.
     if(NEXUS_TEST_AUTHENTICATOR)
+        if(CMAKE_CONFIGURATION_TYPES OR CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$"
+                OR (APPLE AND NEXUS_MAC_SIGN_IDENTITY))
+            message(FATAL_ERROR "NEXUS_TEST_AUTHENTICATOR is ON in a Release, multi-config or signed build "
+                "(CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}): the stand-in unlocks with no real check and is never shipped. "
+                "Build it as Debug, unsigned, or turn it off.")
+        endif()
         message(WARNING "NEXUS_TEST_AUTHENTICATOR is ON: this nexus unlocks with no real check. Never ship it.")
         target_sources(nexus PRIVATE src/lock_test_authenticator.cpp)
         target_compile_definitions(nexus PRIVATE NEXUS_TEST_AUTHENTICATOR=1)
+    else()
+        # The shipped binary has none of the stand-in: checked after every link, and by the unit test below, which CI runs
+        # on its Release build.
+        set(nexus_no_stand_in "${CMAKE_CURRENT_SOURCE_DIR}/cmake/no_test_authenticator.cmake")
+        add_custom_command(TARGET nexus POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -DBINARY=$<TARGET_FILE:nexus> -P ${nexus_no_stand_in}
+            VERBATIM)
     endif()
     target_sources(nexus PRIVATE src/ui_audio.cpp)
     target_link_libraries(nexus PRIVATE prax::audio prax::png)
@@ -523,6 +538,18 @@ function(nexus_tlc_limits cap cap_var timeout_var)
         set(${timeout_var} TIMEOUT ${timeout} PARENT_SCOPE)
     endif()
 endfunction()
+# The shipped app has none of the lock's stand-in authenticator (cmake/no_test_authenticator.cmake; CMake option
+# NEXUS_TEST_AUTHENTICATOR).
+if(TARGET nexus AND NOT NEXUS_TEST_AUTHENTICATOR)
+    add_test(NAME nexus_no_test_authenticator
+        COMMAND ${CMAKE_COMMAND} -DBINARY=$<TARGET_FILE:nexus> -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/no_test_authenticator.cmake)
+    set_tests_properties(nexus_no_test_authenticator PROPERTIES LABELS unit TIMEOUT 30)
+    add_test(NAME nexus_no_test_authenticator_detects
+        COMMAND ${CMAKE_COMMAND} -DBINARY=${CMAKE_CURRENT_SOURCE_DIR}/cmake/no_test_authenticator.cmake
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/no_test_authenticator.cmake)
+    set_tests_properties(nexus_no_test_authenticator_detects PROPERTIES LABELS unit TIMEOUT 30
+        PASS_REGULAR_EXPRESSION "holds the lock's stand-in authenticator")
+endif()
 if(TARGET nexus_policy)
     add_executable(policy_reload_test tests/policy/reload.cpp)
     target_link_libraries(policy_reload_test PRIVATE nexus_policy)

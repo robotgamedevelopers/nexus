@@ -98,6 +98,7 @@
 #include "client_home.h"
 #include "client_lock.h"
 #include "client_lock_platform.h"
+#include "window_lock.h"
 #include "font_prefetch.h"
 #include "frame_host.h"
 #include "remote.h"
@@ -181,7 +182,7 @@ struct App {
     // The client lock (client_lock.h): the live window is locked from launch until the device's owner authenticates, and
     // again after sleep, a screen lock, a session switch or the idle timeout; while locked the view draws the lock screen
     // alone (View::lockScreen). Null in a screenshot, which draws what it is given, unless --locked.
-    std::unique_ptr<ClientLock> lock;
+    std::unique_ptr<WindowLock> lock;
     // Answers and events from other threads, taken at the next wake of `app` (from start()). Shared with what posts
     // them, so that an answer the system gives after the window has gone lands in the inbox, not in a freed App.
     struct LockInbox {
@@ -189,10 +190,7 @@ struct App {
         std::atomic<PrApp*> app{nullptr};
     };
     std::shared_ptr<LockInbox> lockInbox = std::make_shared<LockInbox>();
-    std::unique_ptr<LockAuthenticator> authenticator;
     std::unique_ptr<LockEvents> lockEvents;     // the events Prax does not report, from start()
-    std::string lockMethod;                     // how the lock screen names the authentication
-    std::string lockDetail;                     // the system's words for the last refusal
 #if NEXUS_LINK
     std::unique_ptr<link::ClientPort> link;
 #endif
@@ -228,6 +226,11 @@ PrAppWindowBackdrop overlayBackdrop() {
     return style::kOverlayBlur ? PrAppWindowBackdrop_Blur : PrAppWindowBackdrop_Transparent;
 }
 
+// The client lock's time: seconds on the monotonic clock (ClientLock takes time as an argument).
+double lockNow() {
+    return double(prTimeMonotonicMilliseconds()) / 1000.0;
+}
+
 // Does what the overlay's rules answered. Show covers the screen with the window, shows it and gives it the keyboard
 // (prAppWindowFocus shows a hidden window first, and gives an overlay the keyboard without activating nexus), then
 // checks after kKeyCheckSeconds that it has the keyboard.
@@ -236,6 +239,8 @@ void carryOut(App& a, OverlayAct act) {
         return;
     PrAppWindow* window = prStudioWindowAppWindow(a.window);
     PrApp* app = prStudioWindowApp(a.window);
+    // The idle check first: a show after the timeout shows the lock screen, and claims no sign-in.
+    if (a.lock && act != OverlayAct::Hide) a.lock->tick(lockNow());
 #ifdef __APPLE__
     if ((act == OverlayAct::Hide) == bool(prAppWindowIsVisible(window))) prioritizeOverlayTransition();
 #endif
@@ -262,7 +267,7 @@ void carryOut(App& a, OverlayAct act) {
         prAppWindowSetOpacity(window, 0);
         prAppWindowSetVisible(window, true);
         prAppWindowRequestUnpacedFrame(window);
-        // A locked window claims no sign-in: the browser opens only for an owner who has unlocked (lockChanged).
+        // A locked window claims no sign-in: the browser opens only for an owner who has unlocked (window_lock.h).
         if (!a.lock || a.lock->drawsContent()) a.host.signIn.shown();
         return;
     }
@@ -280,37 +285,6 @@ bool overlayActive(const App& a) {
     return a.window != nullptr && prAppWindowIsActive(prStudioWindowAppWindow(a.window));
 }
 
-// The client lock's time: seconds on the monotonic clock (ClientLock takes time as an argument).
-double lockNow() {
-    return double(prTimeMonotonicMilliseconds()) / 1000.0;
-}
-
-const char* lockReasonName(LockReason why) {
-    switch (why) {
-    case LockReason::None: return "unlocked";
-    case LockReason::Launch: return "launch";
-    case LockReason::Sleep: return "sleep";
-    case LockReason::ScreenLock: return "the screen locked";
-    case LockReason::SessionSwitch: return "a session switch";
-    case LockReason::Background: return "the background";
-    case LockReason::Idle: return "the idle timeout";
-    case LockReason::Failed: return "authentication failed";
-    case LockReason::Cancelled: return "the prompt was cancelled";
-    case LockReason::Unavailable: return "no authentication available";
-    }
-    return "?";
-}
-
-// The view's lock screen from the lock's state: set while locked or prompting, none while unlocked.
-void showLock(App& a) {
-    if (!a.lock || a.lock->drawsContent()) {
-        a.view.lockScreen.reset();
-        return;
-    }
-    a.view.lockScreen = View::LockScreen{lockTitle(a.lock->state()),
-        lockMessage(a.lock->state(), a.lock->reason(), a.lockMethod, a.lockDetail)};
-}
-
 void requestFrame(App& a) {
     if (a.window != nullptr) prAppWindowRequestFrame(prStudioWindowAppWindow(a.window));
 }
@@ -323,45 +297,40 @@ LockPost lockPoster(App& a) {
     };
 }
 
-// Asks the system to unlock, over the window: only from locked (ClientLock::prompt), so never twice at once.
-void askToUnlock(App& a) {
-    if (!a.lock || !a.authenticator || a.window == nullptr) return;
-    const std::uint64_t attempt = a.lock->prompt();
-    if (attempt == 0) return;
-    PrSurface surface{};
-    if (prAppWindowSurface(prStudioWindowAppWindow(a.window), &surface) != PrStatus_Ok) surface = PrSurface{};
-    a.authenticator->request(attempt, surface, lockPoster(a));
-    showLock(a);
-    requestFrame(a);
+// A normal window (--windowed) that locks: its content leaves the screen at once (opacity 0, which the window server
+// applies now, before a sleep), and comes back only with the lock screen's frame (trace), so that no old frame stays in
+// a capture, the Dock's thumbnail or Mission Control.
+void veil(App& a) {
+    if (a.window == nullptr) return;
+    PrAppWindow* window = prStudioWindowAppWindow(a.window);
+    prAppWindowSetOpacity(window, 0);
+    a.preparingReveal = true;
+    a.revealFrameReady = false;
+    a.boardRevealStep.reset();
+    prAppWindowRequestUnpacedFrame(window);
 }
 
-// After the lock may have changed from `before`. Locking from unlocked hides the overlay at once, so nothing of nexus
-// stays on the screen; a relock that overtakes the system's prompt takes the prompt away. Unlocking shows the overlay
-// if the system's prompt took the keyboard from it and it hid (overlay.h), and lets a sign-in claim its flow.
-void lockChanged(App& a, LockState before) {
-    if (!a.lock) return;
-    const LockState now = a.lock->state();
-    if (before == LockState::Prompting && now == LockState::Locked && a.authenticator) a.authenticator->cancel();
-    if (before == LockState::Unlocked && now != LockState::Unlocked) {
-        std::fprintf(stderr, "nexus: locked: %s\n", lockReasonName(a.lock->reason()));
-        if (a.overlay && overlayVisible(a)) carryOut(a, OverlayAct::Hide);
-    } else if (before != LockState::Unlocked && now == LockState::Locked && before != now) {
-        std::fprintf(stderr, "nexus: not unlocked: %s%s%s\n", lockReasonName(a.lock->reason()),
-            a.lockDetail.empty() ? "" : ": ", a.lockDetail.c_str());
-    }
-    showLock(a);
-    if (before != LockState::Unlocked && now == LockState::Unlocked) {
-        std::fprintf(stderr, "nexus: unlocked\n");
-        if (a.overlay && !overlayVisible(a)) carryOut(a, a.rules.hotkey(overlayVisible(a), overlayActive(a)));
-        else a.host.signIn.shown();
-    }
-    requestFrame(a);
-}
-
-// The relock reasons that show the prompt by themselves when the window shows; after a refusal the lock screen waits for
-// Return or a click, so that its words can be read.
-bool asksOnShow(LockReason why) {
-    return why != LockReason::Failed && why != LockReason::Cancelled && why != LockReason::Unavailable;
+// The window, for the lock (window_lock.h).
+WindowLock::Hooks lockHooks(App& a, bool overlay) {
+    WindowLock::Hooks h;
+    h.overlay = overlay;
+    h.visible = [&a] { return overlayVisible(a); };
+    h.hide = [&a] { carryOut(a, OverlayAct::Hide); };
+    h.reveal = [&a] { carryOut(a, a.rules.hotkey(overlayVisible(a), overlayActive(a))); };
+    h.veil = [&a] { veil(a); };
+    h.screen = [&a](std::optional<View::LockScreen> screen) { a.view.lockScreen = std::move(screen); };
+    h.signInLock = [&a] { a.host.signIn.lock(); };
+    h.signInShown = [&a] { a.host.signIn.shown(); };
+    h.frame = [&a] { requestFrame(a); };
+    h.surface = [&a] {
+        PrSurface surface{};
+        if (a.window == nullptr || prAppWindowSurface(prStudioWindowAppWindow(a.window), &surface) != PrStatus_Ok)
+            surface = PrSurface{};
+        return surface;
+    };
+    h.post = lockPoster(a);
+    h.log = [](const std::string& line) { std::fprintf(stderr, "nexus: %s\n", line.c_str()); };
+    return h;
 }
 
 // The clipboard's text for the prompt (View::paste), on the app's thread: a Paste event through the host, which cuts it
@@ -529,7 +498,10 @@ bool open(void* context, PrStudioWindow* window) {
     if (a.overlay && prAppDisplays(board.app, &screen, 1))
         board.initialExtent = {float(screen.extent.x), float(screen.extent.y)};
     board.initialExtent.y -= a.look.tabs.height * style::textScale(a.look.textSteps) + 1;
-    board.open = a.urls->handle();
+    // A page's link that arrives while the window is locked is not opened (window_lock.h openUnlessLocked).
+    const auto lockedNow = [&a] { return a.lock && !a.lock->drawsContent(); };
+    const auto logLine = [](const std::string& line) { std::fprintf(stderr, "nexus: %s\n", line.c_str()); };
+    board.open = openUnlessLocked(a.urls->handle(), lockedNow, logLine);
     if (a.overlay)
         board.visible = [&a] { return overlayVisible(a); };
     if (clientConfig().sprintEnabled) a.board = std::make_unique<PraxBoard>(board);
@@ -553,11 +525,11 @@ bool open(void* context, PrStudioWindow* window) {
     // In-app sign-in's URL, in the default browser off the frame thread (frame_host.h LinkSignIn, url_opener.h); a URL
     // the system cannot open is the flow's to end at its deadline, and is never printed. A window that is not an overlay
     // shows from the start, so it may claim now.
-    a.view.openLink = a.urls->handle();
+    a.view.openLink = openUnlessLocked(a.urls->handle(), lockedNow, logLine);
     a.view.playChirp = [&a](const Chirp& cue) { a.audio.play(cue); };
     a.host.signIn.openUrl = a.urls->handle();
     // Return or a click on the lock screen asks the system again.
-    a.view.unlock = [&a] { askToUnlock(a); };
+    a.view.unlock = [&a] { if (a.lock) a.lock->ask(); };
     if (!a.overlay && (!a.lock || a.lock->drawsContent())) {
         a.host.signIn.shown();
     }
@@ -567,7 +539,7 @@ bool open(void* context, PrStudioWindow* window) {
     // A window that is not an overlay shows from the start: it asks the owner now.
     if (!a.overlay) {
         a.lockInbox->app = prStudioWindowApp(window);
-        askToUnlock(a);
+        if (a.lock) a.lock->ask();
     }
     return true;
 }
@@ -611,12 +583,9 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
     // The frame's work starts here, after the swap chain's wait; it ends in trace(), once the frame is rendered.
     a.hitch.begin();
+    // The idle check before the frame is built, so that a frame after the timeout is the lock screen's.
+    if (a.lock) a.lock->tick(lockNow());
     a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
-    if (a.lock) {
-        const LockState before = a.lock->state();
-        a.lock->tick(lockNow());
-        if (a.lock->state() != before) lockChanged(a, before);
-    }
     if (a.preparingReveal) {
         // A locked window shows the lock screen alone: it waits for no page.
         const bool sprint = !a.view.lockScreen && a.board && a.model->tab_count() &&
@@ -642,6 +611,11 @@ bool start(void* context, PrStudioApp* studio) {
         a.lockInbox->app = prStudioAppApp(studio);
         a.lockEvents = watchLockEvents(lockPoster(a));
         prAppTimerSet(prStudioAppApp(studio), kLockTickTag, kLockTickSeconds, kLockTickSeconds);
+        // A normal window reads the policy's idle timeout too (appEvent).
+        if (!a.overlay) {
+            a.hotkeyGeneration = a.view.application->refresh();
+            prAppTimerSet(prStudioAppApp(studio), kPolicyCheckTag, 1, 1);
+        }
     }
     if (!a.overlay)
         return true;
@@ -686,7 +660,7 @@ void shutdown(void* context, PrStudioApp*) {
     App& a = appOf(context);
     a.stopping = true;
     // A prompt still up goes, and nothing wakes the app once it has stopped.
-    if (a.authenticator) a.authenticator->cancel();
+    if (a.lock) a.lock->cancel();
     a.lockEvents.reset();
     a.lockInbox->app = nullptr;
 }
@@ -705,22 +679,25 @@ void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
         setBudget(a, prStudioWindowApp(a.window));
     // The client lock: the notices other threads posted (answers, events), Prax's sleep and screen lock, the idle check.
     if (a.lock) {
-        const LockState before = a.lock->state();
-        bool changed = false;
         if (e->kind == PrAppEventKind_Wake)
-            changed = applyLockNotices(*a.lock, a.lockInbox->mail.take(), lockNow(), &a.lockDetail);
-        else if (e->kind == PrAppEventKind_Suspend)
-            a.lock->relock(LockReason::Sleep);
-        else if (e->kind == PrAppEventKind_ScreenLocked)
-            a.lock->relock(LockReason::ScreenLock);
+            a.lock->notices(a.lockInbox->mail.take(), lockNow());
+        else if (const LockReason why = relockFor(*e); why != LockReason::None)
+            a.lock->relock(why);
         else if (e->kind == PrAppEventKind_Timer && e->tag == kLockTickTag)
             a.lock->tick(lockNow());
-        if (changed || a.lock->state() != before || e->kind == PrAppEventKind_Suspend ||
-                e->kind == PrAppEventKind_ScreenLocked)
-            lockChanged(a, before);
     }
-    if (!a.overlay)
+    if (!a.overlay) {
+        // A normal window has no hotkey; the policy's idle timeout is all it reads.
+        if (a.lock && e->kind == PrAppEventKind_Timer && e->tag == kPolicyCheckTag) {
+            const auto generation = a.view.application->refresh();
+            if (generation == a.hotkeyGeneration) return;
+            a.hotkeyGeneration = generation;
+            std::string why;
+            a.lock->setIdleSeconds(lockIdleSeconds(*a.view.application, why));
+            if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
+        }
         return;
+    }
     if (e->kind == PrAppEventKind_Hotkey && e->tag == kHotkeyTag) {
         carryOut(a, a.preparingReveal ? OverlayAct::Hide : a.rules.hotkey(overlayVisible(a), overlayActive(a)));
     } else if (e->kind == PrAppEventKind_Timer && e->tag == kPolicyCheckTag) {
@@ -759,10 +736,7 @@ bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
     auto& a = appOf(context);
     // The person's input starts the lock's idle time again while unlocked; input that comes after the timeout locks first,
     // and then reaches only the lock screen (FrameHost::event).
-    if (a.lock && a.lock->drawsContent() && isInputEvent(*e)) {
-        const LockState before = a.lock->state();
-        if (!a.lock->input(lockNow())) lockChanged(a, before);
-    }
+    if (a.lock) a.lock->input(*e, lockNow());
     if (e->kind == PrAppEventKind_KeyDown || e->kind == PrAppEventKind_Text ||
             e->kind == PrAppEventKind_PointerDown) a.view.lastInput = e->time;
     return a.host.event(*e);
@@ -796,12 +770,18 @@ void trace(void* context, const PrStudioWindowFrameTimes* t) {
             // Studio submitted the updated frame. Complete it before exposing the surface.
             prGpuDeviceWaitIdle(prStudioAppDevice(prStudioWindowStudioApp(a.window)));
             a.preparingReveal = false;
+            if (!a.overlay) {
+                // A normal window veiled by a relock (veil): the lock screen's frame is drawn, so it shows again,
+                // without taking the keyboard or asking; Return or a click asks.
+                prAppWindowSetOpacity(window, 1);
+                return;
+            }
             prAppWindowFocus(window);
             prAppWindowSetOpacity(window, 1);
             a.audio.play(a.view.windowApp.surface.openChirp);
             prAppTimerSet(prStudioWindowApp(a.window), kKeyCheckTag, kKeyCheckSeconds, 0);
             // Shown locked: the system is asked now, over the lock screen (after a refusal, on Return or a click).
-            if (a.lock && a.lock->state() == LockState::Locked && asksOnShow(a.lock->reason())) askToUnlock(a);
+            if (a.lock) a.lock->shown();
         } else {
             if (a.board && !a.boardRevealStep) a.boardRevealStep = a.board->postedStep();
             prAppWindowRequestFrame(window);
@@ -1121,6 +1101,13 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nexus: --locked draws a screenshot of the lock screen; a live window is always locked\n");
         return 2;
     }
+    // A screenshot draws a state file or the demo, never the person's own window: that would be the window without the
+    // lock (the sprint board, the AIs' tabs, the terminals).
+    if (shot != nullptr && state == nullptr && !demo && !demoTerminal) {
+        std::fprintf(stderr, "nexus: --screenshot draws a state file (--state) or the demo (--demo, --demo-terminal) "
+            "only, never the live window\n");
+        return 2;
+    }
     if ((state != nullptr && (shot == nullptr || server != nullptr)) || (lost && state == nullptr)) {
         std::fprintf(stderr, "nexus: --state draws a screenshot only, without --server; --lost needs --state\n");
         return 2;
@@ -1330,11 +1317,8 @@ int main(int argc, char** argv) {
         std::string why;
         const double idle = live ? lockIdleSeconds(*a.view.application, why) : kLockIdleMinutesDefault * 60;
         if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
-        a.lock = std::make_unique<ClientLock>(idle);
-        a.authenticator = systemLockAuthenticator();
-        a.lockMethod = a.authenticator->method();
-        if (!live) a.authenticator.reset();
-        showLock(a);
+        // A screenshot is never asked (it takes no input): its authenticator names the method only.
+        a.lock = std::make_unique<WindowLock>(idle, systemLockAuthenticator(), lockHooks(a, !windowed && live));
     }
     // The window opens on the tab --tab names; without it, on the tab selected when nexus last quit, found by who it is
     // or, for a terminal, by its place among the terminals (tab_order.h), or the sprint tab. A saved AI's tab is

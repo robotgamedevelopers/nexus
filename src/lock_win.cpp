@@ -42,6 +42,7 @@ static_assert(kWtsConsoleDisconnect == static_cast<unsigned long>(WTS_CONSOLE_DI
 static_assert(kWtsRemoteDisconnect == static_cast<unsigned long>(WTS_REMOTE_DISCONNECT));
 static_assert(kWtsSessionLogoff == static_cast<unsigned long>(WTS_SESSION_LOGOFF));
 static_assert(kWtsSessionLock == static_cast<unsigned long>(WTS_SESSION_LOCK));
+static_assert(kWtsSessionRemoteControl == static_cast<unsigned long>(WTS_SESSION_REMOTE_CONTROL));
 
 std::string narrow(const std::wstring& text) {
     const int n = WideCharToMultiByte(CP_UTF8, 0, text.data(), int(text.size()), nullptr, 0, nullptr, nullptr);

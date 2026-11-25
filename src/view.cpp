@@ -668,8 +668,8 @@ struct Builder {
     void selectorAction(const std::string& action) {
         if (!model.tab_count()) return;
         const auto active = model.active();
-        if (view.dialogVisible && (action == "picker:close" || action == "dismiss") && view.playChirp)
-            view.playChirp(view.windowApp.surface.cancelChirp);
+        if (view.dialogVisible && (action == "picker:close" || action == "dismiss"))
+            view.chirp(view.windowApp.surface.cancelChirp);
         if (action == "picker:model" || action == "picker:effort") {
             view.choiceKind = action.substr(7);
             view.choiceTab = model.tab(active).id;
@@ -681,7 +681,7 @@ struct Builder {
         } else if (action.starts_with("point:") && !view.choiceKind.empty()) {
             view.choiceValue = action.substr(6);
         } else if (action.starts_with("choose:") && !view.choiceKind.empty()) {
-            if (view.playChirp) view.playChirp(view.windowApp.surface.confirmChirp);
+            view.chirp(view.windowApp.surface.confirmChirp);
             model.set_draft(active, "/" + view.choiceKind + " " + action.substr(std::string_view("choose:").size()));
             view.choiceKind.clear();
             view.choiceValue.clear();
@@ -731,8 +731,8 @@ struct Builder {
                 auto& group = record.groups[PrLayoutGroup_Decoration];
                 auto decoration = prLayoutDecorationStyleRecord(tree, group);
                 if (view.energyAccount != item.action) {
-                    if (view.dialogVisible && !view.energyAccount.empty() && view.playChirp)
-                        view.playChirp(view.windowApp.surface.stepChirp);
+                    if (view.dialogVisible && !view.energyAccount.empty())
+                        view.chirp(view.windowApp.surface.stepChirp);
                     view.accountEnergyTime = view.time;
                     view.energyAccount = item.action;
                 }
@@ -983,8 +983,8 @@ struct Builder {
             prKitPlace(kit, row, rowSize);
             view.accountRows.push_back(row);
             if (preview && view.lastHighlightedAccount != option.name) {
-                if (view.dialogVisible && !view.lastHighlightedAccount.empty() && view.playChirp)
-                    view.playChirp(view.windowApp.surface.stepChirp);
+                if (view.dialogVisible && !view.lastHighlightedAccount.empty())
+                    view.chirp(view.windowApp.surface.stepChirp);
                 prUiSetFocus(ui, row);
                 prUiReveal(ui, row);
                 view.lastHighlightedAccount = option.name;
@@ -2006,7 +2006,7 @@ struct Builder {
             return;
         }
         if (plan.delivery == policy::Delivery::Hold) {
-            if (model.hold_draft(active) && view.playChirp) view.playChirp(view.windowApp.surface.holdChirp);
+            if (model.hold_draft(active)) view.chirp(view.windowApp.surface.holdChirp);
             return;
         }
         if (plan.delivery == policy::Delivery::Release) {
@@ -2413,7 +2413,7 @@ struct Builder {
         // the strip may have selected or moved a tab: read the active tab again
         if (model.tab_count() != 0 && model.tab(model.active()).id != view.selectedId) {
             view.selectedId = model.tab(model.active()).id;
-            if (view.playChirp) view.playChirp(view.windowApp.surface.tabChirp);
+            view.chirp(view.windowApp.surface.tabChirp);
             if (view.selected)
                 view.selected();
         }
@@ -2424,7 +2424,7 @@ struct Builder {
         }
         page(window, composing);
         const bool dialog = view.accountMenu != kPrLayoutNodeNone || asking != nullptr;
-        if (dialog && !view.dialogVisible && view.playChirp) view.playChirp(view.windowApp.surface.dialogChirp);
+        if (dialog && !view.dialogVisible) view.chirp(view.windowApp.surface.dialogChirp);
         if (!dialog) view.energyAccount.clear();
         view.dialogVisible = dialog;
         view.displayedLimit = view.windowApp.limitOffer;
@@ -2542,8 +2542,8 @@ struct Builder {
                 break;
             }
             case WindowCommand::ClearComposer:
-                if (model.tab_count() && view.playChirp && (!model.tab(model.active()).draft.empty() || !model.tab(model.active()).held.empty()))
-                    view.playChirp(view.windowApp.surface.discardChirp);
+                if (model.tab_count() && (!model.tab(model.active()).draft.empty() || !model.tab(model.active()).held.empty()))
+                    view.chirp(view.windowApp.surface.discardChirp);
                 model.clear_composer(model.active());
                 view.prompted = ~std::size_t(0);
                 break;

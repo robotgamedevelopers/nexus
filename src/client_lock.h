@@ -134,11 +134,13 @@ inline constexpr int kConsentCanceled = 6;
 LockAnswer lockAnswerForConsent(int result);
 
 // WM_WTSSESSION_CHANGE's event (lock_win.cpp): the console or a remote session disconnected or logged off is a session
-// switch; the session locked is a screen lock; the rest (connect, logon, unlock, remote control) lock nothing: None.
+// switch, and so is remote control starting or stopping (someone else may be watching or driving the screen); the
+// session locked is a screen lock; the rest (connect, logon, unlock) lock nothing: None.
 inline constexpr unsigned long kWtsConsoleDisconnect = 0x2;
 inline constexpr unsigned long kWtsRemoteDisconnect = 0x4;
 inline constexpr unsigned long kWtsSessionLogoff = 0x6;
 inline constexpr unsigned long kWtsSessionLock = 0x7;
+inline constexpr unsigned long kWtsSessionRemoteControl = 0x9;
 LockReason lockReasonForSessionChange(unsigned long event);
 
 // What arrives from other threads (the authenticator's reply, the OS's notices) for the window's thread, which takes it

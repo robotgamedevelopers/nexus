@@ -24,21 +24,28 @@ nexus never sees a fingerprint, a face, a PIN or a password: the system checks t
 There is no Dashboard, no tab strip, no AI's tab or name, no transcript, prompt or draft, no terminal, no dialog, and
 no sound of what an AI did. No input reaches anything but the lock screen: typed keys, text, pastes, scrolls and drops
 are dropped before the board, a terminal's shell or the prompt can see them. Return or a click on the card asks the
-system again; Escape hides the overlay. nexus posts no system notifications, so none can carry content. The tests:
-`window_input` `lockedWindowDrawsOnlyTheLockScreen` (the tree holds the lock screen's two lines and nothing else) and
-`frame_host_unit` `lockedHostDropsInput`.
+system again; Escape hides the overlay. nexus posts no system notifications, so none can carry content, and plays no
+sound while locked (`View::chirp`). A locked window claims no sign-in and opens nothing in the browser: locking takes
+back the claim a show allowed, no sign-in step runs until unlocked, and a page's link that arrives while locked is
+dropped, with a line in the log, never kept to open later. The tests: `window_input` `lockedWindowDrawsOnlyTheLockScreen`
+(the tree holds the lock screen's two lines and nothing else), `frame_host_unit` `lockedHostDropsInput`,
+`window_unit_signin` `lockedClaimsNothing`, and `window_lock_unit`.
 
 **It locks** at launch, and again when:
 
 - the machine goes to sleep (Prax's `PrAppEventKind_Suspend`; on Windows also the display turning off, which modern
   standby sends where it sends no suspend) or the displays sleep (macOS);
 - the screen locks (Prax's `PrAppEventKind_ScreenLocked`);
-- the user session switches away: fast user switching on macOS; a console or remote disconnect or a logoff on Windows;
+- the user session switches away: fast user switching on macOS; a console or remote disconnect, a logoff, or remote
+  control starting or stopping on Windows;
 - the phone's app goes to the background (iOS);
 - the window has had no input for the idle timeout.
 
 Locking from unlocked hides the overlay at once, so nothing of nexus stays on the screen, and takes away a system
-prompt that is still up: its answer, if one still comes, is stale and unlocks nothing.
+prompt that is still up: its answer, if one still comes, is stale and unlocks nothing. A `--windowed` window, which
+stays on the screen, is veiled at once (its opacity to 0, which the window server applies before a sleep) and shows
+again only with the lock screen's frame, so that no frame of content stays in a capture, the Dock's thumbnail or
+Mission Control.
 
 **It asks** when the window shows locked: the overlay, at the hotkey (launch itself still shows nothing and takes no
 focus, AGENTS.md); the `--windowed` window, as it opens. After a refusal (the check failed, the prompt was cancelled, or
@@ -49,9 +56,11 @@ leaves nexus locked, and the lock screen says to set it up.
 **The idle timeout** is the client policy's `lock` event, `{"idle_minutes": N}`; the shipped rule
 (`policy/rules/client/window.star`) answers config `lock_idle_minutes`, **10** unless set. N is a whole number of
 minutes from 1 to 240. Nothing turns the lock off: any other answer is the default, with a line in the log saying why
-(`window_app.h` `lockIdleSeconds`). Any input to the window (a key, the pointer) starts the idle time again. The window
-checks every 5 seconds, also while hidden, and at every input, so it locks within 5 seconds of the timeout, and input
-that arrives after the timeout locks before it is delivered.
+(`window_app.h` `lockIdleSeconds`). Only the person's deliberate input starts the idle time again: a key, text, a press,
+a scroll, a paste or a drop. A pointer or a drag passing over the window, a gesture or a touch on the trackpad does
+not, so nothing but the person's act keeps nexus unlocked. The window checks every 5 seconds, also while hidden, at
+every frame, before the overlay shows, and at every input, so it locks within 5 seconds of the timeout, and input that
+arrives after the timeout locks before it is delivered. The `--windowed` window reads the timeout from the policy too.
 
 **The model**: `models/ClientLock.tla` (`models/README.md`): `locked`, `prompting`, `unlocked`; only the system's grant
 for the attempt that is current unlocks; every relock locks from any state; a frame draws content and input is
@@ -85,13 +94,16 @@ in for the other:
 | Another local user on the same machine | each user's `~/.nexus/client` is owner-only (0700), and a session switch locks nexus | none from the lock's side; an administrator can read any user's memory and files |
 | Screen sharing or a screenshot | while locked nothing of nexus is drawn, so nothing can be captured | while unlocked, nexus shows on a shared screen like any other window |
 | Someone with the person's ssh key or user account | the link's ssh authentication only | the client lock does not cover this: it guards the window, not the account |
-| A test build | the stand-in authenticator exists only with the CMake option `NEXUS_TEST_AUTHENTICATOR`, off by default, never in a release; such a build warns at configure, logs at start, and names itself on the lock screen ("the TEST BUILD's authenticator (no real check)") | anyone who builds nexus with it on gets a nexus that checks no one |
+| A test build | the stand-in authenticator exists only with the CMake option `NEXUS_TEST_AUTHENTICATOR`, off by default; it is a configure error in a Release, multi-config or signed build; every other build of the app is checked after linking for none of its words (`cmake/no_test_authenticator.cmake`, and the unit test `nexus_no_test_authenticator` on CI's Release build); a test build warns at configure, logs at start, and names itself on the lock screen | anyone who builds nexus as Debug with it on gets a nexus that checks no one |
+| A screenshot of the live window | `--screenshot` draws a state file or the demo only, and refuses otherwise | none |
 
 ## What is verified, and how
 
 - The rules: `client_lock_unit` (unit tests, time as an argument), and the model with its witnesses and the trace
   check (`ctest -L model -R client_lock`).
 - The window's drawing and input while locked: `window_input` and `frame_host_unit` (headless, no window).
+- What the app does around the lock (asking, relocking, hiding, veiling, the sign-in taken back, the idle reset, links
+  and sounds while locked): `window_lock_unit`, over recording hooks (`src/window_lock.h`); main.cpp gives it the window.
 - The system's codes: the LocalAuthentication and Windows Hello answers and the Windows session events are mapped by
   plain functions (`client_lock.h`), unit-tested, and each platform file checks the numbers against its SDK at
   compile time.

@@ -68,6 +68,8 @@ PrAppHotkey overlayBinding(policy::Host& host, std::string& why);
 inline constexpr double kLockIdleMinutesDefault = 10;
 inline constexpr double kLockIdleMinutesMost = 240;
 double lockIdleSeconds(policy::Host& host, std::string& why);
+// The same from the rule's answer (JSON), for the tests.
+double lockIdleSecondsFrom(const std::string& answer, std::string& why);
 
 struct Chirp {
     float startHz = 440, endHz = 440, durationMs = 50, gain = 0;

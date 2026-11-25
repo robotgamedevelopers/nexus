@@ -138,6 +138,10 @@ struct TranscriptItems {
 
 struct View {
     std::function<void(const Chirp&)> playChirp;
+    // Plays a cue through playChirp, and none while locked (lockScreen): no sound says what an AI did.
+    void chirp(const Chirp& cue) const {
+        if (!lockScreen && playChirp) playChirp(cue);
+    }
     struct GlyphTrail {
         struct Range { size_t start, end; double birth; };
         size_t tab = SIZE_MAX, entry = SIZE_MAX;

@@ -153,6 +153,7 @@ LockReason lockReasonForSessionChange(unsigned long event) {
     case kWtsConsoleDisconnect:
     case kWtsRemoteDisconnect:
     case kWtsSessionLogoff:
+    case kWtsSessionRemoteControl:
         return LockReason::SessionSwitch;
     case kWtsSessionLock: return LockReason::ScreenLock;
     default: return LockReason::None;

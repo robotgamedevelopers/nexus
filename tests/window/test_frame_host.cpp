@@ -444,6 +444,12 @@ void lockedHostDropsInput() {
     CHECK(w.host.event(make(PrAppEventKind_Scroll)));
     CHECK(w.host.event(make(PrAppEventKind_Drop)));
     CHECK(w.host.event(make(PrAppEventKind_CompositionUpdate)));
+    CHECK(w.host.event(make(PrAppEventKind_Gesture)));
+    CHECK(w.host.event(make(PrAppEventKind_TrackpadTouches)));
+    CHECK(w.host.event(make(PrAppEventKind_DragEnter)));
+    CHECK(w.host.event(make(PrAppEventKind_DragOver)));
+    CHECK(w.host.event(make(PrAppEventKind_DragLeave)));
+    CHECK(w.host.event(make(PrAppEventKind_DragPromise)));
     CHECK(w.host.event(make(PrAppEventKind_KeyDown, PrAppKey_Enter, PrAppModifierFlag_Shift)));
     CHECK(w.host.event(make(PrAppEventKind_KeyDown, PrAppKey('t'), style::kCommand)));
     CHECK(!w.host.event(make(PrAppEventKind_KeyDown, PrAppKey_Enter)));

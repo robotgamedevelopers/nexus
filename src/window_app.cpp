@@ -604,7 +604,12 @@ PrAppHotkey overlayBinding(policy::Host& host, std::string& why) {
 
 double lockIdleSeconds(policy::Host& host, std::string& why) {
     const auto answer = host.decide({}, "app.lock", "{}", why);
-    if (!why.empty() || answer.empty() || answer == "null") return kLockIdleMinutesDefault * 60;
+    if (!why.empty()) return kLockIdleMinutesDefault * 60;
+    return lockIdleSecondsFrom(answer, why);
+}
+
+double lockIdleSecondsFrom(const std::string& answer, std::string& why) {
+    if (answer.empty() || answer == "null") return kLockIdleMinutesDefault * 60;
     std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
     if (prJsonParse(doc.get(), {answer.data(), answer.size()}, nullptr)) {
         const auto value = prJsonMember(doc.get(), 0, {"idle_minutes", 12});
