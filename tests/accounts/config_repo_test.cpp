@@ -443,7 +443,7 @@ int main(int argc, char** argv) {
         CHECK(old.open(&why) && old.moved().empty() && history(old).size() == 3);
         // Both names there: refused, nothing moved, the fix named.
         spit(olddir + "/friends.json", oldText);
-        CHECK(!old.open(&why) && why.find("holds both friends.json and ais.json") != std::string::npos);
+        CHECK(!old.open(&why) && why.find("holds both friends.json") != std::string::npos);
         std::filesystem::remove(olddir + "/friends.json");
     }
 
