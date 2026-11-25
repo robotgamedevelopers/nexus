@@ -30,14 +30,14 @@ void FingerScroll::setRange(double max, double height) {
     height_ = std::max(1.0, height);
     if (phase_ == FingerPhase::Rest) offset_ = std::clamp(offset_, 0.0, max_);
     // A fling the range shrank under is past the new bottom: it springs back to it from where it shows, with the speed
-    // it has. (Left to its next frame, the list jumped to the new bottom first: models/FingerScroll.tla, FlingInside.)
+    // it has. (Left to its next frame, the list jumped to the new bottom first.)
     if (phase_ == FingerPhase::Fling && offset_ > max_) {
         springFrom(1, v0_ * std::exp(flingRate() * std::max(0.0, shown_ - start_)), shown_);
         return;
     }
     // A spring back to the bottom goes to the range's bottom: on from where it shows, with the speed it has; or, the
     // bottom now at or past where it shows, the list is inside and at rest there. (Kept to the old end, it came to
-    // rest past the new one, outside the range: models/FingerScroll.tla, SpringToItsEnd and AtRestInside.)
+    // rest past the new one, outside the range.)
     if (phase_ == FingerPhase::Spring && side_ > 0 && end_ != max_) {
         if (offset_ <= max_) {
             phase_ = FingerPhase::Rest;

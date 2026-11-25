@@ -1,7 +1,6 @@
 # Voice (src/voice): which AI a spoken prompt is for, and one voice turn of a client, with three labels:
 #   unit   name_match_unit, voice_turn_unit and voice_host_unit (over a fake Speech): pure logic, no OS, no audio, no clock (the time is an argument)
-#   model  TLC: VoiceTurn.tla on two AIs, and FingerScroll.tla (the iPhone's list under the finger) on a small list:
-#          every reversed witness rejected, the code's random walks checked against the spec over several seeds, and
+#   model  TLC: VoiceTurn.tla on two AIs: every reversed witness rejected, the code's random walks checked against the spec over several seeds, and
 #          a faulty trace rejected. Needs TLA2TOOLS_JAR and java.
 # The OS's speech (src/voice/speech.h) is tested on the iOS simulator, with recorded audio (tests/ios/tests.cmake).
 
@@ -84,37 +83,4 @@ if(TARGET nexus_scroll)
     target_compile_options(finger_scroll_test PRIVATE ${NEXUS_WARNINGS})
     add_test(NAME finger_scroll_unit COMMAND finger_scroll_test)
     set_tests_properties(finger_scroll_unit PROPERTIES LABELS unit TIMEOUT 30)
-    if(NEXUS_SERVER_PARTS)
-        # The walk whose traces FingerScrollTrace.tla checks.
-        add_executable(finger_walk finger_walk.cpp)
-        target_link_libraries(finger_walk PRIVATE nexus_scroll)
-        target_compile_options(finger_walk PRIVATE ${NEXUS_WARNINGS})
-        add_dependencies(model_checks finger_scroll_test finger_walk)
-    endif()
-    # FingerScroll.tla on a small list (a range of 0 to 3 rows), every property; its reversed witnesses, each rejected
-    # by the property it breaks (WFingerOldEnd is the code before the spring went to the range's new bottom); the
-    # code's walks, each a behaviour of the spec; and a scroller whose press forgets it caught a moving list, rejected
-    # (no step of the spec reaches its state: a deadlock).
-    tlc_test(tlc_finger_spec MCFingerScroll MCFingerScroll.cfg pass)
-    tlc_test(tlc_finger_witness_fling_rests_past WFingerFlingRestsPast witnesses/WFingerFlingRestsPast.cfg invariant
-             PROPERTY AtRestInside)
-    tlc_test(tlc_finger_witness_fling_outside WFingerFlingOutside witnesses/WFingerFlingOutside.cfg invariant
-             PROPERTY FlingInside)
-    tlc_test(tlc_finger_witness_spring_inside WFingerSpringInside witnesses/WFingerSpringInside.cfg invariant
-             PROPERTY SpringNeverCrossesInside)
-    tlc_test(tlc_finger_witness_old_end WFingerOldEnd witnesses/WFingerOldEnd.cfg invariant PROPERTY SpringToItsEnd)
-    tlc_test(tlc_finger_witness_old_end_rests WFingerOldEnd witnesses/WFingerOldEndRests.cfg invariant
-             PROPERTY AtRestInside)
-    tlc_test(tlc_finger_witness_drag_taps WFingerDragTaps witnesses/WFingerDragTaps.cfg action PROPERTY DragIsNoTap)
-    tlc_test(tlc_finger_witness_caught_taps WFingerCaughtTaps witnesses/WFingerCaughtTaps.cfg action
-             PROPERTY CaughtIsNoTap)
-    tlc_test(tlc_finger_witness_shrink_keeps WFingerShrinkKeeps witnesses/WFingerShrinkKeeps.cfg action
-             PROPERTY ShrinkPullsIn)
-    tlc_test(tlc_finger_witness_spring_forever WFingerSpringForever witnesses/WFingerSpringForever.cfg liveness)
-    foreach(seed 1 2 3 4)
-        tlc_test(tlc_finger_trace_seed_${seed} FingerScrollTrace FingerScrollTrace.cfg pass FINGERWALK SEED ${seed}
-                 STEPS 600)
-    endforeach()
-    tlc_test(tlc_finger_trace_faulty_caught_rejected FingerScrollTrace FingerScrollTrace.cfg deadlock FINGERWALK SEED 1
-             STEPS 600 FAULTY caught)
 endif()

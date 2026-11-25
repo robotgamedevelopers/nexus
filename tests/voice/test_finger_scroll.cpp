@@ -99,7 +99,7 @@ void aFlingStopsAtTheEndAndNeverComesBackInside() {
 }
 
 // A fling that reaches the bottom bounces past it, as one reaching the top does past the top (its spring once began at
-// the end with no speed, p0 = 0 read as the inside: it stopped dead at the bottom). models/FingerScroll.tla.
+// the end with no speed, p0 = 0 read as the inside: it stopped dead at the bottom).
 void aFlingBouncesPastTheBottomAsPastTheTop() {
     for (const int way : {1, -1}) {
         auto s = list();

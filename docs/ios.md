@@ -95,3 +95,15 @@ iOS is the container, whose top an app may not write. It holds what the desktop 
 An iOS app's window is the system's to show, so there is no overlay and no global hotkey: the app's window fills its
 scene, on iPhone and on iPad. Command is the key left of the space bar on an iPad's keyboard, as on a Mac, so the
 window's keys are the desktop's.
+
+## For Prax
+
+What nexus works around on iOS, for Prax to take up (Prax stays pinned; nexus does not patch it):
+
+- Studio's window panel pads its content to the safe area but stays the screen's height, so a window of full height
+  runs past the home indicator; and it does not leave room for the on-screen keyboard (`PrAppFrame.keyboard`). nexus
+  sizes its window from `PrAppFrame.safeArea` and `keyboard` itself (`usableHeightOf`, src/main_ios.cpp).
+- A button has no accessibility label: the back chevron on an AI's page should read "Back" to VoiceOver.
+- Text has no ellipsis: nexus shortens a long title from the last layout's measure (src/view.cpp fitPhoneTitle).
+- The UIKit backend sends touches as pointer events with no scrolling, so the menu's scroll is nexus's own
+  (src/finger_scroll.h).

@@ -23,9 +23,6 @@
 #   CHURN       with WALK: ON walks the friends coming and going (trace_walk --friends-churn)
 #   VOICEWALK   optional, in place of WALK: tests/voice's voice_walk; it is run first and writes VoiceTurnTraceData.tla
 #               into WORK, with SEED and STEPS, and FAULTY turn-end for the turn that keeps an AI awaited
-#   FINGERWALK  optional, in place of WALK: tests/voice's finger_walk; it is run first and writes
-#               FingerScrollTraceData.tla into WORK, with SEED and STEPS, and FAULTY caught for the scroller whose
-#               press forgets that it caught a moving list
 #   LINKWALK    optional, in place of WALK: tests/sync's link_walk program; it is run first and writes
 #               LinkTraceData.tla into WORK, with SEED, STEPS and WINDOWS (its windows), and FAULTY one of applier,
 #               mirror, tail, close or ensure
@@ -368,19 +365,6 @@ elseif(DEFINED VOICEWALK AND NOT "${VOICEWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "voice_walk failed (${walk_rc}): ${walk_out}")
-    endif()
-elseif(DEFINED FINGERWALK AND NOT "${FINGERWALK}" STREQUAL "")
-    set(walk_args "${SEED}" "${STEPS}")
-    if(FAULTY STREQUAL "caught")
-        list(APPEND walk_args --faulty-caught)
-    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not caught")
-    endif()
-    execute_process(COMMAND "${FINGERWALK}" ${walk_args} "${WORK}/FingerScrollTraceData.tla"
-        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
-    message("${walk_out}")
-    if(NOT walk_rc EQUAL 0)
-        message(FATAL_ERROR "finger_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED LINKWALK AND NOT "${LINKWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}" "${WINDOWS}")

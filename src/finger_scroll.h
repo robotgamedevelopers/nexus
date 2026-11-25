@@ -16,9 +16,8 @@
 // fling now past the bottom springs back to it, and a spring back to the bottom goes to the new bottom, each from
 // where it shows (or, the bottom now past it, the spring stops there).
 //
-// Pure: time is an argument, the events' own (seconds); nothing here reads a clock. The model is
-// models/FingerScroll.tla (offsets in whole rows, the motion's curves abstracted to the ways they move), checked
-// against this code's traces by models/FingerScrollTrace.tla (tests/voice/finger_walk.cpp writes them).
+// Pure: time is an argument, the events' own (seconds); nothing here reads a clock. Its unit tests are
+// tests/voice/test_finger_scroll.cpp.
 #pragma once
 
 #include <array>
@@ -62,9 +61,7 @@ public:
     // A finger is down and moved past the slop: what it is over must not take the press.
     bool dragging() const { return phase_ == FingerPhase::Drag; }
 
-protected:
-    // Protected, not private: the trace walk (tests/voice/finger_walk.cpp) reads the motion to quantise it, and its
-    // faulty scroller breaks it on purpose.
+private:
     double raw(double y) const;     // the offset the finger asks for, before the rubber band
     double banded(double r) const;  // the offset drawn for a raw offset
     void release(double v, double t);

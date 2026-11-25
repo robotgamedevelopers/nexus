@@ -27,8 +27,11 @@ phone (`show_tabs` false).
 - The microphone (**Talk**) sits at the bottom, above the safe area, in reach of the thumb. The list has its own room
   above it and never scrolls under it.
 
-**An AI's page** has only the "< AIs" button back to the menu (panel `back`, with the AI's title beside it), the
-transcript, and the prompt: one rounded box with a microphone icon inside at its right end. The account and status
+**An AI's page** has only a back chevron (an icon, no words) to the menu (panel `back`), the AI's title centred on the
+screen's width whatever the chevron's (laid over it, never pushed by it, and shortened with an ellipsis when it does
+not fit the same room on both sides), the transcript, and the prompt: one rounded box with a microphone icon inside at
+its right end. The window takes exactly the room between the safe area (status bar, home indicator) and, when it
+shows, the keyboard, so the prompt sits just above the home indicator or the keyboard. The account and status
 panels show when the policy lists them, as on the desktop. The prompt does not take the focus on its own
 (`focus_prompt` false); a tap on it brings up the keyboard.
 
@@ -51,8 +54,8 @@ listen also ends by itself after 55 seconds):
 
 The menu stays up. It shows who the prompt went to ("To Emma"), the end of the reply as it arrives (the last 280
 bytes or so; the whole reply is in the AI's page), and an **Open Emma** button into that AI's page. Replies to a
-prompt spoken on the menu are spoken aloud by default: the policy answers `voice_reply` `"voice"` on the menu, from
-the phone setting `menu_reply` (`"text"`, `"voice"` or `"both"`). They are spoken in order, and tapping Talk (it reads
+prompt spoken on the menu are spoken aloud; in an AI's page they come back as text. This is fixed, not a setting
+(`voice::replyOn`). They are spoken in order, and tapping Talk (it reads
 **Talk over** while the phone speaks) stops the speech at once, so the recognizer never hears the phone.
 
 Names are matched on the phone against the AIs the server lists, in `src/voice/name_match.h`. Matching ignores case,
@@ -64,7 +67,7 @@ config, for example `"phone": {"voice_names": {"zhi": ["zhi ya wen", "zhiya"]}}`
 
 The microphone in the prompt is plain dictation: the words go into the prompt as they form, after whatever was typed
 there, and the person edits and sends them as a typed prompt. Nothing is sent from the microphone, no name is matched,
-and nothing is spoken; replies in a tab come back as text (`voice_reply` `"text"`). Tap the icon again to stop.
+and nothing is spoken; replies in a tab come back as text. Tap the icon again to stop.
 
 `"phone": {"voice": false}` in the client config turns both microphones off.
 
@@ -93,9 +96,6 @@ naming no one goes to the AI showing or, with none showing, to the first AI (`De
 `WVoiceNoDefault` among them) each break one property and must be rejected. `tests/voice/voice_walk.cpp` walks the
 real `VoiceTurn` with random events and writes its trace, and `models/VoiceTurnTrace.tla` checks that each walk is a
 behaviour of the spec. A walk with a faulty turn end must be rejected. These run as `ctest -L model` (`tlc_voice_*`).
-
-The menu's scrolling has its own model, `models/FingerScroll.tla`, with a trace check: `tests/voice/finger_walk.cpp`
-walks the real `FingerScroll` and the model checks each walk.
 
 Tests:
 

@@ -205,13 +205,10 @@ voice, `ui.voice` (`listening` and `speaking`, booleans). On a phone the stock `
   `focus_prompt` is true by default on the iPad and the desktop.
 - `voice_mic`: boolean, default false; the menu's microphone and the prompt's dictation microphone are shown only when
   it is true.
-- `voice_reply`: `"text"`, `"voice"` or `"both"` (default `"both"`), how replies to a prompt spoken on the menu come
-  back. The stock policy answers `"voice"` on the menu (from the setting `menu_reply`) and `"text"` in a tab, where the
-  microphone is dictation and nothing is spoken. Any other value is refused.
 - `voice_names`: an object of at most 256 AI names (1 to 64 bytes each), each a list of at most 16 more spoken forms
   of that name (1 to 128 bytes each).
 - `tab_titles`: a list of at most 1024 strings of up to 512 bytes, one per tab in the strip's order: the row titles
-  and the title beside "< AIs". The stock policy gives the Mac's labels (an AI's name capitalized, other kinds through
+  and the title of an AI's page. The stock policy gives the Mac's labels (an AI's name capitalized, other kinds through
   `tab_labels`).
 - `menu_tabs`: a list of at most 1024 tab indexes (whole numbers from 0 to 1023), the menu's rows in order. An index
   past the last tab is skipped. Absent, every tab is listed in the strip's order. The stock policy sorts by kind in the
@@ -232,11 +229,11 @@ A refused window answer is logged with its reason (`nexus: window application: .
 stock policy's answer. The client config's `phone` object sets the stock policy's choices:
 
 ```json
-"phone": {"voice": true, "menu_reply": "voice", "voice_names": {"zhi": ["zhi ya wen"]}}
+"phone": {"voice": true, "voice_names": {"zhi": ["zhi ya wen"]}}
 ```
 
-`voice` (default true) sets `voice_mic`; `"voice": false` leaves both microphones out. `menu_reply` (default `"voice"`)
-sets `voice_reply` on the menu. `menu_kinds`, a list of tab kinds, orders the menu's rows; by default the dashboard
+`voice` (default true) sets `voice_mic`; `"voice": false` leaves both microphones out. How replies come back is
+no setting: spoken on the menu, text in an AI's page. `menu_kinds`, a list of tab kinds, orders the menu's rows; by default the dashboard
 (`sprint`), then AI tabs, then `terminal`. `voice_names` passes through as `voice_names`. How the menu and voice work is in [voice.md](voice.md).
 
 ## Fable limit choices
