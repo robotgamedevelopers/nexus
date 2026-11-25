@@ -207,6 +207,10 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
     a.hitch.begin();
     a.keyboardCover = keyboardCover(*f);
+    // An iPad's regular width takes a narrower prompt and column than the policy's (style.h kRegularWidthColumn).
+    PrSurface surface{};
+    a.view.columnScale = prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok &&
+        regularWidth(surface) ? style::kRegularWidthColumn : 1;
     a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
 }
 

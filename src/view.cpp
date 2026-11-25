@@ -2782,7 +2782,10 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     Look& look = *view.look;
     const bool scaleChanged = look.textSteps != view.askedTextSteps;
     const bool opacityChanged = look.overlay && look.overlayOpacity != view.windowApp.overlayOpacity;
-    const bool cardChanged = look.messageCard != view.windowApp.messageCard || look.tabs != view.windowApp.surface.tabs || look.prompt != view.windowApp.surface.prompt;
+    // The prompt as the policy gives it, at the share of its width this screen takes (View::columnScale).
+    PromptStyle askedPrompt = view.windowApp.surface.prompt;
+    askedPrompt.width *= view.columnScale;
+    const bool cardChanged = look.messageCard != view.windowApp.messageCard || look.tabs != view.windowApp.surface.tabs || look.prompt != askedPrompt;
     const bool transcriptChanged = look.transcriptStyle != view.windowApp.transcriptStyle;
     if (!scaleChanged && !opacityChanged && !cardChanged && !transcriptChanged) return false;
     if (scaleChanged || cardChanged) view.tabWidths.clear();
@@ -2793,12 +2796,12 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
             look.transcriptStyle.listItemGapLines != view.windowApp.transcriptStyle.listItemGapLines ||
             look.transcriptStyle.listGap != view.windowApp.transcriptStyle.listGap ||
             look.transcriptStyle.replyWidth != view.windowApp.transcriptStyle.replyWidth ||
-            look.prompt.width != view.windowApp.surface.prompt.width)
+            look.prompt.width != askedPrompt.width)
             view.items.clear();
         look.transcriptStyle = view.windowApp.transcriptStyle;
         look.messageCard = view.windowApp.messageCard;
         look.tabs = view.windowApp.surface.tabs;
-        look.prompt = view.windowApp.surface.prompt;
+        look.prompt = askedPrompt;
         if (opacityChanged) look.overlayOpacity = view.windowApp.overlayOpacity;
         prUiForget(kit->ui, &look);
     }

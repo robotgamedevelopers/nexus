@@ -203,6 +203,9 @@ struct View {
     std::function<std::string(const std::string& service, const std::string& text)> requestService;
     std::string extensionProblem;
     int askedTextSteps = 0;                     // the text scale the keys asked for, applied at the next frame's start
+    // The share of the policy's prompt width the prompt box and the transcript's column take, applied at the next
+    // frame's start: 1 on a desktop, style::kRegularWidthColumn on an iPad (main_ios.cpp).
+    float columnScale = 1;
     std::string notice;                         // shown in place of the transcript when there are no tabs
     std::function<void()> hide;                 // Escape: hides the overlay (overlay.h escape); unset when
                                                 // windowed, where Escape does nothing

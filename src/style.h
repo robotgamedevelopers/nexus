@@ -75,6 +75,11 @@ constexpr int kDefaultTextSteps = -2;
 #endif
 static_assert(kDefaultTextSteps >= -kTextStepsDown && kDefaultTextSteps <= kTextStepsUp);
 
+// On a regular-width screen without a desktop's window (an iPad), the prompt box and the transcript's column stand at
+// this share of the policy's prompt width (prompt_style.width), centred where they stood, so that their edges still
+// line up: 10% narrower, at the owner's ask. View::columnScale carries it; main_ios.cpp sets it from the size class.
+constexpr float kRegularWidthColumn = 0.9f;
+
 // Widths, as percentages of the window width.
 constexpr float kColumnPercent = 80;          // transcript (the reference's 54.1% widened at the owner's ask)
 constexpr float kPromptPercent = 82;          // prompt box, a little wider than the column, as in the reference
