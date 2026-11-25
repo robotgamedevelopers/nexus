@@ -30,7 +30,7 @@ const char* const kIgnore =
     "*\n"
     "!.gitignore\n"
     "!accounts.json\n"
-    "!friends.json\n";
+    "!ais.json\n";
 
 std::int64_t steadyMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -325,12 +325,12 @@ bool ConfigRepo::open(std::string* why) {
     std::vector<std::string> errors;
     std::string a;
     std::string f;
-    if (readFile(accountsPath(), &a, why) && readFile(friendsPath(), &f, why) && (!a.empty() || !f.empty()) &&
+    if (readFile(accountsPath(), &a, why) && readFile(aisPath(), &f, why) && (!a.empty() || !f.empty()) &&
             working(&found, &errors)) {
         files.push_back("accounts.json");
-        files.push_back("friends.json");
+        files.push_back("ais.json");
         if (!writeAtomic(accountsPath(), accounts::accountsText(found), why) ||
-                !writeAtomic(friendsPath(), accounts::friendsText(found), why)) {
+                !writeAtomic(aisPath(), accounts::aisText(found), why)) {
             return false;
         }
     }
@@ -353,7 +353,7 @@ bool ConfigRepo::readAt(const std::string& rev, accounts::Registry* out, std::ve
                         bool* upgraded) {
     const std::size_t had = errors->size();   // the caller's, not this read's
     std::string texts[2];
-    const char* names[2] = {"accounts.json", "friends.json"};
+    const char* names[2] = {"accounts.json", "ais.json"};
     for (int i = 0; i < 2; ++i) {
         std::string why;
         if (rev.empty()) {
@@ -375,17 +375,17 @@ bool ConfigRepo::readAt(const std::string& rev, accounts::Registry* out, std::ve
         texts[i] = g.out;
     }
     const std::string where = rev.empty() ? dir() + "/" : rev + ":";
-    // The working files are read against what HEAD holds: a friend added by hand there, not yet committed, reads
-    // limited even in a version 1 file (accounts::readFriends). HEAD unreadable: every friend reads as new.
+    // The working files are read against what HEAD holds: an AI added by hand there, not yet committed, reads
+    // limited even in a version 1 file (accounts::readAIs). HEAD unreadable: every AI reads as new.
     accounts::Registry head;
     if (rev.empty()) {
         std::vector<std::string> ignored;
         if (!readAt("HEAD", &head, &ignored, nullptr)) {
-            head.friends.clear();
+            head.ais.clear();
         }
     }
     accounts::Read ra = accounts::readAccounts(texts[0], where + names[0], out);
-    accounts::Read rf = accounts::readFriends(texts[1], where + names[1], out, rev.empty() ? &head : nullptr);
+    accounts::Read rf = accounts::readAIs(texts[1], where + names[1], out, rev.empty() ? &head : nullptr);
     errors->insert(errors->end(), ra.errors.begin(), ra.errors.end());
     errors->insert(errors->end(), rf.errors.begin(), rf.errors.end());
     if (ra.ok && rf.ok) {
@@ -417,7 +417,7 @@ bool ConfigRepo::committed(accounts::Registry* out, std::vector<std::string>* re
         } else {
             const bool ok = keep(*out, "upgrade: the files written in version " + std::to_string(accounts::kVersion) +
                                  ", the person's entries kept as they were", &why);
-            report->push_back(ok ? "upgraded accounts.json and friends.json to version " +
+            report->push_back(ok ? "upgraded accounts.json and ais.json to version " +
                               std::to_string(accounts::kVersion) : "the upgrade was not committed: " + why);
         }
     }
@@ -451,13 +451,13 @@ bool ConfigRepo::restoring(const std::string& commit, accounts::Registry* out, s
 }
 
 bool ConfigRepo::pending(std::string* why) {
-    const GitResult g = runGit(dir(), {"status", "--porcelain", "--", "accounts.json", "friends.json"});
+    const GitResult g = runGit(dir(), {"status", "--porcelain", "--", "accounts.json", "ais.json"});
     if (g.status != 0) {
         *why = gitWhy("reading the config repository's status", g);
         return true;
     }
     if (!trimmed(g.out).empty()) {
-        *why = "accounts.json or friends.json in " + dir() + " holds hand edits not yet applied, so nothing was "
+        *why = "accounts.json or ais.json in " + dir() + " holds hand edits not yet applied, so nothing was "
             "written over them: run `nexus-server config check`, then `nexus-server config reload` to apply them (or "
             "`git -C " + dir() + " checkout -- .` to drop them)";
         return true;
@@ -477,7 +477,7 @@ bool ConfigRepo::keep(const accounts::Registry& registry, const std::string& mes
         return false;
     }
     // What the files hold now (the person's edit, while a reload applies it): put back if anything below fails.
-    const std::string paths[2] = {accountsPath(), friendsPath()};
+    const std::string paths[2] = {accountsPath(), aisPath()};
     std::string before[2];
     bool existed[2] = {false, false};
     for (int i = 0; i < 2; ++i) {
@@ -494,29 +494,29 @@ bool ConfigRepo::keep(const accounts::Registry& registry, const std::string& mes
                 ::unlink(paths[i].c_str());
             }
         }
-        runGit(dir(), {"reset", "-q", "--", "accounts.json", "friends.json"});
+        runGit(dir(), {"reset", "-q", "--", "accounts.json", "ais.json"});
         *why = failed + "; the files and the index were put back as they were, and nothing was committed";
         return false;
     };
     std::string failed;
     if (!writeAtomic(paths[0], accounts::accountsText(registry), &failed) ||
-            !writeAtomic(paths[1], accounts::friendsText(registry), &failed)) {
+            !writeAtomic(paths[1], accounts::aisText(registry), &failed)) {
         return undo(failed);
     }
-    GitResult g = runGit(dir(), {"add", "--", "accounts.json", "friends.json"});
+    GitResult g = runGit(dir(), {"add", "--", "accounts.json", "ais.json"});
     if (g.status != 0) {
-        return undo(gitWhy("staging accounts.json and friends.json", g));
+        return undo(gitWhy("staging accounts.json and ais.json", g));
     }
-    g = runGit(dir(), {"diff", "--cached", "--quiet", "--", "accounts.json", "friends.json"});
+    g = runGit(dir(), {"diff", "--cached", "--quiet", "--", "accounts.json", "ais.json"});
     if (g.status == 0) {
         return true;    // the files already said this
     }
     if (g.status != 1) {
-        return undo(gitWhy("comparing accounts.json and friends.json with HEAD", g));
+        return undo(gitWhy("comparing accounts.json and ais.json with HEAD", g));
     }
-    g = runGit(dir(), {"commit", "-q", "-m", message, "--", "accounts.json", "friends.json"});
+    g = runGit(dir(), {"commit", "-q", "-m", message, "--", "accounts.json", "ais.json"});
     if (g.status != 0) {
-        return undo(gitWhy("committing accounts.json and friends.json", g));
+        return undo(gitWhy("committing accounts.json and ais.json", g));
     }
     std::string url;
     std::string ignored;
@@ -581,9 +581,9 @@ bool ConfigRepo::onlyKnownHistory(std::string* why) {
             continue;
         }
         *why = "the history of " + dir() + " holds " + line + ", which is not one of its files (.gitignore, "
-            "accounts.json, friends.json), so nothing is pushed: a push would publish it, whatever the index says now. "
+            "accounts.json, ais.json), so nothing is pushed: a push would publish it, whatever the index says now. "
             "Make a new repository (move " + dir() + " aside, start nexus-server, which makes a new one, and copy "
-            "accounts.json and friends.json into it, then `nexus-server config reload`), or rewrite this one's history "
+            "accounts.json and ais.json into it, then `nexus-server config reload`), or rewrite this one's history "
             "so that no commit holds " + line + "; if it was a credential, replace that credential";
         return false;
     }
@@ -840,8 +840,8 @@ bool ConfigRepo::clearRemote(std::string* why) {
 
 std::string configBrief(const std::string& serverDir) {
     const std::string dir = serverDir + "/nexus-config";
-    return "nexus-server's accounts and friends are two JSON files you may edit for the person: " + dir +
-        "/accounts.json and " + dir + "/friends.json (schema: docs/accounts.md in the nexus repository). They are a "
+    return "nexus-server's accounts and AIs are two JSON files you may edit for the person: " + dir +
+        "/accounts.json and " + dir + "/ais.json (schema: docs/accounts.md in the nexus repository). They are a "
         "git repository; never put a credential in them. After an edit run `nexus-server config check` (changes "
         "nothing, prints every error with file, line and fix), then `nexus-server config reload` (applies them and "
         "prints what it applied or refused). `nexus-server config history` lists the versions, `nexus-server config "

@@ -48,7 +48,7 @@ void check(bool ok, const char* what, int line) {
 constexpr auto kDeadline = std::chrono::seconds(20);
 
 struct Harness {
-    Model model{std::vector<FriendInfo>{FriendInfo{"alex", "m1"}}};
+    Model model{std::vector<AIInfo>{AIInfo{"alex", "m1"}}};
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     PrFontSet* fonts = prFontSetCreate(nullptr);
     PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
@@ -172,7 +172,7 @@ void aShellRunsAndItsTabClosesWhenItExits() {
     if (!closed)
         std::fprintf(stderr, "  screen:\n%s\n", h.terminals->text(id).c_str());
     CHECK(closed);
-    CHECK(h.model.active() == 0 && h.model.tab(0).kind == TabKind::Friend);
+    CHECK(h.model.active() == 0 && h.model.tab(0).kind == TabKind::AI);
     CHECK(h.terminals->text(id).empty());   // destroyed
 }
 

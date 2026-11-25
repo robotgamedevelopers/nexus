@@ -1,4 +1,4 @@
-// The accounts and friends (registry.h): their rules, their files' text, and the accounts the server picks.
+// The accounts and AIs (registry.h): their rules, their files' text, and the accounts the server picks.
 
 #include "accounts/registry.h"
 #include "policy/host.h"
@@ -175,7 +175,7 @@ PrJsonValueIndex top(Reader& r, const std::string& list, const std::string& exam
         } else {
             r.read.version = static_cast<int>(n);
             // The upgrades, in the order of the versions, are in the fields' defaults: version 1 had no "billing"
-            // (every account a subscription's) and no "limit" (every friend unlimited), and its file is read so.
+            // (every account a subscription's) and no "limit" (every AI unlimited), and its file is read so.
             r.read.upgraded = r.read.version < kVersion;
         }
     }
@@ -237,8 +237,8 @@ const char* const kMachineRule = "1 to 253 letters, digits, '-' or '.', not star
 const char* const kDirRule = "starting with '/', printable, at most 4096 bytes, as \"/Users/me/work\"";
 const char* const kAccountsExample =
     "{ \"version\": 2, \"accounts\": [ { \"name\": \"work\", \"provider\": \"claude\", \"billing\": \"subscription\" } ] }";
-const char* const kFriendsExample =
-    "{ \"version\": 2, \"friends\": [ { \"name\": \"claude\", \"limit\": true, \"accounts\": [\"work\"], \"default\": "
+const char* const kAIsExample =
+    "{ \"version\": 2, \"ais\": [ { \"name\": \"claude\", \"limit\": true, \"accounts\": [\"work\"], \"default\": "
     "\"work\" } ] }";
 
 bool contains(const std::vector<std::string>& v, std::string_view x) {
@@ -246,7 +246,7 @@ bool contains(const std::vector<std::string>& v, std::string_view x) {
 }
 
 // A "limit_keeps_out" directory: an absolute directory (isDir), never the root itself, which would keep a limited
-// friend out of its own directory too.
+// AI out of its own directory too.
 bool isKeptOut(std::string_view dir) {
     return isDir(dir) && dir != "/";
 }
@@ -263,8 +263,8 @@ const Account* Registry::account(std::string_view name) const {
     return nullptr;
 }
 
-const Friend* Registry::friendNamed(std::string_view name) const {
-    for (const Friend& f : friends) {
+const AI* Registry::aiNamed(std::string_view name) const {
+    for (const AI& f : ais) {
         if (f.name == name) {
             return &f;
         }
@@ -272,8 +272,8 @@ const Friend* Registry::friendNamed(std::string_view name) const {
     return nullptr;
 }
 
-Friend* Registry::friendNamed(std::string_view name) {
-    for (Friend& f : friends) {
+AI* Registry::aiNamed(std::string_view name) {
+    for (AI& f : ais) {
         if (f.name == name) {
             return &f;
         }
@@ -281,7 +281,7 @@ Friend* Registry::friendNamed(std::string_view name) {
     return nullptr;
 }
 
-const Instance* Friend::instance(std::string_view instanceName) const {
+const Instance* AI::instance(std::string_view instanceName) const {
     for (const Instance& i : instances) {
         if (i.name == instanceName) {
             return &i;
@@ -290,8 +290,8 @@ const Instance* Friend::instance(std::string_view instanceName) const {
     return nullptr;
 }
 
-bool Registry::linked(std::string_view friendName, std::string_view account) const {
-    const Friend* f = friendNamed(friendName);
+bool Registry::linked(std::string_view aiName, std::string_view account) const {
+    const AI* f = aiNamed(aiName);
     return f != nullptr && contains(f->accounts, account);
 }
 
@@ -358,44 +358,44 @@ std::vector<std::string> problems(const Registry& r) {
             out.push_back("accounts.json: the account \"" + a.name + "\" is there twice; keep one");
         }
     }
-    std::set<std::string> friends;
-    for (const Friend& f : r.friends) {
+    std::set<std::string> ais;
+    for (const AI& f : r.ais) {
         if (!isName(f.name)) {
-            out.push_back("friends.json: the friend \"" + f.name + "\" is not a name (" + kNameRule + "); rename it");
+            out.push_back("ais.json: the AI \"" + f.name + "\" is not a name (" + kNameRule + "); rename it");
         }
-        if (!friends.insert(f.name).second) {
-            out.push_back("friends.json: the friend \"" + f.name + "\" is there twice; keep one");
+        if (!ais.insert(f.name).second) {
+            out.push_back("ais.json: the AI \"" + f.name + "\" is there twice; keep one");
         }
         std::set<std::string> links;
         for (const std::string& a : f.accounts) {
             if (r.account(a) == nullptr) {
-                out.push_back("friends.json: the friend \"" + f.name + "\" links to the account \"" + a + "\", which " +
+                out.push_back("ais.json: the AI \"" + f.name + "\" links to the account \"" + a + "\", which " +
                               "accounts.json does not set up; add the account there, or take it out of \"" + f.name +
                               "\"'s \"accounts\"");
             }
             if (!links.insert(a).second) {
-                out.push_back("friends.json: the friend \"" + f.name + "\" links to the account \"" + a + "\" twice; " +
+                out.push_back("ais.json: the AI \"" + f.name + "\" links to the account \"" + a + "\" twice; " +
                               "keep one");
             }
         }
-        // A session on an account billed at API rate is always limited: so its friend may not say otherwise.
+        // A session on an account billed at API rate is always limited: so its AI may not say otherwise.
         for (const std::string& a : f.accounts) {
             const Account* acc = r.account(a);
             if (!f.limit && acc != nullptr && acc->billing == Billing::Api) {
-                out.push_back("friends.json: the friend \"" + f.name + "\" has \"limit\": false and links to the "
+                out.push_back("ais.json: the AI \"" + f.name + "\" has \"limit\": false and links to the "
                               "account \"" + a + "\", which accounts.json bills at API rate (\"billing\": \"api\"); a "
-                              "friend on an API-billed account is always limited to its directory, so set \"" +
+                              "AI on an API-billed account is always limited to its directory, so set \"" +
                               f.name + "\"'s \"limit\" to true, or take \"" + a + "\" out of its \"accounts\"");
             }
         }
         if (!f.preferred.empty() && !contains(f.accounts, f.preferred)) {
-            out.push_back("friends.json: the friend \"" + f.name + "\"'s \"default\" is \"" + f.preferred + "\", " +
+            out.push_back("ais.json: the AI \"" + f.name + "\"'s \"default\" is \"" + f.preferred + "\", " +
                           "which is not in its \"accounts\"; add it to \"accounts\", or set \"default\" to one of " +
                           "them or to null");
         }
         std::set<std::string> instances;
         for (const Instance& i : f.instances) {
-            const std::string named = "friends.json: the friend \"" + f.name + "\"'s instance \"" + i.name + "\"";
+            const std::string named = "ais.json: the AI \"" + f.name + "\"'s instance \"" + i.name + "\"";
             if (!isName(i.name)) {
                 out.push_back(named + " is not a name (" + kNameRule + "); rename it");
             }
@@ -415,11 +415,11 @@ std::vector<std::string> problems(const Registry& r) {
     std::set<std::string> kept;
     for (const std::string& d : r.keepsOut) {
         if (!isKeptOut(d)) {
-            out.push_back("friends.json: \"limit_keeps_out\" holds \"" + d + "\", which is not " + kKeptOutRule +
+            out.push_back("ais.json: \"limit_keeps_out\" holds \"" + d + "\", which is not " + kKeptOutRule +
                           "; correct it, or take it out");
         }
         if (!kept.insert(d).second) {
-            out.push_back("friends.json: \"limit_keeps_out\" holds \"" + d + "\" twice; keep one");
+            out.push_back("ais.json: \"limit_keeps_out\" holds \"" + d + "\" twice; keep one");
         }
     }
     return out;
@@ -450,7 +450,7 @@ std::string accountsText(const Registry& r) {
     return s;
 }
 
-std::string friendsText(const Registry& r) {
+std::string aisText(const Registry& r) {
     std::string s = "{\n  \"version\": " + std::to_string(kVersion) + ",\n";
     // Written only when it holds a directory, so a file without the field is saved as it was.
     if (!r.keepsOut.empty()) {
@@ -460,9 +460,9 @@ std::string friendsText(const Registry& r) {
         }
         s += "\n  ],\n";
     }
-    s += "  \"friends\": [";
-    for (std::size_t i = 0; i < r.friends.size(); ++i) {
-        const Friend& f = r.friends[i];
+    s += "  \"ais\": [";
+    for (std::size_t i = 0; i < r.ais.size(); ++i) {
+        const AI& f = r.ais[i];
         s += std::string(i == 0 ? "\n" : ",\n") + "    {\n      \"name\": " + quoted(f.name) +
              ",\n      \"limit\": " + (f.limit ? "true" : "false") + ",\n      \"accounts\": [";
         for (std::size_t k = 0; k < f.accounts.size(); ++k) {
@@ -479,7 +479,7 @@ std::string friendsText(const Registry& r) {
         }
         s += f.instances.empty() ? "]\n    }" : "\n      ]\n    }";
     }
-    s += r.friends.empty() ? "]\n}\n" : "\n  ]\n}\n";
+    s += r.ais.empty() ? "]\n}\n" : "\n  ]\n}\n";
     return s;
 }
 
@@ -551,8 +551,8 @@ Read readAccounts(std::string_view text, const std::string& path, Registry* regi
     return r.read;
 }
 
-Read readFriends(std::string_view text, const std::string& path, Registry* registry, const Registry* committed) {
-    registry->friends.clear();
+Read readAIs(std::string_view text, const std::string& path, Registry* registry, const Registry* committed) {
+    registry->ais.clear();
     registry->keepsOut.clear();
     Reader r(text, path);
     if (text.find_first_not_of(" \t\r\n") == std::string_view::npos) {
@@ -563,11 +563,11 @@ Read readFriends(std::string_view text, const std::string& path, Registry* regis
     if (!r.parse()) {
         return r.read;
     }
-    const PrJsonValueIndex list = top(r, "friends", kFriendsExample, {"limit_keeps_out"});
+    const PrJsonValueIndex list = top(r, "ais", kAIsExample, {"limit_keeps_out"});
     if (list == kPrJsonMissing) {
         return r.read;
     }
-    // "limit_keeps_out": absent is none. Each a directory a limited friend's AI is kept out of (isKeptOut).
+    // "limit_keeps_out": absent is none. Each a directory a limited AI's AI is kept out of (isKeptOut).
     const PrJsonValueIndex ko = prJsonMember(r.doc(), 0, pr("limit_keeps_out"));
     if (ko != kPrJsonMissing && prJsonKind(r.doc(), ko) != PrJsonKind_Array) {
         r.errorAt(ko, "\"limit_keeps_out\" is " + std::string(kindName(prJsonKind(r.doc(), ko))) + ", not a list",
@@ -595,27 +595,27 @@ Read readFriends(std::string_view text, const std::string& path, Registry* regis
     for (PrJsonValueIndex e = prJsonFirst(r.doc(), list); e != kPrJsonMissing; e = prJsonAfter(r.doc(), list, e)) {
         ++count;
     }
-    if (count > kMaxFriends) {
-        r.errorAt(list, "\"friends\" holds " + std::to_string(count) + " friends, and nexus-server takes at most " +
-                  std::to_string(kMaxFriends), "take friends out until it holds " + std::to_string(kMaxFriends) +
+    if (count > kMaxAIs) {
+        r.errorAt(list, "\"ais\" holds " + std::to_string(count) + " AIs, and nexus-server takes at most " +
+                  std::to_string(kMaxAIs), "take AIs out until it holds " + std::to_string(kMaxAIs) +
                   " or fewer; nothing was changed");
         return r.read;
     }
     for (PrJsonValueIndex e = prJsonFirst(r.doc(), list); e != kPrJsonMissing; e = prJsonAfter(r.doc(), list, e)) {
         if (prJsonKind(r.doc(), e) != PrJsonKind_Object) {
-            r.errorAt(e, "a friend is " + std::string(kindName(prJsonKind(r.doc(), e))) + ", not an object",
-                      std::string("write each friend as ") +
+            r.errorAt(e, "an AI is " + std::string(kindName(prJsonKind(r.doc(), e))) + ", not an object",
+                      std::string("write each AI as ") +
                       "{ \"name\": \"claude\", \"accounts\": [\"work\"], \"default\": \"work\" }");
             continue;
         }
-        Friend f;
-        bool ok = onlyKeys(r, e, {"name", "limit", "accounts", "default", "instances"}, "a friend");
-        ok = stringField(r, e, "name", "a friend", true, false, &f.name) && ok;
-        const std::string named = f.name.empty() ? std::string("a friend") : "the friend \"" + f.name + "\"";
-        // Absent: limited, for a friend written since the field (version 2); not limited in a version 1 file, whose
-        // friends ran unlimited, so that nothing changes under a person until the file says so. A friend the committed
+        AI f;
+        bool ok = onlyKeys(r, e, {"name", "limit", "accounts", "default", "instances"}, "an AI");
+        ok = stringField(r, e, "name", "an AI", true, false, &f.name) && ok;
+        const std::string named = f.name.empty() ? std::string("an AI") : "the AI \"" + f.name + "\"";
+        // Absent: limited, for an AI written since the field (version 2); not limited in a version 1 file, whose
+        // AIs ran unlimited, so that nothing changes under a person until the file says so. An AI the committed
         // files do not hold never ran: limited, whatever the file's version.
-        const bool known = committed == nullptr || committed->friendNamed(f.name) != nullptr;
+        const bool known = committed == nullptr || committed->aiNamed(f.name) != nullptr;
         ok = boolField(r, e, "limit", named, r.read.version >= 2 || !known, &f.limit) && ok;
         ok = stringField(r, e, "default", named, false, true, &f.preferred) && ok;
         const PrJsonValueIndex l = prJsonMember(r.doc(), e, pr("accounts"));
@@ -681,16 +681,16 @@ Read readFriends(std::string_view text, const std::string& path, Registry* regis
             ok = false;
         }
         if (ok) {
-            registry->friends.push_back(std::move(f));
+            registry->ais.push_back(std::move(f));
         }
     }
     r.read.ok = r.read.errors.empty();
     return r.read;
 }
 
-std::string nextUp(const Registry& registry, const std::set<std::string>& up, std::string_view friendName,
+std::string nextUp(const Registry& registry, const std::set<std::string>& up, std::string_view aiName,
                    std::string_view current) {
-    const Friend* f = registry.friendNamed(friendName);
+    const AI* f = registry.aiNamed(aiName);
     if (f == nullptr || f->accounts.empty()) {
         return std::string();
     }
@@ -707,8 +707,8 @@ std::string nextUp(const Registry& registry, const std::set<std::string>& up, st
     return selected;
 }
 
-std::string landing(const Registry& registry, const std::set<std::string>& up, std::string_view friendName) {
-    const Friend* f = registry.friendNamed(friendName);
+std::string landing(const Registry& registry, const std::set<std::string>& up, std::string_view aiName) {
+    const AI* f = registry.aiNamed(aiName);
     if (f == nullptr) {
         return std::string();
     }
@@ -727,11 +727,11 @@ std::string_view billingName(Billing billing) {
     return billing == Billing::Api ? "api" : "subscription";
 }
 
-bool limitedFor(const Registry* registry, std::string_view friendName, std::string_view account) {
+bool limitedFor(const Registry* registry, std::string_view aiName, std::string_view account) {
     if (registry == nullptr) {
         return true;
     }
-    const Friend* f = registry->friendNamed(friendName);
+    const AI* f = registry->aiNamed(aiName);
     if (f == nullptr || f->limit) {
         return true;
     }
@@ -781,48 +781,48 @@ std::vector<std::string> changes(const Registry& before, const Registry& after) 
         }
         return "[" + s + "]";
     };
-    for (const Friend& f : after.friends) {
-        const Friend* was = before.friendNamed(f.name);
+    for (const AI& f : after.ais) {
+        const AI* was = before.aiNamed(f.name);
         if (was == nullptr) {
             std::vector<std::string> names;
             for (const Instance& i : f.instances) {
                 names.push_back(i.name + " (" + i.machine + " " + i.dir + ")");
             }
-            out.push_back("friend " + f.name + " set up, accounts " + list(f.accounts) + ", default " +
+            out.push_back("AI " + f.name + " set up, accounts " + list(f.accounts) + ", default " +
                           (f.preferred.empty() ? std::string("none") : f.preferred) + ", instances " + list(names) +
                           ", limit " + (f.limit ? "true" : "false"));
             continue;
         }
         if (was->limit != f.limit) {
-            out.push_back("friend " + f.name + "'s limit " + (was->limit ? "true" : "false") + " -> " +
+            out.push_back("AI " + f.name + "'s limit " + (was->limit ? "true" : "false") + " -> " +
                           (f.limit ? "true" : "false"));
         }
         if (was->accounts != f.accounts) {
-            out.push_back("friend " + f.name + "'s accounts " + list(was->accounts) + " -> " + list(f.accounts));
+            out.push_back("AI " + f.name + "'s accounts " + list(was->accounts) + " -> " + list(f.accounts));
         }
         if (was->preferred != f.preferred) {
-            out.push_back("friend " + f.name + "'s default " + (was->preferred.empty() ? std::string("none") :
+            out.push_back("AI " + f.name + "'s default " + (was->preferred.empty() ? std::string("none") :
                           was->preferred) + " -> " + (f.preferred.empty() ? std::string("none") : f.preferred));
         }
         for (const Instance& i : f.instances) {
             const Instance* old = was->instance(i.name);
             if (old == nullptr) {
-                out.push_back("friend " + f.name + "'s instance " + i.name + " set up, on " + i.machine + " in " +
+                out.push_back("AI " + f.name + "'s instance " + i.name + " set up, on " + i.machine + " in " +
                               i.dir);
             } else if (*old != i) {
-                out.push_back("friend " + f.name + "'s instance " + i.name + " moved: " + old->machine + " " +
+                out.push_back("AI " + f.name + "'s instance " + i.name + " moved: " + old->machine + " " +
                               old->dir + " -> " + i.machine + " " + i.dir);
             }
         }
         for (const Instance& i : was->instances) {
             if (f.instance(i.name) == nullptr) {
-                out.push_back("friend " + f.name + "'s instance " + i.name + " removed");
+                out.push_back("AI " + f.name + "'s instance " + i.name + " removed");
             }
         }
     }
-    for (const Friend& f : before.friends) {
-        if (after.friendNamed(f.name) == nullptr) {
-            out.push_back("friend " + f.name + " removed");
+    for (const AI& f : before.ais) {
+        if (after.aiNamed(f.name) == nullptr) {
+            out.push_back("AI " + f.name + " removed");
         }
     }
     if (before.keepsOut != after.keepsOut) {

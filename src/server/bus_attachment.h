@@ -10,7 +10,7 @@ inline constexpr std::size_t kBusAttachmentBytes = 32 * 1024 * 1024; // same lim
 
 struct BusBody {
     std::string displayBody; // synced to windows as the body of the sender's bubble
-    std::string promptBody;  // delivered to the friend (the relative incoming path for a file)
+    std::string promptBody;  // delivered to the AI (the relative incoming path for a file)
 };
 
 struct BusMessage;

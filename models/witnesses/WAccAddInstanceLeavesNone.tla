@@ -1,5 +1,5 @@
 ------------------------------ MODULE WAccAddInstanceLeavesNone ------------------------------
-\* Reversed witness: a friend's first instance added by an edit leaves its sessions on none, where the drivers file's
+\* Reversed witness: an AI's first instance added by an edit leaves its sessions on none, where the drivers file's
 \* directory would still be used. InstanceHeld must reject it.
 EXTENDS MCAccounts
 

@@ -6,15 +6,15 @@
 // no server outlives the tests. The session key is never printed.
 //
 //   link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver>
-//       the window's own link thread (link/client.h) through ssh <host>: a prompt sent to one friend comes back with
-//       its reply from the friend's driver (the fake, named in <dir>/drivers), one queued to another shows queued;
+//       the window's own link thread (link/client.h) through ssh <host>: a prompt sent to one AI comes back with
+//       its reply from the AI's driver (the fake, named in <dir>/drivers), one queued to another shows queued;
 //       then the same from a window that states no state format (one from before formats), read in format 1;
 //       then the link shuts down and the server ends the session
 //   link_e2e <nexus-server> <dir> outage
 //       through a relay on loopback that the test can cut: prompts sent while the network is down for 8 s arrive once
 //       each when it comes back, the window says it has no contact while it is down, and converges after
 //   link_e2e <nexus-server> <dir> soak <clients> <prompts>
-//       several windows at once, prompts from each to random friends: every window ends holding the server's state,
+//       several windows at once, prompts from each to random ais: every window ends holding the server's state,
 //       each prompt applied once, each window's prompts in its order, and every window's transcripts agree
 //   link_e2e <nexus-server> <dir> restart
 //       the server started by the test and killed with SIGKILL while a window is connected, then started again: a new
@@ -30,10 +30,10 @@
 //       answers the request it sees with a fake value over the real link, the value lands in its file (0600) and,
 //       the server stopped, no run, hex, base64 or length of it is in any other file the run left (server.log with
 //       the server's and the driver's standard error, the driver's environment, the store) or the window's state
-//   link_e2e <nexus-server> <dir> friends <nexus-fake-driver>
-//       a fresh server under a HOME of its own in <dir> with one friend, ada, on the fake driver: a window that knows no
-//       friend shows ada's tab alone, from the server's list, and a prompt typed there starts ada's session and comes
-//       back answered; a friend added to friends.json and reloaded appears in the open window, and goes once taken out
+//   link_e2e <nexus-server> <dir> AIs <nexus-fake-driver>
+//       a fresh server under a HOME of its own in <dir> with one AI, ada, on the fake driver: a window that knows no
+//       AI shows ada's tab alone, from the server's list, and a prompt typed there starts ada's session and comes
+//       back answered; an AI added to ais.json and reloaded appears in the open window, and goes once taken out
 //   link_e2e <nexus-server> <dir> signin <fake claude> [leaky]
 //       in-app sign-in through the real server with the FAKE claude and two windows: which link gets the URL, the
 //       flow let go of when its window's link ends and taken over by the other, the forwarded callback replayed, the
@@ -84,7 +84,7 @@
 #include "link/mosh_link.h"
 #include "model.h"
 #include "sync/client.h"
-#include "sync/friend_strip.h"
+#include "sync/ai_strip.h"
 #include "sync/hub.h"
 #include "server/sha256.h"
 #include "sync/mirror.h"
@@ -106,18 +106,18 @@ int failures = 0;
         }                                                                                 \
     } while (0)
 
-const std::vector<FriendInfo> kFriends = {{"ada", "m1"}, {"bo", "m2"}, {"cy", "m3"}};
+const std::vector<AIInfo> kAIs = {{"ada", "m1"}, {"bo", "m2"}, {"cy", "m3"}};
 
-// Each window first sends an ensure for every friend, in the friends' order, as the app does: the server makes a
-// session for each friend that has none, minting ids from 1, so on a fresh server ada's is 1, bo's 2 and cy's 3,
+// Each window first sends an ensure for every AI, in the AIs' order, as the app does: the server makes a
+// session for each AI that has none, minting ids from 1, so on a fresh server ada's is 1, bo's 2 and cy's 3,
 // whichever window's ensure arrives first (each window's arrive in order). The runs check it against the state.
 sync::SessionId sid(const std::string& name) {
-    for (std::size_t i = 0; i < kFriends.size(); ++i) {
-        if (kFriends[i].name == name) {
+    for (std::size_t i = 0; i < kAIs.size(); ++i) {
+        if (kAIs[i].name == name) {
             return i + 1;
         }
     }
-    std::fprintf(stderr, "link_e2e: no friend %s\n", name.c_str());
+    std::fprintf(stderr, "link_e2e: no AI %s\n", name.c_str());
     std::exit(1);
 }
 
@@ -131,24 +131,24 @@ sync::Action act(sync::ActionKind kind, sync::SessionId session, std::string tex
 
 std::vector<sync::Action> ensures() {
     std::vector<sync::Action> out;
-    for (const FriendInfo& f : kFriends) {
+    for (const AIInfo& f : kAIs) {
         sync::Action a;
         a.kind = sync::ActionKind::Ensure;
-        a.friendName = f.name;
+        a.aiName = f.name;
         out.push_back(a);
     }
     return out;
 }
 
-// Whether the state holds each friend's session at the id sid() gives it, and no other.
+// Whether the state holds each AI's session at the id sid() gives it, and no other.
 bool sessionsAsMinted(const sync::Sessions& state) {
-    for (const FriendInfo& f : kFriends) {
+    for (const AIInfo& f : kAIs) {
         const sync::SessionView* v = state.first(f.name);
         if (v == nullptr || v->id != sid(f.name)) {
             return false;
         }
     }
-    return state.sessions().size() == kFriends.size();
+    return state.sessions().size() == kAIs.size();
 }
 
 // Stops the server in `dir`, if one runs there, and removes `dir`, with the server's log printed first when there is
@@ -269,14 +269,14 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
     CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\",\"features\":[\"limit\"]}\n"
         "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n" + reply + reply));
-    CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
+    CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nai ada fake " + dir +
         "\n"));
     // A window of this build, then one that states no state format, as a window from before formats: the server
-    // answers it in format 1, which carries no activity and no tool line, so it reads the tool line as the friend's
+    // answers it in format 1, which carries no activity and no tool line, so it reads the tool line as the AI's
     // text, as such a window always has.
     for (const std::uint32_t format : {sync::kStateFormat, std::uint32_t(0)}) {
         const bool older = format == 0;
-        Model model(kFriends, true);
+        Model model(kAIs, true);
         sync::Mirror mirror;
         const auto start = Clock::now();
         link::ClientLink::Options options;
@@ -321,11 +321,11 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
         if (t.size() == want) {
             CHECK(t[want - 3].kind == EntryKind::Person);
             CHECK(t[want - 3].text == (older ? "hello from an older window" : "hello over mosh"));
-            CHECK(t[want - 2].kind == EntryKind::Friend && t[want - 2].text == "hello back");
-            CHECK(t[want - 1].kind == (older ? EntryKind::Friend : EntryKind::Tool));
+            CHECK(t[want - 2].kind == EntryKind::AI && t[want - 2].text == "hello back");
+            CHECK(t[want - 1].kind == (older ? EntryKind::AI : EntryKind::Tool));
             CHECK(t[want - 1].text == "Read: a file");
         }
-        // The friend is idle once its turn ends; a window of format 1 hears no activity, and reads idle.
+        // The AI is idle once its turn ends; a window of format 1 hears no activity, and reads idle.
         const std::size_t adaId = model.tab(ada).id;
         CHECK(until([&] { const sync::Activity* a = mirror.activity(adaId); return a != nullptr &&
             *a == sync::Activity::Idle; }));
@@ -407,7 +407,7 @@ private:
 // One headless window over a ClientSession of its own, driven by the test's loop.
 struct Window {
     std::unique_ptr<link::ClientSession> session;
-    Model model{kFriends, true};
+    Model model{kAIs, true};
     sync::Mirror mirror;
     std::uint64_t mirroredNum = ~std::uint64_t(0);
     void after() {
@@ -598,7 +598,7 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
     std::vector<int> next(static_cast<std::size_t>(clients), 0);
     for (int p = 0; p < prompts; ++p) {
         const std::size_t c = rng.below(static_cast<std::size_t>(clients));
-        const std::string tab = kFriends[rng.below(kFriends.size())].name;
+        const std::string tab = kAIs[rng.below(kAIs.size())].name;
         const std::string text = "c" + std::to_string(c) + "-" + std::to_string(next[c]++);
         // A few queued prompts, within the queue's limit of eight per tab.
         if (rng.chance(20) && queues[tab] < 8) {
@@ -617,7 +617,7 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
         for (Window* w : windows) {
             if (!w->session->allAcknowledged())
                 return false;
-            for (const FriendInfo& f : kFriends) {
+            for (const AIInfo& f : kAIs) {
                 const sync::SessionView* v = w->session->state().find(sid(f.name));
                 const std::size_t want = 2 * static_cast<std::size_t>(sends[f.name]);
                 if ((v == nullptr ? 0 : v->total()) != want ||
@@ -640,7 +640,7 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
     for (Window* w : windows)
         CHECK(w->session->state() == windows[0]->session->state());
     CHECK(sessionsAsMinted(windows[0]->session->state()));
-    for (const FriendInfo& f : kFriends) {
+    for (const AIInfo& f : kAIs) {
         std::vector<std::vector<const Entry*>> views;
         for (Window* w : windows)
             views.push_back(byIndex(w->model.tab(tabOf(w->model, f.name))));
@@ -888,7 +888,7 @@ int flush(const std::string& binary, const std::string& dir, const std::string& 
         "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
     CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\",\"features\":[\"limit\"]}\n"
         "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n" + reply + reply));
-    CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
+    CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nai ada fake " + dir +
         "\n"));
     const std::string gate = dir + "/gate";
     ::setenv("NEXUS_TEST_FLUSH_GATE", gate.c_str(), 1);
@@ -1059,7 +1059,7 @@ int secret(const std::string& binary, const std::string& dir, const std::string&
         "emit {\"kind\":\"text\",\"delta\":\"signed in again\"}\nemit {\"kind\":\"text-end\"}\n"
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"));
     CHECK(writeFile(dir + "/drivers", "driver claude " + fake + " --script " + dir + "/ada.script --account a1\n"
-        "friend ada claude " + dir + "\n"));
+        "AI ada claude " + dir + "\n"));
     pid_t pid = startServe(binary, dir);
     CHECK(pid > 0);
     CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
@@ -1149,17 +1149,17 @@ int secret(const std::string& binary, const std::string& dir, const std::string&
     return failures == 0 ? 0 : 1;   // the Server prints server.log and removes the directory
 }
 
-// ---- friends: the strip built from the server's list of friends ----
+// ---- ais: the strip built from the server's list of AIs ----
 
-// One headless window as the app opens it on a fresh install: no friend compiled in or read from any outside tool, no
-// sprint board, every friend tab built from the list the server sends by the window's own code (sync/friend_strip.h
-// takeFriends, which FrameHost::takeFriends calls): an ensure sent for each friend whose tab is added, and the mirror
+// One headless window as the app opens it on a fresh install: no AI compiled in or read from any outside tool, no
+// sprint board, every AI tab built from the list the server sends by the window's own code (sync/ai_strip.h
+// takeAIs, which FrameHost::takeAIs calls): an ensure sent for each AI whose tab is added, and the mirror
 // told of each tab removed.
 struct ServerWindow {
     std::unique_ptr<link::ClientSession> session;
     Model model{{}, false};
     sync::Mirror mirror;
-    sync::FriendStrip strip;
+    sync::AIStrip strip;
     std::uint64_t mirroredNum = ~std::uint64_t(0);
     void after() {
         if (session->stateNum() == mirroredNum) {
@@ -1167,28 +1167,28 @@ struct ServerWindow {
         }
         mirroredNum = session->stateNum();
         const sync::Sessions& state = session->state();
-        sync::takeFriends(strip, model, mirror, state, [this](sync::Action a) { session->add(a); });
+        sync::takeAIs(strip, model, mirror, state, [this](sync::Action a) { session->add(a); });
         mirror.apply(model, state);
     }
 };
 
-// The friend tabs' names, in the strip's order.
-std::vector<std::string> friendTabs(const Model& m) {
+// The AI tabs' names, in the strip's order.
+std::vector<std::string> aiTabs(const Model& m) {
     std::vector<std::string> out;
     for (std::size_t i = 0; i < m.tab_count(); ++i) {
-        if (m.tab(i).kind == TabKind::Friend) {
+        if (m.tab(i).kind == TabKind::AI) {
             out.push_back(m.tab(i).name);
         }
     }
     return out;
 }
 
-// A fresh server under a HOME of its own in <dir>, with one friend, ada, on the fake driver (its drivers file seeds
-// friends.json at the first start). A window that knows no friend connects: its strip shows ada's tab alone, a prompt
-// typed there starts ada's session on the server and its driver, and the reply comes back. Then friends.json is
+// A fresh server under a HOME of its own in <dir>, with one AI, ada, on the fake driver (its drivers file seeds
+// ais.json at the first start). A window that knows no AI connects: its strip shows ada's tab alone, a prompt
+// typed there starts ada's session on the server and its driver, and the reply comes back. Then ais.json is
 // edited as a person would and `nexus-server config reload` run: bo's tab appears in the open window, and once bo is
 // taken out again and the config reloaded, bo's tab goes, ada's staying as it was.
-int friendsFromServer(const std::string& binary, const std::string& dir, const std::string& fake) {
+int aisFromServer(const std::string& binary, const std::string& dir, const std::string& fake) {
     Server server(binary, dir);
     CHECK(::mkdir(dir.c_str(), 0700) == 0);
     const std::string home = dir + "/home";
@@ -1199,7 +1199,7 @@ int friendsFromServer(const std::string& binary, const std::string& dir, const s
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
     CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
         "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n" + reply));
-    CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
+    CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nai ada fake " + dir +
         "\n"));
     pid_t pid = startServe(binary, dir);
     CHECK(pid > 0);
@@ -1245,9 +1245,9 @@ int friendsFromServer(const std::string& binary, const std::string& dir, const s
     };
 
     // The fresh window shows ada's tab alone, from the server's list, and its ensure starts ada's session.
-    CHECK(friendTabs(w.model).empty());
-    CHECK(settle([&] { return w.session->state().friendsKnown() && w.session->state().first("ada") != nullptr; }));
-    CHECK((friendTabs(w.model) == std::vector<std::string>{"ada"}));
+    CHECK(aiTabs(w.model).empty());
+    CHECK(settle([&] { return w.session->state().aisKnown() && w.session->state().first("ada") != nullptr; }));
+    CHECK((aiTabs(w.model) == std::vector<std::string>{"ada"}));
     CHECK(w.model.tab_count() == 1);
     const std::size_t ada = tabOf(w.model, "ada");
     const std::size_t adaId = w.model.tab(ada).id;
@@ -1265,10 +1265,10 @@ int friendsFromServer(const std::string& binary, const std::string& dir, const s
     const std::vector<Entry>& t = w.model.tab(tabOf(w.model, "ada")).transcript;
     CHECK(t.size() == 2 && t[0].text == "hello" && t[1].text == "hello back");
 
-    // bo added to friends.json and the config reloaded: bo's tab appears in the open window, after ada's.
-    const std::string friendsJson = dir + "/nexus-config/friends.json";
-    const std::string seeded = readFile(friendsJson);
-    const std::string list = "\"friends\": [";
+    // bo added to ais.json and the config reloaded: bo's tab appears in the open window, after ada's.
+    const std::string aisJson = dir + "/nexus-config/ais.json";
+    const std::string seeded = readFile(aisJson);
+    const std::string list = "\"ais\": [";
     const std::size_t at = seeded.find(list);
     CHECK(at != std::string::npos);
     const std::string withBo = at == std::string::npos ? seeded : seeded.substr(0, at + list.size()) +
@@ -1276,39 +1276,39 @@ int friendsFromServer(const std::string& binary, const std::string& dir, const s
         seeded.substr(at + list.size());
     const Command reload{"/usr/bin/env", {"HOME=" + home, binary, "config", "reload", "--dir", dir},
         "nexus-server config reload"};
-    CHECK(writeFile(friendsJson, withBo));
+    CHECK(writeFile(aisJson, withBo));
     CommandResult r = runCommand(reload, 20);
     if (r.end != CommandResult::End::Exited || r.code != 0) {
         std::fprintf(stderr, "link_e2e: reload with bo: %s%s\n", r.out.c_str(), r.err.c_str());
         CHECK(false);
     }
-    CHECK(settle([&] { return friendTabs(w.model).size() == 2; }));
-    CHECK((friendTabs(w.model) == std::vector<std::string>{"ada", "bo"}));
+    CHECK(settle([&] { return aiTabs(w.model).size() == 2; }));
+    CHECK((aiTabs(w.model) == std::vector<std::string>{"ada", "bo"}));
 
     // bo taken out and the config reloaded: bo's tab goes, what the person typed to bo kept by name; ada's tab is the
     // same tab, its transcript kept.
     CHECK(w.model.set_draft(tabOf(w.model, "bo"), "half a prompt for bo"));
-    CHECK(writeFile(friendsJson, seeded));
+    CHECK(writeFile(aisJson, seeded));
     r = runCommand(reload, 20);
     if (r.end != CommandResult::End::Exited || r.code != 0) {
         std::fprintf(stderr, "link_e2e: reload without bo: %s%s\n", r.out.c_str(), r.err.c_str());
         CHECK(false);
     }
-    CHECK(settle([&] { return friendTabs(w.model).size() == 1; }));
-    CHECK((friendTabs(w.model) == std::vector<std::string>{"ada"}));
+    CHECK(settle([&] { return aiTabs(w.model).size() == 1; }));
+    CHECK((aiTabs(w.model) == std::vector<std::string>{"ada"}));
     CHECK(w.model.tab(tabOf(w.model, "ada")).id == adaId);
     CHECK(w.model.tab(tabOf(w.model, "ada")).transcript.size() == 2);
     CHECK(w.strip.kept().count("bo") == 1 && w.strip.kept().at("bo") == "half a prompt for bo");
 
-    // bo back in friends.json: a new tab for bo, with the draft the person left in the old one.
-    CHECK(writeFile(friendsJson, withBo));
+    // bo back in ais.json: a new tab for bo, with the draft the person left in the old one.
+    CHECK(writeFile(aisJson, withBo));
     r = runCommand(reload, 20);
     if (r.end != CommandResult::End::Exited || r.code != 0) {
         std::fprintf(stderr, "link_e2e: reload with bo again: %s%s\n", r.out.c_str(), r.err.c_str());
         CHECK(false);
     }
-    CHECK(settle([&] { return friendTabs(w.model).size() == 2; }));
-    CHECK((friendTabs(w.model) == std::vector<std::string>{"ada", "bo"}));
+    CHECK(settle([&] { return aiTabs(w.model).size() == 2; }));
+    CHECK((aiTabs(w.model) == std::vector<std::string>{"ada", "bo"}));
     CHECK(w.model.tab(tabOf(w.model, "bo")).draft == "half a prompt for bo" && w.strip.kept().empty());
 
     // The same open window and server handle an application edit on the next message.
@@ -1359,7 +1359,7 @@ int friendsFromServer(const std::string& binary, const std::string& dir, const s
     CHECK(stopped.end == CommandResult::End::Exited && stopped.code == 0);
     int status = 0;
     waitpid(pid, &status, 0);
-    std::printf("friends: %s\n", failures == 0 ? "ok" : "FAILED");
+    std::printf("ais: %s\n", failures == 0 ? "ok" : "FAILED");
     return failures == 0 ? 0 : 1;   // the Server prints server.log and removes the directory
 }
 
@@ -1421,7 +1421,7 @@ int signin(const std::string& binary, const std::string& dir, const std::string&
     CHECK(writeFile(dir + "/config", "claude " + abs + "/bin/claude-helper\n"));
     // a1 from the drivers file's --account (the first start takes the accounts from it); no session is made, so no
     // driver starts.
-    CHECK(writeFile(dir + "/drivers", "driver claude /usr/bin/false --account a1\nfriend ada claude " + abs + "\n"));
+    CHECK(writeFile(dir + "/drivers", "driver claude /usr/bin/false --account a1\nai ada claude " + abs + "\n"));
     pid_t pid = startServe(binary, dir);
     CHECK(pid > 0);
     CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
@@ -1601,10 +1601,10 @@ int privateSignIn(const std::string& binary, const std::string& dir, const std::
     a.email = "member@example.test";
     a.label = "work";
     registry.accounts.push_back(a);
-    registry.friends.push_back({"fixture-friend", {account}, account});
+    registry.ais.push_back({"fixture-ai", {account}, account});
 
     CHECK(writeFile(config + "/accounts.json", accounts::accountsText(registry)));
-    CHECK(writeFile(config + "/friends.json", accounts::friendsText(registry)));
+    CHECK(writeFile(config + "/ais.json", accounts::aisText(registry)));
     // Keep the drivers command's words free of spaces even if the source tree or interpreter path contains them.
     std::filesystem::create_symlink(python, dir + "/python");
     std::filesystem::create_symlink(fixture, dir + "/enroll.py");
@@ -1617,7 +1617,7 @@ umask 077
 printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"synthetic-id","access_token":"synthetic-access","refresh_token":"synthetic-refresh"}}' > "$CODEX_HOME/auth.json"
 )"));
     CHECK(::chmod(provider.c_str(), 0700) == 0);
-    CHECK(writeFile(dir + "/drivers", "friend fixture-friend codex " + dir + "\nsignin codex " + dir + "/python -IB " + dir + "/enroll.py codex --binary " +
+    CHECK(writeFile(dir + "/drivers", "AI fixture-AI codex " + dir + "\nsignin codex " + dir + "/python -IB " + dir + "/enroll.py codex --binary " +
                     provider + "\n"));
     for (int start = 0; start < 2; ++start) {
         const pid_t pid = startServe(binary, dir);
@@ -1634,9 +1634,9 @@ printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"synthetic-id","acces
         CHECK(until([&] { return w.session->stateNum() != 0; }));
         CHECK(w.session->state().offers().empty());
         const auto needsSignIn = [&]() -> std::optional<bool> {
-            for (const auto& friendRow : w.session->state().friends())
-                for (const auto& choice : friendRow.accounts)
-                    if (friendRow.name == "fixture-friend" && choice.name == account) {
+            for (const auto& aiRow : w.session->state().ais())
+                for (const auto& choice : aiRow.accounts)
+                    if (aiRow.name == "fixture-ai" && choice.name == account) {
                         CHECK(choice.email == a.email && choice.label == a.label);
                         return choice.needsSignIn;
                     }
@@ -1647,7 +1647,7 @@ printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"synthetic-id","acces
         if (start == 0) {
             sync::Action ensure;
             ensure.kind = sync::ActionKind::Ensure;
-            ensure.friendName = "fixture-friend";
+            ensure.aiName = "fixture-ai";
             w.session->add(ensure);
             if (!until([&] {
                 const auto& sessions = w.session->state().sessions();
@@ -1657,7 +1657,7 @@ printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"synthetic-id","acces
                 return 1;
             }
             CHECK(w.session->state().offers().empty());
-            // Exactly the action sent when the person activates the selected friend's Sign in card or presses Enter.
+            // Exactly the action sent when the person activates the selected AI's Sign in card or presses Enter.
             const std::string claim = "fixtureWindowOpener1";
             auto gesture = signInAction(sync::ActionKind::SignInClaim, 0, claim);
             gesture.session = w.session->state().sessions().front()->id;
@@ -1718,12 +1718,12 @@ int verifiedClaude(const std::string& binary, const std::string& dir, const std:
     row.email = "work@example.test";
     row.signInOnUse = true;
     registry.accounts = {row, accounts::Account{other, "claude"}};
-    registry.friends = {{"fixture-friend", {account}, account}, {"fixture-other", {other}, other}};
+    registry.ais = {{"fixture-ai", {account}, account}, {"fixture-other", {other}, other}};
     CHECK(writeFile(config + "/accounts.json", accounts::accountsText(registry)));
-    CHECK(writeFile(config + "/friends.json", accounts::friendsText(registry)));
+    CHECK(writeFile(config + "/ais.json", accounts::aisText(registry)));
     CHECK(writeFile(dir + "/config", "claude " + fakeClaude + "\n"));
-    CHECK(writeFile(dir + "/drivers", "driver claude /usr/bin/false --account work\nfriend fixture-friend claude " +
-                    dir + "\nfriend fixture-other claude " + dir + "\n"));
+    CHECK(writeFile(dir + "/drivers", "driver claude /usr/bin/false --account work\nai fixture-AI claude " +
+                    dir + "\nai fixture-other claude " + dir + "\n"));
     const pid_t pid = startServe(binary, dir);
     CHECK(pid > 0 && waitFor([&] { return answering(dir); }, kStallSeconds));
     Window w;
@@ -1735,12 +1735,12 @@ int verifiedClaude(const std::string& binary, const std::string& dir, const std:
     };
     sync::Action ensure;
     ensure.kind = sync::ActionKind::Ensure;
-    ensure.friendName = "fixture-friend";
+    ensure.aiName = "fixture-ai";
     w.session->add(ensure);
     if (!until([&] { return w.session->state().sessions().size() == 1; })) { CHECK(false); return 1; }
     const auto id = w.session->state().sessions().front()->id;
     const auto selectedNeedsLogin = [&](bool expected) {
-        for (const auto& f : w.session->state().friends()) {
+        for (const auto& f : w.session->state().ais()) {
             for (const auto& a : f.accounts) {
                 if (a.name == account) return a.email == registry.accounts.front().email && a.needsSignIn == expected;
             }
@@ -1827,7 +1827,7 @@ int takeover(const std::string& binary, const std::string& dir) {
     CHECK(pid > 0);
     CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
 
-    Model model(kFriends, true);
+    Model model(kAIs, true);
     sync::Mirror mirror;
     link::ClientLink::Options options;
     options.bootstrap = server.bootstrap("localhost");
@@ -2019,8 +2019,8 @@ int main(int argc, char** argv) {
     if (argc == 5 && std::strcmp(argv[3], "secret") == 0) {
         return secret(argv[1], argv[2], argv[4]);
     }
-    if (argc == 5 && std::strcmp(argv[3], "friends") == 0) {
-        return friendsFromServer(argv[1], argv[2], argv[4]);
+    if (argc == 5 && std::strcmp(argv[3], "ais") == 0) {
+        return aisFromServer(argv[1], argv[2], argv[4]);
     }
     if ((argc == 5 || argc == 6) && std::strcmp(argv[3], "signin") == 0) {
         return signin(argv[1], argv[2], argv[4], argc == 6 && std::strcmp(argv[5], "leaky") == 0);
@@ -2036,7 +2036,7 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
                          "soak <clients> <prompts> | restart | older_server | flush <nexus-fake-driver> |\n"
-                         "       secret <nexus-fake-driver> | friends <nexus-fake-driver> | "
+                         "       secret <nexus-fake-driver> | AIs <nexus-fake-driver> | "
                          "signin <fake claude> [leaky] | private-signin <python> <fixture> | verified-claude <fake claude> | takeover\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;

@@ -37,7 +37,7 @@ struct Trace {
     Trace(std::ostream& stream, bool fault) : out(stream), faulty(fault) {
         host.model = view.model = &model;
         host.view = &view;
-        host.strip = sync::FriendStrip({}, "one", {});
+        host.strip = sync::AIStrip({}, "one", {});
         host.connect(&link, "fixture");
         out << "---- MODULE AccountPickerTraceData ----\nEXTENDS Integers\nTrace == <<\n";
         record("init");
@@ -95,9 +95,9 @@ struct Trace {
         if (sessions.front()->id > sessions.back()->id) std::swap(sessions.front(), sessions.back());
         link.state.phase = sync::LinkPhase::Connected;
         link.state.sessions = sync::Sessions(std::move(sessions));
-        sync::ServerFriend one{"one", roster}, two{"two", roster};
+        sync::ServerAI one{"one", roster}, two{"two", roster};
         one.canAutoAccount = two.canAutoAccount = capable;
-        link.state.sessions.setFriends({one, two});
+        link.state.sessions.setAIs({one, two});
         link.state.sessions.setNextAction(link.sent.size() + 1);
         if (modal) {
             sync::SecretRequest ask;

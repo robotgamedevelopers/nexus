@@ -21,7 +21,7 @@
 //      that resolves into it (spellings, links and case resolved first), a file of it under another name (a hard link), a write to a
 //      config file, or a URL that is not http or https. A backstop only: it reads text, and text can be spelled around.
 //
-// A friend limited to its directory (--limit cwd; limitOf, docs/secrets.md "A limited friend") gets, on top of these,
+// An AI limited to its directory (--limit cwd; limitOf, docs/secrets.md "A limited AI") gets, on top of these,
 // the sandbox's reads and writes kept to its directory, Claude's own working-directory limit on its file tools, deny
 // rules on ~/.ssh, and the hook's check that every path it opens is in its directory.
 //
@@ -41,8 +41,8 @@ import { accountsDir, type Account } from './account.js';
 import { kSandboxBinVariable } from './tools.js';
 
 /**
- * Where people keep their files, by platform: the folders a limited friend's shell may not read (with HOME, wherever
- * it is). Other projects, documents, keys and other friends' directories are under these on a usual machine; the
+ * Where people keep their files, by platform: the folders a limited AI's shell may not read (with HOME, wherever
+ * it is). Other projects, documents, keys and other AIs' directories are under these on a usual machine; the
  * system's own folders (/usr, /etc, /opt, /Library, /System, /Applications) stay readable, so programs run.
  */
 export const kDataRoots: Readonly<Record<string, readonly string[]>> = {
@@ -51,7 +51,7 @@ export const kDataRoots: Readonly<Record<string, readonly string[]>> = {
 };
 
 /**
- * Under HOME, what a limited friend's shell still reads (never writes): single named files, never a folder, that git
+ * Under HOME, what a limited AI's shell still reads (never writes): single named files, never a folder, that git
  * and the shell read at every start, without which `git commit` and a login shell fail. Not ~/.config/git itself: it
  * holds git's credential store. No file named as a credential store (kCredentialNames) is ever allowed. Shell start-up
  * files are readable, and people do export tokens in them: docs/secrets.md lists that as open.
@@ -59,7 +59,7 @@ export const kDataRoots: Readonly<Record<string, readonly string[]>> = {
 export const kLimitedReadsUnderHome = ['.gitconfig', '.config/git/config', '.config/git/ignore', '.config/git/attributes',
     '.profile', '.bash_profile', '.bash_login', '.bashrc', '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.inputrc'] as const;
 
-/** File names that hold a credential store (git's, and the common ones): never in a limited friend's allowed reads. */
+/** File names that hold a credential store (git's, and the common ones): never in a limited AI's allowed reads. */
 export const kCredentialNames = ['credentials', '.git-credentials', '.netrc', '_netrc'] as const;
 
 /**
@@ -77,7 +77,7 @@ export function projectStateOf(configDir: string, cwd: string): string {
     return `${configDir}/projects/${cwd.replace(/[^A-Za-z0-9]/g, '-')}`;
 }
 
-/** What limits a friend to its directory: the sandbox's paths and the file tools' (wallOptions with `limited`). */
+/** What limits an AI to its directory: the sandbox's paths and the file tools' (wallOptions with `limited`). */
 export interface Limit {
     denyRead: string[];     // the shell reads none of these, but what allowRead names in them
     allowRead: string[];    // the working directory, the session's own state, programs and the config in kLimitedReadsUnderHome
@@ -97,7 +97,7 @@ export interface Limit {
  * the temporary directories. Nothing allowed is ~/.ssh, ~/.nexus, a folder above either, or a file named as a
  * credential store (deny-leaning: a path that is, is dropped). `cwd` is the working directory as resolved once by the
  * caller (run.ts prepare), the same path limitRefusal checked and Claude works in: it is not resolved again.
- * `keepsOut` are more denied roots, beside kDataRoots: the server's friends.json "limit_keeps_out", given as
+ * `keepsOut` are more denied roots, beside kDataRoots: the server's ais.json "limit_keeps_out", given as
  * `--keep-out <dir>` (a machine whose people keep files elsewhere: a second volume, a network mount, a WSL2 automount
  * root moved off /mnt). They only ever add denied roots; nexus reads none from the environment.
  */
@@ -150,7 +150,7 @@ export function limitOf(home: string, cwd: string, configDir: string, programs: 
 }
 
 /**
- * Why a limited friend cannot start in `cwd` with HOME `home`, or undefined when it can: a directory that is HOME, the
+ * Why a limited AI cannot start in `cwd` with HOME `home`, or undefined when it can: a directory that is HOME, the
  * root, above ~/.nexus (where the logins and every session's state are) or in ~/.nexus or ~/.ssh would give the AI
  * what the limit keeps from it. `cwd` as resolved once by the caller (run.ts prepare), the path limitOf is given and
  * Claude works in; `home` as the file system resolves it.
@@ -355,7 +355,7 @@ export function wallSandbox(wall: Wall, writable: readonly string[], egressPort:
         allowUnsandboxedCommands: false,
         network: { httpProxyPort: egressPort, socksProxyPort: egressPort },
         filesystem: {
-            // A limited friend (limitOf): it writes only its directory and the temporary ones, and reads none of the
+            // A limited AI (limitOf): it writes only its directory and the temporary ones, and reads none of the
             // data roots and HOME but what allowRead names (allowRead takes precedence over denyRead, never over the
             // secrets, which no allowed folder holds).
             allowWrite: limit === undefined ? [...writable] : [...limit.allowWrite],
@@ -413,7 +413,7 @@ export function isGitName(abs: string): boolean {
  */
 export function wallDenyRules(wall: Wall, limit?: Pick<Limit, 'ssh'>): string[] {
     const rules: string[] = [...kGitNameRules];
-    // A limited friend's file tools are kept off ~/.ssh by rule too, beside Claude's working-directory limit.
+    // A limited AI's file tools are kept off ~/.ssh by rule too, beside Claude's working-directory limit.
     for (const p of [...wall.secrets, ...(limit === undefined ? [] : limit.ssh)]) {
         for (const tool of ['Read', 'Edit']) {
             rules.push(`${tool}(/${p})`, `${tool}(/${p}/**)`);
@@ -659,13 +659,13 @@ export function toolRefusal(tool: string, input: Record<string, unknown>, wall: 
             return `nexus keeps the file tools from writing what makes a git directory (${raw}): the person's git runs `
                 + 'what its config names; use git itself in the shell';
         }
-        // A limited friend: every place the path is on disk must be in its directory (or, to read, its project's
+        // A limited AI: every place the path is on disk must be in its directory (or, to read, its project's
         // memory folder), by the path as resolved, links followed. Deny-leaning: another spelling of the directory
         // (another case on a case-insensitive volume) is refused here, and Claude's own limit judges it too.
         if (limit !== undefined) {
             const places = kWriters.test(tool) ? limit.roots : [...limit.roots, ...limit.reads];
             if (!reals.every((r) => places.some((p) => within(r, p)))) {
-                return `nexus limits this friend to its directory, ${limit.roots[0] ?? cwd}: ${raw} is outside it `
+                return `nexus limits this AI to its directory, ${limit.roots[0] ?? cwd}: ${raw} is outside it `
                     + '(docs/accounts.md, "limit")';
             }
         }
@@ -724,7 +724,7 @@ export const kDriverDir = resolve(dirname(fileURLToPath(import.meta.url)), '../.
 /**
  * The wall for `account`, for a session working in `cwd`, with HOME `home`, its commands' network through the driver's
  * proxy on `egressPort` (egress.ts), and `env` the driver's (its PATH and NEXUS_SANDBOX_BIN name the programs it
- * protects). `limited` limits the friend to `cwd` (limitOf): the sandbox's reads and writes, Claude's own limit on its
+ * protects). `limited` limits the AI to `cwd` (limitOf): the sandbox's reads and writes, Claude's own limit on its
  * file tools to the working directory (blockReadsOutsideWorkingDirectories and blockWritesOutsideWorkingDirectories,
  * which hold in every permission mode), deny rules on ~/.ssh, and the hook. `layers` leaves a layer out, for the
  * functional test that shows the walls under it hold alone (test/functional/wall.test.ts); the driver always builds

@@ -116,8 +116,8 @@ struct Events : sync::SecretEvents {
 
 struct Responder : sync::Responder {
     std::vector<std::string> logins;
-    sync::SessionInfo defaults(const std::string& friendName) const override {
-        return sync::SessionInfo{friendName, sync::kDefaultHarness, "", "", ""};
+    sync::SessionInfo defaults(const std::string& aiName) const override {
+        return sync::SessionInfo{aiName, sync::kDefaultHarness, "", "", ""};
     }
     std::vector<sync::SessionChange> send(sync::SessionId, const std::string&) override { return {}; }
     std::vector<sync::SessionChange> queue(sync::SessionId, const std::string&) override { return {}; }
@@ -141,7 +141,7 @@ std::vector<std::string> names(store::Fs& fs, const std::string& dir) {
     return out;
 }
 
-// nexus-server as the tests need it: its store on a MemFs, a hub with friend f's session (1) and the accounts a1 and a2
+// nexus-server as the tests need it: its store on a MemFs, a hub with AI f's session (1) and the accounts a1 and a2
 // (claude) and a3 (a provider that documents no secret), all three linked to f, and a4 (claude) linked to no one; and
 // the secret dialog wired to `keeper`.
 struct Server {
@@ -158,13 +158,13 @@ struct Server {
         hub = std::make_unique<sync::Hub>(store, sync::Limits{}, &responder);
         sync::Action ensure;
         ensure.kind = sync::ActionKind::Ensure;
-        ensure.friendName = "f";
+        ensure.aiName = "f";
         hub->apply(ensure, &why);
         CHECK(store.find(1) != nullptr);
         accounts::Registry r;
         r.accounts = {accounts::Account{"a1", "claude"}, accounts::Account{"a2", "claude"},
                       accounts::Account{"a3", "other"}, accounts::Account{"a4", "claude"}};
-        r.friends = {accounts::Friend{"f", {"a1", "a2", "a3"}, "a1"}};
+        r.ais = {accounts::AI{"f", {"a1", "a2", "a3"}, "a1"}};
         CHECK(hub->useAccounts(r, nullptr).empty());
         hub->secretsWith(&keeper, &events, [this] { return takers; }, [this] { return now; });
     }
@@ -471,7 +471,7 @@ void hub() {
         }
         CHECK(sync::isSecretWhy("the login expired \xe2\x80\x94 caf\xc3\xa9 \xf0\x9f\x94\x91"));
         CHECK(sync::isSecretWhy(std::string(sync::kSecretWhyBytes, 'w')) && sync::isSecretWhy(""));
-        // A friend's AI asks only for an account its friend is linked to; nexus itself for any.
+        // An AI's AI asks only for an account its AI is linked to; nexus itself for any.
         why.clear();
         CHECK(!s.hub->askSecret(asker(1, 1), "a4", kToken, "", &why) && holds(why, "is not linked"));
         CHECK(s.store.applied(sync::kSecretIdsClient) == 0 && s.events.replies.empty());
@@ -503,7 +503,7 @@ void hub() {
         CHECK(s.hub->apply(numbered(2, answer(2, kOther)), &why, "c1"));
         CHECK(k.writes == writes && k.files.count("a2/oauth-token") == 0);
         CHECK(!s.events.log.empty() && s.events.log.back().event == "late" && !leaks(why));
-        // No window that can take one: no-client at once. (nexus itself asks, for an account linked to no friend.)
+        // No window that can take one: no-client at once. (nexus itself asks, for an account linked to no AI.)
         s.takers = false;
         CHECK(s.hub->askSecret(asker(0, 0), "a4", kToken, "", &why));
         CHECK(s.events.replies.back().id == 4 && s.events.replies.back().reason == sync::reason::kNoClient);
@@ -571,7 +571,7 @@ void hub() {
         // The account's own sign-in asks nothing while its value is held.
         s.hub->reportSignedIn("a1", false);
         CHECK(s.hub->state().requests().empty() && s.store.applied(sync::kSecretIdsClient) == 1);
-        // The friend whose value is held asks again: refused busy at once, with id 0, no id minted, nothing opened,
+        // The AI whose value is held asks again: refused busy at once, with id 0, no id minted, nothing opened,
         // and the held value untouched.
         s.events.replies.clear();
         CHECK(s.hub->askSecret(asker(1, 2), "a1", kToken, "", &why));
@@ -604,7 +604,7 @@ void hub() {
         CHECK(s.hub->apply(numbered(4, answer(third, "x y")), &why, "c1"));
         CHECK(s.hub->askSecret(asker(0, 0), "a2", kToken, "", &why));
         CHECK(!s.hub->reaskSecrets() && s.store.applied(sync::kSecretIdsClient) == third + 1);
-        // A friend's AI is not asked again by nexus: it hears malformed, and asks again itself.
+        // An AI's AI is not asked again by nexus: it hears malformed, and asks again itself.
         CHECK(s.hub->askSecret(asker(1, 2), "a1", kToken, "", &why));
         CHECK(s.hub->apply(numbered(5, answer(third + 2, "x y")), &why, "c1"));
         CHECK(s.events.replies.back().reason == sync::reason::kMalformed && !s.hub->reaskPending());
@@ -808,7 +808,7 @@ void leak() {
     {
         Server s(storeFs, keeper);
         std::string why;
-        // Friend f's AI asks for a1's login; nexus itself asks for a2's.
+        // AI f's AI asks for a1's login; nexus itself asks for a2's.
         CHECK(s.hub->askSecret(asker(1, 11), "a1", kToken, "the login expired", &why));
         CHECK(s.hub->askSecret(asker(0, 0), "a2", kToken, "", &why));
         flush(s, windows, out);

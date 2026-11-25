@@ -22,9 +22,9 @@ void writePeerTrace(std::ostream& out, sync::Hub& hub, const server::DurableStor
         return reply.get();
     });
     server::DriverTable table;
-    table.drivers["codex"] = {"/policy", "-I", "-m", "nexus_policy", "friend-driver", "/profile",
-                              "{friend}", "{harness}", "/driver"};
-    table.friends["ada"] = {"codex", "/work"};
+    table.drivers["codex"] = {"/policy", "-I", "-m", "nexus_policy", "ai-driver", "/profile",
+                              "{ai}", "{harness}", "/driver"};
+    table.ais["ada"] = {"codex", "/work"};
 
     constexpr auto header = "nexus-bus-roster-v1\n";
     constexpr auto reader = "ada\tcodex\t127.0.0.1:6379\n";
@@ -93,9 +93,9 @@ void writePeerTrace(std::ostream& out, sync::Hub& hub, const server::DurableStor
                 if (!hub.ignoreBus("ada", id, &why, address)) throw std::runtime_error(why);
                 decision = "other";
                 break;
-            case server::BusPeer::Friend:
+            case server::BusPeer::AI:
                 if (!hub.receiveBus("ada", id, "peer", id, id, &why)) throw std::runtime_error(why);
-                decision = "friend";
+                decision = "ai";
                 break;
             }
         }
@@ -126,7 +126,7 @@ void writePeerTrace(std::ostream& out, sync::Hub& hub, const server::DurableStor
     grants.refresh(table, now);                         // old snapshot already started
     offer(1);
     decide();
-    lookup(std::string(header) + reader + "peer\tclaude\t\n", "friend", false, known);
+    lookup(std::string(header) + reader + "peer\tclaude\t\n", "ai", false, known);
     decide();                                          // historical membership cannot authorize this delivery
     lookup("", "unavailable", true, [&] { return !grants.problem().empty(); });
     decide();
@@ -134,12 +134,12 @@ void writePeerTrace(std::ostream& out, sync::Hub& hub, const server::DurableStor
     decide();                                          // recipient granted, peer absent from complete roster
     offer(2);
     decide();
-    lookup(std::string(header) + reader + "peer\tmuse\t\n", "friend", true, known);
+    lookup(std::string(header) + reader + "peer\tmuse\t\n", "ai", true, known);
     decide();                                          // newly registered peer, new message
     offer(1);
     decide();                                          // same peer, originally filtered ID
     lookup("", "unavailable", false, [&] { return !grants.problem().empty(); });
     lookup(header, "empty", false, [&] { return !known() && grants.problem().empty(); });
-    lookup(std::string(header) + reader + "peer\tmuse\t\n", "friend", false, known);
+    lookup(std::string(header) + reader + "peer\tmuse\t\n", "ai", false, known);
     out << "\n>>\n====\n";
 }

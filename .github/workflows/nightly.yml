@@ -79,14 +79,14 @@ jobs:
             run: '^tlc_supervisor_signin_temporal_1$'
           - shard: supervisor-signin-2
             run: '^tlc_supervisor_signin_temporal_2$'
-          - shard: supervisor-friend-1
-            run: '^tlc_supervisor_friend_temporal_1$'
-          - shard: supervisor-friend-2
-            run: '^tlc_supervisor_friend_temporal_2$'
+          - shard: supervisor-ai-1
+            run: '^tlc_supervisor_ai_temporal_1$'
+          - shard: supervisor-ai-2
+            run: '^tlc_supervisor_ai_temporal_2$'
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
             build: supervisor_walk
-            skip: '^tlc_supervisor_(switch_|place_|signin_|friend_)?temporal_[0-9]+$'
+            skip: '^tlc_supervisor_(switch_|place_|signin_|ai_)?temporal_[0-9]+$'
           - shard: link-ensure
             prebuilt: true
             run: '^tlc_link_ensure$'
@@ -190,12 +190,12 @@ jobs:
           - shard: tailscale-rest
             run: '^tlc_tailscale_'
             skip: '^tlc_tailscale_spec(_keys|_certs)?$'
-          # The window's friends from the server's list (MCWindowFriends, 39,465 states on four workers), alone: in the
+          # The window's AIs from the server's list (MCWindowAIs, 39,465 states on four workers), alone: in the
           # window shard it ran past its 60 s.
-          - shard: window-friends
-            run: '^tlc_spec_friends$'
-          # The friend strip's shared-file instance (MCFriendStripShared, 150,016 states) in its own shard on eight
-          # workers, then its single-window spec and its code's walks against FriendStripTrace.tla, and their faults.
+          - shard: window-ais
+            run: '^tlc_spec_ais$'
+          # The AI strip's shared-file instance (MCAIStripShared, 150,016 states) in its own shard on eight
+          # workers, then its single-window spec and its code's walks against AIStripTrace.tla, and their faults.
           - shard: strip-shared
             run: '^tlc_spec_strip_shared$'
           - shard: strip-rest
@@ -240,7 +240,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk service_process_functional
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass|bus_delivery)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_ais$|signin|reconnect|loop_pass|bus_delivery)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

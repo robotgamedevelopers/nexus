@@ -104,7 +104,7 @@ std::string quoted(const std::vector<std::string>& command) {
 EntryKind entryKind(Effect::What what) {
     switch (what) {
         case Effect::What::Prompt: return EntryKind::Person;
-        case Effect::What::Reply: return EntryKind::Friend;
+        case Effect::What::Reply: return EntryKind::AI;
         case Effect::What::Tool: return EntryKind::Tool;
         case Effect::What::Error:
         case Effect::What::Stopped:
@@ -144,7 +144,7 @@ Output Supervisor::setPlace(std::string cwd, bool here, Millis now) {
 }
 
 // Tightened under an open turn on a driver started unlimited: that turn is stopped now, through the person's stop
-// (Stop, then the stop deadline and the kill), so no driver runs with a weaker limit than its friend's for longer than
+// (Stop, then the stop deadline and the kill), so no driver runs with a weaker limit than its AI's for longer than
 // the stop takes; once it is done the driver is ended (retire) and the next starts limited. Loosened: the open turn
 // finishes as it started. Models: models/Supervisor.tla SetLimit, NeverWeaker.
 Output Supervisor::setLimited(bool limited, Millis now) {
@@ -154,8 +154,8 @@ Output Supervisor::setLimited(bool limited, Millis now) {
     return finish();
 }
 
-// The friend taken out: an open turn gets the person's stop (its done, or the stop's deadline, ends it; Advance then ends
-// the driver, as Retire ends any driver while the friend is out); a driver still starting has no turn open, and is
+// The AI taken out: an open turn gets the person's stop (its done, or the stop's deadline, ends it; Advance then ends
+// the driver, as Retire ends any driver while the AI is out); a driver still starting has no turn open, and is
 // ended at once, never counted as a failed start. Put back: what waits goes on.
 Output Supervisor::setPresent(bool present, Millis now) {
     if (present == config_.present) {
@@ -401,7 +401,7 @@ Output Supervisor::message(const DriverMessage& message, Millis now) {
             // Started limited, and it does not say it keeps to its directory: it is never trusted to.
             end(config_.name + "'s driver does not support the limit to its directory (its hello lists no \"limit\" "
                 "feature), and " + config_.name + " is limited, so it was ended. Install a driver that supports it ("
-                + config_.configured + "), or set the friend's \"limit\" to false (docs/accounts.md).", now);
+                + config_.configured + "), or set the AI's \"limit\" to false (docs/accounts.md).", now);
         } else if (hello != nullptr && hello->protocol == kProtocolVersion) {
             phase_ = Phase::Idle;
             crashed_ = false;
@@ -811,7 +811,7 @@ void Supervisor::writeNext() {
     phase_ = Phase::Working;
 }
 
-// With a driver configured, the friend in friends.json, no turn open, nothing waiting and starting not held back, the
+// With a driver configured, the AI in ais.json, no turn open, nothing waiting and starting not held back, the
 // oldest queued prompt leaves the queue and waits, shown as the person's entry: one per turn. One that cannot be
 // written as a protocol line (the hub's text limit keeps every prompt far within the line limit, so only text that is
 // not UTF-8) leaves the queue with a notice, and the next is taken in its place.
@@ -838,7 +838,7 @@ void Supervisor::take() {
 // the session's instance is on another machine, or one started under another limit than the session's now (limited or
 // not, or limited keeping out other directories). So is one told a model or effort the session has since put back to
 // the harness's default, which a settings line cannot say: the next one starts on the defaults. So is any while the
-// friend is not in friends.json. A turn open runs to its end first.
+// AI is not in ais.json. A turn open runs to its end first.
 void Supervisor::retire(Millis now) {
     const bool changedIdentity = driverEmail_ != expectedEmail(config_.command);
     if (changedIdentity && driverAccount_ == config_.account && phase_ == Phase::Working) {

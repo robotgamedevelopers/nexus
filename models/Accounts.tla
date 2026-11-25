@@ -1,53 +1,53 @@
 ------------------------------ MODULE Accounts ------------------------------
 (***************************************************************************)
-(* The accounts and friends nexus-server holds (src/accounts/registry.h,   *)
+(* The accounts and AIs nexus-server holds (src/accounts/registry.h,   *)
 (* src/sync/hub.h, docs/accounts.md): the providers' accounts, the         *)
-(* friends, the links from a friend to the accounts it may run on (in      *)
+(* AIs, the links from an AI to the accounts it may run on (in      *)
 (* order, with one of them its default, or none), and which account each   *)
 (* session runs on.                                                        *)
 (*                                                                         *)
 (* An account is set up on its own, with its provider, and needs sign-in   *)
 (* until a sign-in reports otherwise (`Report`, the server's own step). A  *)
-(* friend links to any number of accounts, of any providers, and an        *)
-(* account serves any number of friends. A session is made with a friend   *)
+(* AI links to any number of accounts, of any providers, and an        *)
+(* account serves any number of AIs. A session is made with an AI   *)
 (* (`Create`), on the account of the session it copies when that account   *)
-(* is linked to its friend, else on the friend's default. The person sets  *)
-(* a session's account to one linked to its friend, or to none             *)
+(* is linked to its AI, else on the AI's default. The person sets  *)
+(* a session's account to one linked to its AI, or to none             *)
 (* (`SetSession`); its harness becomes the account's provider, so a switch *)
-(* may cross providers. Multi-subscription friends default to automatic   *)
+(* may cross providers. Multi-subscription AIs default to automatic   *)
 (* selection. On a usage limit Rotate moves only automatic sessions, in   *)
 (* link order, to another signed-in subscription. CreditHandoff models    *)
 (* the exhausted-payer set for the unfinished request.                    *)
 (*                                                                         *)
-(* The accounts and friends are also two files a person or an AI edits by  *)
+(* The accounts and AIs are also two files a person or an AI edits by  *)
 (* hand; `nexus-server config reload` applies an edit (`Reload*`): a       *)
-(* friend dropped, a link dropped, a default or an account's provider      *)
+(* AI dropped, a link dropped, a default or an account's provider      *)
 (* changed. An edit that leaves the files inconsistent is refused whole    *)
 (* and changes nothing.                                                    *)
 (*                                                                         *)
-(* A friend also has instances: the friend on one machine, in one          *)
-(* working directory (named, in order; the first is the friend's default   *)
+(* An AI also has instances: the AI on one machine, in one          *)
+(* working directory (named, in order; the first is the AI's default   *)
 (* instance), set by edits only (`ReloadAddInstance`,                      *)
 (* `ReloadDropInstance`, `ReloadMoveInstance`). Accounts are the           *)
-(* friend's, shared by all its instances; a session belongs to one of its  *)
-(* friend's instances, or to none when the friend has none. A create takes *)
-(* the instance of the session it copies when that is the same friend's    *)
-(* and still one of its instances, else the friend's default instance.     *)
+(* AI's, shared by all its instances; a session belongs to one of its  *)
+(* AI's instances, or to none when the AI has none. A create takes *)
+(* the instance of the session it copies when that is the same AI's    *)
+(* and still one of its instances, else the AI's default instance.     *)
 (*                                                                         *)
-(* A friend dropped by an edit keeps its sessions exactly as they are      *)
+(* An AI dropped by an edit keeps its sessions exactly as they are      *)
 (* (account, harness, instance), and each is told; they are settled like   *)
-(* the rest once the friend is set up again (`Live`). What the drop does   *)
-(* to a session's turn and driver is Supervisor.tla's (`RemoveFriend`).    *)
+(* the rest once the AI is set up again (`Live`). What the drop does   *)
+(* to a session's turn and driver is Supervisor.tla's (`RemoveAI`).    *)
 (*                                                                         *)
-(* Every change of the accounts and friends, by an action or an edit,      *)
+(* Every change of the accounts and AIs, by an action or an edit,      *)
 (* ends in `Settled`: each session on an account no longer linked to its   *)
-(* friend moves, in the same step, to the friend's default when that is    *)
-(* signed in, else to the friend's first signed-in linked account, else to *)
+(* AI moves, in the same step, to the AI's default when that is    *)
+(* signed in, else to the AI's first signed-in linked account, else to *)
 (* none; a session whose account's provider changed takes the new          *)
 (* harness; and each session moved or changed is told (a notice in its     *)
 (* transcript). An unlinked or removed default becomes none. A session     *)
-(* whose instance its friend no longer has, or on none while its friend    *)
-(* has some, moves to the friend's default instance, or none, and is told; *)
+(* whose instance its AI no longer has, or on none while its AI    *)
+(* has some, moves to the AI's default instance, or none, and is told; *)
 (* an instance moved in place (another machine or directory, the same      *)
 (* name) tells every session on it.                                        *)
 (*                                                                         *)
@@ -55,19 +55,19 @@
 (* just taken, and the operation with its arguments and result. No action  *)
 (* reads either, so TLC tells states apart without them (VIEW).            *)
 (*                                                                         *)
-(* A friend is limited to its directory or not (`lim`, friends.json's    *)
-(* "limit"; a friend set up by an action is limited, one not set up reads *)
+(* An AI is limited to its directory or not (`lim`, ais.json's    *)
+(* "limit"; an AI set up by an action is limited, one not set up reads *)
 (* limited), and an account is billed by subscription or at API rate      *)
 (* (`bill`, accounts.json's "billing"); both are set by edits only          *)
-(* (`ReloadLimit`, `ReloadBilling`). A friend that is not limited may link  *)
+(* (`ReloadLimit`, `ReloadBilling`). An AI that is not limited may link  *)
 (* no API-billed account: an edit or a link that would leave one is        *)
-(* refused. A session's driver starts (`Start`) limited when its friend is  *)
+(* refused. A session's driver starts (`Start`) limited when its AI is  *)
 (* limited or its account is billed at API rate, decided then, from the    *)
 (* files as they are (accounts::limitedFor); a change later takes effect   *)
 (* from the next start (`End`, then `Start`: Supervisor.tla retires the     *)
-(* driver once no turn is open), and a friend's limit changed tells each   *)
+(* driver once no turn is open), and an AI's limit changed tells each   *)
 (* of its sessions. `run` is each session's driver: off, or started limited *)
-(* or open, with whether its account was API-billed and its friend limited *)
+(* or open, with whether its account was API-billed and its AI limited *)
 (* at the start.                                                           *)
 (*                                                                         *)
 (* Not modelled: an instance's machine and directory (a driver runs only   *)
@@ -84,32 +84,32 @@ CONSTANTS
     Accts,          \* the account names a model config uses
     Provider,       \* each account's provider when it is set up
     Providers,      \* the providers an edit may give an account
-    Friends,        \* the friend names a model config uses
-    Insts,          \* the friends' instance names a model config uses
+    AIs,        \* the AI names a model config uses
+    Insts,          \* the AIs' instance names a model config uses
     MaxSes,         \* the sessions a model config may make (ids 1 .. MaxSes)
-    StartHarness,   \* the harness of a session on no account (the friend's harness)
+    StartHarness,   \* the harness of a session on no account (the AI's harness)
     Bills,          \* the billings an edit may give an account: "sub", "api"
-    Limits,         \* the limits an edit may give a friend: TRUE, FALSE
+    Limits,         \* the limits an edit may give an AI: TRUE, FALSE
     Runs            \* whether drivers start and end (TRUE) or the model leaves them off (FALSE)
 
 None == "none"
 Ids == 1..MaxSes
 Range(sq) == {sq[i] : i \in DOMAIN sq}
 Harnesses == Providers \cup {StartHarness}
-ASSUME None \notin Accts \cup Friends \cup Harnesses \cup Insts
+ASSUME None \notin Accts \cup AIs \cup Harnesses \cup Insts
 ASSUME \A a \in Accts : Provider[a] \in Providers
 ASSUME Bills \subseteq {"sub", "api"} /\ Limits \subseteq BOOLEAN /\ Runs \in BOOLEAN
 
 VARIABLES
     acct,       \* each account: "absent", "in" (signed in) or "out" (needs sign-in)
     prov,       \* each account's provider
-    known,      \* the friends set up
-    links,      \* each friend's linked accounts, in link order
-    dflt,       \* each friend's default account, or None
-    insts,      \* each friend's instances, in order (the first its default instance)
-    ses,        \* each session id: made, its friend, its instance (or None), its account (or None) and its harness
+    known,      \* the AIs set up
+    links,      \* each AI's linked accounts, in link order
+    dflt,       \* each AI's default account, or None
+    insts,      \* each AI's instances, in order (the first its default instance)
+    ses,        \* each session id: made, its AI, its instance (or None), its account (or None) and its harness
     nextSes,    \* the id the next session made gets
-    lim,        \* each friend: limited to its directory (TRUE for a friend not set up)
+    lim,        \* each AI: limited to its directory (TRUE for an AI not set up)
     bill,       \* each account's billing: "sub" or "api" ("sub" for an account not set up)
     run,        \* each session's driver: its state "off", "limited" or "open", and at its start, api and flim
     told,       \* history: the sessions the step gave a notice
@@ -119,7 +119,7 @@ model == <<acct, prov, known, links, dflt, insts, ses, nextSes, lim, bill, run>>
 vars == <<acct, prov, known, links, dflt, insts, ses, nextSes, lim, bill, run, told, last>>
 View == model
 
-NoSes == [made |-> FALSE, friend |-> None, inst |-> None, acct |-> None, harness |-> None, automatic |-> FALSE]
+NoSes == [made |-> FALSE, ai |-> None, inst |-> None, acct |-> None, harness |-> None, automatic |-> FALSE]
 Off == [st |-> "off", api |-> FALSE, flim |-> FALSE]
 
 Up(a) == acct[a] = "in"
@@ -129,29 +129,29 @@ Pos(sq, x) == IF x \in Range(sq) THEN CHOOSE i \in DOMAIN sq : sq[i] = x ELSE 0
 After(sq, x) == LET i == Pos(sq, x) IN
     IF i = 0 THEN sq ELSE SubSeq(sq, i + 1, Len(sq)) \o SubSeq(sq, 1, i - 1)
 FirstUp(sq) == LET c == SelectSeq(sq, Up) IN IF c = << >> THEN None ELSE Head(c)
-\* The friend's next signed-in linked account after x, in link order, or None.
+\* The AI's next signed-in linked account after x, in link order, or None.
 Subs(sq, nb) == SelectSeq(sq, LAMBDA a : nb[a] = "sub")
 NextUp(f, x) == FirstUp(After(Subs(links[f], bill), x))
 HarnessFor(a, p, h) == IF a = None THEN h ELSE p[a]
 FirstOr(sq) == IF sq = << >> THEN None ELSE Head(sq)
 
-\* After links nl, defaults nd and providers np take effect: a session on an account no longer linked to its friend
-\* (stray) moves to the friend's default when signed in, else its first signed-in linked account, else none; a session
+\* After links nl, defaults nd and providers np take effect: a session on an account no longer linked to its AI
+\* (stray) moves to the AI's default when signed in, else its first signed-in linked account, else none; a session
 \* on an account kept takes its provider's harness. Told: every session moved or whose harness changed.
-Stray(nl, s) == ses[s].made /\ ses[s].acct /= None /\ ses[s].acct \notin Range(nl[ses[s].friend])
+Stray(nl, s) == ses[s].made /\ ses[s].acct /= None /\ ses[s].acct \notin Range(nl[ses[s].ai])
 Landing(nl, nd, f) == IF nd[f] /= None /\ Up(nd[f]) THEN nd[f] ELSE FirstUp(nl[f])
-\* A session whose instance its friend no longer has (after instances ni), or on none while its friend has some,
-\* moves to the friend's first, or none.
-StrayInst(ni, s) == ses[s].made /\ IF ses[s].inst = None THEN ni[ses[s].friend] /= << >>
-                                   ELSE ses[s].inst \notin Range(ni[ses[s].friend])
-InstOf(ni, s) == IF StrayInst(ni, s) THEN FirstOr(ni[ses[s].friend]) ELSE ses[s].inst
-\* A session whose friend is not set up (after friends kn) is left as it is, its account, harness and instance kept, and
-\* settled like the rest once its friend is set up again. One whose friend the step took out is told (its work is
-\* stopped: Supervisor.tla RemoveFriend).
-Out(kn, s) == ses[s].friend \notin kn
+\* A session whose instance its AI no longer has (after instances ni), or on none while its AI has some,
+\* moves to the AI's first, or none.
+StrayInst(ni, s) == ses[s].made /\ IF ses[s].inst = None THEN ni[ses[s].ai] /= << >>
+                                   ELSE ses[s].inst \notin Range(ni[ses[s].ai])
+InstOf(ni, s) == IF StrayInst(ni, s) THEN FirstOr(ni[ses[s].ai]) ELSE ses[s].inst
+\* A session whose AI is not set up (after AIs kn) is left as it is, its account, harness and instance kept, and
+\* settled like the rest once its AI is set up again. One whose AI the step took out is told (its work is
+\* stopped: Supervisor.tla RemoveAI).
+Out(kn, s) == ses[s].ai \notin kn
 FirstAuto(subs) == IF FirstUp(subs) /= None THEN FirstUp(subs) ELSE FirstOr(subs)
 SettledAccount(nl, nd, nb, s) ==
-    LET f == ses[s].friend
+    LET f == ses[s].ai
         subs == Subs(nl[f], nb)
     IN IF ses[s].automatic THEN IF ses[s].acct \in Range(subs) THEN ses[s].acct ELSE FirstAuto(subs)
        ELSE IF Stray(nl, s) THEN Landing(nl, nd, f) ELSE ses[s].acct
@@ -159,16 +159,16 @@ SettledAccount(nl, nd, nb, s) ==
 SettledWithBilling(nl, nd, np, ni, kn, nb) ==
     [s \in Ids |-> IF Out(kn, s) THEN ses[s] ELSE
         LET a == SettledAccount(nl, nd, nb, s)
-        IN [ses[s] EXCEPT !.acct = a, !.automatic = @ /\ Len(Subs(nl[ses[s].friend], nb)) > 1,
+        IN [ses[s] EXCEPT !.acct = a, !.automatic = @ /\ Len(Subs(nl[ses[s].ai], nb)) > 1,
                           !.harness = HarnessFor(a, np, @), !.inst = InstOf(ni, s)]]
 SettledI(nl, nd, np, ni, kn) == SettledWithBilling(nl, nd, np, ni, kn, bill)
 SettledToldI(nl, np, ni, kn) ==
     {s \in Ids : ~Out(kn, s) /\ (Stray(nl, s) \/ StrayInst(ni, s)
-                                 \/ (ses[s].automatic /\ Len(Subs(nl[ses[s].friend], bill)) < 2)
+                                 \/ (ses[s].automatic /\ Len(Subs(nl[ses[s].ai], bill)) < 2)
                                  \/ (ses[s].made /\ ses[s].acct /= None /\ np[ses[s].acct] /= ses[s].harness))}
-    \cup {s \in Ids : ses[s].made /\ ses[s].friend \in known \ kn}
-\* A friend not set up has no instances.
-InstsFor(kn) == [f \in Friends |-> IF f \in kn THEN insts[f] ELSE << >>]
+    \cup {s \in Ids : ses[s].made /\ ses[s].ai \in known \ kn}
+\* An AI not set up has no instances.
+InstsFor(kn) == [f \in AIs |-> IF f \in kn THEN insts[f] ELSE << >>]
 Settled(nl, nd, np) == SettledI(nl, nd, np, insts, known)
 SettledTold(nl, np) == SettledToldI(nl, np, insts, known)
 
@@ -178,26 +178,26 @@ Refused(op, f, a, s, notice) ==
     /\ told' = notice
     /\ UNCHANGED model
 
-\* The accounts and friends become nl, nd, np, kn, ac, ni, and the sessions are settled, in one step. mv: the
-\* instances moved in place (<<friend, instance>>: another machine or directory), whose sessions are told too.
+\* The accounts and AIs become nl, nd, np, kn, ac, ni, and the sessions are settled, in one step. mv: the
+\* instances moved in place (<<ai, instance>>: another machine or directory), whose sessions are told too.
 BecomeIM(op, f, a, ac, np, kn, nl, nd, ni, mv) ==
     /\ acct' = ac /\ prov' = np /\ known' = kn /\ links' = nl /\ dflt' = nd /\ insts' = ni
     /\ ses' = SettledI(nl, nd, np, ni, kn)
-    /\ told' = SettledToldI(nl, np, ni, kn) \cup {s \in Ids : ses[s].made /\ <<ses[s].friend, ses[s].inst>> \in mv}
+    /\ told' = SettledToldI(nl, np, ni, kn) \cup {s \in Ids : ses[s].made /\ <<ses[s].ai, ses[s].inst>> \in mv}
     /\ Done(op, f, a, 0, TRUE)
-    \* A friend kept keeps its limit; one set up anew, or not set up, is limited. An account not set up bills "sub".
-    /\ lim' = [g \in Friends |-> IF g \in kn /\ g \in known THEN lim[g] ELSE TRUE]
+    \* An AI kept keeps its limit; one set up anew, or not set up, is limited. An account not set up bills "sub".
+    /\ lim' = [g \in AIs |-> IF g \in kn /\ g \in known THEN lim[g] ELSE TRUE]
     /\ bill' = [b \in Accts |-> IF ac[b] = "absent" THEN "sub" ELSE bill[b]]
     /\ UNCHANGED <<nextSes, run>>
 BecomeI(op, f, a, ac, np, kn, nl, nd, ni) == BecomeIM(op, f, a, ac, np, kn, nl, nd, ni, {})
 Become(op, f, a, ac, np, kn, nl, nd) == BecomeI(op, f, a, ac, np, kn, nl, nd, InstsFor(kn))
 
-\* The files agree: links name accounts set up, each once, only from friends set up; a default is linked or none;
-\* instances only of friends set up, each named once; a friend not limited (limits nm) links no account billed at API
+\* The files agree: links name accounts set up, each once, only from AIs set up; a default is linked or none;
+\* instances only of AIs set up, each named once; an AI not limited (limits nm) links no account billed at API
 \* rate (billings nb).
 NoApiUnlimited(kn, nl, nm, nb) == \A f \in kn : ~nm[f] => \A i \in DOMAIN nl[f] : nb[nl[f][i]] /= "api"
 ConsistentLB(ac, kn, nl, nd, ni, nm, nb) ==
-    /\ \A f \in Friends :
+    /\ \A f \in AIs :
         /\ \A i \in DOMAIN nl[f] : ac[nl[f][i]] /= "absent"
         /\ Len(nl[f]) = Cardinality(Range(nl[f]))
         /\ f \notin kn => nl[f] = << >> /\ nd[f] = None /\ ni[f] = << >>
@@ -211,12 +211,12 @@ Init ==
     /\ acct = [a \in Accts |-> "absent"]
     /\ prov = Provider
     /\ known = {}
-    /\ links = [f \in Friends |-> << >>]
-    /\ dflt = [f \in Friends |-> None]
-    /\ insts = [f \in Friends |-> << >>]
+    /\ links = [f \in AIs |-> << >>]
+    /\ dflt = [f \in AIs |-> None]
+    /\ insts = [f \in AIs |-> << >>]
     /\ ses = [s \in Ids |-> NoSes]
     /\ nextSes = 1
-    /\ lim = [f \in Friends |-> TRUE]
+    /\ lim = [f \in AIs |-> TRUE]
     /\ bill = [a \in Accts |-> "sub"]
     /\ run = [s \in Ids |-> Off]
     /\ told = {}
@@ -236,25 +236,25 @@ Report(a, st) ==
          /\ UNCHANGED <<prov, known, links, dflt, insts, ses, nextSes, lim, bill, run>>
     ELSE Refused(IF st = "in" THEN "in" ELSE "out", None, a, 0, {})
 
-\* The person's: an account removed. Every friend's link to it goes, and a default on it becomes none.
+\* The person's: an account removed. Every AI's link to it goes, and a default on it becomes none.
 RemoveAccount(a) ==
     IF acct[a] /= "absent"
     THEN Become("remove", None, a, [acct EXCEPT ![a] = "absent"], prov, known,
-                [f \in Friends |-> Drop(links[f], a)], [f \in Friends |-> IF dflt[f] = a THEN None ELSE dflt[f]])
+                [f \in AIs |-> Drop(links[f], a)], [f \in AIs |-> IF dflt[f] = a THEN None ELSE dflt[f]])
     ELSE Refused("remove", None, a, 0, {})
 
-AddFriend(f) ==
+AddAI(f) ==
     IF f \notin known
-    THEN Become("friend", f, None, acct, prov, known \cup {f}, links, dflt)
-    ELSE Refused("friend", f, None, 0, {})
+    THEN Become("ai", f, None, acct, prov, known \cup {f}, links, dflt)
+    ELSE Refused("ai", f, None, 0, {})
 
-\* Refused, too, when the friend is not limited and the account is billed at API rate.
+\* Refused, too, when the AI is not limited and the account is billed at API rate.
 LinkAccount(f, a) ==
     IF f \in known /\ acct[a] /= "absent" /\ a \notin Range(links[f]) /\ (lim[f] \/ bill[a] /= "api")
     THEN Become("link", f, a, acct, prov, known, [links EXCEPT ![f] = Append(@, a)], dflt)
     ELSE Refused("link", f, a, 0, {})
 
-\* The person's: the friend no longer runs on the account; a default on it becomes none.
+\* The person's: the AI no longer runs on the account; a default on it becomes none.
 Unlink(f, a) ==
     IF a \in Range(links[f])
     THEN Become("unlink", f, a, acct, prov, known, [links EXCEPT ![f] = Drop(@, a)],
@@ -273,10 +273,10 @@ ReloadI(f, a, ac, np, kn, nl, nd, ni) ==
     ELSE Refused("reload", f, a, 0, {})
 Reload(f, a, ac, np, kn, nl, nd) == ReloadI(f, a, ac, np, kn, nl, nd, InstsFor(kn))
 
-\* A friend taken out of the friends file, its links and default with it.
-ReloadDropFriend(f) ==
+\* An AI taken out of the AIs file, its links and default with it.
+ReloadDropAI(f) ==
     Reload(f, None, acct, prov, known \ {f}, [links EXCEPT ![f] = << >>], [dflt EXCEPT ![f] = None])
-\* A link taken out of a friend's list, its default left as it was (refused when that was the link).
+\* A link taken out of an AI's list, its default left as it was (refused when that was the link).
 ReloadDropLink(f, a) == Reload(f, a, acct, prov, known, [links EXCEPT ![f] = Drop(@, a)], dflt)
 \* An account taken out of the accounts file, the links left as they were (refused while linked).
 ReloadDropAccount(a) == Reload(None, a, [acct EXCEPT ![a] = "absent"], prov, known, links, dflt)
@@ -284,17 +284,17 @@ ReloadDropAccount(a) == Reload(None, a, [acct EXCEPT ![a] = "absent"], prov, kno
 ReloadProvider(a, p) ==
     LET ac == IF prov[a] /= p /\ acct[a] = "in" THEN [acct EXCEPT ![a] = "out"] ELSE acct
     IN Reload(None, a, ac, [prov EXCEPT ![a] = p], known, links, dflt)
-\* A friend's limit set (refused for a friend not set up, or false while it links an account billed at API rate).
-\* When it changes, each of the friend's sessions is told (tightened, an open turn stops and the driver restarts limited;
+\* An AI's limit set (refused for an AI not set up, or false while it links an account billed at API rate).
+\* When it changes, each of the AI's sessions is told (tightened, an open turn stops and the driver restarts limited;
 \* loosened, once no turn is open: Supervisor.tla SetLimit).
 ReloadLimit(f, v) ==
     IF f \in known /\ ConsistentLB(acct, known, links, dflt, insts, [lim EXCEPT ![f] = v], bill)
     THEN /\ lim' = [lim EXCEPT ![f] = v]
-         /\ told' = IF v = lim[f] THEN {} ELSE {s \in Ids : ses[s].made /\ ses[s].friend = f}
+         /\ told' = IF v = lim[f] THEN {} ELSE {s \in Ids : ses[s].made /\ ses[s].ai = f}
          /\ Done("limit", f, None, 0, TRUE)
          /\ UNCHANGED <<acct, prov, known, links, dflt, insts, ses, nextSes, bill, run>>
     ELSE Refused("limit", f, None, 0, {})
-\* An account's billing set (refused for an account not set up, or "api" while a friend not limited links it).
+\* An account's billing set (refused for an account not set up, or "api" while an AI not limited links it).
 ReloadBilling(a, b) ==
     IF acct[a] /= "absent" /\ ConsistentLB(acct, known, links, dflt, insts, lim, [bill EXCEPT ![a] = b])
     THEN /\ bill' = [bill EXCEPT ![a] = b]
@@ -303,28 +303,28 @@ ReloadBilling(a, b) ==
          /\ Done("billing", None, a, 0, TRUE)
          /\ UNCHANGED <<acct, prov, known, links, dflt, insts, nextSes, lim, run>>
     ELSE Refused("billing", None, a, 0, {})
-\* An instance added to the end of a friend's (refused for a friend not set up, or a name it already has).
+\* An instance added to the end of an AI's (refused for an AI not set up, or a name it already has).
 ReloadAddInstance(f, i) == ReloadI(f, i, acct, prov, known, links, dflt, [insts EXCEPT ![f] = Append(@, i)])
-\* An instance taken out of a friend's.
+\* An instance taken out of an AI's.
 ReloadDropInstance(f, i) == ReloadI(f, i, acct, prov, known, links, dflt, [insts EXCEPT ![f] = Drop(@, i)])
-\* An instance of a friend's moved in place: its machine or directory edited, its name kept (the names alone are
-\* modelled, so nothing else changes; refused for an instance the friend does not have).
+\* An instance of an AI's moved in place: its machine or directory edited, its name kept (the names alone are
+\* modelled, so nothing else changes; refused for an instance the AI does not have).
 ReloadMoveInstance(f, i) ==
     IF i \in Range(insts[f])
     THEN BecomeIM("moveinst", f, i, acct, prov, known, links, dflt, insts, {<<f, i>>})
     ELSE Refused("moveinst", f, i, 0, {})
 
-\* The person's: the session's account, one linked to its friend or none, whatever its provider or sign-in. A
+\* The person's: the session's account, one linked to its AI or none, whatever its provider or sign-in. A
 \* refusal is a notice in the session's transcript.
 SetSession(s, a) ==
-    IF ses[s].made /\ (a = None \/ a \in Range(links[ses[s].friend]))
+    IF ses[s].made /\ (a = None \/ a \in Range(links[ses[s].ai]))
     THEN /\ ses' = [ses EXCEPT ![s].acct = a, ![s].automatic = FALSE, ![s].harness = HarnessFor(a, prov, @)]
          /\ Done("set", None, a, s, TRUE)
          /\ told' = IF a /= None /\ ses[s].acct /= None /\ ses[s].acct /= a THEN {s} ELSE {}
          /\ UNCHANGED <<acct, prov, known, links, dflt, insts, nextSes, lim, bill, run>>
     ELSE Refused("set", None, a, s, IF ses[s].made THEN {s} ELSE {})
 
-\* The server's, where a usage limit is reported: the friend's next signed-in linked account after the session's, in
+\* The server's, where a usage limit is reported: the AI's next signed-in linked account after the session's, in
 \* link order. The session is told either way: of the switch, or that there is none to switch to.
 RotateTo(s, n) ==
     IF ses[s].made
@@ -335,47 +335,47 @@ RotateTo(s, n) ==
               /\ UNCHANGED <<acct, prov, known, links, dflt, insts, nextSes, lim, bill, run>>
     ELSE Refused("rotate", None, None, s, {})
 
-Rotate(s) == IF ses[s].automatic THEN RotateTo(s, NextUp(ses[s].friend, ses[s].acct))
+Rotate(s) == IF ses[s].automatic THEN RotateTo(s, NextUp(ses[s].ai, ses[s].acct))
              ELSE Refused("rotate", None, None, s, {})
 
 \* A fork may decline the move or pick any other signed-in linked account.
 PolicyRotate(s) ==
     IF ses[s].automatic
-    THEN \E n \in {None} \cup {a \in Range(Subs(links[ses[s].friend], bill)) : a /= ses[s].acct /\ Up(a)} : RotateTo(s, n)
+    THEN \E n \in {None} \cup {a \in Range(Subs(links[ses[s].ai], bill)) : a /= ses[s].acct /\ Up(a)} : RotateTo(s, n)
     ELSE Refused("rotate", None, None, s, {})
 
-\* A session made with friend f, copying session `from` (0: none): its account when linked to f (or none), else
+\* A session made with AI f, copying session `from` (0: none): its account when linked to f (or none), else
 \* f's default; its instance when `from` is f's and f still has it, else f's default instance. Past the limit, or
 \* copying a session not made, refused.
 Create(f, from) ==
     IF nextSes <= MaxSes /\ (from = 0 \/ ses[from].made)
     THEN LET subs == Subs(links[f], bill)
-             same == from /= 0 /\ ses[from].friend = f
+             same == from /= 0 /\ ses[from].ai = f
              auto == Len(subs) > 1 /\ (~same \/ ses[from].automatic)
              a == IF auto THEN IF same /\ ses[from].acct \in Range(subs) /\ Up(ses[from].acct)
                                THEN ses[from].acct ELSE FirstAuto(subs)
                   ELSE IF from /= 0 /\ (ses[from].acct = None \/ ses[from].acct \in Range(links[f]))
                   THEN ses[from].acct ELSE dflt[f]
-             i == IF from /= 0 /\ ses[from].friend = f /\ ses[from].inst \in Range(insts[f])
+             i == IF from /= 0 /\ ses[from].ai = f /\ ses[from].inst \in Range(insts[f])
                   THEN ses[from].inst ELSE FirstOr(insts[f]) IN
-         /\ ses' = [ses EXCEPT ![nextSes] = [made |-> TRUE, friend |-> f, inst |-> i, acct |-> a,
+         /\ ses' = [ses EXCEPT ![nextSes] = [made |-> TRUE, ai |-> f, inst |-> i, acct |-> a,
                                              harness |-> HarnessFor(a, prov, StartHarness), automatic |-> auto]]
          /\ nextSes' = nextSes + 1
          /\ Done("create", f, a, from, TRUE) /\ told' = {}
          /\ UNCHANGED <<acct, prov, known, links, dflt, insts, lim, bill, run>>
     ELSE Refused("create", f, None, from, {})
 
-\* The server's: a session's driver started, limited when its friend is limited or its account is billed at API rate,
-\* from the files as they are now (accounts::limitedFor). Eff is passed in so that a witness can break it. A friend or
+\* The server's: a session's driver started, limited when its AI is limited or its account is billed at API rate,
+\* from the files as they are now (accounts::limitedFor). Eff is passed in so that a witness can break it. An AI or
 \* an account the files no longer hold reads limited: the safe direction.
-Eff(s) == \/ ses[s].friend \notin known
-          \/ lim[ses[s].friend]
+Eff(s) == \/ ses[s].ai \notin known
+          \/ lim[ses[s].ai]
           \/ ses[s].acct /= None /\ (acct[ses[s].acct] = "absent" \/ bill[ses[s].acct] = "api")
 StartWith(E(_), s) ==
     IF ses[s].made /\ run[s].st = "off"
     THEN /\ run' = [run EXCEPT ![s] = [st |-> IF E(s) THEN "limited" ELSE "open",
                                        api |-> ses[s].acct /= None /\ bill[ses[s].acct] = "api",
-                                       flim |-> lim[ses[s].friend]]]
+                                       flim |-> lim[ses[s].ai]]]
          /\ Done("start", None, None, s, TRUE) /\ told' = {}
          /\ UNCHANGED <<acct, prov, known, links, dflt, insts, ses, nextSes, lim, bill>>
     ELSE Refused("start", None, None, s, {})
@@ -391,22 +391,22 @@ End(s) ==
 \* The steps, with the actions a reversed witness breaks passed in.
 NextAll(Add(_), Rm(_), Ul(_, _), Def(_, _), St(_, _), Rot(_), Cr(_, _), DropLink(_, _), Pv(_, _), AddInst(_, _),
         DropInst(_, _), MoveInst(_, _), Lk(_, _), AddF(_), Sta(_), LimR(_, _), BillR(_, _)) ==
-    \/ \E f \in Friends, i \in Insts : AddInst(f, i) \/ DropInst(f, i) \/ MoveInst(f, i)
+    \/ \E f \in AIs, i \in Insts : AddInst(f, i) \/ DropInst(f, i) \/ MoveInst(f, i)
     \/ \E a \in Accts : Add(a) \/ Rm(a) \/ Report(a, "in") \/ Report(a, "out") \/ ReloadDropAccount(a)
     \/ \E a \in Accts, p \in Providers : Pv(a, p)
-    \/ \E f \in Friends : AddF(f) \/ ReloadDropFriend(f)
-    \/ \E f \in Friends, a \in Accts : Lk(f, a) \/ Ul(f, a) \/ DropLink(f, a)
-    \/ \E f \in Friends, v \in Limits : LimR(f, v)
+    \/ \E f \in AIs : AddF(f) \/ ReloadDropAI(f)
+    \/ \E f \in AIs, a \in Accts : Lk(f, a) \/ Ul(f, a) \/ DropLink(f, a)
+    \/ \E f \in AIs, v \in Limits : LimR(f, v)
     \/ \E a \in Accts, b \in Bills : BillR(a, b)
     \/ Runs /\ \E s \in Ids : Sta(s) \/ End(s)
-    \/ \E f \in Friends, a \in Accts \cup {None} : Def(f, a)
+    \/ \E f \in AIs, a \in Accts \cup {None} : Def(f, a)
     \/ \E s \in Ids, a \in Accts \cup {None} : St(s, a)
     \/ \E s \in Ids : Rot(s)
-    \/ \E f \in Friends, from \in 0..MaxSes : Cr(f, from)
+    \/ \E f \in AIs, from \in 0..MaxSes : Cr(f, from)
 
 NextWithIM(Add(_), Rm(_), Ul(_, _), Def(_, _), St(_, _), Rot(_), Cr(_, _), DropLink(_, _), Pv(_, _), AddInst(_, _),
            DropInst(_, _), MoveInst(_, _)) ==
-    NextAll(Add, Rm, Ul, Def, St, Rot, Cr, DropLink, Pv, AddInst, DropInst, MoveInst, LinkAccount, AddFriend, Start,
+    NextAll(Add, Rm, Ul, Def, St, Rot, Cr, DropLink, Pv, AddInst, DropInst, MoveInst, LinkAccount, AddAI, Start,
             ReloadLimit, ReloadBilling)
 
 \* The steps with the limit's actions passed in, for its witnesses.
@@ -432,48 +432,48 @@ PolicySpec == Init /\ [][PolicyNext]_vars
 -----------------------------------------------------------------------------
 \* Invariants.
 
-Session == [made : BOOLEAN, friend : Friends \cup {None}, inst : Insts \cup {None}, acct : Accts \cup {None},
+Session == [made : BOOLEAN, ai : AIs \cup {None}, inst : Insts \cup {None}, acct : Accts \cup {None},
             harness : Harnesses \cup {None}, automatic : BOOLEAN]
 
 TypeOK ==
     /\ acct \in [Accts -> {"absent", "in", "out"}]
     /\ prov \in [Accts -> Providers]
-    /\ known \subseteq Friends
-    /\ \A f \in Friends : links[f] \in Seq(Accts)
-    /\ dflt \in [Friends -> Accts \cup {None}]
-    /\ \A f \in Friends : insts[f] \in Seq(Insts)
+    /\ known \subseteq AIs
+    /\ \A f \in AIs : links[f] \in Seq(Accts)
+    /\ dflt \in [AIs -> Accts \cup {None}]
+    /\ \A f \in AIs : insts[f] \in Seq(Insts)
     /\ ses \in [Ids -> Session]
     /\ nextSes \in 1..(MaxSes + 1)
-    /\ lim \in [Friends -> BOOLEAN]
+    /\ lim \in [AIs -> BOOLEAN]
     /\ bill \in [Accts -> {"sub", "api"}]
     /\ run \in [Ids -> [st : {"off", "limited", "open"}, api : BOOLEAN, flim : BOOLEAN]]
     /\ told \subseteq Ids
     /\ last.ok \in BOOLEAN
 
-\* Links name accounts set up, each once, only from friends set up.
+\* Links name accounts set up, each once, only from AIs set up.
 LinksSound ==
-    \A f \in Friends :
+    \A f \in AIs :
         /\ \A i \in DOMAIN links[f] : acct[links[f][i]] /= "absent"
         /\ Len(links[f]) = Cardinality(Range(links[f]))
         /\ f \notin known => links[f] = << >>
 
-\* A friend's default is one of its linked accounts, or none.
-DefaultLinked == \A f \in Friends : dflt[f] = None \/ dflt[f] \in Range(links[f])
+\* An AI's default is one of its linked accounts, or none.
+DefaultLinked == \A f \in AIs : dflt[f] = None \/ dflt[f] \in Range(links[f])
 
-\* A session of a friend set up: one made whose friend is in the friends file. A session whose friend was taken out is
-\* kept as it was, and held to these again once its friend is set up again (the step that sets it up settles it).
-Live(s) == ses[s].made /\ ses[s].friend \in known
+\* A session of an AI set up: one made whose AI is in the AIs file. A session whose AI was taken out is
+\* kept as it was, and held to these again once its AI is set up again (the step that sets it up settles it).
+Live(s) == ses[s].made /\ ses[s].ai \in known
 
-\* A session runs on an account linked to its friend, or on none: never on one unlinked or removed.
+\* A session runs on an account linked to its AI, or on none: never on one unlinked or removed.
 SessionLinked ==
-    \A s \in Ids : Live(s) => (ses[s].acct = None \/ ses[s].acct \in Range(links[ses[s].friend]))
+    \A s \in Ids : Live(s) => (ses[s].acct = None \/ ses[s].acct \in Range(links[ses[s].ai]))
 
-\* A session belongs to one of its friend's instances, or to none when its friend has none; instances only of friends
+\* A session belongs to one of its AI's instances, or to none when its AI has none; instances only of AIs
 \* set up, each named once.
 InstanceHeld ==
-    /\ \A s \in Ids : Live(s) => IF insts[ses[s].friend] = << >> THEN ses[s].inst = None
-                                 ELSE ses[s].inst \in Range(insts[ses[s].friend])
-    /\ \A f \in Friends : Len(insts[f]) = Cardinality(Range(insts[f])) /\ (f \notin known => insts[f] = << >>)
+    /\ \A s \in Ids : Live(s) => IF insts[ses[s].ai] = << >> THEN ses[s].inst = None
+                                 ELSE ses[s].inst \in Range(insts[ses[s].ai])
+    /\ \A f \in AIs : Len(insts[f]) = Cardinality(Range(insts[f])) /\ (f \notin known => insts[f] = << >>)
 
 \* A session on an account runs its provider's harness.
 HarnessMatches == \A s \in Ids : Live(s) /\ ses[s].acct /= None => ses[s].harness = prov[ses[s].acct]
@@ -484,14 +484,14 @@ IdsDense == \A s \in Ids : ses[s].made <=> s < nextSes
 \* No driver of a session on an account billed at API rate ever starts unlimited.
 ApiAlwaysLimited == \A s \in Ids : run[s].st /= "off" /\ run[s].api => run[s].st = "limited"
 
-\* No driver starts with a weaker limit than its friend's at its start.
-NeverWeakerThanFriend == \A s \in Ids : run[s].st /= "off" /\ run[s].flim => run[s].st = "limited"
+\* No driver starts with a weaker limit than its AI's at its start.
+NeverWeakerThanAI == \A s \in Ids : run[s].st /= "off" /\ run[s].flim => run[s].st = "limited"
 
-\* A friend not limited links no account billed at API rate; a friend not set up reads limited, an account not set up
+\* An AI not limited links no account billed at API rate; an AI not set up reads limited, an account not set up
 \* bills by subscription; only a session made has a driver.
 LimitSound ==
     /\ NoApiUnlimited(known, links, lim, bill)
-    /\ \A f \in Friends \ known : lim[f]
+    /\ \A f \in AIs \ known : lim[f]
     /\ \A a \in Accts : acct[a] = "absent" => bill[a] = "sub"
     /\ \A s \in Ids : run[s].st /= "off" => ses[s].made
 
@@ -510,19 +510,19 @@ MovedIsTold ==
 ServerPicksSignedIn ==
     [][\A s \in Ids : ses[s].made /\ ses'[s].acct /= ses[s].acct /\ ses'[s].acct /= None /\ last'.op /= "set"
                       /\ (~ses[s].automatic \/ last'.op = "rotate"
-                          \/ (\E a \in Range(Subs(links'[ses[s].friend], bill')) : acct'[a] = "in"))
+                          \/ (\E a \in Range(Subs(links'[ses[s].ai], bill')) : acct'[a] = "in"))
                         => acct'[ses'[s].acct] = "in"]_vars
 
-\* Automatic selection moves when the friend has another signed-in subscription.
+\* Automatic selection moves when the AI has another signed-in subscription.
 RotateMoves ==
     [][last'.op = "rotate" /\ ses[last'.s].automatic
-       /\ (\E b \in Range(Subs(links[ses[last'.s].friend], bill)) : b /= ses[last'.s].acct /\ acct[b] = "in")
+       /\ (\E b \in Range(Subs(links[ses[last'.s].ai], bill)) : b /= ses[last'.s].acct /\ acct[b] = "in")
          => ses'[last'.s].acct /= ses[last'.s].acct]_vars
 
-\* A set is taken exactly for a session made and an account linked to its friend (or none), and gives it that one.
+\* A set is taken exactly for a session made and an account linked to its AI (or none), and gives it that one.
 SetExact ==
     [][last'.op = "set" =>
-         /\ last'.ok <=> (ses[last'.s].made /\ (last'.a = None \/ last'.a \in Range(links[ses[last'.s].friend])))
+         /\ last'.ok <=> (ses[last'.s].made /\ (last'.a = None \/ last'.a \in Range(links[ses[last'.s].ai])))
          /\ last'.ok => ses'[last'.s].acct = last'.a]_vars
 
 \* A set or a rotation changes no other session.
@@ -531,23 +531,23 @@ OnlyItsSession == [][last'.op \in {"set", "rotate"} => \A s \in Ids \ {last'.s} 
 \* An instance moved in place tells every session on it (its driver follows it there).
 MovedInstanceIsTold ==
     [][last'.op = "moveinst" /\ last'.ok =>
-         {s \in Ids : ses[s].made /\ ses[s].friend = last'.f /\ ses[s].inst = last'.a} \subseteq told']_vars
+         {s \in Ids : ses[s].made /\ ses[s].ai = last'.f /\ ses[s].inst = last'.a} \subseteq told']_vars
 
-\* A friend set up by an action is limited.
-NewFriendLimited == [][last'.op = "friend" /\ last'.ok => lim'[last'.f]]_vars
+\* An AI set up by an action is limited.
+NewAILimited == [][last'.op = "ai" /\ last'.ok => lim'[last'.f]]_vars
 
-\* A friend's limit changed tells each of its sessions.
+\* An AI's limit changed tells each of its sessions.
 LimitChangeIsTold ==
-    [][\A s \in Ids : ses[s].made /\ known' = known /\ lim'[ses[s].friend] /= lim[ses[s].friend] => s \in told']_vars
+    [][\A s \in Ids : ses[s].made /\ known' = known /\ lim'[ses[s].ai] /= lim[ses[s].ai] => s \in told']_vars
 
 \* An operation refused changes nothing.
 RefusedChangesNothing == [][~last'.ok => UNCHANGED model]_vars
 
-\* A session whose friend is out of the friends file after the step is left exactly as it was by every change of the
-\* accounts and friends (the person's own set aside); one whose friend the step took out is told.
+\* A session whose AI is out of the AIs file after the step is left exactly as it was by every change of the
+\* accounts and AIs (the person's own set aside); one whose AI the step took out is told.
 OutLeftAlone ==
     [][last'.op /= "set" =>
-         \A s \in Ids : ses[s].made /\ ses[s].friend \notin known' => ses'[s] = ses[s]]_vars
-OutIsTold == [][\A s \in Ids : ses[s].made /\ ses[s].friend \in known \ known' => s \in told']_vars
+         \A s \in Ids : ses[s].made /\ ses[s].ai \notin known' => ses'[s] = ses[s]]_vars
+OutIsTold == [][\A s \in Ids : ses[s].made /\ ses[s].ai \in known \ known' => s \in told']_vars
 
 =============================================================================

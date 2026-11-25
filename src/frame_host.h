@@ -32,7 +32,7 @@
 #include "model.h"
 #include "sync/actions.h"
 #include "sync/client.h"
-#include "sync/friend_strip.h"
+#include "sync/ai_strip.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
 #include "signin_gate.h"
@@ -46,7 +46,7 @@ namespace nexus {
 class PraxTerminals;
 class PraxBoard;
 
-// Text from outside (a name the server sent that is not a friend's, the host given), as a log line can hold it: every
+// Text from outside (a name the server sent that is not an AI's, the host given), as a log line can hold it: every
 // byte below 0x20, 0x7f and above, and the backslash as \xNN, the rest as it is; at most 80 bytes, cut between two
 // characters, never inside an escape, then "...".
 std::string loggable(std::string_view text);
@@ -158,16 +158,16 @@ struct FrameHost {
     std::uint64_t savedLayoutRevision = ~std::uint64_t{};
     std::size_t savedLayoutFocus = ~std::size_t{};
 
-    // The friend tabs are the server's (AGENTS.md "Friend tabs"): each state the link brings while connected whose
-    // friends changed sets them (sync/friend_strip.h), new ones in the saved order, and a session is ensured with each
-    // friend as its tab is added. A saved friend's tab is selected when it arrives, unless the person chose a tab first
-    // (personSelected); the selection is not saved while it waits, nor the friends' order before the friends arrive.
-    // A removed friend's draft is kept by name, and given back when a friend of that name has a tab again; each such
+    // The AI tabs are the server's (AGENTS.md "AI tabs"): each state the link brings while connected whose
+    // AIs changed sets them (sync/ai_strip.h), new ones in the saved order, and a session is ensured with each
+    // AI as its tab is added. A saved AI's tab is selected when it arrives, unless the person chose a tab first
+    // (personSelected); the selection is not saved while it waits, nor the AIs' order before the AIs arrive.
+    // A removed AI's draft is kept by name, and given back when an AI of that name has a tab again; each such
     // change is made in `keptStore` for this window's server, `host` (with `keep`, and unless its file did not read or
     // the host cannot key a draft: tab_order.h KeptChange, keptServer).
-    sync::FriendStrip strip;
+    sync::AIStrip strip;
     const KeptDraftsStore* keptStore = nullptr;
-    // A tab chosen by the person (view.h selected): the saved selection no longer waits for the friends.
+    // A tab chosen by the person (view.h selected): the saved selection no longer waits for the AIs.
     void personSelected();
 
     // With a server (main.cpp --server, or a state file).
@@ -180,7 +180,7 @@ struct FrameHost {
     LinkSignIn signIn;                  // in-app sign-in, from connect(); main.cpp sets its openUrl
 
     // Shows the server's sessions through `port`: the prompt waits for the server, Enter and Command-Enter send and
-    // queue to the session the tab shows, Command-Escape stops it, the friend tabs follow the server's friends, a
+    // queue to the session the tab shows, Command-Escape stops it, the AI tabs follow the server's AIs, a
     // session is ensured with each, and the server's secret requests are asked in the secret dialog.
     void connect(LinkPort* port, const std::string& serverHost);
     // Shows `state` as the window holds it once the server is heard, or with `lost` once it has lost the server.
@@ -201,9 +201,9 @@ struct FrameHost {
     void keepTerminals();
     void keepSelection();
 
-    // The link's latest state into the window, as each frame's start takes it: the friend tabs, the transcripts, the
+    // The link's latest state into the window, as each frame's start takes it: the AI tabs, the transcripts, the
     // secret requests and the status line. Never waits. main.cpp calls it before the first frame too, while a --tab
-    // waits for the server's friends.
+    // waits for the server's AIs.
     void pollLink();
 
 private:
@@ -232,12 +232,12 @@ private:
     void chooseAccount(std::string account);
     void setAccount(sync::SessionId session, const std::string& target);
     bool activateSignIn();
-    const sync::ServerFriend* activeAccountRoster() const;
+    const sync::ServerAI* activeAccountRoster() const;
     void wire();
-    // The friend tabs from `state` (FriendStrip::take): when its friends changed, the mirror's record of each removed
+    // The AI tabs from `state` (AIStrip::take): when its AIs changed, the mirror's record of each removed
     // tab forgotten, a session ensured for each added one when there is a link, each name the server sent that is not
-    // a friend's logged, the kept drafts saved when they changed, and the notice for a strip without friends.
-    void takeFriends(const sync::Sessions& state);
+    // an AI's logged, the kept drafts saved when they changed, and the notice for a strip without AIs.
+    void takeAIs(const sync::Sessions& state);
 };
 
 } // namespace nexus

@@ -8,7 +8,7 @@ BrokenSend(i) ==
     THEN /\ transcript' = [transcript EXCEPT ![At(i)] = Append(@, [kind |-> "Person", text |-> draft[At(i)]])]
          /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("send", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active, queue>>
+         /\ UNCHANGED <<ais, order, active, queue>>
     ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
@@ -17,7 +17,7 @@ BrokenQueue(i) ==
     THEN /\ queue' = [queue EXCEPT ![At(i)] = Append(@, draft[At(i)])]
          /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("queue", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active, transcript>>
+         /\ UNCHANGED <<ais, order, active, transcript>>
     ELSE /\ last' = Did("queue", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

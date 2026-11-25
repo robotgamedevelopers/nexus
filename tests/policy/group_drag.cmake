@@ -5,7 +5,7 @@ set(config [=[
 {
   "tab_groups": [
     {"id":"Tools","types":["terminal","words"]},
-    {"id":"Chat","types":["friend","left"]},
+    {"id":"Chat","types":["ai","left"]},
     {"id":"Review","types":["sprint","right"],"closable":true}
   ],
   "tab_types": [

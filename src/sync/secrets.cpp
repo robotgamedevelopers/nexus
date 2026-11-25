@@ -299,7 +299,7 @@ SecretEffects SecretDesk::answer(std::uint64_t id, const SecretValue& value, Sec
     }
     if (const std::string problem = secretShape(r.what, value); !problem.empty()) {
         // The person's input, not nexus's failure: they are told, and asked again (nexus's own ask is made again by
-        // the hub; a friend's AI asks again itself).
+        // the hub; an AI's AI asks again itself).
         if (expired) {
             out.log.push_back(SecretLog{id, r.account, reason::kMalformed, problem + " (after its deadline)"});
             return out;

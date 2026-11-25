@@ -1,5 +1,5 @@
-// The window's state without drawing: the sprint tab, one tab per friend (friends come and go with the server's friend
-// list), then the terminal tabs that come and go, the active tab, and each friend's transcript, unsent draft and queue
+// The window's state without drawing: the sprint tab, one tab per AI (ais come and go with the server's AI
+// list), then the terminal tabs that come and go, the active tab, and each AI's transcript, unsent draft and queue
 // of prompts held for later.
 // Plain C++: no OS, no clock, no input events. models/Window.tla is its specification, and
 // tests/model/trace_walk.cpp checks that this code's behaviours are behaviours of that spec.
@@ -32,22 +32,22 @@ bool blank(const std::string& text) {
 int zone(TabKind kind) {
     switch (kind) {
         case TabKind::Sprint: return 0;
-        case TabKind::Friend: return 1;
+        case TabKind::AI: return 1;
         case TabKind::Terminal: return 2;
         case TabKind::Extension: return 3;
     }
     return 2;
 }
 
-// Window.tla's Init: the sprint tab, if any, at position 0 with the id after the friends', then the friends by their
+// Window.tla's Init: the sprint tab, if any, at position 0 with the id after the AIs', then the AIs by their
 // place in the list.
-Model::Model(const std::vector<FriendInfo>& friends, bool sprint) {
-    tabs_.reserve(friends.size() + (sprint ? 1 : 0));
+Model::Model(const std::vector<AIInfo>& ais, bool sprint) {
+    tabs_.reserve(ais.size() + (sprint ? 1 : 0));
     if (sprint)
-        tabs_.push_back(Tab{friends.size(), {}, {}, {}, {}, {}, TabKind::Sprint, {}, home_group(TabKind::Sprint)});
-    for (std::size_t f = 0; f < friends.size(); ++f)
-        tabs_.push_back(Tab{f, friends[f].name, friends[f].model, {}, {}, {}, TabKind::Friend, {}, home_group(TabKind::Friend)});
-    next_id_ = friends.size() + (sprint ? 1 : 0);
+        tabs_.push_back(Tab{ais.size(), {}, {}, {}, {}, {}, TabKind::Sprint, {}, home_group(TabKind::Sprint)});
+    for (std::size_t f = 0; f < ais.size(); ++f)
+        tabs_.push_back(Tab{f, ais[f].name, ais[f].model, {}, {}, {}, TabKind::AI, {}, home_group(TabKind::AI)});
+    next_id_ = ais.size() + (sprint ? 1 : 0);
     if (!tabs_.empty())
         history_.push_back(tabs_[0].id);
 }
@@ -61,8 +61,8 @@ const std::vector<std::size_t>& Model::selection_history() const {
     return history_;
 }
 
-bool Model::friend_tab(std::size_t i) const {
-    return i < tabs_.size() && tabs_[i].kind == TabKind::Friend;
+bool Model::ai_tab(std::size_t i) const {
+    return i < tabs_.size() && tabs_[i].kind == TabKind::AI;
 }
 
 std::size_t Model::tab_count() const {
@@ -86,14 +86,14 @@ bool Model::select_tab(std::size_t i) {
 }
 
 bool Model::set_draft(std::size_t i, std::string text) {
-    if (!friend_tab(i))
+    if (!ai_tab(i))
         return false;
     tabs_[i].draft = std::move(text);
     return true;
 }
 
 bool Model::sendable(std::size_t i) const {
-    return friend_tab(i) && !blank(tabs_[i].draft);
+    return ai_tab(i) && !blank(tabs_[i].draft);
 }
 
 bool Model::send(std::size_t i) {
@@ -124,23 +124,23 @@ bool Model::hold_draft(std::size_t i) {
 }
 
 void Model::clear_composer(std::size_t i) {
-    if (!friend_tab(i)) return;
+    if (!ai_tab(i)) return;
     tabs_[i].held.clear();
     tabs_[i].draft.clear();
 }
 
 void Model::restore_held(std::size_t i, std::string text) {
-    if (!friend_tab(i)) return;
+    if (!ai_tab(i)) return;
     auto& held = tabs_[i].held;
     held = held.empty() ? std::move(text) : text + "\n" + held;
 }
 
 void Model::pop_held(std::size_t i) {
-    if (friend_tab(i)) tabs_[i].held.clear();
+    if (ai_tab(i)) tabs_[i].held.clear();
 }
 
 bool Model::take_queued(std::size_t i) {
-    if (!friend_tab(i) || tabs_[i].queue.empty()) {
+    if (!ai_tab(i) || tabs_[i].queue.empty()) {
         return false;
     }
     tabs_[i].queue.erase(tabs_[i].queue.begin());
@@ -148,26 +148,26 @@ bool Model::take_queued(std::size_t i) {
 }
 
 void Model::clear_transcript(std::size_t i) {
-    if (!friend_tab(i)) return;
+    if (!ai_tab(i)) return;
     tabs_[i].held.clear();
     clear_output(i);
 }
 
 void Model::clear_output(std::size_t i) {
-    if (!friend_tab(i)) return;
+    if (!ai_tab(i)) return;
     tabs_[i].transcript.clear();
     ++tabs_[i].transcriptGeneration;
 }
 
 bool Model::append(std::size_t i, Entry e) {
-    if (!friend_tab(i))
+    if (!ai_tab(i))
         return false;
     tabs_[i].transcript.push_back(std::move(e));
     return true;
 }
 
 void Model::edit_transcript(std::size_t i, std::vector<TranscriptEdit> edits) {
-    if (!friend_tab(i) || edits.empty()) return;
+    if (!ai_tab(i) || edits.empty()) return;
     auto& tab = tabs_[i];
     auto& old = tab.transcript;
     std::vector<Entry> updated;
@@ -194,7 +194,7 @@ void Model::edit_transcript(std::size_t i, std::vector<TranscriptEdit> edits) {
 // extension groups in the order they are first opened.
 std::string Model::home_group(TabKind kind, const std::string& type, const std::string& declared) const {
     const std::string_view key = kind == TabKind::Extension ? std::string_view(type) :
-        kind == TabKind::Friend ? "friend" : kind == TabKind::Sprint ? "sprint" : "terminal";
+        kind == TabKind::AI ? "ai" : kind == TabKind::Sprint ? "sprint" : "terminal";
     for (const TabGroup& g : groups_) {
         if (std::find(g.types.begin(), g.types.end(), key) != g.types.end())
             return g.id;
@@ -378,24 +378,24 @@ bool Model::dismiss_tab(std::size_t i) {
     return true;
 }
 
-// Window.tla's AddFriend: the tab goes at FriendEnd, the first position past the sprint tab and the friends; active_
+// Window.tla's AddAI: the tab goes at AIEnd, the first position past the sprint tab and the AIs; active_
 // moves with the tab it names when that stood at or past it.
-bool Model::add_friend(FriendInfo f) {
+bool Model::add_ai(AIInfo f) {
     if (f.name.empty()) {
         return false;
     }
     for (const Tab& t : tabs_) {
-        if (t.kind == TabKind::Friend && t.name == f.name) {
+        if (t.kind == TabKind::AI && t.name == f.name) {
             return false;
         }
     }
-    const auto group = home_group(TabKind::Friend);
+    const auto group = home_group(TabKind::AI);
     const std::size_t at = group_end(group);
     ++layoutRevision_;
     const std::size_t id = next_id_++;
     const bool empty = tabs_.empty();
     tabs_.insert(tabs_.begin() + static_cast<std::ptrdiff_t>(at),
-                 Tab{id, std::move(f.name), std::move(f.model), {}, {}, {}, TabKind::Friend, {}, group});
+                 Tab{id, std::move(f.name), std::move(f.model), {}, {}, {}, TabKind::AI, {}, group});
     if (empty) {
         history_.push_back(id);
     } else if (active_ >= at) {
@@ -404,37 +404,37 @@ bool Model::add_friend(FriendInfo f) {
     return true;
 }
 
-bool Model::remove_friend(std::size_t i) {
-    if (!friend_tab(i)) {
+bool Model::remove_ai(std::size_t i) {
+    if (!ai_tab(i)) {
         return false;
     }
     remove_at(i);
     return true;
 }
 
-// add_friend of each in turn: every tab goes at the friends' zone's end, so the new tabs stand together there in the
+// add_ai of each in turn: every tab goes at the AIs' zone's end, so the new tabs stand together there in the
 // order given, and the active tab moves past them when it stood at or past that end. A model with no tabs makes the first
-// of them active and its id the history, and add_friend of the rest leaves both as they are.
-std::vector<std::string> Model::add_friends(std::vector<FriendInfo> friends, std::size_t* atOut) {
+// of them active and its id the history, and add_ai of the rest leaves both as they are.
+std::vector<std::string> Model::add_ais(std::vector<AIInfo> ais, std::size_t* atOut) {
     std::unordered_set<std::string> named;
     for (const Tab& t : tabs_) {
-        if (t.kind == TabKind::Friend) {
+        if (t.kind == TabKind::AI) {
             named.insert(t.name);
         }
     }
-    const auto group = home_group(TabKind::Friend);
+    const auto group = home_group(TabKind::AI);
     const auto at = group_end(group);
     if (atOut != nullptr) {
         *atOut = at;
     }
     std::vector<Tab> fresh;
     std::vector<std::string> added;
-    for (FriendInfo& f : friends) {
+    for (AIInfo& f : ais) {
         if (f.name.empty() || !named.insert(f.name).second) {
             continue;
         }
         added.push_back(f.name);
-        fresh.push_back(Tab{next_id_++, std::move(f.name), std::move(f.model), {}, {}, {}, TabKind::Friend, {}, group});
+        fresh.push_back(Tab{next_id_++, std::move(f.name), std::move(f.model), {}, {}, {}, TabKind::AI, {}, group});
     }
     if (fresh.empty()) {
         return added;
@@ -452,17 +452,17 @@ std::vector<std::string> Model::add_friends(std::vector<FriendInfo> friends, std
     return added;
 }
 
-// remove_friend of each, last first. A tab that is not active leaves only its place and its id in the history. When
-// the active tab goes, remove_friend makes the tab of the history's last id active, and when that one goes too the
+// remove_ai of each, last first. A tab that is not active leaves only its place and its id in the history. When
+// the active tab goes, remove_ai makes the tab of the history's last id active, and when that one goes too the
 // next: so, while any id of the history stays, the tab of the last id that stays is active at the end. When every id of
-// the history goes, remove_friend's fallback (the tab at the removed one's place) decides, step by step, and so the
+// the history goes, remove_ai's fallback (the tab at the removed one's place) decides, step by step, and so the
 // loop itself is run.
-std::vector<std::size_t> Model::remove_friends(const std::function<bool(const Tab&)>& gone) {
+std::vector<std::size_t> Model::remove_ais(const std::function<bool(const Tab&)>& gone) {
     std::vector<std::size_t> removed;
     std::vector<char> drop(tabs_.size(), 0);
     std::unordered_set<std::size_t> ids;
     for (std::size_t i = 0; i < tabs_.size(); ++i) {
-        if (tabs_[i].kind == TabKind::Friend && gone(tabs_[i])) {
+        if (tabs_[i].kind == TabKind::AI && gone(tabs_[i])) {
             drop[i] = 1;
             ids.insert(tabs_[i].id);
             removed.push_back(tabs_[i].id);
@@ -520,7 +520,7 @@ void Model::remove_at(std::size_t i) {
         active_ = tabs_.empty() ? 0 : tabs_.size() - 1;
     }
     // A history left empty with tabs open (the closed tab was the only one ever selected, and the rest arrived without
-    // a selection, as a friend's tab does) holds the tab that now shows, so that it still ends at the active tab
+    // a selection, as an AI's tab does) holds the tab that now shows, so that it still ends at the active tab
     // (Window.tla, ClosedHistory).
     if (history_.empty() && !tabs_.empty()) {
         history_.push_back(tabs_[active_].id);

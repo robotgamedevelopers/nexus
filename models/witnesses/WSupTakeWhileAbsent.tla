@@ -1,6 +1,6 @@
 ------------------------- MODULE WSupTakeWhileAbsent -------------------------
-\* Reversed witness: the take forgets the friend is out of friends.json, so a prompt queued while it is out leaves the
-\* queue and waits, for a friend that is gone. AbsentKeepsPrompts must reject it.
+\* Reversed witness: the take forgets the AI is out of ais.json, so a prompt queued while it is out leaves the
+\* queue and waits, for an AI that is gone. AbsentKeepsPrompts must reject it.
 EXTENDS MCSupervisor
 
 BrokenTake(x) ==

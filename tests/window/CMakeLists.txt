@@ -171,7 +171,7 @@ if(NEXUS_WINDOW)
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/terminal_work)
     set_tests_properties(window_terminal PROPERTIES LABELS functional TIMEOUT 60)
 
-    # The window's frame code around the friend tabs (test_frame_host.cpp): FrameHost over a fake link, no window.
+    # The window's frame code around the AI tabs (test_frame_host.cpp): FrameHost over a fake link, no window.
     add_executable(nexus_frame_host_tests test_frame_host.cpp)
     target_compile_options(nexus_frame_host_tests PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_frame_host_tests PRIVATE nexus_frame)
@@ -236,7 +236,7 @@ if(NEXUS_WINDOW)
         set_tests_properties(window_functional_url_opener_${case} PROPERTIES LABELS functional TIMEOUT 30)
     endforeach()
 
-    # `nexus --state` against a fixture state (fixtures/busy.state, written by tests/server's friends_functional_window
+    # `nexus --state` against a fixture state (fixtures/busy.state, written by tests/server's ais_functional_window
     # from the fake driver), with HOME an empty directory: it draws from the file alone (state_screenshot.cmake).
     if(NEXUS_LINK AND TARGET nexus)
         add_test(NAME window_state_screenshot COMMAND ${CMAKE_COMMAND} -DNEXUS=$<TARGET_FILE:nexus>

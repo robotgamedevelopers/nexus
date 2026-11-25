@@ -25,7 +25,7 @@ def _command(state):
         target = catalog.get("resolved", {}).get(model)
         email = state.get("account_email") or "email unavailable"
         lines = [
-            "AI: " + state["friend"],
+            "AI: " + state["ai"],
             "Harness: " + (state.get("harness") or "unknown"),
             "Account: " + email + " (" + (state.get("login_state") or "unknown") + ")",
             "Model: " + model + (" → " + target if target and target != model else ""),
@@ -68,11 +68,11 @@ def handle(event, state, config):
         command = _command(state)
         if command != None:
             return command
-        service = config.get("services", {}).get(state["friend"])
+        service = config.get("services", {}).get(state["ai"])
         if service:
             if "native" in service:
                 return [{"op": "native", "name": service["native"]}]
-            fail("Unknown service handler for " + state["friend"])
+            fail("Unknown service handler for " + state["ai"])
         # The text argument defaults to the submitted text. A fork can inspect it,
         # transform it, attach notices, or choose to queue against live session state.
         return [{"op": state["intent"]}]

@@ -8,7 +8,7 @@ BrokenAppend(i, e) ==
     THEN /\ transcript' = [transcript EXCEPT ![At(i)] = Append(@, e)]
          /\ queue' = [queue EXCEPT ![At(i)] = IF Len(@) > 0 THEN Tail(@) ELSE @]
          /\ last' = Did("append", i, "", e, TRUE)
-         /\ UNCHANGED <<friends, order, active, draft>>
+         /\ UNCHANGED <<ais, order, active, draft>>
     ELSE /\ last' = Did("append", i, "", e, FALSE)
          /\ UNCHANGED model
 

@@ -2,7 +2,7 @@
 # Words are split on spaces; give the programs by absolute path, since the server's PATH may not hold node.
 #
 #   driver <harness> <program> [<argument>...]    the server adds --cwd <dir> and, to go on, --resume <session id>
-#   friend <name> <harness> [<directory>]
+#   AI <name> <harness> [<directory>]
 #
 # The Claude driver's one required argument is --account <name>: its login is ~/.nexus/server/accounts/<name>/, the
 # token in its file oauth-token (one line from `claude setup-token`, mode 0600), which Claude gets on a descriptor and
@@ -18,9 +18,9 @@
 # run (they would run outside the sandbox).
 # --claude <path> runs that claude executable instead of the SDK's own.
 #
-# Each driver line is one harness on one account; friends on two accounts name two harnesses.
+# Each driver line is one harness on one account; AIs on two accounts name two harnesses.
 
 driver claude /opt/homebrew/bin/node /Users/me/nexus/drivers/claude/dist/src/main.js --account main --effort high
 driver claude-work /opt/homebrew/bin/node /Users/me/nexus/drivers/claude/dist/src/main.js --account work
-friend alice claude ~/work
-friend bob claude-work ~/src
+ai alice claude ~/work
+ai bob claude-work ~/src

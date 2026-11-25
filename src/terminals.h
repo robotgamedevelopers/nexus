@@ -4,7 +4,7 @@
 // prTerminalService for the others, prTerminalDestroy on close and at exit.
 //
 // The screen's background is the window's (style::kBackground), at the overlay opacity from the window's policy
-// and opaque otherwise, as behind the friends' tabs. Prax takes the background from the kit theme's bg1, opaque
+// and opaque otherwise, as behind the AIs' tabs. Prax takes the background from the kit theme's bg1, opaque
 // (terminal.cpp updateTheme 738-751, color8Of 368-371): each frame sets the screen's background colour back to the
 // window's, and paints it on the window element (PrTerminalBackground_Parent). A request for Prax: a host-set
 // background role that survives palette changes, or a screen opacity apart from the ink.

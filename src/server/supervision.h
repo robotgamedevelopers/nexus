@@ -169,7 +169,7 @@ public:
     struct Run;
 
 private:
-    friend struct Run;
+    ai struct Run;
     store::Fs& fs_;
     handover::PlacementPort& placement_;
     HandoverGate& handoverGate_;

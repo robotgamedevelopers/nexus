@@ -91,7 +91,7 @@ void populateOldHome(MemFs& fs) {
         CHECK_OK(s->commit(1, std::vector<Change>{q}, "w1", 2));
     }
     CHECK(fs.has("/h/.nexus/store/snapshot") && fs.has("/h/.nexus/store/log"));
-    writeDurable(fs, "/h/.nexus/drivers", "driver claude /usr/bin/node /d/main.js --account main\nfriend ada claude\n");
+    writeDurable(fs, "/h/.nexus/drivers", "driver claude /usr/bin/node /d/main.js --account main\nai ada claude\n");
     writeDurable(fs, "/h/.nexus/config", "machine studio\n");
     writeDurable(fs, "/h/.nexus/server.log", "old server log\n");
     writeDurable(fs, "/h/.nexus/server.sock", "");
@@ -104,7 +104,7 @@ void verifyMigrated(MemFs& fs) {
     CHECK((topNames == std::vector<std::string>{"client", "server"}));
     CHECK(strOf(fs.data("/h/.nexus/client/config")) == "sprint-url https://board.example\n");
     CHECK(!fs.has("/h/.nexus/server/.migrating"));
-    CHECK(has(strOf(fs.data("/h/.nexus/server/drivers")), "friend ada claude"));
+    CHECK(has(strOf(fs.data("/h/.nexus/server/drivers")), "AI ada claude"));
     CHECK(strOf(fs.data("/h/.nexus/server/config")) == "machine studio\n");
 
     std::unique_ptr<Store> s;
@@ -112,7 +112,7 @@ void verifyMigrated(MemFs& fs) {
     if (s != nullptr) {
         CHECK(s->sessions().size() == 1 && s->next_session() == 2 && s->applied("w1") == 2);
         const store::Session* ses = s->session(1);
-        CHECK(ses != nullptr && ses->info.friend_name == "ada" && ses->transcript.size() == 1 &&
+        CHECK(ses != nullptr && ses->info.ai_name == "ada" && ses->transcript.size() == 1 &&
               ses->transcript[0].text == "keep this conversation across layout migration" &&
               ses->queue == std::vector<std::string>{"queued prompt"});
     }
@@ -200,10 +200,10 @@ void testRefusals() {
     {
         MemFs diff;
         populateOldHome(diff);
-        writeDurable(diff, "/h/.nexus/server/drivers", "friend other claude\n");
+        writeDurable(diff, "/h/.nexus/server/drivers", "AI other claude\n");
         const Status s = migrateOldLayout(diff, "/h/.nexus", "/h/.nexus/server");
         CHECK(s.code() == Status::Code::Failed && has(s.message(), "drivers"));
-        CHECK(strOf(diff.data("/h/.nexus/server/drivers")) == "friend other claude\n");
+        CHECK(strOf(diff.data("/h/.nexus/server/drivers")) == "AI other claude\n");
         CHECK(diff.has("/h/.nexus/drivers"));
 
         MemFs same;
@@ -297,9 +297,9 @@ void testFormats() {
     CHECK(has(ref, "store-snapshot") && has(ref, "6"));
 
     // Breaking config (version 3 > b1.writes 2): refused.
-    d = DiskFormats{3, 1, 4, 3, "friends.json"};
+    d = DiskFormats{3, 1, 4, 3, "ais.json"};
     ref = diskFormatsRefusal(b1, h1, d);
-    CHECK(has(ref, "config") && has(ref, "friends.json") && has(ref, "3"));
+    CHECK(has(ref, "config") && has(ref, "ais.json") && has(ref, "3"));
 
     // readDiskFormats over MemFs: reads store readers and nexus-config JSON versions without mutating disk.
     MemFs fs;
@@ -312,14 +312,14 @@ void testFormats() {
         CHECK_OK(s->commit(1, std::vector<Change>{mk}, "w1", 1));
     }
     writeDurable(fs, "/srv/nexus-config/accounts.json", "{\n  \"version\": 2,\n  \"accounts\": []\n}\n");
-    writeDurable(fs, "/srv/nexus-config/friends.json", "{\n  \"version\": 3,\n  \"friends\": []\n}\n");
+    writeDurable(fs, "/srv/nexus-config/ais.json", "{\n  \"version\": 3,\n  \"ais\": []\n}\n");
     DiskFormats got;
     const std::uint64_t callsBefore = fs.calls();
     CHECK_OK(readDiskFormats(fs, "/srv", &got));
     CHECK(fs.calls() == callsBefore);
     CHECK(got.storeRecordReader == 3 && got.storeRecordSeq == 1 && got.configVersion == 3 &&
-          got.configFile == "friends.json");
-    CHECK(has(diskFormatsRefusal(b1, h1, got), "friends.json"));
+          got.configFile == "ais.json");
+    CHECK(has(diskFormatsRefusal(b1, h1, got), "ais.json"));
 }
 
 } // namespace
