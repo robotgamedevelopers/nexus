@@ -23,7 +23,7 @@ Spaces, with no Dock icon.
 Escape hides it too, and so does switching away: Command-Tab, a click on another app, or Mission Control. With
 `--windowed` it is a normal window instead.
 
-Each AI the server holds (its `friends.json`, `docs/accounts.md`) has a tab, and an AI added or removed there
+Each AI the server holds (its `ais.json`, `docs/accounts.md`) has a tab, and an AI added or removed there
 gets or loses its tab as soon as the server applies the change (`nexus-server config reload`); the sprint tab comes
 first. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
 reorder the tabs; the order is kept across launches. In the [keyboard profile](policy.md#start-with-the-keyboard-driven-client), Enter stages the current message. Empty Enter sends the batch. Command-Enter sends the batch and current draft in order. Command-Delete clears the draft and all locally staged messages in this tab. Shift-Enter starts a new line. The stock profile binds Enter to send and Command-Enter to queue. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller,
@@ -73,12 +73,12 @@ the Keychain, the environment or another tool's directory (`~/.claude` included)
     tab-order.txt, selected-tab.txt, text-scale.txt, terminals.txt
                                 its saved order, selection, text size and terminals
     kept-drafts.txt, kept-drafts.lock
-                                the drafts of friends taken off a server, kept by server and name until they return,
+                                the drafts of AIs taken off a server, kept by server and name until they return,
                                 and the lock every window's change of them takes
     nexus.log                   Windows only: its errors
 ~/.nexus/server/                nexus-server (`--dir` gives another directory)
     config                      its settings (it takes none yet)
-    drivers                     which program drives which friend
+    drivers                     which program drives which AI
     store/                      the tabs and what each window has had applied
     server.sock, server.log     its control socket (mode 0600) and its log
     accounts/<name>/            one harness login each (always here, whatever `--dir` says)

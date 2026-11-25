@@ -12,11 +12,11 @@ namespace nexus::server {
 
 namespace {
 
-// Only the bundled identity profile's documented launcher opts its friends into this integration.
+// Only the bundled identity profile's documented launcher opts its AIs into this integration.
 // The executable/profile pair belongs to the fork. No registry program or profile comes from a message.
 std::vector<std::string> queryFor(const std::vector<std::string>& argv) {
     if (argv.size() < 9 || argv[0].empty() || argv[0].front() != '/' || argv[1] != "-I" ||
-        argv[2] != "-m" || argv[3] != "nexus_policy" || argv[4] != "friend-driver" ||
+        argv[2] != "-m" || argv[3] != "nexus_policy" || argv[4] != "ai-driver" ||
         argv[5].empty() || argv[5].front() != '/') return {};
     return {argv[0], "-I", "-m", "nexus_policy", "bus-roster", argv[5]};
 }
@@ -59,7 +59,7 @@ bool BusGrants::read(const std::string& text, Roster& roster) {
         constexpr std::string_view identifiers = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:/-";
         if (!sync::busPeerName(name) || harness.empty() || harness.size() > 128 ||
             harness.find_first_not_of(identifiers) != harness.npos || (!address.empty() && !endpoint(address)) ||
-            !parsed.try_emplace(std::string(name), Friend{std::string(harness), std::string(address), mode == "no-sandbox"}).second) return false;
+            !parsed.try_emplace(std::string(name), AI{std::string(harness), std::string(address), mode == "no-sandbox"}).second) return false;
     }
     roster = std::move(parsed);
     return true;
@@ -72,19 +72,19 @@ BusPeer BusGrants::sender(const std::string& recipient, const std::string& id, c
     auto& delivery = query.deliveries[recipient];
     if (delivery.id != id || delivery.sender != name) delivery = {id, name, query.started + 1};
     if (!query.roster || !query.problem.empty() || query.completed < delivery.required) return BusPeer::Pending;
-    return query.roster->contains(name) ? BusPeer::Friend : BusPeer::Other;
+    return query.roster->contains(name) ? BusPeer::AI : BusPeer::Other;
 }
 
 void BusGrants::refresh(const DriverTable& table, std::int64_t nowMs) {
     using namespace std::chrono_literals;
     std::map<Program, std::map<std::string, std::string>> wanted;
     std::map<std::string, Program> routes;
-    for (const auto& [name, entry] : table.friends) {
+    for (const auto& [name, entry] : table.ais) {
         const auto driver = table.drivers.find(entry.harness);
         if (driver == table.drivers.end()) continue;
         const auto& argv = driver->second;
         const auto query = queryFor(argv);
-        if (!query.empty() && (argv[6] == "{friend}" || argv[6] == name) &&
+        if (!query.empty() && (argv[6] == "{ai}" || argv[6] == name) &&
                               (argv[7] == "{harness}" || argv[7] == entry.harness)) {
             wanted[query][name] = entry.harness;
             routes.emplace(name, query);

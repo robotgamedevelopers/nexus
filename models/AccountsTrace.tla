@@ -1,19 +1,19 @@
 ---------------------------- MODULE AccountsTrace ----------------------------
 (***************************************************************************)
 (* Trace validation: TLC checks that one trace of the real hub's accounts  *)
-(* and friends (src/sync/hub.h, src/accounts/registry.h) is a behaviour of *)
+(* and AIs (src/sync/hub.h, src/accounts/registry.h) is a behaviour of *)
 (* Accounts.tla.                                                           *)
 (*                                                                         *)
 (* tests/accounts/accounts_walk.cpp drives the code with a seeded random   *)
 (* walk and writes AccountsTraceData.tla beside this module. It defines    *)
-(* the instance (TraceAccts, TraceProvider, TraceProviders, TraceFriends,  *)
+(* the instance (TraceAccts, TraceProvider, TraceProviders, TraceAIs,  *)
 (* TraceInsts, TraceMaxSes, TraceStartHarness, TraceBills, TraceLimits)  *)
 (* and Trace: one record per step. Trace[1] is the start (op "init");     *)
 (* each later record is the operation the code was given (op, with its    *)
-(* friend f, account or instance a, session s, provider p, limit v and    *)
+(* AI f, account or instance a, session s, provider p, limit v and    *)
 (* billing b), whether the code took it (ok), and after it the code's     *)
-(* whole state: the accounts, providers, friends, links, defaults,        *)
-(* instances, sessions and next id, the friends' limits and the accounts' *)
+(* whole state: the accounts, providers, AIs, links, defaults,        *)
+(* instances, sessions and next id, the AIs' limits and the accounts' *)
 (* billings, the drivers the walk started (each limited or open as        *)
 (* accounts::limitedFor decided at its start), and the sessions the step  *)
 (* gave a notice (told).                                                  *)
@@ -29,7 +29,7 @@ EXTENDS Integers, Sequences, TLC, AccountsTraceData
 VARIABLES acct, prov, known, links, dflt, insts, ses, nextSes, lim, bill, run, told, last, l
 
 L == INSTANCE Accounts WITH Accts <- TraceAccts, Provider <- TraceProvider, Providers <- TraceProviders,
-                            Friends <- TraceFriends, Insts <- TraceInsts, MaxSes <- TraceMaxSes,
+                            AIs <- TraceAIs, Insts <- TraceInsts, MaxSes <- TraceMaxSes,
                             StartHarness <- TraceStartHarness, Bills <- TraceBills, Limits <- TraceLimits,
                             Runs <- TRUE
 
@@ -58,11 +58,11 @@ Step(r) ==
       [] r.op = "remove"      -> L!RemoveAccount(r.a)
       [] r.op = "in"          -> L!Report(r.a, "in")
       [] r.op = "out"         -> L!Report(r.a, "out")
-      [] r.op = "friend"      -> L!AddFriend(r.f)
+      [] r.op = "ai"      -> L!AddAI(r.f)
       [] r.op = "link"        -> L!LinkAccount(r.f, r.a)
       [] r.op = "unlink"      -> L!Unlink(r.f, r.a)
       [] r.op = "default"     -> L!SetDefault(r.f, r.a)
-      [] r.op = "dropfriend"  -> L!ReloadDropFriend(r.f)
+      [] r.op = "dropai"  -> L!ReloadDropAI(r.f)
       [] r.op = "droplink"    -> L!ReloadDropLink(r.f, r.a)
       [] r.op = "dropaccount" -> L!ReloadDropAccount(r.a)
       [] r.op = "provider"    -> L!ReloadProvider(r.a, r.p)
@@ -101,9 +101,9 @@ InstanceHeld == L!InstanceHeld
 HarnessMatches == L!HarnessMatches
 IdsDense == L!IdsDense
 ApiAlwaysLimited == L!ApiAlwaysLimited
-NeverWeakerThanFriend == L!NeverWeakerThanFriend
+NeverWeakerThanAI == L!NeverWeakerThanAI
 LimitSound == L!LimitSound
-NewFriendLimited == L!NewFriendLimited
+NewAILimited == L!NewAILimited
 LimitChangeIsTold == L!LimitChangeIsTold
 MovedIsTold == L!MovedIsTold
 MovedInstanceIsTold == L!MovedInstanceIsTold

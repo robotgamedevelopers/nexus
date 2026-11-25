@@ -17,12 +17,12 @@ struct MessagePlan {
 };
 struct MessageState {
     const std::string& text;
-    const std::string& friendName;
+    const std::string& aiName;
     const std::string& model;
     std::size_t queued;
     bool busy;
     std::string effort{}, harness{}, catalog{};
     bool signedOut = false;
-    std::string accountEmail{}, loginState{}, friendInfo{};
+    std::string accountEmail{}, loginState{}, aiInfo{};
 };
 } // namespace nexus::policy

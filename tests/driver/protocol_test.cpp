@@ -180,7 +180,7 @@ void roundtrip() {
     const Decoded<DriverMessage> no =
         decodeDriverMessage("{\"kind\":\"error\",\"cause\":\"c\",\"fix\":\"f\",\"code\":\"no-credential\"}");
     CHECK(no.message && *no.message == DriverMessage(Error{"c", "f", std::nullopt, ErrorCode::NoCredential}));
-    // The account's usage limit: the server moves the session to its friend's next signed-in account.
+    // The account's usage limit: the server moves the session to its AI's next signed-in account.
     const Decoded<DriverMessage> limit =
         decodeDriverMessage("{\"kind\":\"error\",\"cause\":\"c\",\"fix\":\"f\",\"turn\":3,\"code\":\"usage-limit\"}");
     CHECK(limit.message && *limit.message == DriverMessage(Error{"c", "f", 3, ErrorCode::UsageLimit}));

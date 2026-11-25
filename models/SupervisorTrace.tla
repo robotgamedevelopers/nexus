@@ -68,7 +68,7 @@ Step(r) ==
       [] r.op = "configure" -> L!Reconfigure(r.v = "none")
       [] r.op = "signin"   -> L!SignIn
       [] r.op = "limit"    -> L!SetLimit(r.v = "on")
-      [] r.op = "remove"   -> L!RemoveFriend
+      [] r.op = "remove"   -> L!RemoveAI
       [] r.op = "back"     -> L!AddBack
       [] r.op = "restart-unknown" -> L!RestartUnknown
       [] r.op = "learn"    -> L!Learn(r.v = "in")

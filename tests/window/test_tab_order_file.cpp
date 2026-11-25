@@ -124,14 +124,14 @@ void clientHomeFiles() {
 // identity. The same snapshot respects a fork which disallows the prior cross-group move.
 static void mixedLayout() {
     const SavedLayout wanted{"extension:8", {
-        {"sprint", "dashboards", ""}, {"extension:4", "friends", "notes"}, {"friend:ada", "friends", ""},
-        {"terminal:2", "friends", "/same"}, {"terminal:3", "terminals", "/same"}, {"extension:8", "writing", "notes"}}};
+        {"sprint", "dashboards", ""}, {"extension:4", "ais", "notes"}, {"ai:ada", "ais", ""},
+        {"terminal:2", "ais", "/same"}, {"terminal:3", "terminals", "/same"}, {"extension:8", "writing", "notes"}}};
     SavedLayout read;
     CHECK(parseLayout(formatLayout(wanted), &read) && read == wanted);
     const auto path = fileTabOrderStore("mixed-layout-test/tab-layout.json");
     std::string error, text;
     CHECK(path.write(formatLayout(wanted), &error) && path.read(&text, &error) && parseLayout(text, &read));
-    CHECK(!parseLayout(R"({"version":1,"selected":"","tabs":[["sprint","dashboards",""],["sprint","friends",""]]})", &read));
+    CHECK(!parseLayout(R"({"version":1,"selected":"","tabs":[["sprint","dashboards",""],["sprint","ais",""]]})", &read));
     CHECK(!parseLayout(R"({"version":1,"selected":"extension:7","tabs":[]})", &read));
     const auto extension = [](const std::string& type, std::string* group, std::string* title) {
         if (type != "notes") return false;
@@ -141,7 +141,7 @@ static void mixedLayout() {
     };
     for (bool crossing : {true, false}) {
         Model model({}, true);
-        model.set_tab_groups({{"dashboards", {"sprint"}}, {"friends", {"friend"}, false,
+        model.set_tab_groups({{"dashboards", {"sprint"}}, {"ais", {"ai"}, false,
             crossing ? std::vector<std::string>{"terminals", "writing"} : std::vector<std::string>{}},
             {"terminals", {"terminal"}, true}, {"writing", {"notes"}, true}});
         TabLayout layout(read);
@@ -152,7 +152,7 @@ static void mixedLayout() {
         CHECK(model.tab(model.active()).kind == TabKind::Extension);
         layout.capture(model, {"/same", "/same"}, false);
         CHECK(layout.saved().selected == "extension:8");
-        model.add_friend({"ada", {}});
+        model.add_ai({"ada", {}});
         layout.restore(model, extension, true);
         CHECK(model.tab(model.active()).id == focused);
         layout.capture(model, {"/same", "/same"}, true);
@@ -181,15 +181,15 @@ static void mixedLayout() {
     CHECK(partial.tab(partial.active()).kind == TabKind::Sprint);
     delayed.capture(partial, {"/same", "/same"}, true);
     CHECK(delayed.saved().selected == "sprint" && delayed.saved().tabs.size() == 5);
-    SavedLayout friendFocus = wanted;
-    friendFocus.selected = "friend:ada";
-    TabLayout pending(friendFocus);
+    SavedLayout aiFocus = wanted;
+    aiFocus.selected = "ai:ada";
+    TabLayout pending(aiFocus);
     Model waiting({}, true);
     pending.reopenTerminals(waiting);
     pending.restore(waiting, extension, false);
     pending.capture(waiting, {"/same", "/same"}, false);
-    CHECK(pending.saved().selected == "friend:ada");
-    waiting.add_friend({"ada", {}});
+    CHECK(pending.saved().selected == "ai:ada");
+    waiting.add_ai({"ada", {}});
     pending.restore(waiting, extension, true);
     CHECK(waiting.tab(waiting.active()).name == "ada");
 }
@@ -199,14 +199,14 @@ int main() {
     const std::string path = "tab-order-test/nexus/tab-order.txt";
     prFileRemove(PrStringView{path.data(), path.size()});
     TabOrderStore store = fileTabOrderStore(path);
-    const std::vector<FriendInfo> loaded{{"a", "m"}, {"b", "m"}, {"c", "m"}};
+    const std::vector<AIInfo> loaded{{"a", "m"}, {"b", "m"}, {"c", "m"}};
     std::string warning;
     CHECK(loadTabOrder(store, loaded, &warning)[0].name == "a" && warning.empty());   // no file yet: no warning
     Model model(loaded);
     model.move_tab(0, 2);
     std::string error;
     CHECK(saveTabOrder(store, model, &error));                                         // the directory is made too
-    std::vector<FriendInfo> again = loadTabOrder(store, loaded, &warning);
+    std::vector<AIInfo> again = loadTabOrder(store, loaded, &warning);
     CHECK(warning.empty());
     CHECK(again.size() == 3 && again[0].name == "b" && again[1].name == "c" && again[2].name == "a");
     // A write into a path whose directory cannot exist fails with the path and a cause.

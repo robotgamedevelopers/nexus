@@ -5,14 +5,14 @@
 
 namespace nexus::policy {
 bool newSession(Host& host, const std::string& path, const sync::SessionInfo& defaults, const sync::SessionInfo* source,
-    const accounts::Friend* who, bool hasRoster, bool canAutoAccount, sync::SessionInfo& result, std::string& why) {
+    const accounts::AI* who, bool hasRoster, bool canAutoAccount, sync::SessionInfo& result, std::string& why) {
     std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);
     auto key = [&](std::string_view name) { prJsonWriterKey(w.get(), {name.data(), name.size()}); };
     auto text = [&](std::string_view s) { prJsonWriterString(w.get(), {s.data(), s.size()}); };
     auto field = [&](std::string_view name, std::string_view value) { key(name); text(value); };
     auto session = [&](const sync::SessionInfo& info) {
         prJsonWriterBeginObject(w.get());
-        field("friend", info.friendName);
+        field("ai", info.aiName);
         field("account", info.account);
         key("auto_account");
         prJsonWriterBool(w.get(), info.autoAccount);
@@ -22,7 +22,7 @@ bool newSession(Host& host, const std::string& path, const sync::SessionInfo& de
         prJsonWriterEndObject(w.get());
     };
     prJsonWriterBeginObject(w.get());
-    field("friend", defaults.friendName);
+    field("ai", defaults.aiName);
     key("defaults");
     session(defaults);
     key("source");

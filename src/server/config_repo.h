@@ -1,5 +1,5 @@
 // nexus-server's config repository: ~/.nexus/server/nexus-config/, a git repository of its own that holds the files
-// a person or an AI edits by hand, accounts.json and friends.json (accounts/registry.h, docs/accounts.md). Every
+// a person or an AI edits by hand, accounts.json and ais.json (accounts/registry.h, docs/accounts.md). Every
 // change the server applies is one commit, whose message says what changed and who asked: an account action from a
 // window, a hand edit applied by `nexus-server config reload`, an earlier version brought back by `config restore`, or
 // an upgrade of an older file version. History is never rewritten: a restore is a new commit.
@@ -41,7 +41,7 @@
 namespace nexus::server {
 
 // The files the repository holds, and the only ones it ever stages.
-inline const std::vector<std::string> kConfigFiles{".gitignore", "accounts.json", "friends.json"};
+inline const std::vector<std::string> kConfigFiles{".gitignore", "accounts.json", "ais.json"};
 
 // The deadline of a git call on the local repository, and of a push.
 constexpr int kGitMs = 30000;
@@ -71,7 +71,7 @@ public:
 
     std::string dir() const { return dirNow_ ? dirNow_() : dir_; }
     std::string accountsPath() const { return dir() + "/accounts.json"; }
-    std::string friendsPath() const { return dir() + "/friends.json"; }
+    std::string aisPath() const { return dir() + "/ais.json"; }
 
     // Makes the directory (0700) and the repository when they are missing, with its .gitignore and a first commit.
     // Files already there when the repository is made are committed in it only when they read and agree (else they
@@ -108,7 +108,7 @@ public:
     bool keep(const accounts::Registry& registry, const std::string& message, std::string* why) override;
 
     // The upgrade from before accounts: `seed` (made from the drivers file) kept as keep() does, with a mark, in the
-    // repository's .git and never committed, that the sessions from before accounts are still to take their friends'
+    // repository's .git and never committed, that the sessions from before accounts are still to take their AIs'
     // default accounts (sync::Hub::adoptDefaults). The mark is set before the commit and taken off when the commit
     // fails, so a server stopped between the two still adopts at its next start. adopting(): the mark is there.
     // adopted(): the sessions took them, so the mark comes off (false, with why, when it cannot).
@@ -166,7 +166,7 @@ private:
     Child push_;
 };
 
-// The text a driver gives its AI so that it can find and change the server's accounts and friends cold: where the
+// The text a driver gives its AI so that it can find and change the server's accounts and AIs cold: where the
 // files are, the schema's page, and the verbs (docs/accounts.md). The drivers pass it on in part 4 of the sign-in work;
 // for now it is here, tested, for them to use.
 std::string configBrief(const std::string& serverDir);

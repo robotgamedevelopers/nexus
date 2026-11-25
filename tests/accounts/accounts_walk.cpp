@@ -1,18 +1,18 @@
-// Trace walk: drives the hub's accounts and friends (src/sync/hub.h over a MemoryStore, src/accounts/registry.h) with
+// Trace walk: drives the hub's accounts and AIs (src/sync/hub.h over a MemoryStore, src/accounts/registry.h) with
 // a seeded random walk and writes the trace as AccountsTraceData.tla, for TLC to check against models/Accounts.tla
 // (models/AccountsTrace.tla). No files, no clock: the registry is the hub's, the sign-ins are reported by the walk.
 //
 //   accounts_walk <seed> <steps> [--faulty-stay | --faulty-harness | --faulty-instance | --faulty-limit] <out.tla>
 //
 // Each step is one of the model's operations, given to the code the way the server gives it: an account action from a
-// window (add, remove, friend, link, unlink, default, set, create) through Hub::apply; a hand edit (dropfriend,
+// window (add, remove, AI, link, unlink, default, set, create) through Hub::apply; a hand edit (dropai,
 // droplink, dropaccount, provider, addinst, dropinst, moveinst) as the registry it leaves, through Hub::applyAccounts,
 // the way `nexus-server config reload` applies the files; a sign-in reported (in, out) through Hub::reportSignedIn; a
-// usage limit (rotate) through Hub::rotate; a friend's limit or an account's billing edited (limit, billing) as the
+// usage limit (rotate) through Hub::rotate; an AI's limit or an account's billing edited (limit, billing) as the
 // registry it leaves; a session's driver started (start), limited or not as accounts::limitedFor decides from the
 // hub's registry, the way the server decides it at every driver start (src/server/drivers.cpp), or ended (end). After it the walk records the code's whole state: each account absent,
-// signed in or needing sign-in, its provider, the friends with their links, defaults and instances, each session's
-// friend, instance, account and harness, the next id, the sessions the step gave a notice (their transcripts' notices counted before and after), and whether the code took
+// signed in or needing sign-in, its provider, the AIs with their links, defaults and instances, each session's
+// AI, instance, account and harness, the next id, the sessions the step gave a notice (their transcripts' notices counted before and after), and whether the code took
 // the step or refused it.
 //
 // An account's provider is the registry's while it is set up; while it is not, the walk keeps the one it had (or the
@@ -20,10 +20,10 @@
 //
 // The faults show the binding can fail; each is a hub that keeps a session where the model moves it, played by the
 // walk writing the session's old settings back into the store after the step:
-//   --faulty-stay      a session left on an account no longer linked to its friend
+//   --faulty-stay      a session left on an account no longer linked to its AI
 //   --faulty-harness   a session left on its old harness when its account's provider changed
-//   --faulty-instance  a session left on an instance its friend no longer has
-//   --faulty-limit     a driver started open for a limited friend on an account billed by subscription (a server that
+//   --faulty-instance  a session left on an instance its AI no longer has
+//   --faulty-limit     a driver started open for a limited AI on an account billed by subscription (a server that
 //                      reads only the account's billing)
 
 #include <algorithm>
@@ -47,7 +47,7 @@ using namespace nexus;
 const std::vector<std::string> kAccts{"a1", "a2", "a3"};
 const std::map<std::string, std::string> kProvider{{"a1", "claude"}, {"a2", "claude"}, {"a3", "codex"}};
 const std::vector<std::string> kProviders{"claude", "codex"};
-const std::vector<std::string> kFriends{"f", "g"};
+const std::vector<std::string> kAIs{"f", "g"};
 const std::vector<std::string> kInsts{"i1", "i2"};
 constexpr sync::SessionId kMaxSes = 3;
 const char* const kStartHarness = "claude";    // the hub's harness for a session of no account (no responder)
@@ -73,7 +73,7 @@ struct Walk {
     std::map<std::string, std::string> provider = kProvider;   // an account's provider, kept while it is not set up
     std::uint64_t num = 0;
     // Each session's driver, as the walk started it: "off", "limited" or "open", with whether its account was billed at
-    // API rate and its friend limited at the start (the model's run).
+    // API rate and its AI limited at the start (the model's run).
     struct Run {
         std::string st = "off";
         bool api = false;
@@ -81,9 +81,9 @@ struct Walk {
     };
     std::map<sync::SessionId, Run> runs;
 
-    // A friend's limit as the model reads it: a friend not in the files reads limited (accounts::limitedFor).
+    // An AI's limit as the model reads it: an AI not in the files reads limited (accounts::limitedFor).
     bool limitOf(const std::string& f) const {
-        const accounts::Friend* x = reg().friendNamed(f);
+        const accounts::AI* x = reg().aiNamed(f);
         return x == nullptr || x->limit;
     }
     bool apiBilled(const std::string& a) const {
@@ -116,10 +116,10 @@ struct Walk {
         return m;
     }
 
-    bool act(sync::ActionKind kind, sync::SessionId session, const std::string& friendName, const std::string& text,
+    bool act(sync::ActionKind kind, sync::SessionId session, const std::string& aiName, const std::string& text,
              const std::string& account) {
         std::string why;
-        return hub.apply(sync::Action{++num, kind, session, friendName, text, account}, &why, "walk");
+        return hub.apply(sync::Action{++num, kind, session, aiName, text, account}, &why, "walk");
     }
 
     bool edit(const accounts::Registry& next) {
@@ -142,14 +142,14 @@ struct Walk {
         }
         o << "), known |-> {";
         bool first = true;
-        for (const accounts::Friend& f : reg().friends) {
+        for (const accounts::AI& f : reg().ais) {
             o << (first ? "" : ", ") << q(f.name);
             first = false;
         }
         o << "}, links |-> (";
-        for (std::size_t i = 0; i < kFriends.size(); ++i) {
-            const accounts::Friend* f = reg().friendNamed(kFriends[i]);
-            o << (i == 0 ? "" : " @@ ") << q(kFriends[i]) << " :> <<";
+        for (std::size_t i = 0; i < kAIs.size(); ++i) {
+            const accounts::AI* f = reg().aiNamed(kAIs[i]);
+            o << (i == 0 ? "" : " @@ ") << q(kAIs[i]) << " :> <<";
             if (f != nullptr) {
                 for (std::size_t j = 0; j < f->accounts.size(); ++j) {
                     o << (j == 0 ? "" : ", ") << q(f->accounts[j]);
@@ -158,14 +158,14 @@ struct Walk {
             o << ">>";
         }
         o << "), dflt |-> (";
-        for (std::size_t i = 0; i < kFriends.size(); ++i) {
-            const accounts::Friend* f = reg().friendNamed(kFriends[i]);
-            o << (i == 0 ? "" : " @@ ") << q(kFriends[i]) << " :> " << q(orNone(f == nullptr ? "" : f->preferred));
+        for (std::size_t i = 0; i < kAIs.size(); ++i) {
+            const accounts::AI* f = reg().aiNamed(kAIs[i]);
+            o << (i == 0 ? "" : " @@ ") << q(kAIs[i]) << " :> " << q(orNone(f == nullptr ? "" : f->preferred));
         }
         o << "), insts |-> (";
-        for (std::size_t i = 0; i < kFriends.size(); ++i) {
-            const accounts::Friend* f = reg().friendNamed(kFriends[i]);
-            o << (i == 0 ? "" : " @@ ") << q(kFriends[i]) << " :> <<";
+        for (std::size_t i = 0; i < kAIs.size(); ++i) {
+            const accounts::AI* f = reg().aiNamed(kAIs[i]);
+            o << (i == 0 ? "" : " @@ ") << q(kAIs[i]) << " :> <<";
             if (f != nullptr) {
                 for (std::size_t j = 0; j < f->instances.size(); ++j) {
                     o << (j == 0 ? "" : ", ") << q(f->instances[j].name);
@@ -178,16 +178,16 @@ struct Walk {
             const sync::StoredSession* s = store.find(id);
             o << (id == 1 ? "" : ", ");
             if (s == nullptr) {
-                o << "[made |-> FALSE, friend |-> \"none\", inst |-> \"none\", acct |-> \"none\", harness |-> \"none\", automatic |-> FALSE]";
+                o << "[made |-> FALSE, AI |-> \"none\", inst |-> \"none\", acct |-> \"none\", harness |-> \"none\", automatic |-> FALSE]";
             } else {
-                o << "[made |-> TRUE, friend |-> " << q(s->info.friendName) << ", inst |-> " <<
+                o << "[made |-> TRUE, AI |-> " << q(s->info.aiName) << ", inst |-> " <<
                     q(orNone(s->info.instance)) << ", acct |-> " << q(orNone(s->info.account)) << ", harness |-> " <<
                     q(s->info.harness) << ", automatic |-> " << (s->info.autoAccount ? "TRUE" : "FALSE") << "]";
             }
         }
         o << ">>, nextSes |-> " << store.nextId() << ", lim |-> (";
-        for (std::size_t i = 0; i < kFriends.size(); ++i) {
-            o << (i == 0 ? "" : " @@ ") << q(kFriends[i]) << " :> " << (limitOf(kFriends[i]) ? "TRUE" : "FALSE");
+        for (std::size_t i = 0; i < kAIs.size(); ++i) {
+            o << (i == 0 ? "" : " @@ ") << q(kAIs[i]) << " :> " << (limitOf(kAIs[i]) ? "TRUE" : "FALSE");
         }
         o << "), bill |-> (";
         for (std::size_t i = 0; i < kAccts.size(); ++i) {
@@ -280,36 +280,36 @@ int main(int argc, char** argv) {
             ok = w.reg().account(a) != nullptr;
             w.hub.reportSignedIn(a, op == "in");
         } else if (choice < 12) {
-            op = "friend";
-            f = pickOf(kFriends);
-            ok = w.act(sync::ActionKind::AddFriend, 0, f, "", "");
+            op = "ai";
+            f = pickOf(kAIs);
+            ok = w.act(sync::ActionKind::AddAI, 0, f, "", "");
         } else if (choice < 19) {
             op = "link";
-            f = pickOf(kFriends);
+            f = pickOf(kAIs);
             a = pickOf(kAccts);
             ok = w.act(sync::ActionKind::LinkAccount, 0, f, "", a);
         } else if (choice < 21) {
             op = "unlink";
-            f = pickOf(kFriends);
+            f = pickOf(kAIs);
             a = pickOf(kAccts);
             ok = w.act(sync::ActionKind::UnlinkAccount, 0, f, "", a);
         } else if (choice < 24) {
             op = "default";
-            f = pickOf(kFriends);
+            f = pickOf(kAIs);
             a = pickOf(acctsOrNone);
             ok = w.act(sync::ActionKind::SetDefault, 0, f, "", a == kNone ? "" : a);
         } else if (choice < 25) {
-            op = "dropfriend";
-            f = pickOf(kFriends);
+            op = "dropai";
+            f = pickOf(kAIs);
             accounts::Registry next = w.reg();
-            std::erase_if(next.friends, [&](const accounts::Friend& x) { return x.name == f; });
+            std::erase_if(next.ais, [&](const accounts::AI& x) { return x.name == f; });
             ok = w.edit(next);
         } else if (choice < 26) {
             op = "droplink";
-            f = pickOf(kFriends);
+            f = pickOf(kAIs);
             a = pickOf(kAccts);
             accounts::Registry next = w.reg();
-            if (accounts::Friend* x = next.friendNamed(f)) {
+            if (accounts::AI* x = next.aiNamed(f)) {
                 std::erase(x->accounts, a);
             }
             ok = w.edit(next);
@@ -338,9 +338,9 @@ int main(int argc, char** argv) {
             s = static_cast<sync::SessionId>(1 + pick(kMaxSes));
             a = pickOf(acctsOrNone);
             const sync::StoredSession* on = w.store.find(s);
-            const accounts::Friend* fr = on == nullptr ? nullptr : w.reg().friendNamed(on->info.friendName);
+            const accounts::AI* fr = on == nullptr ? nullptr : w.reg().aiNamed(on->info.aiName);
             if (fr != nullptr && !fr->accounts.empty() && pick(4) != 0) {
-                a = pickOf(fr->accounts);   // mostly one of its friend's accounts, so that sessions run on some
+                a = pickOf(fr->accounts);   // mostly one of its AI's accounts, so that sessions run on some
             }
             ok = w.act(sync::ActionKind::SetAccount, s, "", a == kNone ? "" : a, "");
         } else if (choice < 44) {
@@ -348,12 +348,12 @@ int main(int argc, char** argv) {
             s = static_cast<sync::SessionId>(1 + pick(kMaxSes));
             ok = w.hub.rotate(s);
         } else if (choice >= 58 && choice < 60) {
-            // A friend's limit edited; a friend not in the files has no "limit" to edit (the model refuses it too).
+            // An AI's limit edited; an AI not in the files has no "limit" to edit (the model refuses it too).
             op = "limit";
-            f = pickOf(kFriends);
+            f = pickOf(kAIs);
             v = pick(2) == 0;
             accounts::Registry next = w.reg();
-            if (accounts::Friend* x = next.friendNamed(f)) {
+            if (accounts::AI* x = next.aiNamed(f)) {
                 x->limit = v;
                 ok = w.edit(next);
             }
@@ -377,12 +377,12 @@ int main(int argc, char** argv) {
             Walk::Run& r = w.runs[s];
             if (on != nullptr && r.st == "off") {
                 const std::string& acc = on->info.account;
-                bool limited = accounts::limitedFor(w.hub.accounts(), on->info.friendName, acc);
+                bool limited = accounts::limitedFor(w.hub.accounts(), on->info.aiName, acc);
                 if (faulty == "limit" && limited && !w.apiBilled(acc)) {
                     limited = false;
                     ++faults;
                 }
-                r = Walk::Run{limited ? "limited" : "open", !acc.empty() && w.apiBilled(acc), w.limitOf(on->info.friendName)};
+                r = Walk::Run{limited ? "limited" : "open", !acc.empty() && w.apiBilled(acc), w.limitOf(on->info.aiName)};
                 ok = true;
             }
         } else if (choice == 65) {
@@ -394,15 +394,15 @@ int main(int argc, char** argv) {
                 ok = true;
             }
         } else if (choice >= 50) {
-            // An edit of a friend's instances: one added at the end, one taken out, or one moved in place (its
+            // An edit of an AI's instances: one added at the end, one taken out, or one moved in place (its
             // directory changed, its name kept).
             op = choice < 53 ? "addinst" : choice < 55 ? "dropinst" : "moveinst";
-            f = pickOf(kFriends);
+            f = pickOf(kAIs);
             a = pickOf(kInsts);
             accounts::Registry next = w.reg();
-            accounts::Friend* x = next.friendNamed(f);
+            accounts::AI* x = next.aiNamed(f);
             if (op == "moveinst") {
-                // The model's refusal of an instance the friend does not have is the code's too: not edited.
+                // The model's refusal of an instance the AI does not have is the code's too: not edited.
                 auto in = x == nullptr ? std::vector<accounts::Instance>::iterator() :
                     std::find_if(x->instances.begin(), x->instances.end(),
                                  [&](const accounts::Instance& i) { return i.name == a; });
@@ -418,7 +418,7 @@ int main(int argc, char** argv) {
                 }
                 ok = w.edit(next);
             } else {
-                // No such friend in the files: an instance of it makes them inconsistent (refused); none to drop is
+                // No such AI in the files: an instance of it makes them inconsistent (refused); none to drop is
                 // the files as they are.
                 ok = op == "dropinst" && w.edit(next);
             }
@@ -428,18 +428,18 @@ int main(int argc, char** argv) {
                 continue;
             }
             op = "create";
-            f = pickOf(kFriends);
+            f = pickOf(kAIs);
             s = static_cast<sync::SessionId>(pick(kMaxSes + 1));
             ok = w.act(sync::ActionKind::Create, s, f, "", "");
         }
         // The faulty hubs: a session the step moved is put back where it was.
         if (ok && !faulty.empty()) {
-            const bool unlinking = op == "remove" || op == "unlink" || op == "dropfriend" || op == "droplink";
+            const bool unlinking = op == "remove" || op == "unlink" || op == "dropai" || op == "droplink";
             for (const auto& [id, before] : infosBefore) {
                 const sync::SessionInfo now = w.store.find(id)->info;
                 const bool stray = faulty == "stay" && unlinking && now.account != before.account;
                 const bool harness = faulty == "harness" && op == "provider" && now.harness != before.harness;
-                const bool instance = faulty == "instance" && (op == "dropinst" || op == "dropfriend") &&
+                const bool instance = faulty == "instance" && (op == "dropinst" || op == "dropai") &&
                     now.instance != before.instance;
                 if (stray || harness || instance) {
                     std::string why;
@@ -482,7 +482,7 @@ int main(int argc, char** argv) {
         << "TraceAccts == {\"a1\", \"a2\", \"a3\"}\n"
         << "TraceProvider == (\"a1\" :> \"claude\" @@ \"a2\" :> \"claude\" @@ \"a3\" :> \"codex\")\n"
         << "TraceProviders == {\"claude\", \"codex\"}\n"
-        << "TraceFriends == {\"f\", \"g\"}\n"
+        << "TraceAIs == {\"f\", \"g\"}\n"
         << "TraceInsts == {\"i1\", \"i2\"}\n"
         << "TraceMaxSes == " << kMaxSes << "\n"
         << "TraceStartHarness == \"" << kStartHarness << "\"\n"

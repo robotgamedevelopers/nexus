@@ -74,7 +74,7 @@ store::Status migrateOldLayout(store::Fs& fs, const std::string& top, const std:
 std::set<std::string> parsePlan(const std::string& text);
 std::string formatPlan(const std::vector<std::string>& parts);
 
-// Reads the format versions required by `<serverDir>/store` and `<serverDir>/nexus-config/{accounts,friends}.json` over
+// Reads the format versions required by `<serverDir>/store` and `<serverDir>/nexus-config/{accounts,ais}.json` over
 // `fs` (without mutating anything on disk). Busy when a writer holds `<serverDir>/store`; Ok with `out` populated (0
 // where nothing is on disk yet); Failed when the store or config JSON header is unreadable.
 store::Status readDiskFormats(store::Fs& fs, const std::string& serverDir, builds::DiskFormats* out,

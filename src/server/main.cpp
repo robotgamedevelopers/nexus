@@ -26,17 +26,17 @@
 //                                         keeps the current placed build serving across boots, drain handovers, and
 //                                         post-start build failures (server/supervision.h, docs/builds.md)
 //        nexus-server config <verb> [--dir DIR]
-//                                         the accounts and friends, DIR/nexus-config/accounts.json and friends.json
+//                                         the accounts and AIs, DIR/nexus-config/accounts.json and ais.json
 //                                         (docs/accounts.md): path, check, reload, history, restore <commit>,
 //                                         remote [<url> | --clear]; and sign-in <account>, which waits while the
 //                                         person signs the account in in the browser from nexus's window, and prints
 //                                         `signed in` or `refused: <why>` (docs/secrets.md "Sign-in")
 //
 // DIR is $HOME/.nexus/server unless given (server/home.h): the settings file config, the control socket server.sock,
-// the log server.log and the store store/ live there, and the file drivers, which names each friend's driver
+// the log server.log and the store store/ live there, and the file drivers, which names each AI's driver
 // (server/driver_table.h):
 //   driver <harness> <program> [<argument>...]
-//   friend <name> <harness> [<directory>]
+//   AI <name> <harness> [<directory>]
 // The harness logins, accounts/<name>/, are always under $HOME/.nexus/server, whatever DIR is: a driver finds its
 // account there by its --account.
 
@@ -78,10 +78,10 @@ int usage() {
                          "       nexus-server config restore <commit> | remote [<url>|--clear] [--dir DIR]\n"
                          "       nexus-server config sign-in <account> [--dir DIR]\n"
                          "       nexus-server store check [--dir DIR]\n"
-                         "  accounts and friends: DIR/nexus-config/accounts.json, friends.json (docs/accounts.md)\n"
+                         "  accounts and ais: DIR/nexus-config/accounts.json, ais.json (docs/accounts.md)\n"
                          "ID is 1 to 64 letters, digits, '-' or '_'; N is a number from 1\n"
                          "DIR ($HOME/.nexus/server unless given) holds the file drivers, read at each prompt, with lines\n"
-                         "  driver <harness> <program> [<argument>...]    and    friend <name> <harness> [<directory>]\n");
+                         "  driver <harness> <program> [<argument>...]    and    AI <name> <harness> [<directory>]\n");
     return 2;
 }
 

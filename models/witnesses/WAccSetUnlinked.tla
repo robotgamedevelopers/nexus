@@ -1,5 +1,5 @@
 ------------------------------ MODULE WAccSetUnlinked ------------------------------
-\* Reversed witness: the person may set a session to any account set up, linked to its friend or not. SessionLinked must reject it.
+\* Reversed witness: the person may set a session to any account set up, linked to its AI or not. SessionLinked must reject it.
 EXTENDS MCAccounts
 
 BrokenSet(s, a) ==

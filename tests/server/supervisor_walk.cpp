@@ -3,7 +3,7 @@
 // processes, no clock: the walk plays the driver and the person, keeps the time itself, and commits each step's
 // durable state as the server's store does, so that a restart starts from exactly what was committed.
 //
-//   supervisor_walk <seed> <steps> [--friends-churn] [--faulty-turn | --faulty-resume | --faulty-queue |
+//   supervisor_walk <seed> <steps> [--AIs-churn] [--faulty-turn | --faulty-resume | --faulty-queue |
 //                                   --faulty-setting | --faulty-account | --faulty-activity | --faulty-dir |
 //                                   --faulty-limit | --faulty-remove | --faulty-unknown] <out.tla>
 //
@@ -12,7 +12,7 @@
 //   prompt    the person sends the next prompt ("p1", "p2", ...)
 //   queue     the person queues the next prompt for later (the hub's limit, the waiting bound here, is kept: a queue
 //             past it is refused by the hub before the supervisor sees it, so the walk does not make one)
-//   stop      the person stops the friend's work
+//   stop      the person stops the AI's work
 //   message   the driver writes a message: mostly what the protocol allows where it is (hello, a turn's text, tools
 //             and done, a session id, the credential, an error), and at times what it does not (a message before
 //             hello, a wrong protocol, a message for a turn other than the open one, an API key's credential)
@@ -25,13 +25,13 @@
 //   setting, account, place, configure, limit
 //             the person changes the model and effort, or the account; an edit moves the session's instance
 //             (/work, the model's "", or /work/d, its "d"; on this machine or another); the drivers file loses the
-//             friend's driver, or gives it back; the session's limit is tightened or loosened ("on", "off")
+//             AI's driver, or gives it back; the session's limit is tightened or loosened ("on", "off")
 //   remove, back
-//             with --friends-churn only: the friend is taken out of friends.json, and put back (a reload,
+//             with --AIs-churn only: the AI is taken out of ais.json, and put back (a reload,
 //             Supervisor::setPresent); while it is out the person sends nothing (the server refuses a send first)
 //   restart-unknown, learn
-//             with --friends-churn only: a restart whose committed friends list does not read, so the server holds
-//             none and the friend reads out (Drivers::listed); then the first list applied, with the friend in it
+//             with --AIs-churn only: a restart whose committed AIs list does not read, so the server holds
+//             none and the AI reads out (Drivers::listed); then the first list applied, with the AI in it
 //             ("in") or not ("out")
 //
 // The faults, for the tests that show the check can fail:
@@ -43,10 +43,10 @@
 //   --faulty-activity the activity it records reads a crashed driver as idle, as a cursor that forgot the crash would
 //   --faulty-dir     a restart finds no directory for the harness session, as if the store had not kept it
 //   --faulty-limit   a restart starts the session unlimited, as if the limit were not decided at the start
-//   --faulty-remove  (with --friends-churn) the supervisor is never told the friend was taken out, so a turn open
+//   --faulty-remove  (with --AIs-churn) the supervisor is never told the AI was taken out, so a turn open
 //                    runs on, as a server that only moved the session to no account would leave it
-//   --faulty-unknown (with --friends-churn) a restart holding no list starts the supervisor with its friend in it, as
-//                    Drivers::listed did when it read no registry as every friend listed
+//   --faulty-unknown (with --AIs-churn) a restart holding no list starts the supervisor with its AI in it, as
+//                    Drivers::listed did when it read no registry as every AI listed
 
 #include <algorithm>
 #include <cstdint>
@@ -180,10 +180,10 @@ public:
         const bool alive = procs_ > 0 && s.phase() != Phase::None;
         const bool ending = s.phase() == Phase::Ending;
         const std::size_t r = rng.below(1000);
-        // The friend taken out of friends.json, or put back: drawn from the top of the range, which no other step
+        // The AI taken out of ais.json, or put back: drawn from the top of the range, which no other step
         // below takes first, so a walk without churn draws as it did.
         if (churn_ && r >= 960 && (absent_ || removals_ < kMaxRemovals)) {
-            return friendChurn(rng);
+            return aiChurn(rng);
         }
         if (s.deadline() && (r < 30 || (ending && r < 300))) {
             return timeout();
@@ -231,7 +231,7 @@ public:
             return configure();
         }
         if (absent_) {
-            return friendChurn(rng);
+            return aiChurn(rng);
         }
         if (s.deadline()) {
             return timeout();
@@ -260,17 +260,17 @@ private:
         c.cwd = dir_;
         c.here = here_;
         c.limited = limited_;
-        c.present = !absent_;   // friends.json, which a restart reads again
+        c.present = !absent_;   // ais.json, which a restart reads again
         if (unconfigured_) {
             c.command.clear();
         }
         return c;
     }
 
-    // The friend taken out of friends.json, or put back (Drivers::present, from the hub's settle). With the remove
+    // The AI taken out of ais.json, or put back (Drivers::present, from the hub's settle). With the remove
     // fault the supervisor is never told. While the server holds no list, the first one applied instead (learn): the
-    // friend in it ("in") or not ("out"), from that list alone.
-    bool friendChurn(Rng& rng) {
+    // AI in it ("in") or not ("out"), from that list alone.
+    bool aiChurn(Rng& rng) {
         if (!known_) {
             known_ = true;
             const bool in = rng.chance(2);
@@ -288,7 +288,7 @@ private:
         return take(op, "", 0, "", sup_->setPresent(!absent_, now_));
     }
 
-    // The drivers file loses the friend's driver, or gives it back (the server's Drivers::showResolved): no prompt
+    // The drivers file loses the AI's driver, or gives it back (the server's Drivers::showResolved): no prompt
     // is sent to the supervisor while it has none, as the server refuses it for want of a driver.
     bool configure() {
         ++switches_;
@@ -311,7 +311,7 @@ private:
         return take("place", "", 0, dirName(dir_), sup_->setPlace(dir_, here_, now_));
     }
 
-    // The session's limit changes (its friend's "limit", or its account's billing, on a reload): tightened, an open
+    // The session's limit changes (its AI's "limit", or its account's billing, on a reload): tightened, an open
     // turn on a driver started without it is stopped; loosened, the turn finishes as it started.
     bool limit() {
         ++switches_;
@@ -369,9 +369,9 @@ private:
         return take("exit", "", 0, "", std::move(out));
     }
 
-    // With --friends-churn, one restart in three finds the committed friends list unreadable (restart-unknown): the
-    // server holds none, and the friend reads out (Drivers::listed) until one is applied. A restart that reads the list
-    // after one that did not may find the friend in it or not.
+    // With --AIs-churn, one restart in three finds the committed AIs list unreadable (restart-unknown): the
+    // server holds none, and the AI reads out (Drivers::listed) until one is applied. A restart that reads the list
+    // after one that did not may find the AI in it or not.
     bool restart(Rng& rng) {
         const bool unread = churn_ && rng.chance(3);
         if (unread) {
@@ -412,7 +412,7 @@ private:
             state.sessionDir.clear();
         }
         if (fault_ == Fault::Unknown && unread) {
-            c.present = true;   // no list held read as "every friend is in it"
+            c.present = true;   // no list held read as "every AI is in it"
         }
         Output out;
         sup_.emplace(std::move(c), state, now_, &out, std::move(queue));
@@ -650,9 +650,9 @@ private:
     }
 
     Fault fault_;
-    bool churn_ = false;        // the friend is taken out of friends.json and put back
+    bool churn_ = false;        // the AI is taken out of ais.json and put back
     bool absent_ = false;       // it is out now (always while no list is held)
-    bool known_ = true;         // the server holds a friends list (false after a restart that could not read it)
+    bool known_ = true;         // the server holds a AIs list (false after a restart that could not read it)
     std::size_t removals_ = 0;
     std::size_t unknowns_ = 0;  // restarts that held no list
     Millis now_ = 1000;
@@ -670,13 +670,13 @@ private:
     };
     std::vector<Written> written_;
     std::size_t switches_ = 0;
-    bool unconfigured_ = false;         // the friend has no driver configured
+    bool unconfigured_ = false;         // the AI has no driver configured
     std::string model_;
     std::string effort_;
     std::string account_;
     std::string dir_ = kWork;   // the session's place, as the accounts hold it: a restart starts from it
     bool here_ = true;
-    bool limited_ = false;      // the session's limit (its friend's, from the files): a restart starts from it
+    bool limited_ = false;      // the session's limit (its AI's, from the files): a restart starts from it
     std::vector<std::uint64_t> stops_;          // the turn of every stop written
     std::size_t queued_ = 0;
     std::size_t taken_ = 0;
@@ -708,7 +708,7 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, bool churn, const
                             ", faulty remove", ", faulty unknown"};
     out << "---- MODULE SupervisorTraceData ----\n";
     out << "\\* Written by tests/server/supervisor_walk: seed " << seed << ", " << steps << " steps"
-        << (churn ? ", friends churn" : "") << faults[static_cast<int>(fault)] << ".\n";
+        << (churn ? ", AIs churn" : "") << faults[static_cast<int>(fault)] << ".\n";
     out << "TracePrompts == " << w.sent() << "\n";
     out << "TraceMaxWaiting == " << kMaxWaiting << "\n";
     out << "TraceMaxFailedStarts == " << kMaxFailed << "\n";
@@ -740,7 +740,7 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, bool churn, const
                 w.count(Effect::What::Tool), w.count(Effect::What::Stopped), w.count(Effect::What::Cut),
                 w.count(Effect::What::Notice), w.restarts(), w.removals(), path);
     if (fault == Fault::Remove && w.removals() == 0) {
-        std::fprintf(stderr, "supervisor_walk: the faulty walk never took the friend out; try more steps\n");
+        std::fprintf(stderr, "supervisor_walk: the faulty walk never took the AI out; try more steps\n");
         return 1;
     }
     if (fault == Fault::Unknown && w.unknowns() == 0) {
@@ -759,7 +759,7 @@ int main(int argc, char** argv) {
     bool churn = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--friends-churn") {
+        if (a == "--ais-churn") {
             churn = true;
         } else if (a == "--faulty-remove") {
             fault = Fault::Remove;
@@ -798,9 +798,9 @@ int main(int argc, char** argv) {
     std::uint64_t seed = 0, steps = 0;
     if (rest.size() != 3 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) || faults > 1 ||
         ((fault == Fault::Remove || fault == Fault::Unknown) && !churn)) {
-        std::fprintf(stderr, "usage: supervisor_walk <seed> <steps> [--friends-churn] [--faulty-turn | "
+        std::fprintf(stderr, "usage: supervisor_walk <seed> <steps> [--AIs-churn] [--faulty-turn | "
                      "--faulty-resume | --faulty-queue | --faulty-setting | --faulty-account | --faulty-activity | "
-                     "--faulty-dir | --faulty-limit | --faulty-remove | --faulty-unknown (both with --friends-churn)] "
+                     "--faulty-dir | --faulty-limit | --faulty-remove | --faulty-unknown (both with --AIs-churn)] "
                      "<out.tla>\n");
         return 2;
     }

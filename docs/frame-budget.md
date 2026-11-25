@@ -46,7 +46,7 @@ reports every hitch with its frame and phases.
 | `stalled_link_then_a_long_transcript` | the server goes quiet for seconds, comes back, and 4,000 entries arrive at once |
 | `streaming_reply` | a reply streams a few hundred bytes a frame to 32 KB |
 | `big_paste` | 1 MB pasted with Command-V (through the prompt's own paste), another tab the next frame, edits of the full prompt, typing at the limit, the prompt selected and typed over, 40 KB pasted and sent the next frame |
-| `switching_tabs` | Command-digits between friends with 3,000 entries each and the sprint tab |
+| `switching_tabs` | Command-digits between AIs with 3,000 entries each and the sprint tab |
 | `sprint_tab` | the board's page made, loaded and painted for the first time, polled, left and shown again |
 | `terminals` | a command typed into a new tab before its shell has started, three Command-Ts, 10,000 lines of output, Command-W three times, a shell that cannot start |
 | `text_scale` | Command-plus and minus over a long history and a terminal with 10,000 lines |

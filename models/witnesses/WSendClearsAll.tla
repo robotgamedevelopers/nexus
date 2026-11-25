@@ -1,5 +1,5 @@
 --------------------------- MODULE WSendClearsAll ---------------------------
-\* Reversed witness: a send that succeeds clears every friend's draft, not only
+\* Reversed witness: a send that succeeds clears every AI's draft, not only
 \* its own. SendClearsOnlyItsDraft must reject it.
 EXTENDS MCWindow
 
@@ -8,7 +8,7 @@ BrokenSend(i) ==
     THEN /\ transcript' = [transcript EXCEPT ![At(i)] = Append(@, [kind |-> "Person", text |-> draft[At(i)]])]
          /\ draft' = [f \in Ids |-> ""]
          /\ last' = Did("send", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active, queue>>
+         /\ UNCHANGED <<ais, order, active, queue>>
     ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

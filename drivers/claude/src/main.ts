@@ -102,17 +102,17 @@ function startHarness(start: HarnessStart, account: Account): Harness {
     }
     const instructions = [start.startupContext];
     if (start.busListener && wall?.sandbox.network) {
-        const [friend, address] = start.busListener.split('@');
-        if (!friend || !address) throw new Error('Missing message bus grant fields');
-        busSocket ??= busListener(friend, address);
+        const [ai, address] = start.busListener.split('@');
+        if (!ai || !address) throw new Error('Missing message bus grant fields');
+        busSocket ??= busListener(ai, address);
         const sockets = wall.sandbox.network.allowUnixSockets ?? [];
         wall.sandbox.network.allowUnixSockets = [...sockets, busSocket];
         const bin = join(kDriverDir, 'bin/bus');
         wall.sandbox.filesystem?.allowRead?.push(bin);
-        Object.assign(childEnv, {PATH: bin + ':' + (childEnv['PATH'] ?? '/usr/bin:/bin'), NEXUS_BUS_FRIEND: friend,
+        Object.assign(childEnv, {PATH: bin + ':' + (childEnv['PATH'] ?? '/usr/bin:/bin'), NEXUS_BUS_AI: ai,
             NEXUS_BUS_LISTENER: busSocket});
         instructions.push('To listen on the message bus use Monitor with "' + join(bin, 'nova-bus') +
-            '" hook --as ' + friend + '. Keep the full output for delivery.');
+            '" hook --as ' + ai + '. Keep the full output for delivery.');
     }
     if (start.busSender) instructions.push('Peer messages arrive in chat. Use nexus_bus_send to send or reply as yourself. Keep routine sends and their receipts out of the conversation unless the person asks.');
     const startupContext = instructions.filter(Boolean).join('\n');
@@ -141,7 +141,7 @@ function startHarness(start: HarnessStart, account: Account): Harness {
             includePartialMessages: true,
             mcpServers: { nexus: secretMcpServer(start.askSecret, start.busSender) },
             toolAliases: { [kSecretToolName]: kSecretMcpToolName, ...(start.busSender ? {[sendName]: `mcp__nexus__${sendName}`} : {}) },
-            // A limited friend (--limit cwd) reads and writes only its directory (wall.ts limitOf).
+            // A limited AI (--limit cwd) reads and writes only its directory (wall.ts limitOf).
             ...(wall ?? {sandbox: {enabled: false}, spawnClaudeCodeProcess: spawnWithToken(account.token, data => process.stderr.write(data))}),
         },
     });
