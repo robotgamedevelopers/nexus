@@ -2644,7 +2644,7 @@ Sessions listState(std::initializer_list<const char*> names) {
 void batch_ais_are_the_loops() {
     Rng rng{20261115};
     for (int round = 0; round < 3000; ++round) {
-        Model a({}, rng.chance(2));
+        Model a({}, rng.chance(2) ? std::vector<std::string>{"sprint"} : std::vector<std::string>{});
         const int steps = static_cast<int>(rng.below(12));
         for (int s = 0; s < steps; ++s) {
             switch (rng.below(4)) {
