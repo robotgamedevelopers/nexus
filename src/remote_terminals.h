@@ -1,6 +1,6 @@
 // Terminal tabs whose shells run on nexus-server (docs/terminals.md): the window of a machine that cannot start a
-// process of its own (iOS) shows the server's terminals in its tabs, and types into them. The server owns each shell, its
-// pseudoterminal and its screen; the window holds a copy of the screen for each tab, drawn by Prax's terminal view
+// process of its own (iOS) shows the server's terminals in its tabs, and types into them. The server owns each shell,
+// its pseudoterminal and its screen; the window holds a copy of the screen for each tab, drawn by Prax's terminal view
 // (pr/terminal.h) with no program behind it, and painted from the rows the state brings (sync/terminal_paint.h).
 //
 // What a tab does:
@@ -51,8 +51,9 @@ namespace nexus {
 
 struct LinkPort;
 
-// What a terminal tab's keys send: the bytes a screen's input rules (pr/vterm_input.h) make of each key, text and paste,
-// under the modes the program set, in the order they were typed; and the key row's Control, held for the next key.
+// What a terminal tab's keys send: the bytes a screen's input rules (pr/vterm_input.h) make of each key, text and
+// paste, under the modes the program set, in the order they were typed; and the key row's Control, held for the next
+// key.
 class TerminalKeys {
 public:
     // Appends to bytes what e sends (cell: the screen's cell, px), and says whether e was the terminal's. On iOS a

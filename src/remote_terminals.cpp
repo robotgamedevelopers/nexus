@@ -229,7 +229,8 @@ void RemoteTerminals::show(std::size_t id, PrLayoutNode parent) {
         const bool control = k.key == PrAppKey(0);
         const PrLayoutNode cap = prKitButton(kit_, row,
             {.key = prHashString(sv("remote-terminal-key-" + label), id), .text = sv(label),
-             .selected = control && keys_.controlHeld(), .disabled = t->fate != sync::TerminalFate::Running || t->terminal == 0},
+             .selected = control && keys_.controlHeld(),
+             .disabled = t->fate != sync::TerminalFate::Running || t->terminal == 0},
             {.size = PrKitControlSize_Lg});
         if (prKitActivated(kit_, cap)) {
             if (control) toggleControl();
@@ -367,7 +368,8 @@ bool TerminalKeys::type(PrVterm* vterm, PrVec2 cell, const PrAppEvent& e, std::s
             // event is dropped when it comes.
             taken = prVtermInputEvent(vterm, &e, &desc);
             const std::string_view text(e.keyboard.text.data, e.keyboard.text.size);
-            if (!taken && typesText(text) && (e.modifiers & (PrAppModifierFlag_Control | PrAppModifierFlag_Super)) == 0) {
+            const bool plain = (e.modifiers & (PrAppModifierFlag_Control | PrAppModifierFlag_Super)) == 0;
+            if (!taken && plain && typesText(text)) {
                 PrAppEvent as{};
                 as.kind = PrAppEventKind_Text;
                 as.modifiers = e.modifiers;
