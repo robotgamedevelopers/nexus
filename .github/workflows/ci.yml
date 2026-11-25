@@ -157,7 +157,11 @@ jobs:
       - name: Compile, lint and unit tests
         working-directory: drivers/claude
         run: npm run check
+      # Clang, as the other builds use: Prax does not build with the image's GCC.
       - name: Configure (the protocol and the conformance test only)
+        env:
+          CC: clang
+          CXX: clang++
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF
       - name: Build the conformance test
         run: cmake --build build --parallel "$JOBS" --target driver_conformance_test
