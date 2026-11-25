@@ -103,7 +103,7 @@ struct AccountMenuStyle {
     float radius = 10;              // the menu's corners
     float maxWidthEm = 22;          // the widest the menu grows, in the tab label's em
     float tabMoveThreshold = 12;    // points sideways from the press past which the press is the tab's move
-    float dialogTextEm = 18;        // the widest a row's text is in the /account and /login dialogs, in their text's em
+    float dialogTextEm = 16;        // the widest a row's text is in the /account and /login dialogs, in their text's em
     unsigned fill = 0x2a2a2a, ink = 0xffffff, hoverFill = 0x86c5ff, markInk = 0x86c5ff;
     float hoverOpacity = 0.5f;
     std::string mark = "\xE2\x9C\x93";   // shown before the current account

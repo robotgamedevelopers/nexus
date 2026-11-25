@@ -126,7 +126,7 @@ style, never bigger; a long email is cut with "…", never wrapped.
 | `padding_x` | 14 | points either side of a row's text |
 | `radius` | 10 | the menu's corner radius |
 | `max_width_em` | 22 | the widest the menu grows, in the tab label's em |
-| `dialog_text_em` | 18 | the widest a row's text is in the `/account` and `/login` dialogs, in their text's em; longer is cut with "…" |
+| `dialog_text_em` | 16 | the widest a row's text is in the `/account` and `/login` dialogs, in their text's em; longer is cut with "…" |
 | `tab_move_threshold` | 12 | points sideways from the press past which the press becomes the tab's move |
 | `fill`, `ink` | `#2a2a2a`, `#ffffff` | the menu and its text |
 | `hover_fill`, `hover_opacity` | `#86c5ff`, 0.5 | the row under the finger |
