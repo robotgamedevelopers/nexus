@@ -10,7 +10,7 @@
 //   Fling   let go at speed v0 inside the range: v(t) = v0 d^(1000 t), so the content goes v0 (d^(1000 t) - 1) / ln(d^1000)
 //           further, and comes to rest when slower than kSettleSpeed. Reaching an end, it springs there.
 //   Spring  past an end: scroll_glide.h's critically damped spring back to the end, never crossing back inside.
-// A press stops a fling or a spring where it shows (as a finger on a moving UIScrollView catches it).
+// A press stops a fling or a spring where it shows (as a finger on a moving UIScrollView catches it), and is no tap.
 //
 // Pure: time is an argument, the events' own (seconds); nothing here reads a clock. The model is
 // models/FingerScroll.tla, checked against this code's traces (tests/voice/finger_walk.cpp).
@@ -73,6 +73,7 @@ private:
     // The finger's last moves, for its speed at release: a ring of (t, y).
     std::array<double, 8> times_{}, ys_{};
     std::size_t samples_ = 0;
+    bool caught_ = false; // the press caught a moving list: lifted without a drag it was no tap
     // Fling and Spring: where and when the motion began, its speed then, and a spring's end.
     double start_ = 0, p0_ = 0, v0_ = 0, end_ = 0;
 };

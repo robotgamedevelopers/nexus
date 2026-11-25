@@ -41,6 +41,7 @@ double FingerScroll::banded(double r) const {
 
 void FingerScroll::down(double y, double t, double now) {
     frame(now);
+    caught_ = moving();
     // A finger on a moving list catches it where it shows. Past an end the drag goes on from there, rubber-banded.
     phase_ = FingerPhase::Track;
     y0_ = y;
@@ -96,9 +97,14 @@ double FingerScroll::speedAt(double t) const {
 
 bool FingerScroll::up(double t, double now) {
     if (phase_ == FingerPhase::Track) {
-        phase_ = FingerPhase::Rest;
-        offset_ = std::clamp(offset_, 0.0, max_);
-        return true;
+        // A press that caught a moving list only stopped it: it is no tap. One caught past an end springs back.
+        if (offset_ < 0 || offset_ > max_) {
+            phase_ = FingerPhase::Drag;
+            release(0, now);
+        } else {
+            phase_ = FingerPhase::Rest;
+        }
+        return !caught_;
     }
     if (phase_ != FingerPhase::Drag) return false;
     release(-speedAt(t), now);
@@ -106,10 +112,9 @@ bool FingerScroll::up(double t, double now) {
 }
 
 void FingerScroll::cancel(double now) {
-    if (phase_ == FingerPhase::Track) {
+    if (phase_ == FingerPhase::Track && offset_ >= 0 && offset_ <= max_) {
         phase_ = FingerPhase::Rest;
-        offset_ = std::clamp(offset_, 0.0, max_);
-    } else if (phase_ == FingerPhase::Drag) {
+    } else if (phase_ == FingerPhase::Track || phase_ == FingerPhase::Drag) {
         release(0, now);
     }
 }

@@ -3,6 +3,8 @@
 
 #include <map>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "model.h"
@@ -24,6 +26,11 @@ struct Shortcut {
 // a tab.
 enum class Panel { Board, Terminal, Spacer, Transcript, Prompt, Status, Account, LimitChoice, Native, TextArea, Label, ServiceReply,
                    Menu, Back };
+// A row of the phone's list after its tabs (menu_rows): its title, and the window command it runs as a shortcut does.
+struct MenuRow {
+    std::string title;
+    Shortcut command{};
+};
 struct TabType {
     std::string title, group, native, service;
     bool operator==(const TabType&) const = default;
@@ -90,6 +97,7 @@ struct AccountSurface {
     // The phone's list: the tabs it shows, by index, in its order (the dashboard, the AIs, then terminals); unset, all
     // of them in the strip's order.
     std::optional<std::vector<std::size_t>> menuTabs;
+    std::vector<MenuRow> menuRows;
 };
 
 struct MessageCardStyle {
@@ -183,5 +191,9 @@ private:
     uint64_t generation_ = 0;
     std::optional<uint64_t> appliedGeneration_;
 };
+
+// Reads a window answer's menu_rows (docs/policy.md, The iPhone's form) into `rows`: absent is none; a malformed list is
+// refused, with why. readWindow uses it on every answer; a test reads one alone.
+bool readMenuRows(std::string_view json, std::vector<MenuRow>& rows, std::string& why);
 
 } // namespace nexus

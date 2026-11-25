@@ -7,6 +7,8 @@
 #include <utility>
 #include <vector>
 
+#include "pr/layout_query.h"
+
 #include "platform.h"
 #if NEXUS_PROCESSES
 #include "board.h"

@@ -686,6 +686,20 @@ struct Builder {
                 view.phoneMenu = false;
             }
         }
+        // The policy's own rows after the tabs (menu_rows): each runs its window command as its shortcut would.
+        for (const auto& extra : view.windowApp.surface.menuRows) {
+            const auto row = prKitButton(kit, list, {.key = prHashString(sv("menu-row/" + extra.title), 0)},
+                                         {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Lg});
+            PrKitPlace place{};
+            place.height = prKitPx(1.9f * kLinePitch * k());
+            place.flex = PrKitFlex_Fixed;
+            prKitPlace(kit, row, place);
+            label(row, extra.title, textStyle(PrKitTextRole_Title, kChatTone));
+            if (!asking && prKitActivated(kit, row) && !view.menuScroll.dragging()) {
+                view.phoneMenu = false;
+                shortcut(extra.command);
+            }
+        }
         if (view.voice && view.windowApp.surface.voiceMic) menuTalk(root);
     }
 
@@ -2603,7 +2617,6 @@ struct Builder {
             prJsonWriterBool(w, view.voice->listening);
             prJsonWriterKey(w, sv("speaking"));
             prJsonWriterBool(w, view.voice->speaking);
-            field("reply", view.voice->reply);
             prJsonWriterEndObject(w);
         }
         prJsonWriterKey(w, sv("dismissed"));
