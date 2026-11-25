@@ -823,25 +823,25 @@ jobs:
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
+              migration_walk takeover_walk steering_walk
           - part: walks
             half: 2
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
+              migration_walk takeover_walk steering_walk
           - part: walks
             half: 3
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
+              migration_walk takeover_walk steering_walk
           - part: walks
             half: 4
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
+              migration_walk takeover_walk steering_walk
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -996,6 +996,13 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             walk build/tests/server/supervisor_walk 1 1000 "$fault"
           done
+          # steering a turn: the supervisor and the driver's side, every feature set, and the planted faults
+          for seed in 1 2 3 4 5 6 7 8 1000 1001 1002 1003; do
+            walk build/tests/driver/steering_walk "$seed" 2000 ok
+          done
+          walk build/tests/driver/steering_walk 4 600 silent
+          walk build/tests/driver/steering_walk 4 600 early-follow
+          walk build/tests/driver/steering_walk 1 2000 write-settled
           for seed in 13 14 15; do
             walk build/tests/server/supervisor_walk "$seed" 600 --ais-churn
           done

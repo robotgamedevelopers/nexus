@@ -767,6 +767,7 @@ void steeringDriver() {
         st.take(Steer{4, 5, "s5"});
         g = st.runEnd();    // a steer pending goes before the next follow-up
         CHECK(g.items.size() == 1 && g.items[0].id == 5);
+        CHECK(!st.settle() && !st.settling());       // only a follow-up pending: still no settle
         g = st.runEnd();
         CHECK(g.items.size() == 1 && g.items[0].id == 3 && (*g.report == Queue{4, {}, {}}));
         CHECK(st.runEnd().items.empty() && !st.pending());

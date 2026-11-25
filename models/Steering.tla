@@ -24,6 +24,13 @@
 (* of its waiting prompts. A driver that exits has its open turn and what  *)
 (* it may have half taken cut with a notice; never otherwise.              *)
 (*                                                                         *)
+(* The server holds at most MaxWaiting messages for the AI (the hub's      *)
+(* queue limits, which keep a sync diff small): the prompts waiting and    *)
+(* what was written into the open turn and not yet seen taken in, since   *)
+(* any of those may wait again at done. A message that would not fit is   *)
+(* refused with a notice when the person writes it, never dropped later.  *)
+(* The code counts bytes the same way (Supervisor::fits).                  *)
+(*                                                                         *)
 (* Server state is one record s and driver state one record d, so that the *)
 (* server's eager step after each event (Adv: start a driver for a waiting *)
 (* prompt, or write the next send to an idle one) is an operator, as the   *)
@@ -39,6 +46,7 @@
 (*   settle-early   the driver settles with follow-ups pending             *)
 (*   send-at-settled the server closes the turn at settled, not at done    *)
 (*   loop           the driver never takes a follow-up in, nor settles     *)
+(*   unbounded      the server writes into the turn past the waiting limit *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
@@ -46,6 +54,7 @@ CONSTANTS MaxIds,       \* messages the person writes, in all
           MaxStarts,    \* driver processes, in all
           MaxTools,     \* tool rounds in one turn
           MaxRetries,   \* model runs after the first that are not steering's (retry, compaction)
+          MaxWaiting,   \* messages the server holds for the AI: waiting, and written into the turn untaken
           FeatureSets,  \* the features a driver's hello may name
           Fault
 
@@ -75,7 +84,7 @@ NoRep == [steer |-> <<>>, follow |-> <<>>]
 
 ServerInit == [drv |-> "none", starts |-> 0, turn |-> 0, next |-> 1, prompt |-> 0, stopping |-> FALSE,
                settled |-> FALSE, waiting |-> <<>>, inflight |-> <<>>, rep |-> NoRep, ever |-> {}, cut |-> {},
-               broken |-> FALSE]
+               refused |-> {}, broken |-> FALSE]
 
 DriverInit == [alive |-> FALSE, turn |-> 0, last |-> 0, lastid |-> 0, ps |-> <<>>, pf |-> <<>>, run |-> "idle",
                tools |-> 0, retries |-> 0, aborted |-> FALSE, broken |-> FALSE]
@@ -115,9 +124,18 @@ Close(st) ==
 
 NewId == Len(kinds) + 1
 
+\* What the server holds for the AI that may wait at the next done: the prompts waiting, and what it wrote into the
+\* open turn and has not seen taken in.
+Held(st) == Len(st.waiting) + Cardinality({id \in Range(st.inflight) : ~Taken(st, id)})
+Fits == Held(s) < MaxWaiting
+
+\* The person's message waits as a prompt, or is refused with a notice when it would not fit.
+Wait == IF Fits THEN Set(Adv([s EXCEPT !.waiting = Append(@, NewId)], d, s2d, d2s))
+        ELSE s' = [s EXCEPT !.refused = @ \cup {NewId}] /\ UNCHANGED <<d, s2d, d2s>>
+
 Prompt == /\ Len(kinds) < MaxIds
           /\ kinds' = Append(kinds, "prompt")
-          /\ Set(Adv([s EXCEPT !.waiting = Append(@, NewId)], d, s2d, d2s))
+          /\ Wait
           /\ UNCHANGED <<feats, hlog>>
 
 CanSteer(k) == /\ s.drv = "up" /\ s.turn # 0 /\ ~s.stopping /\ ~s.settled
@@ -125,11 +143,11 @@ CanSteer(k) == /\ s.drv = "up" /\ s.turn # 0 /\ ~s.stopping /\ ~s.settled
 
 Steer(k) == /\ Len(kinds) < MaxIds
             /\ kinds' = Append(kinds, k)
-            /\ IF CanSteer(k)
+            /\ IF CanSteer(k) /\ (Fits \/ Fault = "unbounded")
                THEN /\ s' = [s EXCEPT !.inflight = Append(@, NewId)]
                     /\ s2d' = Append(s2d, Msg(k, s.turn, NewId))
                     /\ UNCHANGED <<d, d2s>>
-               ELSE Set(Adv([s EXCEPT !.waiting = Append(@, NewId)], d, s2d, d2s))
+               ELSE Wait
             /\ UNCHANGED <<feats, hlog>>
 
 Stop == /\ s.drv = "up" /\ s.turn # 0 /\ ~s.stopping
@@ -280,11 +298,14 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 \* Each message reaches the harness at most once: as a send, a steer or a follow-up, never two of them.
 AtMostOnce == \A i, j \in 1..Len(hlog) : i # j => hlog[i] # hlog[j]
 
-\* Each message the person wrote is in the harness, waiting, written into the open turn, the open turn's prompt, or cut
-\* with a notice.
+\* Each message the person wrote is in the harness, waiting, written into the open turn, the open turn's prompt, cut
+\* with a notice, or refused with a notice when written.
 NeverLost == \A id \in 1..Len(kinds) :
-    \/ id \in Range(hlog) \/ id \in Range(s.waiting) \/ id \in Range(s.inflight) \/ id \in s.cut
+    \/ id \in Range(hlog) \/ id \in Range(s.waiting) \/ id \in Range(s.inflight) \/ id \in s.cut \/ id \in s.refused
     \/ (id = s.prompt /\ s.turn # 0)
+
+\* The waiting prompts never pass the limit, at done (what is given back) as at any other time.
+WaitingFits == Len(s.waiting) <= MaxWaiting
 
 \* Cut only when the driver is gone: never lost while it lives.
 CutOnlyOnExit == [][s'.cut # s.cut => ~d.alive]_vars
@@ -310,7 +331,7 @@ NamedOnly == \A j \in 1..Len(s2d) : s2d[j].k \in Kinds => s2d[j].k \in feats
 DriverKeptRules == ~d.broken
 ServerKeptRules == ~s.broken
 
-Safety == AtMostOnce /\ NeverLost /\ ViewMatches /\ NamedOnly /\ DriverKeptRules /\ ServerKeptRules
+Safety == AtMostOnce /\ NeverLost /\ WaitingFits /\ ViewMatches /\ NamedOnly /\ DriverKeptRules /\ ServerKeptRules
 
 \* Every turn ends, and every message written into a turn is taken in, given back or cut.
 TurnsEnd == \A t \in 1..MaxIds : (s.turn = t) ~> (s.turn # t)

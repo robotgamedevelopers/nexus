@@ -115,12 +115,14 @@ tlc_test(tlc_claude_driver_trace_faulty_latch_rejected ClaudeDriverTrace ClaudeD
 tlc_test(tlc_claude_driver_trace_faulty_secret_rejected ClaudeDriverTrace ClaudeDriverTrace.cfg invariant
          PROPERTY TraceMatches DRIVERWALK SEED 1 STEPS 600 FAULTY secret)
 
-# Steering a turn (models/Steering.tla, docs/driver-protocol.md "Steering a turn"), label model: the spec on its
-# per-commit instance (a driver naming nothing, and one naming all three features) and, nightly, on every set of
-# features; a reversed witness per property, each a planted bug TLC must reject; and the traces of steering_walk (the
-# server's real supervisor and the driver's real side, src/driver/steering.h, over encoded lines) over several seeds,
-# each a behaviour of the spec, with two faulty driver sides rejected. Named tlc_supervisor_steering_* so the nightly
-# model shard supervisor-rest runs them (tests/server builds steering_walk with supervisor_walk).
+# Steering a turn (models/Steering.tla, docs/driver-protocol.md "Steering a turn"). All label model, which CI runs
+# nightly only (the model shard supervisor-rest takes tlc_supervisor_*; tests/server builds steering_walk with
+# supervisor_walk), none per pull request: the spec on two small instances within the 60 s cap (Steering.cfg,
+# SteeringThree.cfg) and on every set of features (SteeringWide.cfg, SteeringWideRest.cfg; model_nightly); a reversed
+# witness per property, each a planted bug TLC must reject; and the traces of steering_walk (the server's real
+# supervisor and the driver's real side, src/driver/steering.h, over encoded lines) over several seeds, each a behaviour
+# of the spec, with planted faults of either side rejected. The sanitizer jobs run steering_walk itself per pull request
+# (.github/workflows/ci.yml).
 if(NEXUS_SERVER_PARTS)
     add_executable(steering_walk steering_walk.cpp)
     target_link_libraries(steering_walk PRIVATE nexus_supervisor)
@@ -130,9 +132,11 @@ endif()
 tlc_test(tlc_supervisor_steering Steering Steering.cfg pass WORKERS 4)
 tlc_test(tlc_supervisor_steering_three Steering SteeringThree.cfg pass WORKERS 4)
 tlc_test(tlc_supervisor_steering_wide Steering SteeringWide.cfg pass WORKERS 8 NIGHTLY)
+tlc_test(tlc_supervisor_steering_wide_rest Steering SteeringWideRest.cfg pass WORKERS 8 NIGHTLY)
 foreach(witness Twice:invariant:AtMostOnce Drop:invariant:NeverLost EarlyFollow:action:FollowAtRunEnd
                 Silent:invariant:ViewMatches Unnamed:invariant:NamedOnly Stale:invariant:AtMostOnce
-                SettleEarly:action:SettleEmpty SendAtSettled:invariant:DriverKeptRules Loop:liveness:)
+                SettleEarly:action:SettleEmpty SendAtSettled:invariant:DriverKeptRules Unbounded:invariant:WaitingFits
+                Loop:liveness:)
     string(REPLACE ":" ";" parts "${witness}")
     list(GET parts 0 fault)
     list(GET parts 1 expect)
@@ -161,11 +165,19 @@ function(steering_trace_test name seed steps mode expect)
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake)
     set_tests_properties(${name} PROPERTIES LABELS model TIMEOUT 90 PROCESSORS 2)
 endfunction()
+# Seeds below 1000 name all three features; 1000 to 1003 name the other sets (nothing, settled only, steer and settled,
+# follow-up and settled).
 foreach(seed RANGE 1 20)
-    steering_trace_test(tlc_supervisor_steering_trace_seed_${seed} ${seed} 600 ok pass)
+    steering_trace_test(tlc_supervisor_steering_trace_seed_${seed} ${seed} 2000 ok pass)
+endforeach()
+foreach(seed 1000 1001 1002 1003)
+    steering_trace_test(tlc_supervisor_steering_trace_seed_${seed} ${seed} 2000 ok pass)
 endforeach()
 steering_trace_test(tlc_supervisor_steering_trace_faulty_silent_rejected 4 600 silent invariant TraceMatches)
 steering_trace_test(tlc_supervisor_steering_trace_faulty_early_follow_rejected 4 600 early-follow invariant
+                    TraceMatches)
+# A server that writes into a turn after reading its settled (Supervisor::into without its settled check).
+steering_trace_test(tlc_supervisor_steering_trace_faulty_write_settled_rejected 1 2000 write-settled invariant
                     TraceMatches)
 
 # The unit test runs under the sanitizers with the model's programs (cmake --build <dir> --target model_checks).

@@ -328,18 +328,37 @@ std::optional<Millis> Supervisor::deadline() const {
     return deadline_;
 }
 
-Output Supervisor::prompt(const std::string& text, Millis now) {
-    const std::size_t bytes = std::accumulate(state_.waiting.begin(), state_.waiting.end(), std::size_t(0),
+// Models: models/Steering.tla Held, Fits.
+std::string Supervisor::fits(const std::string& text) const {
+    std::size_t count = state_.waiting.size();
+    std::size_t bytes = std::accumulate(state_.waiting.begin(), state_.waiting.end(), std::size_t(0),
         [](std::size_t n, const std::string& w) { return n + w.size(); });
+    std::size_t intoTurn = 0;
+    for (const Written& w : written_) {
+        if (!taken(w.id)) {
+            ++count;
+            ++intoTurn;
+            bytes += w.text.size();
+        }
+    }
+    const std::string held = intoTurn == 0 ? std::string() : " (counting " + plural(intoTurn, "message", "messages") +
+        " written into the turn that runs, which wait again if it ends before taking them in)";
+    if (count >= config_.maxWaiting) {
+        return std::to_string(count) + (intoTurn == 0 ? " prompts" : " messages") + " already wait for " +
+            config_.name + held + ", the limit";
+    }
+    if (bytes + text.size() > config_.maxWaitingBytes) {
+        return std::string(intoTurn == 0 ? "the prompts" : "the messages") + " waiting for " + config_.name + held +
+            " would hold more than " + std::to_string(config_.maxWaitingBytes / 1024) + " KiB";
+    }
+    return {};
+}
+
+Output Supervisor::prompt(const std::string& text, Millis now) {
     const Encoded line = encode(sendOf(state_.nextTurn, text));
     const std::string notSent = "A prompt to " + config_.name + " was not sent: ";
-    if (state_.waiting.size() >= config_.maxWaiting) {
-        effect(Effect::What::Notice, notSent + std::to_string(state_.waiting.size()) + " prompts already wait for " +
-            config_.name + ", the limit. Send it again once " + config_.name + " has answered.");
-    } else if (bytes + text.size() > config_.maxWaitingBytes) {
-        effect(Effect::What::Notice, notSent + "the prompts waiting for " + config_.name + " would hold more than " +
-            std::to_string(config_.maxWaitingBytes / 1024) + " KiB. Send it again once " + config_.name +
-            " has answered.");
+    if (const std::string full = fits(text); !full.empty()) {
+        effect(Effect::What::Notice, notSent + full + ". Send it again once " + config_.name + " has answered.");
     } else if (!line.error.empty()) {
         effect(Effect::What::Notice, notSent + sentence(line.error));
     } else {
@@ -692,11 +711,12 @@ Output Supervisor::followUp(const std::string& text, Millis now) {
     return into(text, true, now);
 }
 
-// Into the open turn when the driver takes that kind and the turn is open, not stopping and not settled (models/
-// Steering.tla Steer, CanSteer); otherwise a prompt for the next turn.
+// Into the open turn when the driver takes that kind and the turn is open, not stopping and not settled, and it fits
+// the waiting limits, since it waits again if the turn ends before taking it in (models/Steering.tla Steer, CanSteer,
+// Fits); otherwise a prompt for the next turn, which refuses it with a notice when it does not fit.
 Output Supervisor::into(const std::string& text, bool followUp, Millis now) {
     const bool takes = followUp ? driverFollowsUp_ : driverSteers_;
-    if (phase_ == Phase::Working && takes && !settled_ && written_.size() < kMaxQueued) {
+    if (phase_ == Phase::Working && takes && !settled_ && written_.size() < kMaxQueued && fits(text).empty()) {
         const std::uint64_t id = nextWritten_;
         const Encoded line = followUp ? encode(FollowUp{state_.openTurn, id, text})
                                       : encode(driver::Steer{state_.openTurn, id, text});
@@ -713,7 +733,7 @@ Output Supervisor::into(const std::string& text, bool followUp, Millis now) {
     if (!followUp && phase_ == Phase::Working && !driverSteers_) {
         effect(Effect::What::Notice, config_.name + "'s driver does not take a message into a turn that runs (its "
             "hello names no \"steer\"), so this one waits for the next turn.");
-    } else if (phase_ == Phase::Working && takes && !settled_) {
+    } else if (phase_ == Phase::Working && takes && !settled_ && written_.size() >= kMaxQueued) {
         effect(Effect::What::Notice, std::to_string(kMaxQueued) + " messages were already written into this turn, "
             "the most one turn takes, so this one waits for the next turn.");
     }

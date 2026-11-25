@@ -301,6 +301,9 @@ private:
     Output into(const std::string& text, bool followUp, Millis now);
     bool steering(const driver::DriverMessage& message, std::uint64_t open, Millis now);
     void giveBack();
+    // Whether one more message of text fits the waiting limits, counting the prompts waiting and what was written into
+    // the open turn and not seen taken in (any of which may wait again at done): empty when it fits, else why not.
+    std::string fits(const std::string& text) const;
     void cutWritten();
     void clearSteering();
     void clearContinuation();

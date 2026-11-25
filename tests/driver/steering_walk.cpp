@@ -6,16 +6,19 @@
 //
 //   steering_walk <seed> <steps> <mode> <out.tla>
 //
-// mode is ok, or a planted driver fault for the tests that show the check can fail:
-//   silent        the driver takes steers in at a tool-call boundary without writing its queue
-//   early-follow  the driver takes a follow-up in at a tool-call boundary
+// mode is ok, or a planted fault for the tests that show the check can fail:
+//   silent         the driver takes steers in at a tool-call boundary without writing its queue
+//   early-follow   the driver takes a follow-up in at a tool-call boundary
+//   write-settled  the server writes a steer or follow-up into a turn after reading its settled (the walk plays that
+//                  server's line itself; the real supervisor makes it a prompt)
 //
 // A faulty mode must show its fault: a walk in which it never fires (no steer pending at a tool-call boundary, say)
-// is run again from the next seed with the same features (seed + 5, + 10, ...) until it fires, and the walk fails
-// if none of 1000 does. The trace data names the seed that was written.
+// is run again with the same features and another random stream until it fires, and the walk fails if none of 1000
+// does. The trace data names the seed and the attempt that was written.
 //
-// The seed picks the features the driver's hello names (one of the five sets the model allows). The steps, each a
-// Steering.tla action, recorded with every variable of the model after it:
+// The seed picks the features the driver's hello names: below 1000, all three; from 1000, seed % 5 picks one of the
+// five sets the model allows (a few named seeds take the other four). The steps, each a Steering.tla action,
+// recorded with every variable of the model after it:
 //   prompt, steer, follow   the person writes the next message ("m1", "m2", ...) as a prompt, a steer or a follow-up
 //   stop                    the person stops the turn that runs
 //   srecv                   the server reads the driver's next line
@@ -24,7 +27,8 @@
 //   tools, boundary         a model call ends with tool calls; they finish (a tool-call boundary)
 //   runend                  a model run ends with something pending: it goes in and the run goes on
 //   retry                   a model run ends and another follows by itself (a retry, a compaction)
-//   settle, finish          nothing left: settled (to a driver that names it); then the done
+//   settle, finish          nothing left: settled (to a driver that names it); then the done. The walk offers the
+//                           driver a settle at any model run's end; one it refuses (something pending) is nosettle
 //   exit                    the driver exits
 
 #include <algorithm>
@@ -51,13 +55,22 @@ using namespace nexus::driver;
 using nexus::server::Phase;
 using nexus::server::Supervisor;
 
-constexpr std::size_t kMaxIds = 12;
+constexpr std::size_t kMaxIds = 80;
+constexpr std::size_t kMaxWaiting = 4;            // the supervisor's waiting limit in the walk, so that it is reached
+constexpr std::uint64_t kPlantedIds = 1000000;    // write-settled: the planted server's ids, above the real ones
 constexpr std::size_t kMaxStarts = 3;
 constexpr int kMaxTools = 2;
 constexpr int kMaxRetries = 1;
 
 const std::vector<std::vector<std::string>> kFeatureSets = {
     {}, {"settled"}, {"steer", "settled"}, {"follow-up", "settled"}, {"steer", "follow-up", "settled"}};
+
+const std::vector<std::string>& featuresFor(std::uint64_t seed) {
+    if (seed >= 1000) {
+        return kFeatureSets[seed % kFeatureSets.size()];
+    }
+    return kFeatureSets[4];
+}
 
 // splitmix64
 struct Rng {
@@ -112,16 +125,17 @@ std::uint64_t idOf(const std::string& text) {
 
 class Walk {
 public:
-    Walk(std::uint64_t seed, std::string mode) : rng_{seed}, mode_(std::move(mode)) {
-        features_ = kFeatureSets[seed % kFeatureSets.size()];
+    Walk(std::uint64_t seed, std::uint64_t attempt, std::string mode)
+        : rng_{seed * 1000003 + attempt}, mode_(std::move(mode)) {
+        features_ = featuresFor(seed);
         server::Config c;
-        c.name = "friend";
+        c.name = "the AI";
         c.command = {"driver"};
         c.cwd = "/work";
         c.configured = "the drivers file";
         c.limited = false;
         c.maxFailedStarts = 1000;
-        c.maxWaiting = kMaxIds + 1;
+        c.maxWaiting = kMaxWaiting;
         server::Output out;
         sup_.emplace(c, sync::DriverState{}, 0, &out, std::vector<std::string>{});
         apply(out);
@@ -135,8 +149,10 @@ public:
                 break;
             }
             const std::string op = pick(ops);
-            take(op);
-            record(op);
+            record(take(op));
+            if (mode_ == "write-settled" && fired_) {
+                break;      // the planted line is the divergence; what follows it only breaks the protocol further
+            }
         }
     }
 
@@ -145,12 +161,21 @@ public:
 
     // A weighted choice, so that turns are steered: an exit or a stop ends the turn and what was written into it, so
     // each is drawn a sixth as often as a driver's or server's own step; a steer or follow-up is drawn mostly while a
-    // turn runs, and a prompt or a settle (which ends the turn's chance of one) seldom.
+    // turn runs, and a prompt or a settle (which ends the turn's chance of one) seldom; at the waiting limit the person
+    // writes seldom, so that the messages are not all spent on refusals.
     std::string pick(const std::vector<std::string>& ops) {
         const bool working = sup_->phase() == Phase::Working;
-        auto weight = [working](const std::string& op) -> std::size_t {
+        std::size_t held = sup_->state().waiting.size();
+        for (const Supervisor::Written& w : sup_->written()) {
+            held += sup_->taken(w.id) ? 0 : 1;
+        }
+        const bool full = held >= kMaxWaiting;
+        auto weight = [working, full](const std::string& op) -> std::size_t {
             if (op == "exit" || op == "stop") {
                 return 1;
+            }
+            if (full && (op == "prompt" || op == "steer" || op == "follow")) {
+                return 1;       // at the waiting limit: now and then, to see it refused
             }
             if (op == "steer" || op == "follow") {
                 return working ? 8 : 1;
@@ -174,13 +199,15 @@ public:
         return ops.back();
     }
 
-    void write(const std::string& path, std::uint64_t seed) const {
+    void write(const std::string& path, std::uint64_t seed, std::uint64_t attempt) const {
         std::ofstream out(path);
         out << "---- MODULE SteeringTraceData ----\n"
-            << "\\* Written by tests/driver/steering_walk.cpp, seed " << seed << ", mode " << mode_ << ".\n"
+            << "\\* Written by tests/driver/steering_walk.cpp, seed " << seed << ", attempt " << attempt << ", mode "
+            << mode_ << ".\n"
             << "EXTENDS Naturals, Sequences\n"
             << "TraceMaxIds == " << kMaxIds << "\nTraceMaxStarts == " << kMaxStarts << "\nTraceMaxTools == "
-            << kMaxTools << "\nTraceMaxRetries == " << kMaxRetries << "\nTrace == <<\n";
+            << kMaxTools << "\nTraceMaxRetries == " << kMaxRetries << "\nTraceMaxWaiting == " << kMaxWaiting
+            << "\nTrace == <<\n";
         for (std::size_t i = 0; i < trace_.size(); ++i) {
             out << trace_[i] << (i + 1 < trace_.size() ? ",\n" : "\n");
         }
@@ -231,8 +258,8 @@ private:
             if (d_.run == "model" && d_.retries < kMaxRetries) {
                 ops.push_back("retry");
             }
-            if (d_.run == "model" && !d_.st.pending()) {
-                ops.push_back("settle");
+            if (d_.run == "model") {
+                ops.push_back("settle");    // the driver's code refuses it while something is pending (nosettle)
             }
             if (d_.run == "settling") {
                 ops.push_back("finish");
@@ -244,15 +271,37 @@ private:
         return ops;
     }
 
-    void take(const std::string& op) {
+    // Takes the step, and returns the op to record (the op, or nosettle for a settle the driver refused).
+    std::string take(const std::string& op) {
         Supervisor& s = *sup_;
         if (op == "prompt" || op == "steer" || op == "follow") {
             const std::uint64_t id = kinds_.size() + 1;
             kinds_.push_back(op == "prompt" ? "prompt" : op);
             const std::string text = "m" + std::to_string(id);
+            const bool named = std::find(features_.begin(), features_.end(),
+                op == "steer" ? "steer" : "follow-up") != features_.end();
+            if (mode_ == "write-settled" && op != "prompt" && named && s.phase() == Phase::Working &&
+                    s.settledTurn()) {
+                // The planted server: written into the settled turn as the supervisor would without its check.
+                const std::uint64_t written = kPlantedIds + id;
+                persons_[written] = id;
+                s2d_.push_back(op == "steer" ? encode(Steer{s.state().openTurn, written, text}).line
+                                             : encode(FollowUp{s.state().openTurn, written, text}).line);
+                fired_ = true;
+                return op;
+            }
             pendingPerson_ = id;
             apply(op == "prompt" ? s.prompt(text, 0) : op == "steer" ? s.steer(text, 0) : s.followUp(text, 0));
             pendingPerson_ = 0;
+            // Neither waiting, nor written into the turn, nor the turn's prompt: refused at the waiting limit.
+            const auto& waiting = s.state().waiting;
+            const bool held = std::find(waiting.begin(), waiting.end(), text) != waiting.end() ||
+                std::any_of(s.written().begin(), s.written().end(),
+                    [&](const Supervisor::Written& w) { return w.text == text; }) ||
+                (s.state().openTurn != 0 && s.openPrompt() == text);
+            if (!held) {
+                refused_.insert(id);
+            }
         } else if (op == "stop") {
             apply(s.stop(0));
         } else if (op == "srecv") {
@@ -301,7 +350,10 @@ private:
         } else if (op == "settle") {
             const std::optional<Settled> settled = d_.st.settle();
             if (!d_.st.settling()) {
-                fail("settle with nothing pending did not settle");
+                if (settled) {
+                    fail("the driver refused a settle but wrote settled");
+                }
+                return "nosettle";
             }
             if (settled) {
                 driverWrites(*settled);
@@ -315,6 +367,7 @@ private:
         } else if (op == "exit") {
             d_.alive = false;
         }
+        return op;
     }
 
     void give(const Steering::Given& g, bool report) {
@@ -489,7 +542,8 @@ private:
           << boolean(p == Phase::Stopping) << ", settled |-> " << boolean(s.settledTurn()) << ", waiting |-> "
           << seq(waiting) << ", inflight |-> " << seq(inflight) << ", rep |-> [steer |-> "
           << seq(persons(s.reported().steer)) << ", follow |-> " << seq(persons(s.reported().followUp))
-          << "], ever |-> " << set(ever) << ", cut |-> " << set(cut_) << ", broken |-> "
+          << "], ever |-> " << set(ever) << ", cut |-> " << set(cut_) << ", refused |-> " << set(refused_)
+          << ", broken |-> "
           << boolean(serverBroke_ || p == Phase::Ending) << "],\n d |-> [alive |-> " << boolean(d_.alive)
           << ", turn |-> " << d_.st.turn() << ", last |-> " << d_.st.lastTurn() << ", lastid |-> "
           << (d_.st.lastId() == 0 ? 0 : person(d_.st.lastId())) << ", ps |-> " << seq(persons(d_.st.steerIds()))
@@ -517,6 +571,7 @@ private:
     std::vector<std::string> kinds_;
     std::vector<std::uint64_t> hlog_;
     std::set<std::uint64_t> cut_;
+    std::set<std::uint64_t> refused_;              // the person's messages refused at the waiting limit
     std::map<std::uint64_t, std::uint64_t> persons_;   // the supervisor's written id -> the person's id
     std::uint64_t pendingPerson_ = 0;
     std::size_t starts_ = 0;
@@ -529,27 +584,28 @@ private:
 
 int main(int argc, char** argv) {
     if (argc != 5) {
-        std::fprintf(stderr, "usage: steering_walk <seed> <steps> <mode: ok, silent or early-follow> <out.tla>\n");
+        std::fprintf(stderr, "usage: steering_walk <seed> <steps> <mode: ok, silent, early-follow or write-settled> "
+            "<out.tla>\n");
         return 2;
     }
     const std::uint64_t seed = std::strtoull(argv[1], nullptr, 10);
     const std::size_t steps = std::strtoull(argv[2], nullptr, 10);
     const std::string mode = argv[3];
-    if (mode != "ok" && mode != "silent" && mode != "early-follow") {
-        std::fprintf(stderr, "steering_walk: mode %s is not ok, silent or early-follow\n", mode.c_str());
+    if (mode != "ok" && mode != "silent" && mode != "early-follow" && mode != "write-settled") {
+        std::fprintf(stderr, "steering_walk: mode %s is not ok, silent, early-follow or write-settled\n", mode.c_str());
         return 2;
     }
     for (std::uint64_t attempt = 0; attempt < 1000; ++attempt) {
-        const std::uint64_t s = seed + attempt * kFeatureSets.size();
-        Walk walk(s, mode);
+        Walk walk(seed, attempt, mode);
         walk.run(steps);
         if (mode == "ok" || walk.fired()) {
-            walk.write(argv[4], s);
+            walk.write(argv[4], seed, attempt);
             return 0;
         }
     }
     std::fprintf(stderr, "steering_walk: mode %s never fired in 1000 walks from seed %llu; the walk cannot show its "
-        "fault, so the check would pass for the wrong reason. Make the fault reachable in tests/driver/steering_walk.cpp\n",
+        "fault, so the check would pass for the wrong reason. Make the fault reachable in "
+        "tests/driver/steering_walk.cpp\n",
         mode.c_str(), static_cast<unsigned long long>(seed));
     return 1;
 }

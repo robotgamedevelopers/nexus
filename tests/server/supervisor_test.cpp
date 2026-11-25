@@ -1690,13 +1690,13 @@ void testSteering() {
         s.message(driver::Queue{1, {1}, {}}, kStart + 4);
         Output o = s.stop(kStart + 5);
         CHECK((written(o) == std::vector<ServerMessage>{Stop{1}}));
-        o = s.steer("while stopping", kStart + 6);     // the turn is stopping: it waits
-        CHECK(written(o).empty());
+        o = s.steer("while stopping", kStart + 6);     // the turn is stopping: it would wait, but a and b hold the limit
+        CHECK(written(o).empty() && noticeHas(o, "2 messages already wait"));
         s.message(Settled{1, true}, kStart + 7);
         o = s.message(doneOf(1, Outcome::Stopped), kStart + 8);
         CHECK(noticeHas(o, "2 messages written into the turn were not taken in"));
         CHECK(sends(o, 2, "a"));
-        CHECK((s.state().waiting == std::vector<std::string>{"b", "while stopping"}));
+        CHECK((s.state().waiting == std::vector<std::string>{"b"}));
         CHECK(o.durable);
     }
     // A driver that names neither kind is never written one: the message waits as the next prompt, a steer with a
@@ -1787,6 +1787,37 @@ void testSteering() {
         CHECK(noticeHas(o, "1 message written into the turn may not have reached ada"));
         CHECK(s.written().empty() && s.state().waiting.empty() && s.state().openTurn == 0);
         CHECK(written(o).empty());
+    }
+    // The waiting limits (2 messages, 64 bytes here) count what was written into the turn and not taken in, since it
+    // waits again at the done: a steer that would not fit is refused when written, with a notice, and what the done
+    // gives back always fits. Nothing is dropped then.
+    {
+        const std::string big(41, 'x');
+        Supervisor s = steered();
+        CHECK(written(s.prompt("p1", kStart + 2)).empty());
+        CHECK(written(s.steer(big, kStart + 3)).size() == 1);       // 1 waiting + 1 into the turn: the limit
+        Output o = s.steer(big + "y", kStart + 4);
+        CHECK(written(o).empty() && noticeHas(o, "was not sent") && noticeHas(o, "written into the turn"));
+        CHECK(s.written().size() == 1 && s.state().waiting == std::vector<std::string>{"p1"});
+        o = s.prompt("p2", kStart + 5);
+        CHECK(noticeHas(o, "2 messages already wait") && s.state().waiting.size() == 1);
+        s.stop(kStart + 6);
+        s.message(Settled{1, true}, kStart + 7);
+        o = s.message(doneOf(1, Outcome::Stopped), kStart + 8);
+        CHECK(noticeHas(o, "1 message written into the turn was not taken in"));
+        CHECK(sends(o, 2, big) && s.state().waiting == std::vector<std::string>{"p1"});
+    }
+    {
+        // By bytes: 41 + 41 > 64, so the second steer is refused though the count would fit.
+        const std::string big(41, 'x');
+        Supervisor s = steered();
+        CHECK(written(s.steer(big, kStart + 2)).size() == 1);
+        const Output o = s.followUp(big, kStart + 3);
+        CHECK(written(o).empty() && noticeHas(o, "would hold more than") && s.state().waiting.empty());
+        // Once the harness takes the steer in, it no longer counts.
+        s.message(driver::Queue{1, {1}, {}}, kStart + 4);
+        s.message(driver::Queue{1, {}, {}}, kStart + 5);
+        CHECK(written(s.followUp(big, kStart + 6)).size() == 1);
     }
     // A driver that names nothing keeps working as before: done closes the turn with no settled.
     {

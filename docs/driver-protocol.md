@@ -159,6 +159,10 @@ the person's message waits as the next prompt.
   in (never queued, or still in the last queue) and puts it first among the waiting prompts, in the order written:
   each is the next turn's prompt, so nothing the person wrote is lost while the driver lives. If the driver exits with
   the turn open, what it had not taken in is cut with the turn, with a notice, and never written again.
+- **The waiting limit.** What the server writes into a turn counts against its limit on the prompts waiting for the
+  AI (8 messages, 32 KiB) until the driver reports it taken in, since it waits again if the turn ends first. A steer or
+  follow-up that would not fit is refused when the person writes it, with a notice saying why, so what the server
+  gives back at a turn's `done` always fits and is never cut short.
 - **Refused.** A steer or follow-up to a driver whose hello did not name the kind, for a turn the driver never opened
   (above the last `send`), or whose `id` is not above the last, is the server's bug: the driver refuses the line (rule
   4), carrying its `turn`. A `queue` or `settled` from a driver that did not name it, for a turn that is not open, a
@@ -264,9 +268,9 @@ A turn the harness fails, with its cause first:
 ```
 
 A turn steered while it runs, by a driver whose hello named all three: the steer goes in after the tool call, the
-follow-up when the run would otherwise end, then settled and done. A second follow-up, written as the driver settles the turn,
-crosses its end: the driver had already written settled when it read it, so it ignores it, and at the done the server
-sends it as the next turn's prompt:
+follow-up when the run would otherwise end, then settled and done. A second follow-up, written as the driver settles
+the turn, crosses its end: the driver had already written settled when it read it, so it ignores it, and at the done
+the server sends it as the next turn's prompt:
 
 ```
 < {"kind":"hello","protocol":1,"harness":"fake","features":["steer","follow-up","settled"]}

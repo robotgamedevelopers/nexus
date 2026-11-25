@@ -13,14 +13,18 @@
 (* Each step of this spec takes the action the record names; TraceMatches  *)
 (* requires the spec's state to equal the code's, variable by variable.    *)
 (* The model's safety properties are checked on the trace. A step the     *)
-(* spec cannot take is a deadlock, which TLC reports.                      *)
+(* spec cannot take is a deadlock, which TLC reports. The op nosettle is   *)
+(* the walk offering the driver a settle that it refused (something was   *)
+(* pending): nothing changes, and a settle the code took when the model    *)
+(* would not is recorded as settle, which the spec cannot take.            *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, TLC, SteeringTraceData
 
 VARIABLES feats, kinds, s, d, s2d, d2s, hlog, l
 
 M == INSTANCE Steering WITH MaxIds <- TraceMaxIds, MaxStarts <- TraceMaxStarts, MaxTools <- TraceMaxTools,
-                            MaxRetries <- TraceMaxRetries, FeatureSets <- {Trace[1].feats}, Fault <- "none"
+                            MaxRetries <- TraceMaxRetries, MaxWaiting <- TraceMaxWaiting,
+                            FeatureSets <- {Trace[1].feats}, Fault <- "none"
 
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
@@ -39,6 +43,7 @@ Step(op) ==
       [] op = "runend"   -> M!RunEnd
       [] op = "retry"    -> M!Retry
       [] op = "settle"   -> M!Settle
+      [] op = "nosettle" -> UNCHANGED <<feats, kinds, s, d, s2d, d2s, hlog>>
       [] op = "finish"   -> M!Finish
       [] op = "exit"     -> M!Exit
 
@@ -56,6 +61,7 @@ TraceMatches == LET r == Trace[l] IN
 \* The model's properties, on the trace (a cfg names no instance's operator).
 AtMostOnce == M!AtMostOnce
 NeverLost == M!NeverLost
+WaitingFits == M!WaitingFits
 ViewMatches == M!ViewMatches
 NamedOnly == M!NamedOnly
 DriverKeptRules == M!DriverKeptRules
