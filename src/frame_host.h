@@ -196,6 +196,13 @@ struct FrameHost {
     PrUi* ui = nullptr;                     // the window's tree's context, while the window is open; null cuts nothing
     // One round of the window under `root`.
     void build(PrKit* kit, PrLayoutNode root);
+    // One round of the window under `root`, whose extent is `extent`, inside a box of its own above the on-screen
+    // keyboard in every frame (iOS, main_ios.cpp): `room` is the content's height above the keyboard (keyboard_room.h),
+    // 0 for none over it, and view->extent is that box. The box is there with the keyboard and without it, so the
+    // window's nodes stay the same nodes as it comes and goes: built straight into the root while no keyboard showed,
+    // they were new each time it rose or fell, the prompt took the focus anew, and the keyboard went down and up
+    // every frame (tests/window/test_keyboard_frames.cpp).
+    void buildAbove(PrKit* kit, PrLayoutNode root, PrVec2 extent, float room);
 
     // Saves the terminal tabs and the selected tab if they changed (and the window keeps them).
     void keepTerminals();

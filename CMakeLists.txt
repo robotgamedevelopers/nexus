@@ -430,7 +430,9 @@ if(WIN32 AND NOT NEXUS_WINDOW)
 endif()
 
 enable_testing()
-if(TARGET nexus_policy)
+# The policy tool runs on the build machine, so the reload check runs in the desktop trees; an iOS tree builds for a
+# simulator or a device, where a test is a program the simulator runner starts (tests/ios).
+if(TARGET nexus_policy AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     add_executable(policy_reload_test tests/policy/reload.cpp)
     target_link_libraries(policy_reload_test PRIVATE nexus_policy)
     target_compile_options(policy_reload_test PRIVATE ${NEXUS_WARNINGS})

@@ -183,6 +183,16 @@ if(NEXUS_WINDOW)
     add_test(NAME frame_host_unit COMMAND nexus_frame_host_tests)
     set_tests_properties(frame_host_unit PROPERTIES LABELS unit TIMEOUT 30)
 
+    # The first switch from the Dashboard to an AI's tab as the iOS window draws it, above an on-screen keyboard whose
+    # rect comes on time, early, late, with a gap or never (test_keyboard_frames.cpp): the focus and the keyboard settle
+    # once and no frame asks for another. A kit with no window, the system's fonts, made-up time.
+    add_executable(nexus_keyboard_frames_tests test_keyboard_frames.cpp)
+    target_compile_options(nexus_keyboard_frames_tests PRIVATE ${NEXUS_WARNINGS})
+    target_include_directories(nexus_keyboard_frames_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(nexus_keyboard_frames_tests PRIVATE nexus_frame)
+    add_test(NAME keyboard_frames_unit COMMAND nexus_keyboard_frames_tests)
+    set_tests_properties(keyboard_frames_unit PROPERTIES LABELS unit TIMEOUT 30)
+
     if(NEXUS_SERVER_PARTS)
         add_executable(account_picker_trace account_picker_trace.cpp)
         target_compile_options(account_picker_trace PRIVATE ${NEXUS_WARNINGS})
