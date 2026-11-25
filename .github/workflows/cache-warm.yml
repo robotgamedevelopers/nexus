@@ -35,11 +35,6 @@ jobs:
             config: mac-release
             brew: ccache ninja protobuf
             targets: ""
-          - cache: mac-frame
-            os: macos-26
-            config: mac-release
-            brew: ccache ninja protobuf
-            targets: nexus_frame_tests
           - cache: mac-asan-units
             os: macos-26
             config: mac-asan

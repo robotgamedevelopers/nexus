@@ -34,21 +34,22 @@ concurrency:
 
 jobs:
   # The build compiles Metal shaders (Prax) and needs Xcode's Metal toolchain: the newest macOS image (macos-26, arm64).
-  # Two jobs: the build with its unit and functional tests, and the frame budget alone (it times the frame thread on
-  # the real clock, so it shares its machine with nothing else of nexus's).
+  # Three jobs, each building from the cache: the unit tests, and the functional tests in two halves (ctest -I, every
+  # other test), which together take about a minute on the image's 3 cores. The frame budget (docs/frame-budget.md),
+  # which times the frame thread on the real clock against budgets set on the fleet's Macs, runs in the nightly on a
+  # fleet Mac: a shared 3-core VM is not the machine those budgets are for.
   build-and-unit:
     runs-on: macos-26
-    name: ${{ matrix.check }}
+    name: ${{ matrix.check }}${{ matrix.shard && format(' ({0} of 2)', matrix.shard) || '' }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - check: build-and-unit
-            cache: mac-release
-            targets: ""
-          - check: frame-budget
-            cache: mac-frame
-            targets: nexus_frame_tests
+          - check: functional
+            shard: 1
+          - check: functional
+            shard: 2
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -58,12 +59,12 @@ jobs:
       - name: Tools and caches
         uses: ./.github/actions/hosted-caches
         with:
-          name: ${{ matrix.cache }}
+          name: mac-release
           brew: ccache ninja protobuf
       # The link's functional tests reach this machine over `ssh localhost` without a password prompt
       # (tests/link/CMakeLists.txt): a key made here, for this job only, authorized for the runner's own login.
       - name: Passwordless ssh to this machine
-        if: matrix.check == 'build-and-unit'
+        if: matrix.check == 'functional'
         shell: bash
         run: |
           set -euo pipefail
@@ -82,36 +83,17 @@ jobs:
         uses: ./.github/actions/nexus-build
         with:
           config: mac-release
-          targets: ${{ matrix.targets }}
       - name: Unit tests
         if: matrix.check == 'build-and-unit'
         run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
       # The headless window (system fonts), real child processes and a real file, and the link end to end (nexus-server
       # over ssh to this machine, mosh's transport over real UDP): not unit tests.
-      # The frame budget (docs/frame-budget.md) times the frame thread on the real clock, so it runs after the others,
-      # alone, and with every nova-reserve slot on this host when it can have them within 20 s; else shared.
-      - name: Functional tests
-        if: matrix.check == 'build-and-unit'
-        run: ctest --test-dir build -L functional -E '^(window_frame_budget|server_lock_functional)$' -j "$TEST_JOBS" --output-on-failure
-      - name: Frame budget, alone
-        if: matrix.check == 'frame-budget'
-        shell: bash
-        run: |
-          set -uo pipefail
-          frames=(ctest --test-dir build -R '^window_frame_budget$' --output-on-failure --no-tests=error)
-          if command -v nova-reserve >/dev/null; then
-            held="$RUNNER_TEMP/frame-budget-held"
-            rm -f "$held"
-            if nova-reserve run --exclusive --wait 20s --why "nexus CI frame budget" -- \
-                sh -c 'touch "$0" && exec "$@"' "$held" "${frames[@]}"; then
-              exit 0
-            fi
-            if [ -f "$held" ]; then
-              exit 1
-            fi
-            echo "::notice::no exclusive hold on $(hostname -s) within 20 s: the frame budget runs shared"
-          fi
-          "${frames[@]}"
+      # The frame budget and the server lock under contention run in the nightly.
+      - name: Functional tests (every other one, from the shard's)
+        if: matrix.check == 'functional'
+        run: >-
+          ctest --test-dir build -L functional -E '^(window_frame_budget|server_lock_functional)$' -I '${{ matrix.shard }},,2'
+          -j "$TEST_JOBS" --output-on-failure --no-tests=error
 
   # The model and its check programs built Debug with AddressSanitizer and UndefinedBehaviorSanitizer, which stop at
   # the first report: the unit tests, and the trace walks (the window's on every AI count, the overlay's) with every

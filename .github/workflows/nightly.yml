@@ -668,3 +668,43 @@ jobs:
           set -euo pipefail
           chmod +x "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"
           "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"
+
+  # The frame budget (docs/frame-budget.md): the frame thread timed on the real clock, against budgets set on the fleet's
+  # Macs, so on a fleet Mac (a shared 3-core hosted VM is not that machine; ci.yml says so). Built Release with the
+  # link, as ci.yml's build-and-unit, then run alone, with every nova-reserve slot on this host when it can have them
+  # within 20 s; else shared.
+  frame-budget:
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Configure (Release) and build the frame-budget test
+        shell: bash
+        run: |
+          set -euo pipefail
+          downloads="$HOME/Library/Caches/nexus-ci/$RUNNER_NAME/prax-downloads"
+          mkdir -p "$downloads"
+          export PR_DOWNLOAD_DIR="$downloads"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_E2E_TAILNET=
+          cmake --build build --parallel "$(sh .github/job-cores.sh)" --target nexus_frame_tests
+      - name: Frame budget, alone
+        shell: bash
+        run: |
+          set -uo pipefail
+          frames=(ctest --test-dir build -R '^window_frame_budget$' --output-on-failure --no-tests=error)
+          if command -v nova-reserve >/dev/null; then
+            held="$RUNNER_TEMP/frame-budget-held"
+            rm -f "$held"
+            if nova-reserve run --exclusive --wait 20s --why "nexus CI frame budget" -- \
+                sh -c 'touch "$0" && exec "$@"' "$held" "${frames[@]}"; then
+              exit 0
+            fi
+            if [ -f "$held" ]; then
+              exit 1
+            fi
+            echo "::notice::no exclusive hold on $(hostname -s) within 20 s: the frame budget runs shared"
+          fi
+          "${frames[@]}"
