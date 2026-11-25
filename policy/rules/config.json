@@ -1,19 +1,176 @@
 {
-  "auto_accounts": true,
   "account_default": "first",
-  "overlay_opacity": 0.6,
-  "transcript_style": {
-    "highlight_energy": 2.5,
-    "fill": "#252525",
+  "account_picker_shortcuts": {
+    "ArrowDown": "next",
+    "ArrowUp": "previous",
+    "Command+ArrowDown": "next",
+    "Command+ArrowUp": "previous"
+  },
+  "auto_accounts": true,
+  "centered_account_menu": true,
+  "hold_on_enter": true,
+  "message_card": {
+    "email_ink": "#477fba",
+    "email_weight": 700,
+    "fill": "#303030",
+    "ink": "#ffffff",
+    "radius": 20,
+    "selected_opacity": 0.5,
+    "selected_radius": 8,
+    "selector_width_em": 16,
+    "side_extension": 20,
+    "text_size": 34,
+    "unselected_weight": 400,
+    "vertical_extension": 10
+  },
+  "overlay_hotkey": {
+    "code": "Backquote",
+    "modifiers": "Command"
+  },
+  "overlay_opacity": 0.7,
+  "prompt_style": {
+    "bold": true,
+    "border": "#3a3a3a",
+    "caret_aspect": 0.618034,
+    "caret_bottom_hold": 0.2,
+    "caret_fall_ratio": 0.5,
+    "caret_gap": 2,
+    "caret_height": 28,
+    "caret_hold": 0.1,
+    "caret_ink": "#ff801f",
+    "caret_offset_y": 2,
+    "caret_peak": 3,
+    "caret_radius": 3.36,
+    "caret_seconds": 1.5,
+    "fill": "#303030",
     "ink": "#f3f3f3",
+    "radius": 20.16,
+    "show_plus": false,
+    "text_peak": 1.8,
+    "width": 98
+  },
+  "sign_in_on_select": true,
+  "sounds": {
+    "cancel": {
+      "duration_ms": 65,
+      "from_hz": 455,
+      "gain": 0.075,
+      "to_hz": 335
+    },
+    "close": {
+      "duration_ms": 165,
+      "from_hz": 680,
+      "gain": 0.09,
+      "to_hz": 245
+    },
+    "confirm": {
+      "duration_ms": 80,
+      "from_hz": 580,
+      "gain": 0.09,
+      "to_hz": 920
+    },
+    "dialog": {
+      "duration_ms": 70,
+      "from_hz": 465,
+      "gain": 0.07,
+      "to_hz": 620
+    },
+    "discard": {
+      "duration_ms": 24,
+      "from_hz": 750,
+      "gain": 0.045,
+      "to_hz": 250
+    },
+    "hold": {
+      "gain": 0
+    },
+    "open": {
+      "duration_ms": 145,
+      "from_hz": 310,
+      "gain": 0.11,
+      "to_hz": 820
+    },
+    "ready": {
+      "duration_ms": 320,
+      "from_hz": 285,
+      "gain": 0.12,
+      "to_hz": 1140
+    },
+    "send": {
+      "duration_ms": 65,
+      "from_hz": 520,
+      "gain": 0.045,
+      "to_hz": 690
+    },
+    "startup": {
+      "duration_ms": 850,
+      "from_hz": 185,
+      "gain": 0.11,
+      "synth": true,
+      "to_hz": 555
+    },
+    "step": {
+      "duration_ms": 24,
+      "from_hz": 1660,
+      "gain": 0.012,
+      "to_hz": 1440
+    },
+    "tab": {
+      "duration_ms": 42,
+      "from_hz": 710,
+      "gain": 0.07,
+      "to_hz": 510
+    }
+  },
+  "tab_labels": {
+    "sprint": "Dashboard"
+  },
+  "tab_style": {
+    "fill": "#1b1b1b",
+    "ink": "#999999",
+    "opacity": 1,
+    "reserve_width": true,
+    "selected_fill": "#86c5ff",
+    "selected_ink": "#ffffff",
+    "selected_opacity": 0.5,
+    "selected_radius": 8,
+    "selected_weight": 700,
+    "weight": 400
+  },
+  "transcript_style": {
     "bus_ink": "#86c5ff",
-    "notice_ink": "#ffb4b4",
+    "code_background": true,
+    "code_fill": "#303030",
+    "code_padding": 6,
+    "code_radius": 7,
+    "code_size_offset": 2,
+    "command_ink": "#dc7334",
+    "fill": "#252525",
+    "glyph_peak": 3,
+    "glyph_seconds": 0.133333,
+    "glyph_stagger": 0.018333,
+    "highlight_energy": 2.5,
+    "ink": "#ffffff",
+    "list_gap_em": 0.4,
+    "list_item_gap_lines": 0.4,
+    "message_inks": {
+      "Glenn asks for the bus verification again after replacing your idle driver. Start your scoped bus wrapper using Monitor with the absolute wrapper path in your startup instructions, hook --as rowan --harness claude. Pass the full stream to Monitor. Confirm HOOK OK or exact error, and leave the successful listener running. No pushes, writes to your repo, or inbox contents in your reply.": "#86c5ff"
+    },
+    "notice_ink": "#ff4455",
+    "panel_fill": "#1b1b1b",
+    "pending_outline_width": 3,
+    "person_bold": true,
+    "person_flash_peak": 1,
+    "person_flash_seconds": 0.15,
+    "person_ink": "#ffffff",
+    "radius": 25.2,
+    "sent_outline_width": 0,
+    "show_notices": true,
+    "show_tools": true,
     "status_ink": "#d8d8d8",
     "switch_email_ink": "#86c5ff",
-    "radius": 25.2,
-    "show_notices": true,
-    "command_ink": "#dc7334",
-    "tool_prompts": {"Bash": "$ "},
-    "show_tools": true
+    "tool_prompts": {
+      "Bash": "$ "
+    }
   }
 }
