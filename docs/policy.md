@@ -194,18 +194,50 @@ named defaults for every new session.
 ## The iPhone's form
 
 The client's `window` event receives `ui.idiom` (`phone`, `pad` or `desktop`), `ui.menu` (true while the phone shows
-its list of AIs) and `ui.voice` (`listening`, `speaking`, and `reply`: `text`, `voice` or `both`). On a phone the
-stock `client/window.star` (`_phone`) returns:
+its menu), `ui.tabs` (each tab's `kind`, `label`, `group` and `type`, in the strip's order) and, when the build has
+voice, `ui.voice` (`listening` and `speaking`, booleans). On a phone the stock `client/window.star` (`_phone`) returns:
 
-- `panels`: `["menu"]` on the list of AIs. In a tab, `back` first, then the tab's panels with `voice` before `prompt`
-  (and `spacer` in place of `transcript` when replies are voice only). Up to six panels.
-- `show_tabs` and `reorder_tabs` false, and `tab_titles` for the menu's rows.
-- `focus_prompt` false: the prompt takes the focus only when tapped, so the keyboard does not cover the microphone.
-  It is true by default on the iPad and the desktop.
-- `voice_reply`, the first reply mode, and `voice_names`, more spoken forms of each AI's name.
+- `panels`: `["menu"]` on the menu. In a tab, `["back"]` followed by the tab's own panels: for an AI tab `transcript`,
+  `account` and `prompt`, then `status` when the window has a link status. Up to six panels; `menu` and `back` are
+  taken only on the phone's form, and `back` never on an empty window. There is no `voice` panel: an answer naming one
+  is refused.
+- `show_tabs`, `reorder_tabs` and `focus_prompt` false: no strip, and the prompt takes the focus only when tapped.
+  `focus_prompt` is true by default on the iPad and the desktop.
+- `voice_mic`: boolean, default false; the menu's microphone and the prompt's dictation microphone are shown only when
+  it is true.
+- `voice_reply`: `"text"`, `"voice"` or `"both"` (default `"both"`), how replies to a prompt spoken on the menu come
+  back. The stock policy answers `"voice"` on the menu (from the setting `menu_reply`) and `"text"` in a tab, where the
+  microphone is dictation and nothing is spoken. Any other value is refused.
+- `voice_names`: an object of at most 256 AI names (1 to 64 bytes each), each a list of at most 16 more spoken forms
+  of that name (1 to 128 bytes each).
+- `tab_titles`: a list of at most 1024 strings of up to 512 bytes, one per tab in the strip's order: the row titles
+  and the title beside "< AIs". The stock policy gives the Mac's labels (an AI's name capitalized, other kinds through
+  `tab_labels`).
+- `menu_tabs`: a list of at most 1024 tab indexes (whole numbers from 0 to 1023), the menu's rows in order. An index
+  past the last tab is skipped. Absent, every tab is listed in the strip's order. The stock policy sorts by kind in the
+  order of `menu_kinds`, each kind in the strip's order, with kinds not listed last.
+- `menu_rows` (not set by the stock policy): rows after the tabs, each running a window command as its keyboard
+  shortcut does. Absent means none. The shape is
+  `"menu_rows": [{"title": "New terminal", "command": "open_terminal"}]`, and a malformed list is refused with its
+  reason:
+  - not a list, or more than 8 rows;
+  - a row that is not an object with exactly the two string fields `title` and `command`;
+  - a `title` that is empty, longer than 128 bytes, or holds a control character (one line only);
+  - a `command` that is not a window command taking no argument: `open_terminal`, `close_terminal`, `close_tab`,
+    `invoke_service`, `clear_composer` or `stop`.
 
-The client config's `phone` object sets these: `"phone": {"reply": "voice", "voice": true, "voice_names": {"zhi":
-["zhi ya wen"]}}`. `"voice": false` leaves the microphone out. How a voice turn works is in [voice.md](voice.md).
+  `open_terminal` is Command-T's command. The iOS build has no terminal tabs, so there it opens none.
+
+A refused window answer is logged with its reason (`nexus: window application: ...`) and the window falls back to the
+stock policy's answer. The client config's `phone` object sets the stock policy's choices:
+
+```json
+"phone": {"voice": true, "menu_reply": "voice", "voice_names": {"zhi": ["zhi ya wen"]}}
+```
+
+`voice` (default true) sets `voice_mic`; `"voice": false` leaves both microphones out. `menu_reply` (default `"voice"`)
+sets `voice_reply` on the menu. `menu_kinds`, a list of tab kinds, orders the menu's rows; by default the dashboard
+(`sprint`), then AI tabs, then `terminal`. `voice_names` passes through as `voice_names`. How the menu and voice work is in [voice.md](voice.md).
 
 ## Fable limit choices
 

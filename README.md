@@ -15,8 +15,8 @@
 - **macOS 26 or newer on Apple silicon** supports the full desktop chat experience. The same Mac can run the client and server.
 - **Windows x64** has native window code and tested WSL2 terminal support. Connecting that window to the Nexus server for chat is still in development.
 - **Linux** has CI coverage for core libraries, drivers and services. The Wayland desktop client is still in development.
-- **iPhone and iPad (iOS 26 or newer)** have one app that reaches a Nexus server on your Mac over ssh. It is still in
-  development: no terminal tabs and no attachments yet. [Building and installing it](docs/ios.md)
+- **iPhone and iPad (iOS 26 or newer)** have one app that reaches a Nexus server on your Mac over ssh. On an iPhone you talk to your AIs
+  from a menu by voice. It is still in development: no terminal tabs and no attachments yet. [Building and installing it](docs/ios.md)
 
 Bring a supported subscription to use a connected AI. [Build and platform details](docs/README.md)
 

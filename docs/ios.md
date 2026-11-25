@@ -36,10 +36,11 @@ state file, as `nexus --screenshot --state FILE` draws it on the desktop.
 
 ## On an iPhone: Talk to your AIs
 
-On an iPhone the app opens on a list of your AIs, and a tab's main input is your voice, recognized on the phone and
-sent as an ordinary prompt. The form comes from the client policy by device idiom; an iPad keeps the desktop's strip.
-See [voice.md](voice.md) for the form, the voice turn, its tests (`ctest -L speech` on a simulator) and how a watch
-reuses it.
+On an iPhone the app opens on a menu of your tabs with a microphone at the bottom: say an AI's name and what to
+ask, and the reply comes back on the menu, spoken. Speech is recognized on the phone and sent as an ordinary prompt.
+An AI's own page has the way back, the transcript and the prompt, whose microphone is plain dictation. The form comes
+from the client policy by device idiom; an iPad keeps the desktop's strip. See [voice.md](voice.md) for the form, the
+voice turn, its tests (`ctest -L speech` on a simulator) and how a watch reuses it.
 
 ## Reaching the server
 
