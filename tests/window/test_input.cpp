@@ -3137,7 +3137,9 @@ int main(int argc, char** argv) {
         h.type("/login");
         h.enter();
         h.frame();
-        CHECK(h.active().draft.empty() && h.view.accountPicker && h.view.accountMenu != kPrLayoutNodeNone);
+        // /login opens the sign-in dialog of the account menu, never the account picker.
+        CHECK(h.active().draft.empty() && !h.view.accountPicker);
+        CHECK(h.view.accounts.dialog == AccountMenuView::Dialog::Login);
         CHECK(link.sent.size() == sent);
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
         h.frame();
