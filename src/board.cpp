@@ -916,6 +916,19 @@ void PraxBoard::addPageStyle() {
             if (element && taken(prDomNodeTextContent(prDomElementAsNode(element))) != value)
                 prDomNodeSetTextContent(prDomElementAsNode(element), sv(value));
         };
+        // The dashboard owns its IDs and fold keys. Change only its default display labels after load.
+        if (load_ == Load::Loaded) {
+            const auto rename = [](PrDomElement* element, const char* from, const char* to) {
+                if (element && taken(prDomNodeTextContent(prDomElementAsNode(element))) == from)
+                    prDomNodeSetTextContent(prDomElementAsNode(element), sv(to));
+            };
+            auto* root = prDomDocumentAsNode(document);
+            auto* subtitle = prDomNodeGetElementById(root, sv("friends-sub"));
+            if (subtitle) rename(prDomNodePreviousElementSibling(prDomElementAsNode(subtitle)), "Friends", "AIs");
+            auto* rows = prDomNodeGetElementById(root, sv("friends"));
+            auto* header = rows ? prDomNodeFirstElementChild(prDomElementAsNode(rows)) : nullptr;
+            if (header) rename(prDomNodeFirstElementChild(prDomElementAsNode(header)), "friend", "AI");
+        }
         setLabel("wordmark", "nexus");
         setLabel("ver", NEXUS_DISPLAY_VERSION);
     }

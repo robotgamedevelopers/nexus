@@ -140,6 +140,8 @@ a { display: inline-block; }</style></head>
 alt="nova-sprint" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><span class="wordmark" id="wordmark">nova-sprint</span></h1>
 <div class="meta"><span class="chip" id="ver-chip">version <b id="ver">v99.fixture</b></span><span class="chip">epoch <b>3</b></span></div></div>
 <div class="right"><span class="live" id="live">Live</span></div></header>
+<section class="panel friends"><div class="panel-head"><h2 id="ai-heading">Friends</h2><span id="friends-sub"></span></div>
+<div id="friends"><div class="row head"><div id="ai-column">friend</div></div></div></section>
 <p><a id="other" href="https://github.com/mas-bandwidth/nova-tools">nova-tools</a></p>
 <footer id="foot"><a id="repo" href="https://github.com/mas-bandwidth/nova-sprint">https://github.com/mas-bandwidth/nova-sprint</a></footer>
 <footer id="more"><span id="note">made by the sprint</span> <a id="repo2" href="https://github.com/mas-bandwidth/nova-sprint/">repo</a></footer>
@@ -722,6 +724,12 @@ void theRepositoryLinkIsHidden() {
         const auto value = prRawStringView(&version);
         CHECK(value.size > 1 && value.data[0] == 'v' && std::string_view(value.data, value.size) != "v99.fixture");
         prRawStringReset(&version);
+        for (const auto& [id, expected] : {std::pair{"ai-heading", "AIs"}, std::pair{"ai-column", "AI"}}) {
+            auto label = prDomNodeTextContent(prDomElementAsNode(Harness::byId(d, id)));
+            const auto text = prRawStringView(&label);
+            CHECK(std::string_view(text.data, text.size) == expected);
+            prRawStringReset(&label);
+        }
     });
     CHECK(word == "nexus");
     const PrDomRect mark = h.rect("wordmark");

@@ -28,7 +28,7 @@ _COMMAND_HELP = {
     "/help": "Show this command list.",
     "/model": "Open the model selector. Use /model <model> [effort] to switch directly.",
     "/effort": "Open the effort selector. Use /effort <level> to switch directly.",
-    "/info": "Show the friend, account, model, effort, repository and working directories.",
+    "/info": "Show the AI, account, model, effort, repository and working directories.",
     "/clear": "Clear the conversation and its context. When signed out, clear the local conversation.",
     "/compact": "Compact the current conversation context.",
     "/login": "Open the account sign-in window.",

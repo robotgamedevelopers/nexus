@@ -2501,7 +2501,7 @@ struct Builder {
                 if (view.pickerCommand) view.pickerCommand(key.type);
                 if (key.type == "open" && model.tab_count() && model.tab(model.active()).draft == "/login") {
                     if (view.accountPicker) model.set_draft(model.active(), {});
-                    else view.problem = "Connect to a friend with a configured account to sign in.";
+                    else view.problem = "Connect to an AI with a configured account to sign in.";
                     pickerInput = true;
                 }
                 break;

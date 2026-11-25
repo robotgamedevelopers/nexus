@@ -132,11 +132,11 @@ void FrameHost::takeFriends(const sync::Sessions& state) {
     if (friends) {
         view->notice.clear();
     } else if (state.friendsKnown()) {
-        view->notice = host + " holds no friends: add one to ~/.nexus/server/nexus-config/friends.json there "
+        view->notice = host + " has no AIs configured: add one to ~/.nexus/server/nexus-config/friends.json there "
             "(docs/accounts.md), then run `nexus-server config reload`.";
     } else {
-        view->notice = host + " sends no list of friends (a nexus-server before it), and holds no session to show a "
-            "friend by: update nexus-server there.";
+        view->notice = host + " sends no list of AIs (a nexus-server before it), and holds no session to show an "
+            "AI by: update nexus-server there.";
     }
 }
 
@@ -724,7 +724,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
     };
     view->submit = [this](std::size_t i, bool queue) {
         if (i < model->tab_count() && model->tab(i).draft == "/logout") {
-            view->problem = "Use Enter in the friend composer to sign out.";
+            view->problem = "Use Enter in the AI prompt to sign out.";
             return;
         }
         const auto* current = accountState_.find(sync::sessionOf(*model, i, mirror));

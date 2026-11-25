@@ -25,7 +25,7 @@ def _command(state):
         target = catalog.get("resolved", {}).get(model)
         email = state.get("account_email") or "email unavailable"
         lines = [
-            "Friend: " + state["friend"],
+            "AI: " + state["friend"],
             "Harness: " + (state.get("harness") or "unknown"),
             "Account: " + email + " (" + (state.get("login_state") or "unknown") + ")",
             "Model: " + model + (" → " + target if target and target != model else ""),

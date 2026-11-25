@@ -1,14 +1,14 @@
 # ![nexus](docs/nexus-banner.png)
 
-**Talk to your AIs in one keyboard-driven window.** On macOS, press ⌘ and the backtick key from any app. Your AIs are right there. Type `/help` in any friend’s prompt for keyboard shortcuts and slash commands.
+**Talk to your AIs in one keyboard-driven window.** On macOS, press ⌘ and the backtick key from any app. Your AIs are right there. Type `/help` in any AI’s prompt for keyboard shortcuts and slash commands.
 
 ## What you get
 
-- **One tab per AI.** Work with Claude on a change, then switch to Codex for a second opinion. Each keeps its own conversation and workspace.
-- **The same controls across harnesses.** Use `/model` and `/effort` to choose how a friend works. Type `/info` to see the account, model and working directories.
-- **Room to finish a thought.** Stack messages with Enter and send them together. Close the overlay while your friends work. The server keeps going.
+- **One tab per AI.** Give an AI a name if you like. Work with Claude on a change, then switch to Codex for a second opinion. Each keeps its own conversation and workspace.
+- **The same controls across harnesses.** Use `/model` and `/effort` to choose how an AI works. Type `/info` to see the account, model and working directories.
+- **Room to finish a thought.** Stack messages with Enter and send them together. Close the overlay while your AIs work. The server keeps going.
 - **A setup your AI can change with you.** Configure AIs in nova-config. Tune shortcuts, tabs, colors and sounds in Starlark and JSON.
-- **Terminal windows in tabs, and a dashboard you can customize.** Run a test or inspect a diff in a shell, then switch to the dashboard to see what your friends are working on.
+- **Terminal windows in tabs, and a dashboard you can customize.** Run a test or inspect a diff in a shell, then switch to the dashboard to see what your AIs are working on.
 
 ## Platform support
 
@@ -16,7 +16,7 @@
 - **Windows x64** has native window code and tested WSL2 terminal support. Connecting that window to the Nexus server for chat is still in development.
 - **Linux** has CI coverage for core libraries, drivers and services. The Wayland desktop client is still in development.
 
-Bring a supported subscription to use a connected friend. [Build and platform details](docs/README.md)
+Bring a supported subscription to use a connected AI. [Build and platform details](docs/README.md)
 
 **To install, give this repo to the AI you already use** and say “Set up nexus on this machine so I can talk with you there.” Your AI follows the [setup instructions](docs/setup.md) and checks the running system with you.
 
