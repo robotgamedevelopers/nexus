@@ -70,18 +70,20 @@ void removedTabIsNoChoice() {
     w.host.pollLink();
     w.round();
     CHECK(w.chosen == 0);
-    // The person chooses ada, then bo.
+    // The person chooses bo, then ada, then bo (ada shows first: the server lists no dashboard).
+    CHECK(w.model.select_tab(w.tabOf("bo")));
+    w.round();
     CHECK(w.model.select_tab(w.tabOf("ada")));
     w.round();
     CHECK(w.model.select_tab(w.tabOf("bo")));
     w.round();
-    CHECK(w.chosen == 2);
+    CHECK(w.chosen == 3);
     // bo goes from the server's AIs: ada shows again, by the strip, not by the person.
     w.link.ais({"ada"});
     w.host.pollLink();
     CHECK(w.model.tab(w.model.active()).name == "ada");
     w.round();
-    CHECK(w.chosen == 2);
+    CHECK(w.chosen == 3);
 }
 
 // The saved tab arrives and the strip selects it: not the person's choice either; a later choice is.
