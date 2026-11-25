@@ -80,6 +80,8 @@ struct Action {
     std::uint64_t request = 0;  // a secret answer's or cancel's request id; 0 for the rest
     SecretValue secret{};   // a secret answer's value; empty for the rest. Wiped when the action is freed, which is
                             // when mosh's acknowledgement subtracts it (Actions::subtract)
+    bool pastesCode = false;    // a claim's: the window takes a vendor's pasted code in its tab (SignInCode); a window
+                                // from before leaves it false, and is refused a flow that needs one (Hub, SignInClaim)
     bool operator==(const Action&) const = default;
 };
 

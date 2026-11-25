@@ -1327,22 +1327,15 @@ PassOrder::Outcome Server::apply(std::string* why) {
                 std::fprintf(stderr, "nexus-server: leaky witness build: callback %s\n", a.secret.bytes().c_str());
             }
 #endif
-            // The claim token a window claims by names its link: that link's state carries the URLs it holds.
-            if (a.kind == sync::ActionKind::SignInClaim && sync::isClaimToken(a.text) && s.signIn != a.text) {
+            // The claim token a window claims by names its link: that link's state carries the URLs it holds. An
+            // opened, a callback or a pasted code counts only from the link that claimed by its token: no other window
+            // speaks for a flow (sync::Hub::fromLink; models/SignInPaste.tla CodeOnlyFromHolder).
+            const sync::Hub::LinkAction named = sync::Hub::fromLink(a, s.signIn);
+            if (named.renamed) {
                 hub_->signInWindowGone(s.signIn);
-                s.signIn = a.text;
+                s.signIn = named.token;
             }
-            // An opened, a callback or a pasted code counts only from the link that claimed by its token: no other
-            // window speaks for a flow (the state never shows one window's token to another, sync/signin.h
-            // kSignInHeldBy; models/SignInPaste.tla CodeOnlyFromHolder).
-            if ((a.kind == sync::ActionKind::SignInOpened || a.kind == sync::ActionKind::SignInCallback ||
-                    a.kind == sync::ActionKind::SignInCode) && a.text != s.signIn) {
-                sync::Action named = a;
-                named.text = s.signIn;
-                hub_->apply(named, &refused, s.client);
-            } else {
-                hub_->apply(a, &refused, s.client);
-            }
+            hub_->apply(named.action, &refused, s.client);
             changed = true;
             if (!refused.empty())
                 std::fprintf(stderr, "nexus-server: link %llu, action %llu: %s\n",

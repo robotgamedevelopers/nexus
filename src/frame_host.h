@@ -122,7 +122,9 @@ public:
     std::function<std::pair<sync::SessionId, std::string>()> activeTab;
 
     // The state's offers as the link last brought them, or the link lost.
-    void received(const sync::Sessions& state) { opener.received(state.offers()); }
+    // A code this window sent that the server answered while its flow still asks for one was refused (a code taken
+    // clears code_wanted in the very state that acknowledges it): the ask opens again, so the person can paste again.
+    void received(const sync::Sessions& state);
     void lost();
     // The overlay was shown: the window may claim one flow.
     void shown() { opener.shown(); }
@@ -141,13 +143,14 @@ public:
     void submitCode();
     void dismissCode();
     void askCodeAgain(std::uint64_t id);
-    const std::set<std::uint64_t>& codesSent() const { return codeSent_; }
+    bool codeSent(std::uint64_t id) const { return codeSent_.contains(id); }
 
 private:
     void wipeCode();
     sync::SecretValue typed_;
     std::uint64_t typedFor_ = 0;        // the flow the field's text was typed for
-    std::set<std::uint64_t> codeSent_;  // flows this window sent a code for: never again (ids are never reused)
+    std::map<std::uint64_t, std::uint64_t> codeSent_;   // flow -> the action that sent its code; asked again only
+                                                        // after the server refused it (received)
     std::set<std::uint64_t> codePutAway_;
     std::unique_ptr<SignInGate> gate_;
     std::uint64_t gateFlow_ = 0;

@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cerrno>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -1547,6 +1548,130 @@ void paste_opener() {
     o.received({g});
     o.shown();
     CHECK(o.next(sameAlways, nullptr).kind == sync::SignInOpener::Step::Kind::None);
+    // A server from before sign-in by a pasted code sends its private loopback page for the flow: a window on another
+    // machine says the server is too old (opening nothing, binding nothing); one on its machine opens the page.
+    const std::string page = "http://127.0.0.1:5000/nexus-signin/" + std::string(64, 'a');
+    sync::SignInOffer old{2, "g1", "antigravity", "w4", "studio", secret(page), false};
+    sync::SignInOpener remote("w4");
+    remote.received({old});
+    s = remote.next(sameNever, nullptr, &account);
+    CHECK(s.kind == sync::SignInOpener::Step::Kind::OldServer && s.account == "g1" && s.url.empty() && !s.gate &&
+          remote.gate() == 0);
+    CHECK(remote.next(sameNever, nullptr, &account).kind == sync::SignInOpener::Step::Kind::None);   // said once
+    sync::SignInOpener near("w4");
+    near.received({old});
+    s = near.next(sameAlways, nullptr, &account);
+    CHECK(s.kind == sync::SignInOpener::Step::Kind::Open && s.url.bytes() == page && !s.gate);
+    CHECK(sync::isLocalSignInPage(page) && !sync::isLocalSignInPage(kGoogle) &&
+          !sync::isLocalSignInPage("http://127.0.0.1:5000/nexus-signin/" + std::string(63, 'a')));
+}
+
+// The runner's part (sync::CodeHandoff, what src/server/signin_runner.cpp runs on each process): the helper's messages
+// parsed; the code asked for only after the URL, once, by a process that signs in by a pasted code; taken only for its
+// flow, while asked, not ending, once, and only a code; written in pieces as the terminal takes them.
+void paste_runner() {
+    using Said = sync::CodeHandoff::Said;
+    std::string_view word;
+    std::string_view payload;
+    CHECK(sync::parseHelperMessage("7-abc https://x\n", &word, &payload) && word == "7-abc" && payload == "https://x");
+    CHECK(sync::parseHelperMessage("7-abc ?code\n", &word, &payload) && payload == "?code");
+    CHECK(!sync::parseHelperMessage("7-abc https://x", &word, &payload));     // no line end
+    CHECK(!sync::parseHelperMessage("7-abc\n https://x", &word, &payload));   // the space after it
+    CHECK(!sync::parseHelperMessage("", &word, &payload));
+
+    sync::CodeHandoff h;
+    // Asked before its URL: dropped, and no code is taken.
+    CHECK(h.heard("?code", true) == Said::None && !h.asked() && !h.take(3, 3, false, secret(kPasted)));
+    CHECK(h.heard(kGoogle, true) == Said::Url && h.urlSent() && h.heard("https://other", true) == Said::None);
+    // A code before it is asked for: dropped.
+    CHECK(!h.take(3, 3, false, secret(kPasted)) && !h.pending() && !h.taken());
+    CHECK(h.heard("?code", true) == Said::CodeWanted && h.asked() && h.heard("?code", true) == Said::None);
+    // The wrong flow, a process ending, a paste that is no code: dropped, and the one code is still to come.
+    CHECK(!h.take(4, 3, false, secret(kPasted)) && !h.take(3, 3, true, secret(kPasted)));
+    CHECK(!h.take(3, 3, false, secret("two words")) && !h.take(3, 3, false, secret("")) && !h.taken());
+    CHECK(h.take(3, 3, false, secret(kPasted)) && h.taken() && h.pending());
+    // A second code: dropped.
+    CHECK(!h.take(3, 3, false, secret("4/0another")));
+    // Written in pieces: 5 bytes, then the terminal is full (the rest waits for a later serve), then interrupted, then
+    // the rest; the line the terminal got is the code and its line end, once.
+    std::string wrote;
+    int calls = 0;
+    const auto writer = [&](const char* b, std::size_t n) -> long {
+        ++calls;
+        if (calls == 1) {
+            wrote.append(b, 5);
+            return 5;
+        }
+        if (calls == 2) {
+            errno = EAGAIN;
+            return -1;
+        }
+        if (calls == 3) {
+            errno = EINTR;
+            return -1;
+        }
+        wrote.append(b, n);
+        return static_cast<long>(n);
+    };
+    h.drain(writer);
+    CHECK(calls == 2 && wrote == kPasted.substr(0, 5) && h.pending());
+    h.drain(writer);
+    CHECK(calls == 4 && wrote == kPasted + "\n" && !h.pending());
+    // The terminal gone mid-line: the rest is dropped, and nothing is left to write.
+    sync::CodeHandoff gone;
+    CHECK(gone.heard(kGoogle, true) == Said::Url && gone.heard("?code", true) == Said::CodeWanted);
+    CHECK(gone.take(1, 1, false, secret(kPasted)));
+    std::string part;
+    gone.drain([&](const char* b, std::size_t) -> long {
+        if (part.empty()) {
+            part.append(b, 3);
+            return 3;
+        }
+        errno = EIO;
+        return -1;
+    });
+    CHECK(part == kPasted.substr(0, 3) && !gone.pending());
+    // A process that does not sign in by a pasted code (`claude setup-token`, codex) is never asked.
+    sync::CodeHandoff other;
+    CHECK(other.heard(kGoogle, false) == Said::Url && other.heard("?code", false) == Said::None);
+    // A URL from the terminal counts: a helper's after it is dropped.
+    sync::CodeHandoff terminal;
+    CHECK(terminal.takeUrl() && !terminal.takeUrl() && terminal.heard(kGoogle, false) == Said::None);
+}
+
+// The server's naming of a window's sign-in actions by its link (sync::Hub::fromLink, src/server/server.cpp): whatever
+// token an opened, a callback or a code carries, it is the link's; a claim by a fresh valid token renames the link.
+void paste_link() {
+    using sync::Hub;
+    for (sync::ActionKind kind : {sync::ActionKind::SignInCode, sync::ActionKind::SignInOpened,
+                                  sync::ActionKind::SignInCallback}) {
+        sync::Action a;
+        a.kind = kind;
+        a.text = "w2";
+        a.request = 3;
+        a.session = 2;
+        a.secret = secret(kPasted);
+        const Hub::LinkAction r = Hub::fromLink(a, "w1");
+        CHECK(r.action.text == "w1" && !r.renamed && r.token == "w1" && r.action.secret.bytes() == kPasted &&
+              r.action.request == 3 && r.action.session == 2);
+        // Before the link claimed anything: named by no token, which the desk refuses.
+        CHECK(Hub::fromLink(a, "").action.text.empty());
+        a.text = "w1";
+        CHECK(Hub::fromLink(a, "w1").action == a);
+    }
+    sync::Action claim;
+    claim.kind = sync::ActionKind::SignInClaim;
+    claim.text = "w2";
+    const Hub::LinkAction r = Hub::fromLink(claim, "w1");
+    CHECK(r.renamed && r.token == "w2" && r.action == claim);
+    claim.text = "not a token!";
+    CHECK(!Hub::fromLink(claim, "w1").renamed && Hub::fromLink(claim, "w1").token == "w1");
+    claim.text = "w1";
+    CHECK(!Hub::fromLink(claim, "w1").renamed);
+    sync::Action send;
+    send.kind = sync::ActionKind::Send;
+    send.text = "w9";
+    CHECK(Hub::fromLink(send, "w1").action == send && !Hub::fromLink(send, "w1").renamed);
 }
 
 void paste_codecs() {
@@ -1563,6 +1688,19 @@ void paste_codecs() {
     CHECK(got.size() == 1 && got[0].kind == sync::ActionKind::SignInCode && got[0].request == 4 &&
           got[0].text == "w1" && got[0].session == 9 && got[0].secret.bytes() == kPasted);
     CHECK(holds(sync::describe(got[0]), "sign-in 4") && !leaksPasted(sync::describe(got[0])));
+    // A claim's pastes_code rides up, and a claim without it reads false.
+    sync::Action claim;
+    claim.kind = sync::ActionKind::SignInClaim;
+    claim.request = 4;
+    claim.text = "w1";
+    claim.pastesCode = true;
+    sync::Actions claims;
+    claims.setFormat(sync::kSignInFormat);
+    claims.add(claim);
+    claim.pastesCode = false;
+    claims.add(claim);
+    const std::vector<sync::Action> read = sync::Actions::parse(claims.init_diff(), sync::kSignInFormat);
+    CHECK(read.size() == 2 && read[0].pastesCode && !read[1].pastesCode);
     // Never on a link below 5: a stop naming session 0, the code nowhere in the bytes.
     for (const std::uint32_t format : {std::uint32_t(2), sync::kSecretsFormat, sync::kTablesFormat}) {
         sync::Actions older;
@@ -1599,12 +1737,24 @@ void paste_hub() {
     ensure.friendName = "agy";
     std::string why;
     CHECK(s.hub->apply(ensure, &why));
+    // A window from before sign-in by a pasted code (its claim without pastes_code) is refused the flow with a plain
+    // line in its tab: nothing starts, and the flow stays for a window that can take the code.
+    sync::Action old;
+    old.num = ++s.num;
+    old.kind = sync::ActionKind::SignInClaim;
+    old.text = "w0";
+    old.session = 2;
+    old.account = g.name;
+    CHECK(!s.hub->apply(old, &why, "c1") && holds(why, "cannot take") && s.runner.started.empty());
+    CHECK(holds(s.transcript(2), "Update this Nexus window") && s.store.applied("c1") == s.num);
+    CHECK(s.hub->signIns().flowOf(g.name) && s.hub->signIns().flowOf(g.name)->second == sync::SignInState::Needed);
     sync::Action claim;
     claim.num = ++s.num;
     claim.kind = sync::ActionKind::SignInClaim;
     claim.text = "w1";
     claim.session = 2;
     claim.account = g.name;
+    claim.pastesCode = true;
     CHECK(s.hub->apply(claim, &why, "c1") && s.runner.started.size() == 1);
     const auto flow = s.hub->signIns().flowOf(g.name);
     CHECK(flow.has_value());
@@ -1624,13 +1774,15 @@ void paste_hub() {
     CHECK(offerOf(s.hub->stateFor("w1")).codeWanted && offerOf(s.hub->stateFor("w1")).url.bytes() == kGoogle);
     CHECK(!offerOf(s.hub->stateFor("w2")).codeWanted && !offerOf(s.hub->state()).codeWanted);
     CHECK(offerOf(s.hub->stateFor("w2")).url.empty() && offerOf(s.hub->stateFor("w2")).opener == sync::kSignInHeldBy);
-    auto paste = [&](const std::string& token, std::uint64_t request, const std::string& value) {
+    auto paste = [&](const std::string& token, std::uint64_t request, const std::string& value,
+                     sync::SessionId session = 2) {
         sync::Action a;
         a.num = ++s.num;
         a.kind = sync::ActionKind::SignInCode;
         a.request = request;
         a.text = token;
-        a.session = 2;
+        a.session = session;
+        a.account = g.name;
         a.secret = secret(value);
         why.clear();
         return s.hub->apply(a, &why, "c1");
@@ -1638,6 +1790,15 @@ void paste_hub() {
     // From another window: refused, a plain line in the tab, nothing handed over; counted all the same.
     CHECK(!paste("w2", id, kPasted) && holds(why, "another Nexus window") && s.runner.codes.empty());
     CHECK(holds(s.transcript(2), "another Nexus window") && s.store.applied("c1") == s.num);
+    // A refusal naming a session not on the code's account (session 1), or none the server holds: no notice there,
+    // a log line instead.
+    CHECK(s.store.find(1) != nullptr && s.store.find(1)->info.account != g.name);
+    const std::string one = s.transcript(1);
+    const std::size_t logged = s.events.lines.size();
+    CHECK(!paste("w2", id, kPasted, 1) && holds(why, "another Nexus window") && s.transcript(1) == one);
+    CHECK(!paste("w2", id, kPasted, 99) && s.runner.codes.empty());
+    CHECK(std::count_if(s.events.lines.begin() + static_cast<std::ptrdiff_t>(logged), s.events.lines.end(),
+                        [](const std::string& l) { return holds(l, "no notice written"); }) == 2);
     // For no flow: refused.
     CHECK(!paste("w1", id + 5, kPasted) && holds(why, "No sign-in is waiting") && s.runner.codes.empty());
     // From the holder: handed to the waiting process, once.
@@ -1664,6 +1825,8 @@ void paste() {
     paste_opener();
     paste_codecs();
     paste_hub();
+    paste_runner();
+    paste_link();
 }
 
 void leak_scan() {

@@ -148,7 +148,11 @@ An Antigravity account signs in from any window, on any machine. When Google's p
 your application, the tab that started the sign-in asks for it in a masked field: paste it and press **Enter**. It is
 sent once, to that sign-in alone, and the field is cleared. **Esc** puts the field away; selecting the account again
 in that window brings it back. A code with no sign-in waiting, a second code, or one pasted in another window is
-refused with a plain line in the session.
+refused with a plain line in the session. Something that is not a code (two words, a sentence) is never sent: the
+window says so and keeps the field open. If the server refuses a code, the field opens again so you can paste the
+right one. A Nexus window from before this cannot take a code: the server says so in the session, and an updated
+window signs in. A server from before this can sign Antigravity in only from a window on its own machine; a window
+elsewhere says the server is too old.
 
 When an AI has at least two linked subscription accounts, **auto** is the first menu choice and the
 stock server profile uses it for fresh sessions. It starts on the first signed-in linked subscription. When

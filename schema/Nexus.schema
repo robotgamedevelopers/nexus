@@ -193,7 +193,9 @@ enum ActionKind
 // its text, an account action's account, and a secret answer's or cancel's request and an answer's value (bytes as
 // the person pasted them, never text). The sign-in's (format 5 on, sync/signin.h): `request` is the flow's id, `text`
 // the window's claim token, and a callback's query rides in `secret`, as bytes. Its number is the diff's `start` plus
-// its place in the list.
+// its place in the list. `pastes_code` is a claim's: the window takes a vendor's code in its own tab (SignInCode), so
+// a server may give it a flow that ends in a pasted code (Antigravity's); a window that leaves it false (one from
+// before) is refused such a flow with a plain line rather than left to the flow's deadline.
 table Action
 {
     kind        ActionKind
@@ -203,6 +205,7 @@ table Action
     account     *string
     request     uint64
     secret      *bytes
+    pastes_code bool
 }
 
 // An actions diff (Actions::diff_from): the number of its first action, and the actions from there, one unbroken run.

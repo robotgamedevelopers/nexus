@@ -31,6 +31,7 @@ from nexus_rpc.enroll import (
     link_from,
     recover,
     run,
+    quiet_input,
     run_paste,
 )
 
@@ -465,6 +466,37 @@ class PastedCodeFlow(unittest.TestCase):
             worker.join(4)
             self.assertEqual(result, [1])
             self.assertIsNone(enrolled(home, "antigravity"))
+
+
+class QuietInput(unittest.TestCase):
+    """quiet_input on a real terminal (a pty, as the runner's): what is pasted is never echoed back."""
+
+    def test_a_terminal_echoes_nothing_and_takes_any_length(self):
+        import pty
+        import termios
+
+        master, slave = pty.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, slave)
+        quiet_input(slave)
+        attrs = termios.tcgetattr(slave)
+        self.assertEqual(attrs[3] & termios.ECHO, 0)
+        self.assertEqual(attrs[3] & termios.ICANON, 0)
+        self.assertEqual(attrs[6][termios.VMIN], 1)
+        self.assertFalse(os.get_blocking(slave))
+        os.write(master, b"synthetic-answer\n")
+        self.assertEqual(os.read(slave, 64), b"synthetic-answer\n")
+        # Nothing comes back to the runner's side: no echo of the code.
+        os.set_blocking(master, False)
+        with self.assertRaises(OSError):
+            os.read(master, 64)
+
+    def test_a_pipe_is_only_made_non_blocking(self):
+        reader, writer = os.pipe()
+        self.addCleanup(os.close, reader)
+        self.addCleanup(os.close, writer)
+        quiet_input(reader)
+        self.assertFalse(os.get_blocking(reader))
 
 
 class EnrollmentRecovery(unittest.TestCase):

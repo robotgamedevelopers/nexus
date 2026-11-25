@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstring>
 
 namespace nexus::sync {
@@ -197,6 +198,10 @@ bool isQueryBytes(std::string_view query) {
         const unsigned char u = static_cast<unsigned char>(c);
         return u > 0x20 && u < 0x7f;
     });
+}
+
+bool isLocalSignInPage(std::string_view url) {
+    return url.size() <= kSignInUrlBytes && isLocalSignInUrl(url);
 }
 
 bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarget* out) {
@@ -739,6 +744,21 @@ SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const voi
         // A pasted-code flow needs no gate wherever the window runs: its redirect goes to the vendor's own page
         // (models/SignInPaste.tla Open).
         const bool gate = !signsInByPastedCode(o.provider) && (same == nullptr || !same(o, context));
+        // A server from before the pasted code serves its private page on its own loopback for such a flow: opened as
+        // before from a window on its machine (no gate: the page needs none), and from any other the window says the
+        // server is too old, rather than leave the person waiting for the flow's deadline.
+        if (signsInByPastedCode(o.provider) && isLocalSignInPage(o.url.bytes())) {
+            opened_.insert(o.id);
+            step.id = o.id;
+            step.account = o.account;
+            if (same != nullptr && same(o, context)) {
+                step.kind = Step::Kind::Open;
+                step.url = o.url;
+            } else {
+                step.kind = Step::Kind::OldServer;
+            }
+            return step;
+        }
         if (gate && usesLocalSignInPage(o.provider)) {
             continue;
         }
@@ -782,6 +802,84 @@ SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const voi
         }
     }
     return step;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The helper's messages, and CodeHandoff
+
+bool parseHelperMessage(std::string_view bytes, std::string_view* word, std::string_view* payload) {
+    const std::size_t end = bytes.find('\n');
+    const std::size_t space = bytes.find(' ');
+    if (end == std::string_view::npos || space == std::string_view::npos || space >= end) {
+        return false;
+    }
+    *word = bytes.substr(0, space);
+    *payload = bytes.substr(space + 1, end - space - 1);
+    return true;
+}
+
+CodeHandoff::Said CodeHandoff::heard(std::string_view payload, bool pastedCode) {
+    if (payload == "?code") {
+        if (urlSent_ && !asked_ && !taken_ && pastedCode) {
+            asked_ = true;
+            return Said::CodeWanted;
+        }
+        return Said::None;
+    }
+    if (!urlSent_) {
+        urlSent_ = true;
+        return Said::Url;
+    }
+    return Said::None;
+}
+
+bool CodeHandoff::takeUrl() {
+    if (urlSent_) {
+        return false;
+    }
+    urlSent_ = true;
+    return true;
+}
+
+bool CodeHandoff::take(std::uint64_t id, std::uint64_t flow, bool ending, const SecretValue& code) {
+    if (id != flow || ending || !asked_ || taken_ || !isSignInCode(code)) {
+        return false;
+    }
+    taken_ = true;
+    // Built in place, never through a temporary that would leave a copy of the code behind unwiped.
+    out_.reserve(code.size() + 1);
+    out_.append(code.bytes());
+    out_.push_back('\n');
+    return true;
+}
+
+void CodeHandoff::drain(const std::function<long(const char*, std::size_t)>& write) {
+    while (!out_.empty()) {
+        const long n = write(out_.data(), out_.size());
+        if (n > 0) {
+            const std::size_t k = std::min(out_.size(), static_cast<std::size_t>(n));
+            std::fill_n(out_.begin(), k, '\0');
+            out_.erase(0, k);
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n < 0 && errno == EAGAIN) {
+            return;
+        }
+        break;      // its terminal is gone: the process ends, and its end says how the sign-in went
+    }
+    wipeBytes(out_);
+}
+
+void CodeHandoff::wipe() {
+    wipeBytes(out_);
+}
+
+CodeHandoff::CodeHandoff(CodeHandoff&& o) noexcept
+    : urlSent_(o.urlSent_), asked_(o.asked_), taken_(o.taken_), out_(std::move(o.out_)) {
+    wipeBytes(o.out_);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

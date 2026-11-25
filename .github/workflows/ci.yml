@@ -343,11 +343,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          changed=$(git status --porcelain -- schema tests/wire/next tests/wire/prev)
+          changed=$(git status --porcelain -- schema tests/wire/next tests/wire/prev tests/wire/main5)
           if [ -n "$changed" ]; then
             echo "$changed"
-            git --no-pager diff --stat -- schema tests/wire/next tests/wire/prev
-            echo "::error::the generated code differs from what schema at the pin makes of the schema files: run cmake -P cmake/schema.cmake (or build the target schema_generate) and commit schema/gen, tests/wire/next/gen and tests/wire/prev/gen"
+            git --no-pager diff --stat -- schema tests/wire/next tests/wire/prev tests/wire/main5
+            echo "::error::the generated code differs from what schema at the pin makes of the schema files: run cmake -P cmake/schema.cmake (or build the target schema_generate) and commit schema/gen, tests/wire/{next,prev,main5}/gen"
             exit 1
           fi
 
