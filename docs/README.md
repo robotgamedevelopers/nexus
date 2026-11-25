@@ -25,8 +25,9 @@ Escape hides it too, and so does switching away: Command-Tab, a click on another
 
 Each AI the server holds (its `ais.json`, `docs/accounts.md`) has a tab, and an AI added or removed there
 gets or loses its tab as soon as the server applies the change (`nexus-server config reload`). The dashboards come
-first: one tab for each `dashboard <url> <name>` line in the server's config (`docs/accounts.md`), in its order,
-labelled with its name, and none when it has no such line. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
+first: one tab for each `dashboard <url> <name>` line in the server's config (`docs/accounts.md`), labelled with
+its name, and none when it has no such line. A new line's tab is added after the dashboards a window already shows,
+which keep their places when the lines are reordered. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
 reorder the tabs; the order is kept across launches. In the [keyboard profile](policy.md#start-with-the-keyboard-driven-client), Enter stages the current message. Empty Enter sends the batch. Command-Enter sends the batch and current draft in order. Command-Delete clears the draft and all locally staged messages in this tab. Shift-Enter starts a new line. The stock profile binds Enter to send and Command-Enter to queue. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller,
 and the size is kept across launches.
 

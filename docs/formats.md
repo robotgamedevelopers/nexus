@@ -105,7 +105,9 @@ later field goes after them.
   `server/home.h`; none by default), whole in every diff. A window shows one tab per dashboard at the head of its
   strip, labelled with its name, and the page at its address (`sync/dashboards.h` holds the bounds: at most 16, a
   name of 1 to 64 bytes, an `http://` or `https://` address of at most 2048 bytes, no name twice); with none, no
-  dashboard tab. An older window skips the field. Formats 1 to 3 carry none (`sync_unit`
+  dashboard tab. When the list changes, a window removes the tab of each name the list no longer holds and adds a tab
+  for each new name at the end of its dashboards, in the list's order; a tab it already shows keeps its place, so a
+  server that reorders its lines moves no open tab (`Model::sync_dashboards`). An older window skips the field. Formats 1 to 3 carry none (`sync_unit`
   `sessions_dashboards_appended`).
 
 Text in format 4 is schema's text: well-formed UTF-8 with no NUL, or the whole diff would not load. The server writes
