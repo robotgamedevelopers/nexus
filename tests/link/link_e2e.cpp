@@ -1400,7 +1400,8 @@ sync::Action signInAction(sync::ActionKind kind, std::uint64_t id, const std::st
 // mosh's transport): the flow is offered to both; the first claims it and its state alone carries the URL, the other
 // sees it held; the first window's link ends and the flow is let go of; the second takes it over, and its state now
 // carries the URL; it sends the callback up as a window on another machine would, the server replays it to the fake's
-// listener, and the fake's token lands in a1's file. An AI's `config sign-in a1`, asked while the flow waits, answers
+// listener, and the fake's login lands in a1's verified-claude.json, its identity as a1's email.
+// An AI's `config sign-in a1`, asked while the flow waits, answers
 // `signed in` once it does; one for an account not set up is refused. Then, the server stopped, every file the run
 // left (server.log first) and every state the second window held before it held the flow is searched for the URL's
 // state, the code and the token.
@@ -1413,7 +1414,10 @@ int signin(const std::string& binary, const std::string& dir, const std::string&
     const std::string abs = std::filesystem::absolute(dir).string();
     const std::string home = dir + "/home";
     const std::string accounts = home + "/.nexus/server/accounts";
-    const std::string file = accounts + "/a1/oauth-token";
+    // a1 has no email, so its sign-in goes through nexus-claude-auth (beside the server): the login is
+    // verified-claude.json, and the identity the fake claude reports (work@example.test) becomes a1's email.
+    const std::string file = accounts + "/a1/verified-claude.json";
+    const std::string access = "fixture-access-work";
     std::error_code ec;
     std::filesystem::create_directories(accounts + "/a1", ec);
     for (const std::string& d : {home, home + "/.nexus", home + "/.nexus/server", accounts, accounts + "/a1"}) {
@@ -1512,8 +1516,10 @@ int signin(const std::string& binary, const std::string& dir, const std::string&
                                  std::string("code=") + kFakeCode + "&state=" + kFakeState));
     CHECK(settle([&] {
         return w2.session->allAcknowledged() && offerOf(w2.session->state(), 1) == nullptr &&
-            readFile(file) == kFakeToken;
+            readFile(file).find(access) != std::string::npos;
     }));
+    CHECK(readFile(dir + "/nexus-config/accounts.json").find("\"work@example.test\"") != std::string::npos);
+    CHECK(!std::filesystem::exists(accounts + "/a1/oauth-token"));
     ai.join();
     CHECK(asked.end == CommandResult::End::Exited && asked.code == 0 && asked.out == "signed in\n");
     struct stat st{};
@@ -1535,7 +1541,7 @@ int signin(const std::string& binary, const std::string& dir, const std::string&
     int read = 0;
     bool logLeaks = false;
     bool otherLeaks = false;
-    for (const char* v : {kFakeState, kFakeCode, kFakeToken}) {
+    for (const char* v : {kFakeState, kFakeCode, kFakeToken, access.c_str()}) {
         const test::LeakScan scan(v);
         logLeaks = logLeaks || scan.in(log);
         for (const std::string& where : leaksUnder(dir, file, scan, &read)) {
