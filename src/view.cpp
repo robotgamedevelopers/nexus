@@ -1456,6 +1456,9 @@ struct Builder {
             return;
         }
         view.terminals->show(tab.id, window);
+        if (view.terminals->takeCloseAsked(tab.id))
+            shortcut(Shortcut{.key = PrAppKey(0), .modifiers = 0, .command = WindowCommand::CloseTerminal,
+                              .argument = 0});
     }
 
     // The sprint tab: its page fills the window's width and the height below the strip, with no prompt; or, while there

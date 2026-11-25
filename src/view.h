@@ -91,6 +91,12 @@ struct Terminals {
         (void)e;
         return false;
     }
+    // Whether the terminal id's own close control was tapped since last asked (iOS, with no Command-W to hand): the
+    // view then closes its tab as Command-W does. The desktop's terminals have none.
+    virtual bool takeCloseAsked(std::size_t id) {
+        (void)id;
+        return false;
+    }
 };
 
 // The sprint tab's page: nova-sprint's served board. Our own seam, as Terminals is, so that the tab logic runs in tests

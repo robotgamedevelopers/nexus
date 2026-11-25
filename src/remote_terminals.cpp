@@ -206,11 +206,13 @@ void RemoteTerminals::show(std::size_t id, PrLayoutNode parent) {
     }
     if (!prTerminalHasFocus(t->view)) prTerminalFocus(t->view);
     paint(*t);
-    // The screen above the key row, which the phone's keyboard lacks: Escape, Tab, Control and the arrows.
+    // The screen above the key row, which the phone's keyboard lacks: Escape, Tab, Control and the arrows. Neither box
+    // keeps its content's height as its least (a flex item's default): the screen measured last frame would hold its
+    // rows, and push the key row out of the window.
     PrLayoutNode column = prKitBox(kit_, parent, {.key = prHashString(sv("remote-terminal"), id)},
-        {.direction = PrKitDirection_Column, .place = {.flex = PrKitFlex_Fill}});
+        {.direction = PrKitDirection_Column, .place = {.minHeight = prKitPx(0), .flex = PrKitFlex_Fill}});
     PrLayoutNode screenBox = prKitBox(kit_, column, {.key = prHashString(sv("remote-terminal-screen"), id)},
-        {.place = {.flex = PrKitFlex_Fill}});
+        {.overflow = PrKitOverflow_Clip, .place = {.minHeight = prKitPx(0), .flex = PrKitFlex_Fill}});
     prTerminalFrame(t->view, kit_, screenBox, PrTerminalBackground_Parent);
     if (!t->launched && prTerminalLaunched(t->view)) {
         // Its first frame wrote that no program starts: the whole screen is painted over it next.
@@ -229,13 +231,21 @@ void RemoteTerminals::show(std::size_t id, PrLayoutNode parent) {
         const bool control = k.key == PrAppKey(0);
         const PrLayoutNode cap = prKitButton(kit_, row,
             {.key = prHashString(sv("remote-terminal-key-" + label), id), .text = sv(label),
-             .selected = control && keys_.controlHeld(), .disabled = t->fate != sync::TerminalFate::Running || t->terminal == 0},
+             .selected = control && keys_.controlHeld(),
+             .disabled = t->fate != sync::TerminalFate::Running || t->terminal == 0},
             {.size = PrKitControlSize_Lg});
         if (prKitActivated(kit_, cap)) {
             if (control) toggleControl();
             else key(id, k.key, 0);
         }
     }
+    // Closing the tab ends its shell, as Command-W does; a phone or an iPad with no keyboard has this control for it.
+    const PrLayoutNode spacer = prKitBox(kit_, row, {.key = prHashString(sv("remote-terminal-keys-gap"), id)},
+        {.place = {.flex = PrKitFlex_Fill}});
+    (void)spacer;
+    const PrLayoutNode closeCap = prKitButton(kit_, row, {.key = prHashString(sv("remote-terminal-close"), id),
+        .text = sv("close")}, {.size = PrKitControlSize_Lg});
+    if (prKitActivated(kit_, closeCap)) closeAsked_.insert(id);
     // The extent the screen took goes to the server when it changed: the shell's pseudoterminal follows the tab.
     if (t->terminal != 0 && t->fate == sync::TerminalFate::Running && t->launched) {
         PrUVec2 extent{};
@@ -367,7 +377,8 @@ bool TerminalKeys::type(PrVterm* vterm, PrVec2 cell, const PrAppEvent& e, std::s
             // event is dropped when it comes.
             taken = prVtermInputEvent(vterm, &e, &desc);
             const std::string_view text(e.keyboard.text.data, e.keyboard.text.size);
-            if (!taken && typesText(text) && (e.modifiers & (PrAppModifierFlag_Control | PrAppModifierFlag_Super)) == 0) {
+            const bool plain = (e.modifiers & (PrAppModifierFlag_Control | PrAppModifierFlag_Super)) == 0;
+            if (!taken && plain && typesText(text)) {
                 PrAppEvent as{};
                 as.kind = PrAppEventKind_Text;
                 as.modifiers = e.modifiers;

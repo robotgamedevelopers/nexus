@@ -1,6 +1,6 @@
 // Terminal tabs whose shells run on nexus-server (docs/terminals.md): the window of a machine that cannot start a
-// process of its own (iOS) shows the server's terminals in its tabs, and types into them. The server owns each shell, its
-// pseudoterminal and its screen; the window holds a copy of the screen for each tab, drawn by Prax's terminal view
+// process of its own (iOS) shows the server's terminals in its tabs, and types into them. The server owns each shell,
+// its pseudoterminal and its screen; the window holds a copy of the screen for each tab, drawn by Prax's terminal view
 // (pr/terminal.h) with no program behind it, and painted from the rows the state brings (sync/terminal_paint.h).
 //
 // What a tab does:
@@ -18,7 +18,7 @@
 //   - A shell that ended stays in its tab with the line that says how (the server writes it on the screen) and takes
 //     no input; one lost to the server's restart shows kTerminalRestarted; either stays until the tab is closed. One
 //     another window closed leaves this window too (ended() is true, and the view closes its tab).
-//   - Command-W (or the close control) sends TerminalClose and the tab goes, as on the Mac.
+//   - Command-W, or the key row's close, sends TerminalClose and the tab goes, as on the Mac.
 //
 // What it keeps: each screen in memory, and nothing in a file, a log or the store; a line it prints names a tab by
 // number, never what it shows or what was typed. Input rides in the action's secret (sync::SecretValue), wiped when
@@ -51,8 +51,9 @@ namespace nexus {
 
 struct LinkPort;
 
-// What a terminal tab's keys send: the bytes a screen's input rules (pr/vterm_input.h) make of each key, text and paste,
-// under the modes the program set, in the order they were typed; and the key row's Control, held for the next key.
+// What a terminal tab's keys send: the bytes a screen's input rules (pr/vterm_input.h) make of each key, text and
+// paste, under the modes the program set, in the order they were typed; and the key row's Control, held for the next
+// key.
 class TerminalKeys {
 public:
     // Appends to bytes what e sends (cell: the screen's cell, px), and says whether e was the terminal's. On iOS a
@@ -109,6 +110,7 @@ public:
     std::string problem(std::size_t id) override;
     std::string title(std::size_t id) override;
     void setTextScale(float k) override;
+    bool takeCloseAsked(std::size_t id) override { return closeAsked_.erase(id) != 0; }
 
 private:
     struct Tab {
@@ -147,6 +149,7 @@ private:
     std::map<std::size_t, float> scales_;
     std::set<sync::TerminalId> closing_;    // closed by this window, until the state no longer holds them
     std::set<std::string> orphans_;         // openers of tabs closed while they waited: closed when they come
+    std::set<std::size_t> closeAsked_;      // tabs whose close control was tapped, until the view asks
 };
 
 } // namespace nexus

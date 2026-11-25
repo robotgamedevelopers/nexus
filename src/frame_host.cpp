@@ -290,7 +290,8 @@ void FrameHost::pollLink() {
     }
     mirror.apply(*model, s.sessions);
     // The server's terminals, for a window whose terminal tabs are the server's (remote_terminals.h).
-    if (view->terminals != nullptr) view->terminals->received(s.sessions, s.phase == sync::LinkPhase::Connected, *model);
+    if (view->terminals != nullptr)
+        view->terminals->received(s.sessions, s.phase == sync::LinkPhase::Connected, *model);
     if (s.phase == sync::LinkPhase::Connected) {
         for (std::size_t i = 0; i < model->tab_count(); ++i) {
             const auto id = model->tab(i).id;
