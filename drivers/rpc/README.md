@@ -43,12 +43,24 @@ the order the fork should offer them. A signed-out account marked
 `"sign_in_on_use": true` defers its sign-in offer until use. In the selected friend's tab,
 press **Enter** or click **Sign in to** to open that account’s browser flow. Its draft stays in the prompt.
 
-The local Nexus window opens a private page for that account. Complete the vendor's
-browser authorization there. Antigravity asks you to paste Google's return code
-into that page. A remote window can keep chatting on an enrolled account. Initial
-enrollment for these four providers needs a window connected to the server over
-loopback. The server probes the account-specific enrollment receipt on restart.
-The driver checks the actual subscription before sending the prompt.
+For Codex, Grok and Muse, the local Nexus window opens a private page for that
+account. Complete the vendor's browser authorization there. Initial enrollment
+for these three needs a window connected to the server over loopback; a remote
+window can keep chatting on an enrolled account.
+
+Antigravity signs in from any Nexus window, on the server's machine or another
+one (an iPad, an iPhone, a Mac over ssh). The window that started the sign-in
+opens Google's page in its own browser. When Google shows a code to paste into
+your application, the same tab asks for it in a masked field: paste it and press
+Enter. The code goes once, over the window's authenticated link, to the waiting
+`agy` enrollment of that account, and the field is wiped. It is never logged,
+shown in the transcript or written anywhere but where `agy` keeps its own login.
+A code sent with no sign-in waiting, a second code, or a code sent from a window
+that did not start the sign-in is refused with a plain line. A wrong code ends
+the enrollment; start it again from the account's tab (`models/SignInPaste.tla`).
+
+The server probes the account-specific enrollment receipt on restart. The driver
+checks the actual subscription before sending the prompt.
 
 Run `python3 .github/python-tests.py --tier pr --start drivers/rpc` from the repository
 root (each PR runs this), and `--tier native` on a Mac with the vendors' CLIs (the nightly

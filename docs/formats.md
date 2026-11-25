@@ -71,6 +71,11 @@ later field goes after them.
   An absent or zero request means no choice. An empty target makes that option unavailable. The `ResolveLimit` action
   binds the session, interrupted request, current payer, choice kind, and offered target. An earlier table reader
   skips the fields and refuses the unknown action. The legacy codecs never offer this choice.
+- A sign-in by a pasted code (Antigravity) adds `SignInOffer.code_wanted` (bool, default false: no code is asked for),
+  set only in the state of the window holding the flow, and the action kind `SignInCode`, whose `secret` carries the
+  code and whose `text` the window's claim token. An earlier window skips the field and never asks; an earlier server
+  reads the kind as unknown and refuses it alone. Neither raises the format: a window that does not ask simply leaves
+  the flow to its deadline. The legacy codecs carry neither.
 - Absent instance (a server from before instances, or a format 1 link): **none**, empty. The window groups the session
   by its friend alone; the server, which holds the friend's instances, settles an empty instance to the friend's
   default instance (its first) and says so in a notice, so an empty one never decides where a driver runs.

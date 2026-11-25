@@ -1526,10 +1526,6 @@ void paste_desk() {
     CHECK(t.code(2, "w2", secret(kPasted), &why).codes.size() == 1 && why.empty());
 }
 
-bool sameAlways(const sync::SignInOffer&, const void*) {
-    return true;
-}
-
 void paste_opener() {
     // A window on another machine (same never) opens the vendor's own URL with no gate, and binds nothing.
     sync::SignInOpener w("w1");
