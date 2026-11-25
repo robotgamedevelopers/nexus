@@ -239,6 +239,13 @@ void RemoteTerminals::show(std::size_t id, PrLayoutNode parent) {
             else key(id, k.key, 0);
         }
     }
+    // Closing the tab ends its shell, as Command-W does; a phone or an iPad with no keyboard has this control for it.
+    const PrLayoutNode spacer = prKitBox(kit_, row, {.key = prHashString(sv("remote-terminal-keys-gap"), id)},
+        {.place = {.flex = PrKitFlex_Fill}});
+    (void)spacer;
+    const PrLayoutNode closeCap = prKitButton(kit_, row, {.key = prHashString(sv("remote-terminal-close"), id),
+        .text = sv("close")}, {.size = PrKitControlSize_Lg});
+    if (prKitActivated(kit_, closeCap)) closeAsked_.insert(id);
     // The extent the screen took goes to the server when it changed: the shell's pseudoterminal follows the tab.
     if (t->terminal != 0 && t->fate == sync::TerminalFate::Running && t->launched) {
         PrUVec2 extent{};
