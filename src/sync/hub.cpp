@@ -1514,10 +1514,12 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
             auto id = action.request;
             if (!action.account.empty() || action.session != 0) {
                 // A card or Enter names the exact session/account the person chose. Recheck it
-                // after any pending account changes and before allocating or claiming a flow.
+                // after any pending account changes and before allocating or claiming a flow. /login names an
+                // account linked to the session's AI that it is not on yet: the session stays where it is while the
+                // account signs in, and the window switches it once it has (docs/accounts.md, "Switching accounts").
                 const auto* session = store_.find(action.session);
                 if (!isClaimToken(action.text) || !session || action.account.empty() ||
-                    session->info.account != action.account || !signsIn(action.account) ||
+                    (isPrimary(action.session) && session->info.account != action.account) || !signsIn(action.account) ||
                     (!isPrimary(action.session) && !accounts_->linked(session->info.aiName, action.account)) ||
                     signedIn_.contains(action.account)) {
                     if (why) *why = "The selected session or its sign-in changed. Use the current account's sign-in.";
