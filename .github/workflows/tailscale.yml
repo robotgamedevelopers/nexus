@@ -166,21 +166,15 @@ jobs:
             echo "::error::Rosetta is not installed on $(hostname -s), so the shim's x86_64 slice cannot run here: install it (softwareupdate --install-rosetta --agree-to-license) through the fleet play"
             exit 1
           fi
-          pids=()
-          for group in version licences_unit names handles start_checks panics_unit licences state_dir refusals lock \
-              lock_two_process panics log_cap quiet unreachable certificate watch threads sign_in tailnet restart \
-              expiry control_down auth_key long_sign_in control_error control_blackhole close_each_other; do
-            (cd "build-tailscale/tests/tailscale/work_$group" && arch -x86_64 ../tailscale_test "$group") &
-            pids+=("$!")
-          done
+          groups=(tailnet sign_in restart expiry control_down auth_key long_sign_in control_error control_blackhole
+            close_each_other version licences_unit names handles start_checks panics_unit licences state_dir refusals
+            lock lock_two_process panics log_cap quiet unreachable certificate watch threads)
+          printf '%s\n' "${groups[@]}" | xargs -n 1 -P "$TEST_JOBS" /bin/bash -ec '
+            cd "build-tailscale/tests/tailscale/work_$1"
+            exec arch -x86_64 ../tailscale_test "$1"
+          ' _
           (cd build-tailscale/tests/tailscale/work_refuses_inherited_key &&
-            TS_AUTHKEY=a-value-that-must-not-be-shown arch -x86_64 ../tailscale_test refuses_inherited_key) &
-          pids+=("$!")
-          failed=0
-          for pid in "${pids[@]}"; do
-            wait "$pid" || failed=1
-          done
-          exit "$failed"
+            TS_AUTHKEY=a-value-that-must-not-be-shown arch -x86_64 ../tailscale_test refuses_inherited_key)
       - name: Primed
         if: ${{ steps.caches.outputs.build == 'true' }}
         shell: bash
@@ -306,6 +300,8 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.sha || github.sha }}
+      # Refresh files already present in a prepared checkout with their pinned LF attributes.
+      - run: git checkout-index --force -- src/tailscale/pins.cmake src/tailscale/go.mod src/tailscale/go.sum
       - name: Caches for these pins
         id: caches
         env:

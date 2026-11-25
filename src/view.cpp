@@ -849,6 +849,18 @@ struct Builder {
     // holds kNoTab, last, which no round declares, and which is selected while the active tab stands in the other
     // strip, so that only the active tab shows as selected. A request for Prax: a strip with no selected tab.
     void syncTabs(PrKitTabs* tabs, std::size_t first, std::size_t end) {
+        const auto count = end - first;
+        const auto activeIndex = model.active();
+        const auto selection = activeIndex >= first && activeIndex < end ? kitId(model.tab(activeIndex)) : kNoTab;
+        if (prKitTabsCount(tabs) == count + 1 && prKitTabsAt(tabs, uint32_t(count)) == kNoTab) {
+            std::size_t same = 0;
+            while (same < count && prKitTabsAt(tabs, uint32_t(same)) == kitId(model.tab(first + same)))
+                ++same;
+            if (same == count) {
+                prKitTabsSelect(tabs, selection);
+                return;
+            }
+        }
         for (uint32_t j = prKitTabsCount(tabs); j-- > 0;) {
             const uint64_t id = prKitTabsAt(tabs, j);
             bool held = id == kNoTab;
@@ -869,8 +881,7 @@ struct Builder {
         }
         if (prKitTabsIndex(tabs, kNoTab) == prKitTabsCount(tabs))
             prKitTabsInsert(tabs, kNoTab, uint32_t(end - first));
-        const std::size_t active = model.active();
-        prKitTabsSelect(tabs, active >= first && active < end ? kitId(model.tab(active)) : kNoTab);
+        prKitTabsSelect(tabs, selection);
     }
 
     // A drop within a strip is applied by the kit as the strip is declared, and is not reported (kit_choice.cpp
@@ -986,16 +997,16 @@ struct Builder {
     float tabAdvance(std::size_t index, const std::string& title) {
         auto& cached = view.tabWidths[index];
         if (cached.title != title) {
-            std::unique_ptr<PrTextShaper, decltype(&prTextShaperDestroy)> fallback(
-                view.windowShaper ? nullptr : prTextShaperCreate(PrTextShaperBackend_Default), prTextShaperDestroy);
-            auto* shaper = view.windowShaper ? view.windowShaper : fallback.get();
-            std::unique_ptr<PrTextLayout, decltype(&prTextLayoutDestroy)> layout(prTextLayoutCreate(), prTextLayoutDestroy);
+            if (!view.windowShaper && !fallbackTabShaper)
+                fallbackTabShaper.reset(prTextShaperCreate(PrTextShaperBackend_Default));
+            auto* shaper = view.windowShaper ? view.windowShaper : fallbackTabShaper.get();
+            if (!tabLayout) tabLayout.reset(prTextLayoutCreate());
             cached = {title, 0};
             for (const auto role : {kTabRole, kSelectedTabRole}) {
                 if (!shaper || !kit->fonts[role]) continue;
                 const PrTextLayoutDesc desc{.text = sv(title), .font = kit->fonts[role], .shaper = shaper};
-                prTextLayoutSet(layout.get(), &desc);
-                cached.advance = std::max(cached.advance, std::ceil(prTextLayoutExtent(layout.get()).x));
+                prTextLayoutSet(tabLayout.get(), &desc);
+                cached.advance = std::max(cached.advance, std::ceil(prTextLayoutExtent(tabLayout.get()).x));
             }
         }
         return cached.advance;
@@ -2648,6 +2659,10 @@ struct Builder {
         if (!view.extensionProblem.empty() && model.tab_count() && model.tab(model.active()).kind == TabKind::Extension)
             caption(element(window, Part::ReplyRow), view.extensionProblem, textStyle(PrKitTextRole_BodySmall, kNoticeTone));
     }
+
+    // Reuse the shaping scratch space while measuring the titles of a newly arrived tab group.
+    std::unique_ptr<PrTextLayout, decltype(&prTextLayoutDestroy)> tabLayout{nullptr, prTextLayoutDestroy};
+    std::unique_ptr<PrTextShaper, decltype(&prTextShaperDestroy)> fallbackTabShaper{nullptr, prTextShaperDestroy};
 
 };
 

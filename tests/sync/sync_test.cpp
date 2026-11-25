@@ -2006,6 +2006,34 @@ void hub_activity() {
     CHECK(again.state().find(sid("bo"))->activity == Activity::Idle);
 }
 
+void mirror_signed_out_console() {
+    Model model(friends2(), false);
+    Mirror mirror;
+    std::vector<EntryRef> rows = {entry(EntryKind::Friend, "previous conversation")};
+    auto update = [&] {
+        auto session = tailFor("ada", rows, {}, Tail{});
+        session.info.account = "work";
+        mirror.apply(model, Sessions({std::make_shared<const SessionView>(session)}));
+    };
+    update();
+    model.set_draft(0, "new draft");
+    model.restore_held(0, "pending prompt");
+    model.append(1, Entry{EntryKind::Friend, "other console"});
+    rows.push_back(entry(EntryKind::Friend, "Signed out of work in Nexus."));
+    update();
+    CHECK(model.tab(0).transcript.size() == 2);
+    rows.push_back(entry(EntryKind::Notice, "Signed out of work in Nexus."));
+    rows.push_back(entry(EntryKind::Notice, "work needs signing in: show nexus's window (its hotkey) to sign in in the browser"));
+    update();
+    update();
+    CHECK(model.tab(0).transcript.empty());
+    CHECK(model.tab(0).draft == "new draft" && model.tab(0).held == "pending prompt");
+    CHECK(model.tab(1).transcript.size() == 1);
+    rows.push_back(entry(EntryKind::Friend, "new conversation"));
+    update();
+    CHECK(model.tab(0).transcript.size() == 1 && model.tab(0).transcript.front().text == "new conversation");
+}
+
 // The mirror holds the activity of the session a tab shows from the last state applied that held it.
 void mirror_activity() {
     Model m(friends2(), false);
@@ -3034,6 +3062,7 @@ const Case kCases[] = {
     {"stop_never_filtered_by_the_window", stop_never_filtered_by_the_window},
     {"sessions_activity_and_tool_lines", sessions_activity_and_tool_lines},
     {"hub_activity", hub_activity},
+    {"mirror_signed_out_console", mirror_signed_out_console},
     {"mirror_activity", mirror_activity},
     {"mirror_drops_open_with_the_session", mirror_drops_open_with_the_session},
     {"state_format_1_from_main", state_format_1_from_main},

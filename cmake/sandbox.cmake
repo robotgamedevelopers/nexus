@@ -19,7 +19,9 @@ file(REMOVE_RECURSE ${nexus_sandbox_dir}/system-bwrap)
 
 # libcap 2.78: only its static library, which its own Makefile builds without installing.
 ExternalProject_Add(nexus_libcap
-    URL https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-2.78.tar.xz
+    URL https://cdn.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-2.78.tar.xz
+        https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-2.78.tar.xz
+    INACTIVITY_TIMEOUT 10
     URL_HASH SHA256=0d621e562fd932ccf67b9660fb018e468a683d7b827541df27813228c996bb11
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     CONFIGURE_COMMAND ""

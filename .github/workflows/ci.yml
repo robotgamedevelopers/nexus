@@ -1,12 +1,6 @@
-# CI for nexus: the build with its unit and functional tests, the model under the sanitizers, the Claude driver
-# (drivers/claude) and the tab label's trace checks, as jobs in parallel on the fleet's macOS runners (never
-# GitHub-hosted); and the build without the window, its unit and functional tests and the sanitizers' programs, the
-# TLA+ models with their trace checks (in parallel shards), and the code generated from
-# schema/Nexus.schema regenerated at schema's pin, on the fleet's Linux runners; the functional tests inside WSL2 on
-# captain (wsl2-functional), where nexus runs everything but the overlay on Windows; the Windows build with its unit
-# tests (windows), whose WSL2 terminal test then runs from inside captain's WSL2 (wsl2-terminal); and the Tailscale shim
-# built and tested alone on macOS, Linux and Windows (tailscale, .github/workflows/tailscale.yml). Every pull
-# request runs it, whatever its base, and so does every push to main.
+# Standard GitHub runners run policy, native driver checks, and schema generation.
+# The fleet provides WSL2 and prebuilt toolchains and caches for the native builds and sanitizers.
+# The Tailscale shim is built and tested separately on macOS, Linux and Windows (.github/workflows/tailscale.yml).
 #
 # Each per-commit job finishes in 2 minutes: timeout-minutes says so here, and the runners' own job hook
 # enforces the same limit. Longer work belongs in a nightly (schedule) workflow.
@@ -42,6 +36,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -57,6 +52,11 @@ jobs:
     # The build compiles Metal shaders (Prax) and needs Xcode's Metal toolchain. Today only the runners labelled
     # `services` have Xcode; drop the extra label when every macOS runner has it.
     runs-on: [self-hosted, fleet, macOS, ARM64, services]
+    name: ${{ matrix.check }}
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [build-and-unit, frame-budget]
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -100,27 +100,24 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "${launcher[@]}" \
             "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-cache_path_lto,$NEXUS_CACHES/lto" \
             "-DNEXUS_E2E_TAILNET=$tailnet"
+      - name: Build the frame-budget test
+        if: matrix.check == 'frame-budget'
+        run: cmake --build build --parallel "$JOBS" --target nexus_frame_tests
       - name: Build
+        if: matrix.check == 'build-and-unit'
         run: cmake --build build --parallel "$JOBS"
       - name: Unit tests
+        if: matrix.check == 'build-and-unit'
         run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
-      # Record real FrameHost callbacks and outbound SetAccount actions with the frame target already built here.
-      - name: Account picker model traces
-        shell: bash
-        run: |
-          set -euo pipefail
-          export TLA2TOOLS_JAR="$HOME/sdk/tla/tla2tools.jar"
-          test "$(shasum -a 256 "$TLA2TOOLS_JAR" | cut -d' ' -f1)" = "$(cut -d' ' -f1 .github/tla2tools.sha256)"
-          export JAVA="$HOME/sdk/bin/java"
-          if ! "$JAVA" -version >/dev/null 2>&1; then export JAVA=/opt/homebrew/opt/openjdk/bin/java; fi
-          ctest --test-dir build -L '^model$' -R '^tlc_window_account_picker_trace' -j "$TEST_JOBS" --output-on-failure --no-tests=error
       # The headless window (system fonts), real child processes and a real file, and the link end to end (nexus-server
       # over ssh to this machine, mosh's transport over real UDP): not unit tests.
       # The frame budget (docs/frame-budget.md) times the frame thread on the real clock, so it runs after the others,
       # alone, and with every nova-reserve slot on this host when it can have them within 20 s; else shared.
       - name: Functional tests
-        run: ctest --test-dir build -L functional -E '^window_frame_budget$' -j "$TEST_JOBS" --output-on-failure
+        if: matrix.check == 'build-and-unit'
+        run: ctest --test-dir build -L functional -E '^(window_frame_budget|server_lock_functional)$' -j "$TEST_JOBS" --output-on-failure
       - name: Frame budget, alone
+        if: matrix.check == 'frame-budget'
         shell: bash
         run: |
           set -uo pipefail
@@ -391,7 +388,7 @@ jobs:
   # Claude executable the tests never run. The live test (npm run test:live) spends a subscription and never runs here.
   server-policy:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Linux, X64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -410,7 +407,7 @@ jobs:
 
   claude-driver:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, macOS, ARM64]
+    runs-on: macos-26
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -456,7 +453,7 @@ jobs:
       fail-fast: false
       matrix:
         run: [whole-wall, without-the-hook, "limited,limited-nohook"]
-    runs-on: [self-hosted, fleet, macOS, ARM64]
+    runs-on: macos-26
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -510,8 +507,7 @@ jobs:
         run: [whole-wall, without-the-hook, "limited,limited-nohook"]
         include:
           - where: ubuntu
-            # The native Ubuntu pool has the Android SDK. TLC alone also selects WSL2.
-            labels: [self-hosted, fleet, Linux, X64, tlc, android]
+            labels: ubuntu-24.04
           - where: wsl2
             labels: [self-hosted, fleet, Linux, X64, wsl2]
     runs-on: ${{ matrix.labels }}
@@ -520,6 +516,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: matrix.where == 'wsl2'
+        with:
+          node-version: '22.14.0'
       - name: Where this runs, and caches outside the workspace
         shell: bash
         run: |
@@ -541,15 +541,16 @@ jobs:
           # Can't find source path .../runner-tmp/.mcp.json; two jobs on amd-2, 2026-11-15). Always under /tmp (never an
           # inherited TMPDIR such as ~/.cache/runner-tmp, which pushes Unix domain socket paths past sun_path's 108-byte
           # limit on long runner names).
-          own="/tmp/$RUNNER_NAME"
+          runner_dir=${RUNNER_NAME// /_}
+          own="/tmp/$runner_dir"
           mkdir -p "$own"
           echo "TMPDIR=$own" >> "$GITHUB_ENV"
           caches="$HOME/.cache/nexus-ci"
-          mkdir -p "$caches/$RUNNER_NAME/prax-downloads"
+          mkdir -p "$caches/$runner_dir/prax-downloads"
           {
-            echo "SANDBOX_BUILD=$caches/$RUNNER_NAME/sandbox-build"
-            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
-            echo "NEXUS_SANDBOX_BIN=$caches/$RUNNER_NAME/sandbox-build/sandbox"
+            echo "SANDBOX_BUILD=$caches/$runner_dir/sandbox-build"
+            echo "PR_DOWNLOAD_DIR=$caches/$runner_dir/prax-downloads"
+            echo "NEXUS_SANDBOX_BIN=$caches/$runner_dir/sandbox-build/sandbox"
           } >> "$GITHUB_ENV"
       - name: Build bubblewrap and socat
         shell: bash
@@ -680,7 +681,7 @@ jobs:
   # runner, and kept outside the workspace under ~/.cache/nexus-ci/<runner>/schema.
   schema-generated:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Linux, X64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -986,459 +987,6 @@ jobs:
           rm -rf "$walks_root"
           echo "$launched walks passed"
 
-  # The TLA+ models and their trace checks, on the fleet's Linux runners: TLC is Java and checks the same on every
-  # platform, so these run where runners are many, in parallel shards, each well within the 2 minutes. Every test
-  # labelled model runs in exactly one shard: each shard names its tests by regex (`run`, less `skip`) and builds only
-  # the walks they run (`build`), and the last, window, takes every test no other shard names, so a new test is never
-  # missed. `--no-tests=error` fails a shard whose regex matches nothing. The largest instances each have a shard of
-  # their own (SHARD in their CMakeLists, which give the times and worker counts), capped at 80 s: the 2 minutes less
-  # the worst setup seen before the tests step (29 s) and the steps after, so TLC's cap, not the job's, ends a run that
-  # is starved. Their timeouts (2026-11-15, 50 runs: 21 of ~240 model jobs in the last hour, 14 on one host) were runs
-  # starved by other repositories' jobs on the same host (9 of them alongside a timed-out shard on average, 2.8 beside
-  # one that passed), not instances grown past their caps. The tab label's traces need the window's logic, which does
-  # not build on Linux at Prax's pin (build-and-unit-linux says why), so they run on macOS (model-label).
-  model:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # Every shard on the fleet's runners labelled tlc (two per machine, so a machine runs at most two shards, sixteen TLC
-    # workers), away from hulk, whose general Linux runners share one machine with other repositories' CI and ran these
-    # past their 60 s. Which machines carry the label is the fleet record's (the busiest is kept off it). A shard
-    # waiting for a runner is not counted in its 2 minutes.
-    runs-on: [self-hosted, fleet, Linux, X64, tlc]
-    timeout-minutes: 2
-    strategy:
-      fail-fast: false
-      # The number of runners labelled tlc in the fleet (6 on 2026-11-15; the fleet's runner distribution sets it, and
-      # this one number follows it). More shards at once than runners only queue; fewer leave runners idle. A shard
-      # waiting here is not counted in its 2 minutes.
-      max-parallel: 6
-      matrix:
-        include:
-          # The five supervisor instances' temporal property (Settles), in two halves, each half in a shard of its own;
-          # their invariants and action properties (`_rest`, seconds each) run in supervisor-rest
-          # (tests/server/CMakeLists.txt says why).
-          - shard: supervisor-1
-            run: '^tlc_supervisor_temporal_1$'
-          - shard: supervisor-2
-            run: '^tlc_supervisor_temporal_2$'
-          - shard: supervisor-switch-1
-            run: '^tlc_supervisor_switch_temporal_1$'
-          - shard: supervisor-switch-2
-            run: '^tlc_supervisor_switch_temporal_2$'
-          - shard: supervisor-place-1
-            run: '^tlc_supervisor_place_temporal_1$'
-          - shard: supervisor-place-2
-            run: '^tlc_supervisor_place_temporal_2$'
-          - shard: supervisor-signin-1
-            run: '^tlc_supervisor_signin_temporal_1$'
-          - shard: supervisor-signin-2
-            run: '^tlc_supervisor_signin_temporal_2$'
-          - shard: supervisor-friend-1
-            run: '^tlc_supervisor_friend_temporal_1$'
-          - shard: supervisor-friend-2
-            run: '^tlc_supervisor_friend_temporal_2$'
-          - shard: supervisor-rest
-            run: '^tlc_supervisor_'
-            build: supervisor_walk
-            skip: '^tlc_supervisor_(switch_|place_|signin_|friend_)?temporal_[0-9]+$'
-          - shard: link-ensure
-            run: '^tlc_link_ensure$'
-          - shard: link-one-window
-            run: '^tlc_link_one_window$'
-          - shard: link-tabs
-            run: '^tlc_link_tabs$'
-          - shard: link-two-windows
-            run: '^tlc_link_two_windows$'
-          - shard: link-rest
-            run: '^tlc_link_'
-            build: link_walk
-            skip: '^tlc_link_(ensure|one_window|tabs|two_windows)$'
-          - shard: accounts
-            run: '^tlc_accounts$'
-          - shard: accounts-rest
-            run: '^tlc_accounts_'
-            build: accounts_walk
-          - shard: journal
-            run: '^tlc_journal'
-            build: journal_walk
-          # The store's lock and the start-up order (models/store/StoreLock.tla): its instances, witnesses and the
-          # code's walks.
-          - shard: store-lock
-            run: '^tlc_store_lock'
-            build: store_lock_walk
-          # Placement (models/placement/Placement.tla): its two-actor instance alone (50 s on four workers), then the
-          # one-actor instance, the witnesses and the code's walks with their faults (about 40 s on two cores).
-          - shard: placement-spec
-            run: '^tlc_placement_spec$'
-          - shard: placement-rest
-            run: '^tlc_placement_'
-            build: builds_walk
-            skip: '^tlc_placement_spec$'
-          # Handover (models/handover/Handover.tla): its temporal spec instances in a shard of their own (capped at
-          # 80 s), then the witnesses and the code's walks with their faults.
-          - shard: handover-spec
-            run: '^tlc_handover_(spec|cut_resume|legacy)$'
-          - shard: handover-rest
-            run: '^tlc_handover_'
-            build: handover_walk
-            skip: '^tlc_handover_(spec|cut_resume|legacy)$'
-          # Supervision (models/supervision/Supervision.tla): its temporal spec instances in a shard of their own
-          # (capped at 80 s), then the witnesses and the code's walks with their faults.
-          - shard: supervision-spec
-            run: '^tlc_supervision_(spec|rollback|dual_fail)$'
-          - shard: supervision-rest
-            run: '^tlc_supervision_'
-            build: supervision_walk
-            skip: '^tlc_supervision_(spec|rollback|dual_fail)$'
-          # Old-layout migration and store format against rollback (models/migration/Migration.tla): its instances,
-          # ten witnesses and the code's walks with their nine faults (about 16 s on four cores).
-          - shard: migration
-            run: '^tlc_migration_'
-            build: migration_walk
-          # End-to-end takeover composition across all five layers (models/takeover/Takeover.tla): its temporal spec
-          # instances in `takeover-spec`, and its eleven witnesses plus real five-layer walks and eleven faults in
-          # `takeover-rest`.
-          - shard: takeover-spec
-            run: '^tlc_takeover_(spec|format_rollback)$'
-          - shard: takeover-rest
-            run: '^tlc_takeover_'
-            build: takeover_walk
-            skip: '^tlc_takeover_(spec|format_rollback)$'
-          # The Claude driver's turn and ask-secret instances (models/ClaudeDriver.tla), each in a shard of its own
-          # with no Node setup, and its twelve witnesses and nine code traces in claude-rest (node: true).
-          - shard: claude-driver
-            run: '^tlc_claude_driver$'
-          - shard: claude-secrets
-            run: '^tlc_claude_driver_secrets$'
-          - shard: claude-rest
-            run: '^tlc_claude'
-            skip: '^tlc_claude_driver(_secrets)?$'
-            node: true
-          - shard: witnesses
-            run: '^tlc_witness'
-          # The secret dialog's instances and witnesses (models/Secrets.tla), then its code's walks against
-          # SecretsTrace.tla (about 90 records each) and their faults.
-          - shard: secrets-spec
-            run: '^tlc_secrets_spec$'
-          - shard: secrets-rest
-            run: '^tlc_secrets_'
-            skip: '^tlc_secrets_(spec$|trace_)'
-          - shard: secrets-trace
-            run: '^tlc_secrets_trace_'
-            build: secrets_walk
-          # The board's scroller, the overlay and terminal foreground synchronization: their specs, witnesses and walks
-          # (short tests), split from window, which ran 50 s at p50 and 112 s at worst with them.
-          - shard: glide-overlay
-            run: '^tlc_(glide|overlay|watch)_'
-            build: overlay_walk glide_walk watch_walk
-          # The Tailscale shim's node lifecycle (models/Tailscale.tla): the three liveness instances (47,169 to 74,329
-          # states) each in a shard of their own on eight workers, then the witnesses, recorded orders and Go walks.
-          - shard: tailscale-spec
-            run: '^tlc_tailscale_spec$'
-          - shard: tailscale-keys
-            run: '^tlc_tailscale_spec_keys$'
-          - shard: tailscale-certs
-            run: '^tlc_tailscale_spec_certs$'
-          - shard: tailscale-rest
-            run: '^tlc_tailscale_'
-            skip: '^tlc_tailscale_spec(_keys|_certs)?$'
-          # The window's friends from the server's list (MCWindowFriends, 39,465 states on four workers), alone: in the
-          # window shard it ran past its 60 s.
-          - shard: window-friends
-            run: '^tlc_spec_friends$'
-          # The friend strip's shared-file instance (MCFriendStripShared, 150,016 states) in its own shard on eight
-          # workers, then its single-window spec and its code's walks against FriendStripTrace.tla, and their faults.
-          - shard: strip-shared
-            run: '^tlc_spec_strip_shared$'
-          - shard: strip-rest
-            run: '^tlc_(strip_|spec_strip)'
-            skip: '^tlc_spec_strip_shared$'
-            build: strip_walk
-          # In-app sign-in (models/SignIn.tla): its two large safety instances (MCSignInTwo, 371,695 states;
-          # MCSignInGate, 813,557 states) each in a shard of their own on eight workers, then its one-window spec and
-          # witnesses, and its code's walks against SignInTrace.tla (~800 records each) in two halves of four traces.
-          - shard: signin-two
-            run: '^tlc_signin_spec_two$'
-          - shard: signin-gate
-            run: '^tlc_signin_spec_gate$'
-          - shard: signin-rest
-            run: '^tlc_signin_'
-            skip: '^tlc_signin_(trace_|spec_two$|spec_gate$)'
-          - shard: signin-trace-1
-            run: '^tlc_signin_trace_seed_[1-4]$'
-            build: signin_walk
-          - shard: signin-trace-2
-            run: '^tlc_signin_trace_'
-            skip: '^tlc_signin_trace_seed_[1-4]$'
-            build: signin_walk
-          # The window's link making its session again (models/Reconnect.tla): spec, witnesses and the code's walks.
-          - shard: reconnect
-            run: '^tlc_reconnect'
-            build: reconnect_walk
-          # One pass of nexus-server's loop (models/LoopPass.tla): its temporal instance in loop-pass-spec (no walk
-          # build), and its two-window instance, eleven reversed witnesses, five seeded code walks and five faulty
-          # walks in loop-pass-rest.
-          - shard: bus-delivery
-            run: '^tlc_bus_delivery_'
-            build: bus_delivery_trace
-          - shard: loop-pass-spec
-            run: '^tlc_loop_pass_spec$'
-          - shard: loop-pass-rest
-            run: '^tlc_loop_pass_'
-            skip: '^tlc_loop_pass_spec$'
-            build: pass_walk
-          # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
-          # new family adds its prefix there.
-          - shard: window
-            run: ''
-            build: trace_walk service_process_functional
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass|bus_delivery)'
-    name: model (${{ matrix.shard }})
-    env:
-      CC: clang
-      CXX: clang++
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-          submodules: recursive
-      - name: Java and the pinned TLC jar from the runner's machine
-        shell: bash
-        run: |
-          set -euo pipefail
-          java=""
-          for c in "$(command -v java || true)" "$HOME/sdk/bin/java" /usr/bin/java; do
-            if [ -n "$c" ] && [ -x "$c" ] && "$c" -version >/dev/null 2>&1; then java=$c; break; fi
-          done
-          if [ -z "$java" ]; then
-            echo "::error::no working java on $(hostname -s) (looked on PATH, at \$HOME/sdk/bin/java and /usr/bin/java): install a JDK 21 on this runner's machine through the fleet play, then re-run"
-            exit 1
-          fi
-          "$java" -version
-          dirname "$java" >> "$GITHUB_PATH"
-          jar=""
-          for c in "$HOME/sdk/tla/tla2tools.jar" /opt/tla/tla2tools.jar; do
-            if [ -f "$c" ]; then jar=$c; break; fi
-          done
-          if [ -z "$jar" ]; then
-            echo "::error::no TLC jar on $(hostname -s) (looked at \$HOME/sdk/tla/tla2tools.jar and /opt/tla/tla2tools.jar): place tla2tools.jar v1.7.4 there (sha256 in .github/tla2tools.sha256; another fleet machine holds one), then re-run"
-            exit 1
-          fi
-          want=$(cut -d' ' -f1 .github/tla2tools.sha256)
-          have=$(sha256sum "$jar" | cut -d' ' -f1)
-          if [ "$want" != "$have" ]; then
-            echo "::error::$jar on $(hostname -s) is not the pinned tla2tools.jar v1.7.4 (sha256 $have, want $want): replace it with the pinned jar, then re-run"
-            exit 1
-          fi
-          echo "TLA2TOOLS_JAR=$jar" >> "$GITHUB_ENV"
-      - name: Caches outside the workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          caches="$HOME/.cache/nexus-ci"
-          mkdir -p "$caches/ccache" "$caches/$RUNNER_NAME/prax-downloads"
-          {
-            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
-            echo "CCACHE_DIR=$caches/ccache"
-            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
-            echo "CCACHE_MAXSIZE=4G"
-            echo "JOBS=$(sh .github/job-cores.sh)"
-            echo "TEST_JOBS=$(nproc)"
-          } >> "$GITHUB_ENV"
-      # The runner's share of its host's cores, read at run time (NOVA_JOB_CORES, which each fleet runner exports; the
-      # core count where it is unset): no TLC run takes more workers than that (tests/model/tlc-workers.cmake), so a
-      # shard asks its host for what the fleet gives it, however many runners the host carries. Never below 4: the
-      # instances with a shard of their own fit their 80 s on four cores (switch 45 s, place 40, link ensure 34, on
-      # four pinned cores of an idle 16-thread host) and not on two (sign-in 94-107 s), so a share under 4 is a fleet
-      # record to change, and the job says so in its log. TEST_JOBS stays the core count: it counts ctest's slots for
-      # the trace checks and witnesses, each a JVM that runs a second or two on one core.
-      - name: The runner's share of cores for TLC
-        shell: bash
-        run: |
-          set -euo pipefail
-          share=$(sh .github/job-cores.sh)
-          if [ "$share" -lt 4 ]; then
-            echo "::warning::this runner's share on $(hostname -s) is $share cores (NOVA_JOB_CORES); the model shards need 4 (ci.yml, model, says why), so TLC runs on 4"
-            share=4
-          fi
-          echo "TLC runs take at most $share workers each"
-          echo "NEXUS_TLC_CORES=$share" >> "$GITHUB_ENV"
-      # The Claude driver's trace checks (models/ClaudeDriverTrace.tla) run its unit tests and its walk under Node, from
-      # its build: Node from the runner's machine as in the claude-driver job, the pinned packages, the compile alone.
-      - name: Node from the runner's machine, and the Claude driver built
-        if: matrix.node
-        shell: bash
-        working-directory: drivers/claude
-        run: |
-          set -euo pipefail
-          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
-            echo "::error::no node or npm on $(hostname -s)'s runner PATH; the fleet installs Node (sdk/bin) on its runners"
-            exit 1
-          fi
-          npm ci --omit=optional --no-audit --no-fund
-          npm run build
-      # Without the window, its logic and the link's transport, which no check program uses (as build-and-unit-linux).
-      - name: Configure (Release)
-        shell: bash
-        run: |
-          set -euo pipefail
-          launcher=()
-          if command -v ccache >/dev/null; then
-            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
-          fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF \
-            -DCMAKE_LINKER_TYPE=LLD "${launcher[@]}"
-      # Only the walks this shard's trace checks run (`build`); a shard of specs and witnesses alone builds nothing.
-      - name: Build the shard's walks
-        if: matrix.build
-        shell: bash
-        env:
-          TARGETS: ${{ matrix.build }}
-        run: |
-          set -euo pipefail
-          read -r -a targets <<< "$TARGETS"
-          cmake --build build --parallel "$JOBS" --target "${targets[@]}"
-      # One TLC worker per core: the instances with tens of thousands of states run eight workers each and ctest counts
-      # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The largest instances, label
-      # model_nightly, run in nightly.yml; every property is still checked here, on the smaller instances.
-      - name: Models and trace checks
-        shell: bash
-        env:
-          RUN: ${{ matrix.run }}
-          SKIP: ${{ matrix.skip }}
-        run: |
-          set -euo pipefail
-          select=()
-          if [ -n "$RUN" ]; then select+=(-R "$RUN"); fi
-          if [ -n "$SKIP" ]; then select+=(-E "$SKIP"); fi
-          ctest --test-dir build -L '^model$' "${select[@]}" -j "$TEST_JOBS" --output-on-failure --no-tests=error
-
-  # The tab label's trace checks (TabLabelTrace.tla), whose walk needs the window's logic: on macOS, as the model job
-  # ran them before it moved to Linux.
-  model-label:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, macOS, ARM64]
-    timeout-minutes: 2
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-          submodules: recursive
-      - name: Java and the pinned TLC jar from the runner's machine
-        shell: bash
-        run: |
-          set -euo pipefail
-          java=""
-          for c in "$HOME/sdk/bin/java" /opt/homebrew/opt/openjdk/bin/java; do
-            if [ -x "$c" ] && "$c" -version >/dev/null 2>&1; then java=$c; break; fi
-          done
-          if [ -z "$java" ]; then
-            echo "::error::no working java on $(hostname -s) (looked at \$HOME/sdk/bin/java and /opt/homebrew/opt/openjdk/bin/java): install a JDK 21 on this runner's machine through the fleet play, then re-run"
-            exit 1
-          fi
-          "$java" -version
-          dirname "$java" >> "$GITHUB_PATH"
-          jar="$HOME/sdk/tla/tla2tools.jar"
-          if [ ! -f "$jar" ]; then
-            echo "::error::no TLC jar at $jar on $(hostname -s): place tla2tools.jar v1.7.4 there (sha256 in .github/tla2tools.sha256; another fleet machine holds one), then re-run"
-            exit 1
-          fi
-          want=$(cut -d' ' -f1 .github/tla2tools.sha256)
-          have=$(shasum -a 256 "$jar" | cut -d' ' -f1)
-          if [ "$want" != "$have" ]; then
-            echo "::error::$jar on $(hostname -s) is not the pinned tla2tools.jar v1.7.4 (sha256 $have, want $want): replace it with the pinned jar, then re-run"
-            exit 1
-          fi
-          echo "TLA2TOOLS_JAR=$jar" >> "$GITHUB_ENV"
-      - name: Caches outside the workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          caches="$HOME/Library/Caches/nexus-ci"
-          mkdir -p "$caches/ccache" "$caches/$RUNNER_NAME/prax-downloads"
-          {
-            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
-            echo "CCACHE_DIR=$caches/ccache"
-            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
-            echo "CCACHE_MAXSIZE=4G"
-            echo "JOBS=$(sh .github/job-cores.sh)"
-            echo "TEST_JOBS=$(sysctl -n hw.ncpu)"
-          } >> "$GITHUB_ENV"
-      # Without the link's transport (mosh and protobuf), which the walk does not use.
-      - name: Configure (Release)
-        shell: bash
-        run: |
-          set -euo pipefail
-          launcher=()
-          if command -v ccache >/dev/null; then
-            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-                      -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache)
-          fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF "${launcher[@]}"
-      - name: Build the label's walk
-        run: cmake --build build --parallel "$JOBS" --target label_walk
-      - name: The label's trace checks
-        run: ctest --test-dir build -L '^model$' -R '^tlc_label_trace' -j "$TEST_JOBS" --output-on-failure --no-tests=error
-
-  # Windows' functional tests, inside WSL2: on Windows the overlay stays native and everything else (nexus-server, the
-  # link, the drivers and their tests) runs as the Linux build inside WSL2 (AGENTS.md, platform targets). So these run
-  # on captain's WSL2 runners (label wsl2: Linux runners inside captain's WSL2 distro, from the fleet's record), with
-  # the same configure as build-and-unit-linux, and so with what Prax lets Linux build at its pin (no window logic, so
-  # no link and no nexus-server yet: build-and-unit-linux says why). The first step refuses to run anywhere but WSL2.
-  # Caches as build-and-unit-linux's, under ~/.cache/nexus-ci inside the distro.
-  wsl2-functional:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Linux, X64, wsl2]
-    timeout-minutes: 2
-    env:
-      CC: clang
-      CXX: clang++
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-          submodules: recursive
-      - name: Inside WSL2, and caches outside the workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          kernel=$(cat /proc/sys/kernel/osrelease)
-          case "$kernel" in
-            *microsoft*WSL2*|*WSL2*) echo "WSL2 kernel $kernel${WSL_DISTRO_NAME:+, distro $WSL_DISTRO_NAME}" ;;
-            *) echo "::error::$(hostname -s) is not inside WSL2 (kernel $kernel): the wsl2 label belongs only to runners in captain's WSL2 distro"; exit 1 ;;
-          esac
-          caches="$HOME/.cache/nexus-ci"
-          mkdir -p "$caches/ccache" "$caches/lto" "$caches/$RUNNER_NAME/prax-downloads"
-          {
-            echo "NEXUS_CACHES=$caches"
-            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
-            echo "CCACHE_DIR=$caches/ccache"
-            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
-            echo "CCACHE_MAXSIZE=4G"
-            echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
-            echo "JOBS=$(sh .github/job-cores.sh)"
-            echo "TEST_JOBS=$(nproc)"
-          } >> "$GITHUB_ENV"
-      - name: Configure (Release)
-        shell: bash
-        run: |
-          set -euo pipefail
-          launcher=()
-          if command -v ccache >/dev/null; then
-            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
-          else
-            echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
-          fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF "${launcher[@]}" \
-            -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto"
-      - name: Build
-        run: cmake --build build --parallel "$JOBS"
-      - name: Functional tests
-        run: ctest --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure --no-tests=error
-      - name: ccache hits in this job
-        if: always()
-        shell: bash
-        run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
-
   # The Tailscale shim built and tested alone on macOS, Linux and Windows (.github/workflows/tailscale.yml, which says
   # how its caches are kept so that only a pin change is cold, and how a machine not yet primed hands this commit to
   # tailscale-prime.yml). On a pull request it builds the head, not the merge commit, and each OS's verdict is the
@@ -1479,13 +1027,29 @@ jobs:
       run:
         shell: pwsh
     steps:
+      # An image may have a warmed build beside a checkout fetched directly by URL.
+      # Preserve source timestamps when the seed's fetch came from this same repository.
+      - name: Identify a prebuilt checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          $dir = $env:GITHUB_WORKSPACE
+          $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY"
+          $fetch = Join-Path $dir '.git/FETCH_HEAD'
+          if ((Test-Path $fetch) -and ((Get-Content $fetch -Last 1).EndsWith(" of $url"))) {
+            if (-not (git -C $dir remote)) {
+              git -C $dir remote add origin $url
+              if ($LASTEXITCODE -ne 0) { throw "Cannot set the prebuilt checkout's origin" }
+            }
+          }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - name: Select the Rust toolchain for the embedded Starlark host
-        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
-        with:
-          toolchain: 1.98.1
+        run: |
+          $toolchain = '1.98.1-x86_64-pc-windows-msvc'
+          rustup toolchain install $toolchain --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw "Cannot prepare Rust $toolchain" }
+          "RUSTUP_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
       # Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one by itself.
       - name: Build directory and caches outside the workspace
         run: |

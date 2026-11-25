@@ -4,3 +4,8 @@ tests/wire/next/gen/** linguist-generated=true
 
 # Licence texts generated from the Tailscale shim's pinned modules (src/tailscale/notices): LF on every OS, collapsed.
 src/tailscale/shim/licences.txt text eol=lf linguist-generated=true
+
+# These inputs form the Tailscale toolchain cache key on every runner.
+src/tailscale/pins.cmake text eol=lf
+src/tailscale/go.mod text eol=lf
+src/tailscale/go.sum text eol=lf

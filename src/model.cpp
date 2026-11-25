@@ -149,8 +149,13 @@ bool Model::take_queued(std::size_t i) {
 
 void Model::clear_transcript(std::size_t i) {
     if (!friend_tab(i)) return;
-    tabs_[i].transcript.clear();
     tabs_[i].held.clear();
+    clear_output(i);
+}
+
+void Model::clear_output(std::size_t i) {
+    if (!friend_tab(i)) return;
+    tabs_[i].transcript.clear();
     ++tabs_[i].transcriptGeneration;
 }
 

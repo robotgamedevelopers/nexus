@@ -162,6 +162,22 @@ bool Mirror::apply(Model& model, const Sessions& state) {
             if (!e.closed) {
                 break;
             }
+            if (e.kind == EntryKind::Notice && !view->info.account.empty() &&
+                    e.text == "Signed out of " + view->info.account + " in Nexus.") {
+                model.clear_output(i);
+                seen.bus.clear();
+                seen.visibleBus = 0;
+                seen.missingHistory = false;
+                ++seen.next;
+                changed = true;
+                continue;
+            }
+            // The account picker already explains how to sign in.
+            if (e.kind == EntryKind::Notice && e.text == view->info.account +
+                    " needs signing in: show nexus's window (its hotkey) to sign in in the browser") {
+                ++seen.next;
+                continue;
+            }
             if (e.kind == EntryKind::Bus) {
                 const bool visible = visibleBus(e.text, *view);
                 seen.bus.push_back({seen.next, tab.transcript.size() - seen.visibleBus, visible});

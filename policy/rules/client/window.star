@@ -311,6 +311,7 @@ def handle(event, state, config):
                 "Keyboard shortcuts",
                 "⌘ + backtick (the ~ key)   Open the Nexus overlay",
                 "⌘T / ⌘W   Open a terminal tab / close the current terminal",
+                "⌘+ / ⌘−   Increase / decrease font size (⌘= also increases it).",
                 "⌘1, ⌘2, ⌘3, ⌘4 …   Select a tab by position",
                 "⌘← / ⌘→   Move to the previous / next tab",
                 "⌘↑ / ⌘↓   Choose an account for the current AI, including among multiple Claude accounts",
