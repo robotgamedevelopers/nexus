@@ -28,9 +28,10 @@ _COMMAND_HELP = {
     "/help": "Show this command list.",
     "/model": "Open the model selector. Use /model <model> [effort] to switch directly.",
     "/effort": "Open the effort selector. Use /effort <level> to switch directly.",
-    "/info": "Show the friend, account, model, effort, repository and working directories.",
+    "/info": "Show the AI, account, model, effort, repository and working directories.",
     "/clear": "Clear the conversation and its context. When signed out, clear the local conversation.",
     "/compact": "Compact the current conversation context.",
+    "/login": "Open the account sign-in window.",
     "/logout": "Sign out of the selected account.",
     "/quiet": "Mute nexus sounds.",
     "/quiet off": "Turn sounds back on.",
@@ -289,16 +290,33 @@ def handle(event, state, config):
                     "Control+ArrowUp": "top", "Control+ArrowDown": "bottom",
                     "PageUp": "page_up", "PageDown": "page_down"}).items():
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["scroll_transcript", direction])
+        if state["tab"] == "friend" and state["prompt_open"] and not state.get("account_picker_open") and not state.get("ui", {}).get("choice_kind"):
+            if state.get("ui", {}).get("draft") == "/login":
+                for chord in ["Enter", "Command+Enter"]:
+                    window["shortcuts"] = _bind(window["shortcuts"], chord, ["account_picker", "open"])
             for chord in config.get("clear_draft_keys", ["Command+Backspace", "Command+Delete"]):
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["clear_composer"])
         if state["tab"] == "friend" and state.get("needs_sign_in"):
-            window["panels"] = ["spacer" if p == "transcript" else p for p in window["panels"]]
+            if state.get("ui", {}).get("help_visible") and state.get("ui", {}).get("dismissed") and not state.get("account_picker_open"):
+                window["panels"] = ["transcript", "prompt"]
+                window["account_items"] = []
+            else:
+                window["panels"] = ["spacer" if p == "transcript" else p for p in window["panels"]]
         return window
     if event == "prompt_key":
         if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() == "/help":
             commands = dict(_COMMAND_HELP)
             commands.update(config.get("command_help", {}))
-            return [{"op": "draft", "text": ""}] + [
+            shortcuts = [
+                "Keyboard shortcuts",
+                "⌘ + backtick (the ~ key)   Open the Nexus overlay",
+                "⌘T / ⌘W   Open a terminal tab / close the current terminal",
+                "⌘1, ⌘2, ⌘3, ⌘4 …   Select a tab by position",
+                "⌘← / ⌘→   Move to the previous / next tab",
+                "⌘↑ / ⌘↓   Choose an account for the current AI, including among multiple Claude accounts",
+                "Esc   Hide the overlay and return to the previous app. In a picker, Esc closes the picker first.",
+            ]
+            return [{"op": "draft", "text": ""}, {"op": "notice", "text": "\n".join(shortcuts)}, {"op": "notice", "text": "\nSlash commands"}] + [
                 {"op": "notice", "text": cmd + "  " + description} for cmd, description in commands.items()
             ]
         if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() in ["/quiet", "/quiet off", "/loud"]:

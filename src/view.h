@@ -213,6 +213,8 @@ struct View {
     bool energyAnimating = false;
     unsigned pendingDashStep = 0;
     bool breathing = false;                     // the last round drew a busy cursor: frames go on while it shows
+    std::optional<std::size_t> helpTab;
+    std::string helpText;
     std::string problem;                        // why the last prompt was not sent, until one is: a dim line at the
                                                 // end of the transcript, never beside the prompt
     // With a server (main.cpp --server): Enter and Command-Enter on a friend's tab call this with the tab's position

@@ -1,12 +1,12 @@
 # Using nexus
 
-nexus is a keyboard-driven macOS client for working with several AI harnesses. Each friend gets a named tab, a conversation and a working directory. The server runs the harnesses and keeps their state. You can close the client and reconnect while a turn continues on the server.
+nexus is a keyboard-driven macOS client for working with several AI harnesses. Each AI gets a named tab, a conversation and a working directory. The server runs the harnesses and keeps their state. You can close the client and reconnect while a turn continues on the server.
 
 For a first install, point your current AI harness at the repository and ask it to [set up nexus](setup.md). The AI handles the commands. You handle your provider sign-in.
 
 ## Picking a setup
 
-The client and server can run on the same Apple silicon Mac with macOS 26 or newer. An always-on server can keep working while the laptop sleeps. Start with the harness you already use. You can add named friends or other harnesses later. [Accounts and friends](accounts.md)
+The client and server can run on the same Apple silicon Mac with macOS 26 or newer. An always-on server can keep working while the laptop sleeps. Start with the harness you already use. You can add AIs or other harnesses later. [Accounts and AIs](accounts.md)
 
 Windows has native window code and WSL2 terminal support. The connected Windows client, Wayland, Android and iOS clients are still development work. The proposed heads-down timer and away report are also on the [roadmap](ROADMAP.md).
 
@@ -23,15 +23,15 @@ Spaces, with no Dock icon.
 Escape hides it too, and so does switching away: Command-Tab, a click on another app, or Mission Control. With
 `--windowed` it is a normal window instead.
 
-Each friend the server holds (its `friends.json`, `docs/accounts.md`) has a tab, and a friend added or removed there
+Each AI the server holds (its `friends.json`, `docs/accounts.md`) has a tab, and an AI added or removed there
 gets or loses its tab as soon as the server applies the change (`nexus-server config reload`); the sprint tab comes
 first. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
 reorder the tabs; the order is kept across launches. In the [keyboard profile](policy.md#start-with-the-keyboard-driven-client), Enter stages the current message. Empty Enter sends the batch. Command-Enter sends the batch and current draft in order. Command-Delete clears the draft and all locally staged messages in this tab. Shift-Enter starts a new line. The stock profile binds Enter to send and Command-Enter to queue. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller,
 and the size is kept across launches.
 
-Cmd-T opens a terminal tab, the login shell in the home directory, after the friends' tabs; its title stays blank until the shell name is available.
+Cmd-T opens a terminal tab, the login shell in the home directory, after the AI tabs; its title stays blank until the shell name is available.
 Cmd-W closes the console and selects its left neighbor in the same group, or its right neighbor at the left edge.
-Closing the last console in the group returns to the previously selected open tab. The console also closes when its shell exits. Terminal tabs can be dragged among themselves, never in among the friends. The
+Closing the last console in the group returns to the previously selected open tab. The console also closes when its shell exits. Terminal tabs can be dragged among themselves, never in among the AIs. The
 terminal tabs open at quit come back at the next launch, in the same order, each a new login shell in the directory
 its shell was last in (the home directory if that is gone); what a terminal showed, and any program running in it, do
 not come back. On a terminal tab every key that is not a Command chord, Escape included, goes to the shell. The
@@ -105,11 +105,11 @@ first state it says it is connecting and takes no typing; after that it is quiet
 server for 6 s, when it says how long.
 
 What syncs, so far: each prompt sent or queued in the window goes to the server once, in order, and the server
-runs the configured friend’s driver. Its reply appears in the same tab. Every window connected to the server shows every
+runs the configured AI’s driver. Its reply appears in the same tab. Every window connected to the server shows every
 tab's transcript and queue. A window that was away for long sees "N earlier entries not shown" in place of what it
 missed (the server sends each transcript's newest 16 entries, so that a diff stays small however far behind a window
-is). The friend tabs are the server's friends, sent in its state; a server from before that list sends none, and the
-window then shows the friends of the server's sessions.
+is). The AI tabs are the server's AIs, sent in its state; a server from before that list sends none, and the
+window then shows the AIs of the server's sessions.
 
 `nexus-server` keeps every tab's transcript and queue, and how far it has applied each window's actions, in
 `~/.nexus/server/store/`: each action is written and synced there before any window sees it, so a restart, or the server
@@ -121,11 +121,11 @@ can use, `~/.nexus/server/server.sock` (mode 0600, in a directory of mode 0700),
 and takes UDP on ports 60001 to 60999, one per window. `nexus-server stop` stops it. If the disk fails under the
 store, the server stops; started again, it opens the store from what is durable.
 
-A friend's AI is reached through a driver, a child process of `nexus-server` per friend that speaks the line protocol
-in [docs/driver-protocol.md](driver-protocol.md). Which program drives which friend comes from `~/.nexus/server/drivers`
+An AI is reached through a driver, a child process of `nexus-server` per AI that speaks the line protocol
+in [docs/driver-protocol.md](driver-protocol.md). Which program drives which AI comes from `~/.nexus/server/drivers`
 (an example: [drivers/claude/drivers.example](../drivers/claude/drivers.example)). Adapters for Codex, Antigravity, Grok and Muse, including their account requirements, are documented in the [RPC driver guide](../drivers/rpc/README.md). The Claude driver,
 [drivers/claude](../drivers/claude), runs Claude on the Claude Agent SDK (TypeScript, Node 20.19 or newer; the SDK is a
-dependency fetched by npm, never kept in this repository) with permission prompts bypassed, in the friend's directory.
+dependency fetched by npm, never kept in this repository) with permission prompts bypassed, in the AI's directory.
 It runs only on a subscription: it removes every API-key variable from Claude's environment, loads no Claude settings
 files unless told to, and refuses any session that would bill an API key, another provider or paid extra usage, with
 a `no-credential` error saying why and what to do. Its login is the account its `--account <name>` names, and
@@ -145,9 +145,9 @@ the driver refuses to start with a `no-credential` error naming the file. With t
 nexus-server config sign-in main
 ```
 
-Replace `main` with the account linked to the friend. Follow the sign-in in Nexus, select the friend’s tab, type
+Replace `main` with the account linked to the AI. Follow the sign-in in Nexus, select the AI’s tab, type
 a message and use the send shortcut for your profile. The server reports the result of sign-in to the command.
-See [accounts and friends](accounts.md) for configuration.
+See [accounts and AIs](accounts.md) for configuration.
 
 If this machine also hosts Nova services, Nexus can run its Sprint scheduler, workers and other configured
 programs while every client is closed. Check the server's children with `nexus-server services status`.
@@ -156,7 +156,7 @@ programs while every client is closed. Check the server's children with `nexus-s
 Edit `policy/rules/client.star`, `server.star` and their JSON config in your Nexus fork. Both hosts run their own
 rules. Preview a change with `build/nexus-policy preview`, then use `apply` to pick it up at the next decision
 without rebuilding or restarting. The window application defines shortcuts, panels and tab registrations. The server application creates sessions, handles messages and selects accounts after a usage limit. See [wiring plugins in a fork](plugins.md) for the native and Starlark registration APIs.
-The driver launcher can load each friend's live nova-config definition, opening prompt and home documents. The Claude driver applies them on fresh and resumed sessions. See [customizing Nexus in your fork](policy.md).
+The driver launcher can load each AI's live nova-config definition, opening prompt and home documents. The Claude driver applies them on fresh and resumed sessions. See [customizing Nexus in your fork](policy.md).
 
 Model and effort can be set in the drivers file and
 changed between turns. Build and test it:

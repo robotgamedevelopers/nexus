@@ -1,55 +1,55 @@
-# Accounts and friends: the files, and how to change them
+# Accounts and AIs: the files, and how to change them
 
-This page is for a person, or the AI they talk to, who sets up nexus-server's accounts and friends. It is all you need:
+This page is for a person, or the AI they talk to, who sets up nexus-server's accounts and AIs. It is all you need:
 every field, what it may hold, an example of each file, the commands, and what the server says back. nexus has no
 settings screen. You change these files by talking with your AI, and the AI edits them, checks them and applies them
 with the commands below.
 
-## Creating a friend
+## Creating an AI
 
-Tell your AI, “I’d like to create a friend.” It should offer you two ways to begin. You can set up a friend directly, choosing its harness, account and working directory. Or you can use Nova Seed to explore a name, written memory and a working agreement together.
+Tell your AI, “I’d like to create an AI.” It should offer you two ways to begin. You can set up an AI directly, choosing its harness, account and working directory. Or you can use Nova Seed to explore a name, written memory and a working agreement together.
 
-If you choose Nova Seed, configure the friend as usual and open its tab. For the first conversation, ask it to read the Nova Seed repository and its short guide, `docs/SEED-CORE.md`. You and the friend can decide later whether to create a private memory home. [Nova Seed getting-started guide](https://github.com/mas-bandwidth/nova/blob/main/docs/GETTING-STARTED.md)
+If you choose Nova Seed, configure the AI as usual and open its tab. For the first conversation, ask it to read the Nova Seed repository and its short guide, `docs/SEED-CORE.md`. You and the AI can decide later whether to create a private memory home. [Nova Seed getting-started guide](https://github.com/mas-bandwidth/nova/blob/main/docs/GETTING-STARTED.md)
 
 ## What they are
 
 - An **account** is one login with one **provider**: the harness its sessions run. Set up each login under its own stable
   name. Several accounts can have the same provider.
-- A **friend** is who you talk to in a tab. A friend links to any number of accounts, of any providers, in an order,
-  and one of them may be its **default**. An account may serve any number of friends.
-- An **instance** of a friend is that friend on one machine, working from one directory: `rowan` on `studio` in
-  `/Volumes/nova/ai/rowan`, `rowan` on `studio` in a rocketnet checkout, `rowan` on the `macbook`. A friend has any
-  number of instances; the first is its default. The friend (its name, its accounts and its default account) is
+- A **AI** is who you talk to in a tab. An AI links to any number of accounts, of any providers, in an order,
+  and one of them may be its **default**. An account may serve any number of AIs.
+- An **instance** of an AI is that AI on one machine, working from one directory: `rowan` on `studio` in
+  `/Volumes/nova/ai/rowan`, `rowan` on `studio` in a rocketnet checkout, `rowan` on the `macbook`. An AI has any
+  number of instances; the first is its default. The AI (its name, its accounts and its default account) is
   shared by all its instances. A machine is the one the instance runs on now: moving it is an ordinary edit.
-- A **session** belongs to one instance of its friend, or to none when the friend has none. A new session takes the
-  instance of the session it copies when that is the same friend's and still one of its instances, else the
-  friend's default instance. Its driver works in the instance's directory. Today a driver runs only on the server's
+- A **session** belongs to one instance of its AI, or to none when the AI has none. A new session takes the
+  instance of the session it copies when that is the same AI's and still one of its instances, else the
+  AI's default instance. Its driver works in the instance's directory. Today a driver runs only on the server's
   own machine: a prompt in a session whose instance is on another machine is not sent, and the session is told so
-  (a driver on the instance's machine is roadmap work). When an edit removes a session's instance (or its friend),
-  the session moves to the friend's default instance, or none, and is told. Every session's friend and instance
-  reach the windows, so a window can show a tab per friend or per instance, as its own config says.
-- A **session** (a conversation with a friend) runs on one of its friend's linked accounts, or on none (the harness's
-  own login). A new session takes the account of the session it copies when that account is linked to its friend,
+  (a driver on the instance's machine is roadmap work). When an edit removes a session's instance (or its AI),
+  the session moves to the AI's default instance, or none, and is told. Every session's AI and instance
+  reach the windows, so a window can show a tab per AI or per instance, as its own config says.
+- A **session** (a conversation with an AI) runs on one of its AI's linked accounts, or on none (the harness's
+  own login). A new session takes the account of the session it copies when that account is linked to its AI,
   else the account selected by the server profile as described below. A session's harness is its account's provider, so switching a session's account can
   switch harness.
 - In **auto**, a subscription usage limit moves the conversation to the next signed-in linked subscription in
-  the friend's configured order. Each payer can be tried once for the interrupted request. If every eligible payer
+  the AI's configured order. Each payer can be tried once for the interrupted request. If every eligible payer
   is exhausted, the session reports that. Selecting a named account pins the conversation to that account.
-- When a change takes a friend out of friends.json, the server stops the work running in each of its sessions (the
+- When a change takes an AI out of friends.json, the server stops the work running in each of its sessions (the
   turn open gets the person's stop; its driver is ended) and tells each session once. The sessions are kept as they
-  are (account, harness, instance, transcript and queued prompts); while the friend is out nothing starts in them and
-  a prompt sent is refused, and they read as limited. When the friend is added again, its sessions are settled like any
+  are (account, harness, instance, transcript and queued prompts); while the AI is out nothing starts in them and
+  a prompt sent is refused, and they read as limited. When the AI is added again, its sessions are settled like any
   other, take the limit its entry says, and what is queued goes on.
-- When a change leaves a session on an account that is no longer linked to its friend (an unlink, an account
-  removed), the server moves it at once to the friend's default if that is signed in, else to its first
+- When a change leaves a session on an account that is no longer linked to its AI (an unlink, an account
+  removed), the server moves it at once to the AI's default if that is signed in, else to its first
   signed-in linked account, else to none, and tells the session. When an account's provider changes, its sessions take
   the new harness and are told. A default that is unlinked or removed becomes none.
 - The server tracks which accounts are signed in. For Claude with a configured email it checks the
   verified login in the named account's directory. For Claude without an email it checks the legacy
   setup token. A missing or refused credential requires sign-in. A subscription cap limits usage
   independently of whether the account is signed in.
-- A session on no account whose friend's driver needs one (the Claude driver's line passes `--account`) starts no
-  driver: its prompt is not sent, and it is told to link an account to the friend and set the session to it.
+- A session on no account whose AI's driver needs one (the Claude driver's line passes `--account`) starts no
+  driver: its prompt is not sent, and it is told to link an account to the AI and set the session to it.
 
 These rules are `models/Accounts.tla`, and the server's code is checked against it.
 
@@ -62,7 +62,7 @@ These rules are `models/Accounts.tla`, and the server's code is checked against 
 
 `nexus-server config path` prints the directory and both files. (With `--dir DIR`, they are under `DIR/nexus-config/`.)
 
-**No secret ever goes in these files.** They hold account and friend configuration. Each account's login lives in
+**No secret ever goes in these files.** They hold account and AI configuration. Each account's login lives in
 `~/.nexus/server/accounts/<name>/` (a 0700 directory of 0600 files), outside this directory, and is set up by the
 in-app sign-in, never through an AI and never by editing a file. The logins stay under your home whatever `--dir` says:
 the server's sign-in check and the drivers read the one path (`src/server/home.h`, `accountsDir`).
@@ -119,7 +119,7 @@ the AI: they hold no secret.
 | `accounts` | top | yes | a list of accounts, in any order you like; `[]` for none |
 | `name` | each account | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the accounts |
 | `provider` | each account | yes | 1 to 32 lowercase letters, digits or `-`, as `claude` or `codex` |
-| `billing` | each account | no (`subscription`) | `"subscription"` (the provider's subscription plan) or `"api"` (billed at API rate, per token); a friend on an `api` account is always limited (friends.json's `limit`) |
+| `billing` | each account | no (`subscription`) | `"subscription"` (the provider's subscription plan) or `"api"` (billed at API rate, per token); an AI on an `api` account is always limited (friends.json's `limit`) |
 | `label` | each account | no | Short display text for the account picker. Up to 254 UTF-8 bytes without ASCII control characters. An omitted or empty label displays the stable account name. |
 | `email` | each account | no | Address shown to connected windows for this linked account. For Claude it also selects the identity the browser must authenticate. Changing the email requires a matching verified login before this account can be used. Up to 254 UTF-8 bytes without ASCII control characters. |
 | `sign_in_on_use` | each account | no (`false`) | `true` defers sign-in until the account is selected or needs its driver. Opening the overlay leaves unused accounts alone. |
@@ -129,12 +129,12 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 ### Using two logins with one provider
 
 The example above declares two Claude logins, `work` and `home`. Add each name once to
-`accounts.json`. In `friends.json`, add both to the friend's `accounts` list in the order
+`accounts.json`. In `friends.json`, add both to the AI's `accounts` list in the order
 you want to cycle them. Run `nexus-server config check` and
 `nexus-server config reload`. The same provider driver handles both logins. Each has its own
 sign-in and private account directory. Keep an enrolled account's name when adding another login.
 
-Open the friend's tab and press **⌘↓** or **⌘↑** to open its account menu and move the
+Open the AI's tab and press **⌘↓** or **⌘↑** to open its account menu and move the
 highlight. Press **Enter** to select the highlighted row or **Esc** to cancel. The server remembers
 the selection for this session across reconnects. Other sessions keep their own selections.
 
@@ -144,15 +144,15 @@ stays in the composer through sign-in. If the browser page closes or reports an 
 again in the window that opened it to reopen the active sign-in page. After the attempt expires, selecting the
 account starts a fresh attempt. Press **Enter** again after sign-in to send your draft.
 
-When a friend has at least two linked subscription accounts, **auto** is the first menu choice and the
+When an AI has at least two linked subscription accounts, **auto** is the first menu choice and the
 stock server profile uses it for fresh sessions. It starts on the first signed-in linked subscription. When
 none are signed in, the first subscription supplies the sign-in card. The account shown alongside **auto** is
 the actual payer. Selecting its name pins it even if the payer stays the same. Older sessions retain their
-existing selections, and a copy of a session for the same friend inherits its selection mode.
+existing selections, and a copy of a session for the same AI inherits its selection mode.
 
 Set `"auto_accounts": false` in the server profile to start fresh sessions on a named account. In that case,
 or with fewer than two subscriptions, the shipped `"account_default": "first"` selects the first linked account.
-Set it to `"preferred"` to use the friend's explicit `default` in `friends.json`. When a roster edit leaves
+Set it to `"preferred"` to use the AI's explicit `default` in `friends.json`. When a roster edit leaves
 an Auto session with only one subscription, that account becomes its named selection.
 
 A change of payer adds a dark transcript bubble, for example **Switched to work@example.org (work)**.
@@ -166,14 +166,14 @@ account. The first prompt on a new payer starts a fresh harness session with rec
 history. On the same account and in the same working directory Nexus can resume the harness session.
 
 In **auto**, an account-wide subscription limit reported during a turn starts a new turn on the next
-eligible subscription. The friend keeps its working directory. Nexus supplies the unfinished request,
-recent conversation, partial reply and available tool activity so the friend can check completed work
+eligible subscription. The AI keeps its working directory. Nexus supplies the unfinished request,
+recent conversation, partial reply and available tool activity so the AI can check completed work
 before continuing. The continuation runs before queued prompts. Nexus tries each eligible account
 once for that request and reports when the list is exhausted. An ordinary throttle or failed connection
 does not establish that an account is out of credits.
 
 When Claude reports a **Fable-only** limit, Nexus pauses the turn. If both alternatives are available,
-the friend tab asks **“Out of Fable. Switch to another account or drop to Opus?”** Choose the account
+the AI tab asks **“Out of Fable. Switch to another account or drop to Opus?”** Choose the account
 option to keep the model or the model option to keep the account. Each button shows its keyboard
 shortcut. The server checks the choice again and continues the unfinished work. Both named and
 automatic selections get this choice. Forks can set `fable_fallback_model` in server policy and
@@ -181,16 +181,18 @@ automatic selections get this choice. Forks can set `fable_fallback_model` in se
 
 ### Signing in to the right Claude account
 
+Type `/login` in an AI’s prompt and press Enter to open the account picker. Choose the address you want to use. If the browser completes sign-in with a different email, Nexus shows the verification failure in the sign-in window.
+
 Use the email on the centered sign-in card to choose the matching identity in Claude's browser page.
 Your browser may already be signed in to a different Claude account. Select the intended account,
 or sign out of Claude in that browser and sign in with the displayed email. Nexus accepts the grant
 only when Claude reports that email for the login just completed. A mismatch or missing identity
 leaves the selected slot awaiting sign-in.
 
-To clear an existing Nexus login, open the friend tab, type `/logout`
-in the friend's prompt, and press **Enter**. Finish or stop active work using that login and finish
+To clear an existing Nexus login, open the AI tab, type `/logout`
+in the AI's prompt, and press **Enter**. Finish or stop active work using that login and finish
 or cancel an in-progress sign-in first. This removes the Nexus credential for that account across
-the friends that share it. Other account slots and the sign-in session in your browser are independent.
+the AIs that share it. Other account slots and the sign-in session in your browser are independent.
 Press **Enter** on the sign-in card to enroll that account again.
 
 A configured Claude email also applies to existing accounts at upgrade. An older `setup-token`
@@ -249,44 +251,44 @@ the identity for that slot. The upgrade preserves the old credential file and co
 | Field | Where | Required | Allowed values |
 |---|---|---|---|
 | `version` | top | yes | the whole number `2` (see Versions) |
-| `limit_keeps_out` | top | no (none) | a list of absolute directories, each once, never `"/"`: more places every limited friend's AI is kept out of, on top of the ones it always is (below, "limit"), as a second data volume or a network mount; it can only add, never let a limited friend read more. Written back only when it holds one |
-| `friends` | top | yes | a list of friends, at most 256, in every version; `[]` for none. A file with more is refused whole, with the count and the limit, and nothing changes (a version 1 file too, before any upgrade); adding one in the window at the limit is refused the same way |
-| `name` | each friend | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the friends |
-| `limit` | each friend | no (`true`) | `true` or `false`, without quotes: whether the friend's AI reads and writes only in its instance's directory (below, "limit"); `false` is refused for a friend that links an account with `"billing": "api"` |
-| `accounts` | each friend | no (none) | a list of account names from accounts.json, each once; the shipped account rotation policy uses this order (see [customizing policy](policy.md)) |
-| `default` | each friend | no (none) | one of the friend's `accounts`, or `null` for none |
-| `instances` | each friend | no (none) | a list of instances, in order; the first is the friend's default instance |
-| `name` | each instance | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among its friend's instances (two friends may use the same name) |
+| `limit_keeps_out` | top | no (none) | a list of absolute directories, each once, never `"/"`: more places every limited AI's AI is kept out of, on top of the ones it always is (below, "limit"), as a second data volume or a network mount; it can only add, never let a limited AI read more. Written back only when it holds one |
+| `friends` | top | yes | a list of AIs, at most 256, in every version; `[]` for none. A file with more is refused whole, with the count and the limit, and nothing changes (a version 1 file too, before any upgrade); adding one in the window at the limit is refused the same way |
+| `name` | each AI | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the AIs |
+| `limit` | each AI | no (`true`) | `true` or `false`, without quotes: whether the AI's AI reads and writes only in its instance's directory (below, "limit"); `false` is refused for an AI that links an account with `"billing": "api"` |
+| `accounts` | each AI | no (none) | a list of account names from accounts.json, each once; the shipped account rotation policy uses this order (see [customizing policy](policy.md)) |
+| `default` | each AI | no (none) | one of the AI's `accounts`, or `null` for none |
+| `instances` | each AI | no (none) | a list of instances, in order; the first is the AI's default instance |
+| `name` | each instance | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among its AI's instances (two AIs may use the same name) |
 | `machine` | each instance | yes | the machine it runs on, by its name in the fleet, as `studio` (1 to 253 letters, digits, `-` or `.`, not starting with `-` or `.`; never a user, a port or an address with them); this server's own when it equals, ignoring case, the server's machine (below) |
 | `dir` | each instance | yes | the absolute path, on that machine, of the directory it works in (starting with `/`, printable, at most 4096 bytes) |
 
-A friend is known by its `name`, everywhere: the window's tab, the saved tab order, a kept draft. Renaming a friend in
+An AI is known by its `name`, everywhere: the window's tab, the saved tab order, a kept draft. Renaming an AI in
 the file is a remove of the old name and an add of the new: the old name's tab goes (its draft kept under the old name)
 and the new name gets a new tab, and the old name's sessions stay with the old name, which is out of the file. Rename as
 one change, which would carry the sessions, the tab and its draft to the new name, is not built (`docs/roadmap.sexp`
 `friend-rename`).
 
-The two files must agree: every account a friend links to is set up in accounts.json, and every default is one of its
-friend's accounts. Moving an instance (its `machine` or `dir`) is an edit like any other, and every session of it is
+The two files must agree: every account an AI links to is set up in accounts.json, and every default is one of its
+AI's accounts. Moving an instance (its `machine` or `dir`) is an edit like any other, and every session of it is
 told. A session's driver that is running ends once no turn is open (an open turn runs to its end first), and the next
 starts where the instance now is: in the same directory it resumes the conversation; in another it starts afresh, and
 its first prompt carries a summary of the conversation so far (the harness keeps its conversations by directory). An
 instance moved to another machine starts no driver here until a driver on another machine exists (roadmap work). A
-session that names no instance while its friend has some belongs to the friend's default instance, and is told. A
-session whose friend has no instances (every one removed, say) works here, in the directory of its friend's line in the
+session that names no instance while its AI has some belongs to the AI's default instance, and is told. A
+session whose AI has no instances (every one removed, say) works here, in the directory of its AI's line in the
 drivers file. A file that is empty or missing means none.
 
-A registry can list up to 256 friends. The complete friend and account picker list must fit in 3 MiB
+A registry can list up to 256 AIs. The complete AI and account picker list must fit in 3 MiB
 on the wire and 12 MiB when decoded. This leaves one quarter of each snapshot limit for conversations,
-requests and sign-in offers. The account name, label and configured email are included once for each friend who links
+requests and sign-in offers. The account name, label and configured email are included once for each AI who links
 that account. Shortening shared metadata or removing unused links can bring an oversized roster back
 under the limit. A rejected reload keeps the running configuration.
 
-Taking a friend out of the file (and running `nexus-server config reload`) stops its work in every one of its sessions,
+Taking an AI out of the file (and running `nexus-server config reload`) stops its work in every one of its sessions,
 as a stop in the window would: a turn running is stopped, and then its driver is ended. Each such session gets one
 notice saying so. The sessions themselves, with their transcripts, account, instance and queued prompts, are kept on
-the server as they were. While the friend is out, no driver starts for them, nothing is taken from their queues, and a
-prompt sent to one is refused with a notice. Put the friend back in the file and reload, and its sessions are settled
+the server as they were. While the AI is out, no driver starts for them, nothing is taken from their queues, and a
+prompt sent to one is refused with a notice. Put the AI back in the file and reload, and its sessions are settled
 like any others (an account no longer linked moves, and so on), and their queued prompts go on.
 
 The server's machine is the name the `machine` fields are compared with. It is the server's short host name (the
@@ -303,35 +305,35 @@ To have an account signed in, an AI runs `nexus-server config sign-in <account>`
 server once a second, and prints one line: `signed in` (at once when the account already is), or `refused: <why>`
 (no such account, a provider without in-app sign-in, no server, or not signed in within the sign-in's 10 minutes and
 one more). The person signs the account in in the browser from nexus's window; the AI sees nothing of the sign-in. A
-driver started after a sign-in runs under its friend's `limit` as every driver start does (below).
+driver started after a sign-in runs under its AI's `limit` as every driver start does (below).
 
-## limit: a friend kept to its directory
+## limit: an AI kept to its directory
 
-`"limit": true` keeps the friend's AI, its shell and its file tools, inside the directory of the instance its session
+`"limit": true` keeps the AI's AI, its shell and its file tools, inside the directory of the instance its session
 runs in: it reads and writes there, and nowhere else people keep files. `"limit": false` is the AI as it ran before
 the field existed: under the token wall (docs/secrets.md), but free to read the rest of the home directory.
 
-- **A friend added is limited.** One added in the window, or written into friends.json without a `limit`, is `true`,
-  whatever the file's version: a friend added by hand to a version 1 file, not yet reloaded, reads limited too (only
-  the friends a version 1 file already held when it was committed read unlimited, as they ran). Set `"limit": false` on
-  a friend you want unlimited (yourself as administrator, say) by editing the file.
-- **A fresh install's first friend is unlimited.** The friends a new server makes from its drivers file, at its first
+- **An AI added is limited.** One added in the window, or written into friends.json without a `limit`, is `true`,
+  whatever the file's version: an AI added by hand to a version 1 file, not yet reloaded, reads limited too (only
+  the AIs a version 1 file already held when it was committed read unlimited, as they ran). Set `"limit": false` on
+  an AI you want unlimited (yourself as administrator, say) by editing the file.
+- **A fresh install's first AI is unlimited.** The AIs a new server makes from its drivers file, at its first
   start with no accounts set up (or the upgrade of an install from before accounts), are `"limit": false`, as they ran:
-  that is the person setting nexus up, as administrator. Every friend added after that is limited.
-- **A friend on an API-billed account is always limited.** A friend that links any account with `"billing": "api"`
+  that is the person setting nexus up, as administrator. Every AI added after that is limited.
+- **An AI on an API-billed account is always limited.** An AI that links any account with `"billing": "api"`
   cannot be `false`: `config check` and a reload refuse it, naming both files and the fix; linking such an account to an
-  unlimited friend in the window is refused the same way. (The fleet's own workers that run models at API rate outside
+  unlimited AI in the window is refused the same way. (The fleet's own workers that run models at API rate outside
   nexus run under their own sandbox tool, not this field.)
 - **What it keeps out**, on macOS and Linux (WSL2 too): the home directory and the places people keep files (macOS
   `/Users`, `/Volumes`; Linux `/home`, `/root`, `/mnt` (WSL2's Windows drives), `/media`, `/run/media`, `/srv`), so
-  other projects, documents, `~/.ssh`'s keys, other friends' directories and other accounts' state; and every write
+  other projects, documents, `~/.ssh`'s keys, other AIs' directories and other accounts' state; and every write
   outside its directory and the temporary directories. What stays readable, and the costs, are in docs/secrets.md
-  ("A limited friend").
+  ("A limited AI").
 - **More places to keep out.** Where people keep files somewhere else too (a second volume such as `/data`, a network
   mount, a WSL2 automount root moved off `/mnt`), name each directory in friends.json's top-level `"limit_keeps_out"`:
-  every limited friend is kept out of it as well, by the shell and the file tools alike. A directory that does not
-  exist on this machine is left out. It only adds: nothing in it lets a limited friend read more, and it changes
-  nothing for an unlimited friend. A reload that changes it tells each limited session; a directory added stops a
+  every limited AI is kept out of it as well, by the shell and the file tools alike. A directory that does not
+  exist on this machine is left out. It only adds: nothing in it lets a limited AI read more, and it changes
+  nothing for an unlimited AI. A reload that changes it tells each limited session; a directory added stops a
   turn already running, as a tightening does (below), and one removed waits for the turn's end. nexus reads none of
   this from the environment: the server passes each to the driver as `--keep-out <dir>` (docs/driver-protocol.md).
 - **Where it cannot start.** A limited session does not start, with one line saying why where a session's start
@@ -339,20 +341,20 @@ the field existed: under the token wall (docs/secrets.md), but free to read the 
   inside `~/.nexus` or `~/.ssh`; on a platform other than macOS and Linux; or when the drivers file names another Claude
   (`--claude`). It never starts unlimited instead.
 - **Tightening takes effect at once; loosening at the turn's end.** When a reload makes a session limited (its
-  friend's `limit` set to `true`, or its account's `billing` set to `"api"`), a turn running on a driver started
+  AI's `limit` set to `true`, or its account's `billing` set to `"api"`), a turn running on a driver started
   without the limit is stopped at once, as the stop button stops it (the driver has the stop's deadline to finish, then
   it is killed), the transcript says why, and the next turn starts limited: an old, weaker limit never lasts past that
   stop. When a reload lifts the limit, the open turn finishes as it started, and the next starts unlimited. A change of
-  a friend's `limit` is also told in each of its sessions' transcripts; a change of an account's `billing` is told only
+  an AI's `limit` is also told in each of its sessions' transcripts; a change of an account's `billing` is told only
   where it stops a turn (the server's reply and log list it either way).
 - **A driver must say it supports the limit.** A limited session runs only on a driver whose hello lists the `limit`
   feature (docs/driver-protocol.md); any other driver is ended before it is given a prompt, and the session says why.
 
 The server decides a session's limit each time it starts the session's driver, from the files as they are then: limited
-when the friend is limited, when its account is billed at API rate, when the friend is not in friends.json at all, or
+when the AI is limited, when its account is billed at API rate, when the AI is not in friends.json at all, or
 when its account is not in accounts.json; and limited when it cannot tell. models/Accounts.tla checks the rules (no
-driver on an API-billed account starts unlimited; none starts weaker than its friend's limit); models/Supervisor.tla
-checks that no session keeps running with a weaker limit than its friend's (tightening stops the open turn, and a
+driver on an API-billed account starts unlimited; none starts weaker than its AI's limit); models/Supervisor.tla
+checks that no session keeps running with a weaker limit than its AI's (tightening stops the open turn, and a
 driver started under another limit is ended).
 
 The server writes both files in one layout: two-space indent, one field per line, keys in the order above, the lists in
@@ -428,11 +430,11 @@ Its `.gitignore` admits only `.gitignore`, `accounts.json` and `friends.json`, a
 config (your `~/.gitconfig` is never read), no hooks, no signing, no prompts, never above this directory, the
 transports file, ssh and https only, the identity `nexus`, and a deadline on every call.
 
-A server from before accounts has no accounts.json: at its first start with this version, the accounts and friends are
+A server from before accounts has no accounts.json: at its first start with this version, the accounts and AIs are
 taken from the drivers file (each driver line's `--account <name>` becomes an account whose provider is that line's
-harness, linked to that harness's friends as their default; and each friend gets one instance, named after this
+harness, linked to that harness's AIs as their default; and each AI gets one instance, named after this
 machine, on this machine, in the directory its `friend` line gives), committed as an upgrade, and each session moves
-onto its friend's default account and instance, told, so that it runs as it ran before. The upgrade's commit leaves a
+onto its AI's default account and instance, told, so that it runs as it ran before. The upgrade's commit leaves a
 mark in the repository, taken off only once every session has moved: a server that stops before then (a store that
 failed, say) moves them at its next start, and a session already moved is not moved twice.
 
@@ -507,7 +509,7 @@ At startup, these legacy checks mark a missing, malformed, inaccessible or expir
 ## Known limits
 
 - The upgrade's mark (above, under History) is taken off once every session has moved. If the server cannot remove it
-  (the repository's `.git` not writable, say), it logs why, and each later start applies the friends' defaults again to
+  (the repository's `.git` not writable, say), it logs why, and each later start applies the AIs' defaults again to
   the sessions then on no account. Sessions on an account are never moved by it. Fix what the log names, and the next
   start removes the mark.
 
@@ -518,16 +520,16 @@ older file is upgraded in place when the server starts (your entries kept as the
 committed as an upgrade, which the server's log reports), unless the files hold edits not yet applied: those are never
 written over, and the next reload writes the new version. `config check` never writes anything, an upgrade included.
 Version 2 added `billing` (accounts.json) and `limit` (friends.json). A version 1 file is read with every account billed
-by subscription and every friend it held when committed **not** limited, as it ran before (a friend added by hand to a
-version 1 file while the edit is pending reads limited: it never ran), and the upgrade writes each friend's `"limit"`
+by subscription and every AI it held when committed **not** limited, as it ran before (an AI added by hand to a
+version 1 file while the edit is pending reads limited: it never ran), and the upgrade writes each AI's `"limit"`
 and each account's `"billing": "subscription"` into the files, so that the choice is plain to see and to change.
 
 Nexus writes accounts.json as version 3 when an account has a display label or email, or enables `sign_in_on_use`.
-A registry that uses none of these options is written as version 2. The friends file continues to use version 2.
+A registry that uses none of these options is written as version 2. The AIs file continues to use version 2.
 
 **A downgrade drops the limit for everyone.** An older nexus-server refuses the version 2 files, so it holds no
-accounts and no friends, and its Claude driver has no limit: every session it runs is unlimited. Do not run an older
-nexus-server against version 2 files while any friend is limited; if you must go back, stop the friends that are
+accounts and no AIs, and its Claude driver has no limit: every session it runs is unlimited. Do not run an older
+nexus-server against version 2 files while any AI is limited; if you must go back, stop the AIs that are
 limited first (or remove their instances), and expect every session to run as it did before the limit existed.
 
 A file whose version is newer than the server reads is refused
@@ -550,12 +552,12 @@ a client's config, the server only relays the change to the client that asked, a
 
 ### Writable project directories
 
-For registry-managed friends, nova-config stores additional read/write directories in the friend’s `startup.writable_dirs` list. Omit the list or use `[]` for the working directory alone. Each extra entry names an existing absolute directory on the server. Changes apply on the next driver launch, including resumed conversations. Claude and Codex enforce the grants. Conversation-only harnesses reject extra directories. Harness state and temporary files retain their existing rules.
+For registry-managed AIs, nova-config stores additional read/write directories in the AI’s `startup.writable_dirs` list. Omit the list or use `[]` for the working directory alone. Each extra entry names an existing absolute directory on the server. Changes apply on the next driver launch, including resumed conversations. Claude and Codex enforce the grants. Conversation-only harnesses reject extra directories. Harness state and temporary files retain their existing rules.
 
 The RPC driver accepts `personal_chatgpt_accounts` in the server's `profile/config.json` as a list of named Codex accounts. For each listed account, configure an email in the account registry. Enrollment checks the email and personal subscription before replacing a saved login. Each turn also checks the account reported by the harness.
 
-In nova-config, a Claude friend can also have `startup.readable_dirs` for read-only workshop directories.
-Use the real directory path. On macOS, `startup.github_ssh_alias` grants fetch and push for the friend's
+In nova-config, a Claude AI can also have `startup.readable_dirs` for read-only workshop directories.
+Use the real directory path. On macOS, `startup.github_ssh_alias` grants fetch and push for the AI's
 `startup.repository` GitHub URL. Configure the checkout's origin as
 `git@<alias>:<owner>/<repo>.git`. The driver opens separate Unix sockets for Git's upload-pack and
 receive-pack protocols and runs SSH on the host with the configured alias. The sandbox receives access
@@ -564,9 +566,9 @@ to those two sockets. Host keys must already be trusted. Grants take effect on t
 
 ### Message bus ownership
 
-For a registry-managed friend, the server uses the friend’s `startup.bus_listener` as its loopback
-Redis endpoint. Set `startup.bus_owner` to `"nexus-server"` to give that friend’s inbox to Nexus.
-For example, add these two fields to the friend’s existing startup object:
+For a registry-managed AI, the server uses the AI’s `startup.bus_listener` as its loopback
+Redis endpoint. Set `startup.bus_owner` to `"nexus-server"` to give that AI’s inbox to Nexus.
+For example, add these two fields to the AI’s existing startup object:
 
 ```json
 {"bus_listener": "127.0.0.1:6379", "bus_owner": "nexus-server"}
@@ -576,44 +578,44 @@ Transfer an existing inbox by stopping its current hook before changing the regi
 the matching server and server policy runtime first. A grant with only `bus_listener` keeps the
 existing macOS Claude driver listener. Upgrading Nexus alone does not move that inbox. To move it
 back, remove `bus_owner`, wait for the server to release the inbox, then relaunch the previous hook.
-To revoke a native grant, remove both fields or disable the friend.
+To revoke a native grant, remove both fields or disable the AI.
 
-The server refreshes idle grants from its friend-driver profiles every 30 seconds. A registry read
+The server refreshes idle grants from its AI-driver profiles every 30 seconds. A registry read
 failure drops that profile’s grants and retries in five seconds. Each grant applies to one enabled
-friend with the matching harness. The bus connection and credentials stay with the server.
+AI with the matching harness. The bus connection and credentials stay with the server.
 
 For each new delivery, the server checks the sender named in the bus envelope against a fresh
-`bus-roster` snapshot from the recipient’s nova-config profile. Enabled friends can send from
-any harness or machine, including friends who have no Nexus inbox. An unavailable or incomplete
+`bus-roster` snapshot from the recipient’s nova-config profile. Enabled AIs can send from
+any harness or machine, including AIs who have no Nexus inbox. An unavailable or incomplete
 roster leaves the delivery pending. Mail from other senders goes into the server’s private
 `bus-filtered/` directory under an identity derived from the bus endpoint, recipient and message ID.
 The server preserves the full envelope before acknowledging it. These deliveries stay out of the
-chat, the friend’s working directory and the driver’s prompt queue.
+chat, the AI’s working directory and the driver’s prompt queue.
 
-A friend’s message appears in the recipient’s default chat with the sender’s name and message text
+An AI’s message appears in the recipient’s default chat with the sender’s name and message text
 in light blue. Up to 4096 UTF-8 bytes appear inline. For a longer body,
-the chat shows the filename and byte count, and the friend receives a path to the complete
+the chat shows the filename and byte count, and the AI receives a path to the complete
 `message.txt` in its workspace's `incoming/` directory. Delivery continues with all windows
 closed. Reconnecting or replaying an acknowledged message preserves its original bubble.
 
 ### Project tools in a Claude session on macOS
 
-The server profile can grant a friend a second Git repository, GitHub REST access, a bench login
+The server profile can grant an AI a second Git repository, GitHub REST access, a bench login
 and bus presence. Put the entry in `work-routes.json` beside `identities.json` in the server-owned
-profile. The key is the registered friend's name. For example:
+profile. The key is the registered AI's name. For example:
 
 ```json
 {"example":{"repository":"org/project","githubAlias":"github-example","ghConfig":"/absolute/gh-example","bench":"build-host","benchUser":"nexus-example","benchKey":"/absolute/bench-key"}}
 ```
 
-Use the friend's own authenticated GitHub CLI config, trusted GitHub SSH alias and dedicated bench
+Use the AI's own authenticated GitHub CLI config, trusted GitHub SSH alias and dedicated bench
 account. Verify the GitHub login and the bench identity before enabling the entry. At the next driver
-launch, Git automatically routes the repository's ordinary GitHub SSH origin. The friend can use
+launch, Git automatically routes the repository's ordinary GitHub SSH origin. The AI can use
 `gh api user`, repository REST endpoints (including pull requests and CI), `ssh build-host hostname`
 and noninteractive bench commands. The API accepts a method, literal string fields and simple field
 selection. For a server-owned bus sender, `nova-bus who` also works for CLI callers such as Sprint.
 Remove the entry and relaunch the driver to revoke the routes.
 
-A Claude friend with `startup.no_sandbox: true` in nova-config runs commands with the operating-system access of the Nexus server login. This takes effect at driver launch. Omit the field or set it to false to use the sandbox. Claude and Codex friends with a server-owned bus inbox can send directly with `nexus_bus_send` and supply `reply_to` to reply. The receiving friend sees the message in chat.
+A Claude AI with `startup.no_sandbox: true` in nova-config runs commands with the operating-system access of the Nexus server login. This takes effect at driver launch. Omit the field or set it to false to use the sandbox. Claude and Codex AIs with a server-owned bus inbox can send directly with `nexus_bus_send` and supply `reply_to` to reply. The receiving AI sees the message in chat.
 
-Nexus checks the friend registry in the background (normally every 30 seconds). Changing a Claude friend’s startup.no_sandbox setting recycles that friend’s driver. Granting access lets the current turn finish. Revoking access stops the active turn. The next driver reads the current registry row and resumes the session.
+Nexus checks the AI registry in the background (normally every 30 seconds). Changing a Claude AI’s startup.no_sandbox setting recycles that AI’s driver. Granting access lets the current turn finish. Revoking access stops the active turn. The next driver reads the current registry row and resumes the session.

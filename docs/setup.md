@@ -4,7 +4,7 @@ You are the AI the human already uses. Run these steps from this checkout. The g
 
 ## 1. Identify the installation
 
-Record the provider, the absolute workspace path and whether the server runs on this machine or another host. A fresh conversation with the same harness is fine. Reuse a prior conversation only when you have its explicit provider resume handle. The human can start without naming a friend or providing a GitHub repository.
+Record the provider, the absolute workspace path and whether the server runs on this machine or another host. A fresh conversation with the same harness is fine. Reuse a prior conversation only when you have its explicit provider resume handle. The human can start without naming an AI or providing a GitHub repository.
 
 Check for an existing server with `nexus-server status` and inspect its configured service ownership with `nexus-server services status`. Preserve its data, profiles, accounts, service definitions and signing identity. For an existing fleet, use the [service transfer procedure](service-migration.md) before changing which process owns Redis or Sprint.
 
@@ -24,7 +24,7 @@ Install the server and `tools/nexus-receive` on the server login's PATH. Use the
 
 Install the matching nova-tools and nova-sprint executables for the server's OS and architecture. Verify release assets against the project's release checksums. Resolve dependencies and storage **on the target server**. Scope provisioning to this installation. A fleet-wide play changes other machines.
 
-- **Registry.** Initialize persistent PostgreSQL and the nova-config schema. Supply separate administrative and runtime credentials through the local secrets store. Verify a read using the runtime account, even if the friend list is empty. [nova-config setup](https://github.com/mas-bandwidth/nova-tools/tree/main/cmd/nova-config)
+- **Registry.** Initialize persistent PostgreSQL and the nova-config schema. Supply separate administrative and runtime credentials through the local secrets store. Verify a read using the runtime account, even if the AI list is empty. [nova-config setup](https://github.com/mas-bandwidth/nova-tools/tree/main/cmd/nova-config)
 - **Message bus.** Initialize persistent Redis with an authenticated local endpoint. Configure the server's bus launcher with the runtime seat. Verify an isolated sender/recipient exchange. Use disposable identities so setup traffic stays out of real chats. [nova-bus setup](https://github.com/mas-bandwidth/nova-tools/tree/main/cmd/nova-bus)
 - **Sprint.** Provision its database, apply the release's store migration and backup verification, and configure its scheduler and dashboard address. Enable the Dashboard by default. Leave the work queue stopped until the human starts a sprint. [Sprint setup](https://github.com/mas-bandwidth/nova-sprint/blob/main/docs/README.md)
 - **Ownership.** Declare the foreground services under nexus-server in its private `services.json`. Give Sprint services `"feature": "sprint"`. Run `nexus-server services check`, `nexus-server services reload` and `nexus-server services status`. Check the bus and the dashboard's `/api/sprint` while the client is closed. [Manifest format and examples](service-migration.md)
@@ -42,7 +42,7 @@ primary-driver codex ["/absolute/venv/bin/python","-I","-m","nexus_policy","prim
 
 For Claude, use `claude` in both records and pass the absolute Node and compiled Claude driver paths after `primary-driver","claude"`. Add `primary-resume <provider-session-id>` only when resuming that conversation. Load the driver table before opening the client.
 
-Apply the [keyboard client profile](policy.md#start-with-the-keyboard-driven-client). Open the conversation for the installing harness and have the human send their first message. Verify the reply arrives in that same tab. Offer friend administration only when asked.
+Apply the [keyboard client profile](policy.md#start-with-the-keyboard-driven-client). Open the conversation for the installing harness and have the human send their first message. Verify the reply arrives in that same tab. Offer AI administration only when asked.
 
 ## 5. Report what works
 

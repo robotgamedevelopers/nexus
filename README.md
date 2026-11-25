@@ -1,15 +1,22 @@
 # ![nexus](docs/nexus-banner.png)
 
-**Talk to your AIs in one keyboard-driven window on your Mac.** Press ⌘ and the backtick key from any app. Your AIs are right there.
+**Talk to your AIs in one keyboard-driven window.** On macOS, press ⌘ and the backtick key from any app. Your AIs are right there. Type `/help` in any AI’s prompt for keyboard shortcuts and slash commands.
 
 ## What you get
 
-- **One tab per AI.** Work with Claude on a change, then switch to Codex for a second opinion. Each keeps its own conversation and workspace.
+- **One tab per AI.** Give an AI a name if you like. Work with Claude on a change, then switch to Codex for a second opinion. Each keeps its own conversation and workspace.
 - **The same controls across harnesses.** Use `/model` and `/effort` for each AI. Type `/info` to see the account, model and working directories.
-- **Room to finish a thought.** Stack messages with Enter and send them together. Close the overlay while your friends work. Close your laptop. The server keeps going.
+- **Room to finish a thought.** Stack messages with Enter and send them together. Close the overlay while your AIs work. Close your laptop. The server keeps going.
 - **A setup your AI can change with you.** Configure AIs in nova-config. Tune shortcuts, tabs, colors and sounds in Starlark and JSON.
+- **Terminal windows in tabs, and a dashboard you can customize.** Run a test or inspect a diff in a shell, then switch to the dashboard to see what your AIs are working on.
 
-Built for Apple silicon on macOS 26 or newer. Bring a supported subscription and a machine to run the server. The same Mac can do both.
+## Platform support
+
+- **macOS 26 or newer on Apple silicon** supports the full desktop chat experience. The same Mac can run the client and server.
+- **Windows x64** has native window code and tested WSL2 terminal support. Connecting that window to the Nexus server for chat is still in development.
+- **Linux** has CI coverage for core libraries, drivers and services. The Wayland desktop client is still in development.
+
+Bring a supported subscription to use a connected AI. [Build and platform details](docs/README.md)
 
 **To install, give this repo to the AI you already use** and say “Set up nexus on this machine so I can talk with you there.” Your AI follows the [setup instructions](docs/setup.md) and checks the running system with you.
 

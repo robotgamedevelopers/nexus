@@ -756,10 +756,30 @@ struct Builder {
         }
     }
 
+    void signInFailure(PrLayoutNode parent, const SignInAccount& account) {
+        if (account.email.empty() || !model.tab_count()) return;
+        const auto& entries = model.tab(model.active()).transcript;
+        const auto needed = account.name + " needs signing in:";
+        const auto failure = "Could not sign in to " + account.email + ". ";
+        // A failed browser return queues a fresh offer immediately after its failure notice.
+        for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+            if (it->kind != EntryKind::Notice) break;
+            if (it->text.starts_with(needed)) continue;
+            if (it->text.starts_with(failure)) {
+                auto appearance = textStyle(PrKitTextRole_BodySmall, kNoticeTone, PrKitTextAlign_Center);
+                appearance.wrap = PrKitWrap_Wrap;
+                caption(parent, it->text, appearance);
+            }
+            break;
+        }
+    }
+
     void accountPanel(PrLayoutNode parent) {
         const auto& selected = view.windowApp.signInAccount;
         if (view.windowApp.surface.items && !asking) {
             accountSelector(parent, *view.windowApp.surface.items);
+            if (view.accountMenu != kPrLayoutNodeNone && view.choiceKind.empty())
+                signInFailure(view.accountMenu, selected);
             return;
         }
         if (selected.name.empty()) return;
@@ -780,6 +800,7 @@ struct Builder {
             record.groups[PrLayoutGroup_Color] = prLayoutColorStyleIntern(tree, &ink);
             prLayoutTreeFrameSetStyle(tree, email, prLayoutStyleIntern(tree, &record));
         }
+        signInFailure(button, selected);
         label(button, "Press Enter or click to sign in.", textStyle(PrKitTextRole_BodySmall, PrKitTone_Inverse, PrKitTextAlign_Center));
         if (prKitActivated(kit, button) && view.activateSignIn)
             view.activateSignIn();
@@ -1254,7 +1275,8 @@ struct Builder {
         for (std::size_t i = items.entries; i < entries.size(); ++i) {
             const Entry& e = entries[i];
             if ((e.kind == EntryKind::Tool && (!look.transcriptStyle.showTools ||
-                    e.text.starts_with("SendMessage:") || e.text.starts_with("mcp__nexus__nexus_bus_send:") ||
+                    e.text.starts_with("Agent:") || e.text.starts_with("SendMessage:") ||
+                    e.text.starts_with("mcp__nexus__nexus_bus_send:") ||
                     e.text.starts_with("nexus_bus_send:"))) ||
                     (e.kind == EntryKind::Notice && !look.transcriptStyle.showNotices))
                 continue;
@@ -1737,6 +1759,8 @@ struct Builder {
             message(assistantMessage(element(column, Part::ReplyRow), tab), *growing, EntryKind::Friend, 1, &reply);
         }
         // Keep the reason alongside the conversation if a prompt could not be sent.
+        if (view.helpTab == tab.id)
+            caption(element(column, Part::ReplyRow), view.helpText, textStyle(PrKitTextRole_Body, kChatTone));
         if (!view.problem.empty()) {
             caption(element(column, Part::ReplyRow), view.problem, textStyle(PrKitTextRole_Body, kNoticeTone));
         }
@@ -1900,6 +1924,9 @@ struct Builder {
     void promptKey(std::size_t active, const char* key) {
         const Tab& tab = model.tab(active);
         const bool logout = tab.draft == "/logout";
+        const auto first = tab.draft.find_first_not_of(" \t\r\n");
+        const bool help = first != std::string::npos &&
+            std::string_view(tab.draft).substr(first, tab.draft.find_last_not_of(" \t\r\n") - first + 1) == "/help";
         policy::MessagePlan plan;
         std::string why;
         const std::string friendName(tab.displayName());
@@ -1908,6 +1935,21 @@ struct Builder {
         if (!policy::messagePlan(*view.application, {}, true, key, state, plan, why) ||
                 (plan.text && plan.text->size() > kPromptBytes)) {
             view.problem = "Prompt application: " + (why.empty() ? "draft exceeds the prompt limit" : why);
+            return;
+        }
+        view.helpTab.reset();
+        if (help && plan.delivery == policy::Delivery::None && !plan.notices.empty()) {
+            view.helpText.clear();
+            for (const auto& line : plan.notices) {
+                if (!view.helpText.empty()) view.helpText += "\n";
+                view.helpText += line;
+            }
+            view.helpTab = tab.id;
+            view.cutFollow = true;
+            view.cutTab = tab.id;
+            model.set_draft(active, {});
+            if (state.signedOut && view.accountAction) view.accountAction("dismiss");
+            view.problem.clear();
             return;
         }
         if (plan.delivery == policy::Delivery::ClearLocal) {
@@ -2337,6 +2379,8 @@ struct Builder {
         prJsonWriterEndArray(w);
         prJsonWriterKey(w, sv("dismissed"));
         prJsonWriterBool(w, view.dismissedSignIn.has_value());
+        prJsonWriterKey(w, sv("help_visible"));
+        prJsonWriterBool(w, active && view.helpTab == active->id);
         field("draft", active ? active->draft : std::string_view{});
         prJsonWriterKey(w, sv("logout"));
         prJsonWriterBool(w, active && active->draft == "/logout");
@@ -2455,6 +2499,11 @@ struct Builder {
                 break;
             case WindowCommand::AccountPicker:
                 if (view.pickerCommand) view.pickerCommand(key.type);
+                if (key.type == "open" && model.tab_count() && model.tab(model.active()).draft == "/login") {
+                    if (view.accountPicker) model.set_draft(model.active(), {});
+                    else view.problem = "Connect to an AI with a configured account to sign in.";
+                    pickerInput = true;
+                }
                 break;
             case WindowCommand::AccountCommand:
                 if (view.accountCommand) view.accountCommand(key.type);

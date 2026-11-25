@@ -49,7 +49,7 @@ uses the rules packaged with its binary.
 Copy `policy/rules/` into your own profile directory. Use
 [`keyboard-client.json`](../policy/examples/keyboard-client.json) as that copy's
 `config.json` to start with the dark tab strip, fixed-width sign-in dialog, keyboard
-account picker and matching prompt. The example contains no account or friend identities.
+account picker and matching prompt. The example contains no account or AI identities.
 Edit the JSON for visual changes. Edit `client/window.star` for tab titles, panels, prompt
 commands and shortcuts, and `client/accounts.star` for sign-in visibility, selection
 and dismissal. Apply only the client profile with the installed tool.
@@ -72,13 +72,13 @@ The client window event supplies `active_tab` (zero-based) and `tab_count` in cu
 end by default. Set `tab_navigation_wrap` to `true` in client `config.json` to wrap around. Numbered shortcuts still select positions directly. In client `config.json`, `tab_navigation` maps chords
 to signed offsets.
 
-On a friend tab, Command-Up and Command-Down open the linked-account picker and highlight the previous or next
+On an AI tab, Command-Up and Command-Down open the linked-account picker and highlight the previous or next
 account. Up and Down continue through the list, wrapping at either end. Enter confirms the highlighted account.
 Clicking a row confirms that account directly. Escape cancels and keeps the overlay and draft open. A change of
-friend, session, current account or connection dismisses the picker. If the server reorders its accounts, the
+AI, session, current account or connection dismisses the picker. If the server reorders its accounts, the
 highlight follows the same account ID. The server validates an exact account selection before applying it.
 
-When the server offers automatic selection for a friend with multiple linked accounts, the first menu row is
+When the server offers automatic selection for an AI with multiple linked accounts, the first menu row is
 **auto**. The tab caption also shows the concrete account currently in use. The sign-in card always identifies
 that concrete account. Set `account_auto_label` in the client configuration or return it from the Starlark
 `app.window` event to customize the mode’s display name.
@@ -97,7 +97,7 @@ field `account_picker_open` lets the program scope other shortcuts to the open m
 cancelling are local actions. After confirmation the server reports the selected account. For an account that
 needs sign-in, a separate Enter or click on the sign-in card starts the provider flow.
 
-With `centered_account_menu` enabled, friend tabs show only the friend’s name. An opening arrow
+With `centered_account_menu` enabled, AI tabs show only the AI’s name. An opening arrow
 highlights the current account in server order. When sign-in is required, the white sign-in card already
 contains the selector. Arrows move immediately and Enter selects the highlighted account. Escape dismisses
 the reminder and focuses the draft. Pressing Enter on the draft while signed out brings the reminder back
@@ -105,7 +105,7 @@ and keeps the text for later.
 
 The live Nova Tools directory supplies provider display names. On Studio a login service runs
 `nova-config friend watch --output ~/.nexus/client/nova-friends.json` with the fleet’s read-only
-database connection. It publishes the current friends and provider labels on connection and on committed
+database connection. It publishes the current AIs and provider labels on connection and on committed
 registry edits. The client policy receives the snapshot as `config["nova_friends"]`. Set a shared
 label with `nova-config harness set codex --display_name ChatGPT`. The account’s provider identifies
 the service the user will authenticate with. Each row shows the configured email, falling back to
@@ -167,11 +167,11 @@ while hidden. Return a physical key code and modifiers, for example
 Use UI Events physical codes such as `Backquote`, `KeyJ` and `F8`. In-window shortcuts
 continue to use logical key names. Applying a client profile updates the global binding.
 
-Type `/help` in a friend tab to print the slash-command reference. It works while signed out. A fork can add descriptions to the client config’s `command_help` map or replace the help handler in Starlark.
+Type `/help` in an AI tab to show overlay, terminal, tab and account shortcuts alongside the slash-command reference. It works while signed out. A fork can add descriptions to the client config’s `command_help` map or replace the help handler in Starlark.
 
 The fork can return `prompt_command` for a draft that should bypass the account reminder.
 The prompt handler receives `signed_out` and can return `clear_local` to clear the active
-friend's visible history and draft. The window can bind a key to `["replace_draft", text]`.
+AI's visible history and draft. The window can bind a key to `["replace_draft", text]`.
 The stock Tab binding derives its completions from `ui.catalog.models` and `ui.model`.
 
 Return `tab_titles` in current tab order to label tabs, `show_tabs` to show the strip and
@@ -187,13 +187,13 @@ both maps for the same chord, `account_picker_shortcuts` takes precedence.
 
 The stock server profile sets `"auto_accounts": true`. Fresh conversations with at least two linked
 subscriptions start in Auto. The first signed-in subscription pays, or the first linked subscription supplies
-the sign-in card. A same-friend copy inherits the source selection mode. Named defaults follow
+the sign-in card. A same-AI copy inherits the source selection mode. Named defaults follow
 `account_default`, either `"first"` (stock) or `"preferred"`. Forks can set `auto_accounts` to false to use
 named defaults for every new session.
 
 ## Fable limit choices
 
-When the provider reports a Fable-specific limit, the friend tab keeps the transcript visible and holds its draft while you choose how to continue. Press Command-Shift-A to switch to the offered account or Command-Shift-O to use the offered model on the current account. Each button also responds to a click. The server supplies the available choices and validates the choice against the interrupted turn.
+When the provider reports a Fable-specific limit, the AI tab keeps the transcript visible and holds its draft while you choose how to continue. Press Command-Shift-A to switch to the offered account or Command-Shift-O to use the offered model on the current account. Each button also responds to a click. The server supplies the available choices and validates the choice against the interrupted turn.
 
 In the client's `window` event, `limit_offer` is present for an interrupted turn. It contains the proposed `account` and `model` (empty when unavailable), plus `connected` and `waiting`. The stock policy renders the `limit_choice` panel using `label` for the question and `limit_account_label` and `limit_model_label` for the buttons. Change the wording in the fork's `client/window.star`. Set `limit_choice_keys` in the client configuration to customize the bindings, for example:
 
@@ -215,7 +215,7 @@ server still owns account eligibility and the durable session move. The client o
 
 ## The window and conversation applications
 
-The person’s messages align right and the friend’s replies align left, including while streaming. Set
+The person’s messages align right and the AI’s replies align left, including while streaming. Set
 `transcript_style` in the client’s `config.json`, or return it from the Starlark `window` event to vary the
 appearance by tab. The shipped profile uses these defaults:
 
@@ -297,7 +297,7 @@ carries `text`. A client `draft` replaces the current draft. A final `send` or `
 `text`. An empty list consumes the input. The server validates the entire plan before acting and commits its
 changes together with the request acknowledgement. The client accepts a single `sign_out` operation for Enter on
 the exact draft `/logout`. It targets the account the server confirmed for this conversation. The command stays in the
-window when queued or unsupported. Sign-out removes the selected Nexus login and returns the friend tab to its sign-in card. An active turn or browser sign-in must finish first. Stop, credential input and sign-in take dedicated engine paths.
+window when queued or unsupported. Sign-out removes the selected Nexus login and returns the AI tab to its sign-in card. An active turn or browser sign-in must finish first. Stop, credential input and sign-in take dedicated engine paths.
 
 The shipped modules are `client/window.star`, `server/conversation.star` and `server/sessions.star`. Add modules in
 your fork, import them from an entry point, and check the imports in with the config. For a complete registration
@@ -321,7 +321,7 @@ Return a dictionary. An empty dictionary uses the driver's defaults. The optiona
 of up to 64 characters. `effort` is one of `low`, `medium`, `high`, `xhigh` or `max`. An explicit driver flag
 wins over a profile default. The server continues to send explicit session settings over the driver protocol.
 
-For example, this policy uses less effort for a fresh conversation with a designated friend. The person supplies
+For example, this policy uses less effort for a fresh conversation with a designated AI. The person supplies
 `quick_friend` in their own JSON.
 
 ```python
@@ -336,10 +336,12 @@ deadline. The hook has no host I/O functions or module loader. A policy error pr
 and leaves the prompt unsent to the provider. Correct the profile, preview it, and retry. A change takes effect on
 the next start. A driver already answering a turn continues with its current settings.
 
-## Friend identity at startup
+<a id="friend-identity-at-startup"></a>
+
+## AI identity at startup
 
 A server profile can keep `identities.json` next to `policy.star`. The launcher queries
-`nova-config friend show NAME --json` at each driver start. The registry supplies the friend's name,
+`nova-config friend show NAME --json` at each driver start. The registry supplies the AI's name,
 harness, model, pronouns, note, enabled state and `startup` object. Its `home` is the absolute checkout
 of the named `repository`, its `prefix` holds the opening instructions, and `files` lists home documents
 in reading order. Set them together with `nova-config friend set NAME --startup '<json>' --actor NAME`.
@@ -355,7 +357,7 @@ read-only registry connection. The optional arguments following the `nova_config
 its store. Keep credentials out of the profile.
 
 The server substitutes `{friend}` and `{harness}` when either occupies an entire driver argument.
-For example, one command can serve all friends using an installed Claude adapter:
+For example, one command can serve all AIs using an installed Claude adapter:
 
 ```text
 driver claude /opt/nexus/venv/bin/python -I -m nexus_policy friend-driver /srv/nexus/profile {friend} {harness} /usr/bin/node /opt/nexus/drivers/claude/dist/src/main.js --account work
@@ -364,7 +366,7 @@ driver claude /opt/nexus/venv/bin/python -I -m nexus_policy friend-driver /srv/n
 The launcher verifies the selected harness against the registry before running the driver. The configured
 model is a default. A registry model equal to the harness name uses the harness default.
 An explicit session setting takes precedence. The `driver_start` hook also receives `context["identity"]`
-with the friend, harness, registry model, home path, files, revision and digest.
+with the AI, harness, registry model, home path, files, revision and digest.
 The CLI can verify a definition and report this metadata without starting a model:
 
 ```sh
@@ -375,7 +377,7 @@ The adapter receives the startup context in an inherited temporary file descript
 named by `--startup-context-fd`. It consumes and closes the descriptor before launching the model.
 The shipped Claude adapter appends the text to the Claude Code system prompt on new and resumed queries.
 Codex, Antigravity, Grok and Muse consume the same descriptor through the [RPC adapters](../drivers/rpc/README.md).
-An identity profile alone does not install a driver or add a friend to the roster.
+An identity profile alone does not install a driver or add an AI to the roster.
 
 ## Install and use
 
@@ -398,7 +400,7 @@ driver claude /home/me/.nexus/server/policy-runtime/bin/python -I -m nexus_polic
 friend reviewer claude ~/work
 ```
 
-The label after the profile path selects the friend's policy. Give friends with different labels separate driver
+The label after the profile path selects the AI's policy. Give AIs with different labels separate driver
 lines. Keep the account links, billing and instances in [the server's configuration](accounts.md).
 
 Keep the driver’s `policy.star` and `config.json` together in your fork. Choose a working directory your configuring AI
@@ -406,7 +408,7 @@ already has permission to edit. Preview changes with `check` and replace files a
 profile. To move to another server, copy those two files, point its driver binding at the profile and connect its
 own account. The policy host needs installing only once per server.
 
-To carry the friend roster too, copy the applied `accounts.json` and `friends.json` from the directory reported by
+To carry the AI roster too, copy the applied `accounts.json` and `friends.json` from the directory reported by
 `nexus-server config path` into your profile. These files contain the account names and links. On a new machine,
 adapt the instance machine and directory, install the driver binding, then use the normal `config check` and
 `config reload` workflow for the two files. An exported roster is a snapshot. Changes to those two copies take
@@ -417,7 +419,7 @@ effect when applied to the server configuration. Each machine signs in through N
 
 The stock server message handler implements `/model`, `/effort`, `/compact` and `/clear`.
 The first two list choices or accept a value from the session's harness catalog. Switching
-models resets the effort to the new model's default. Clearing retains the friend, account
+models resets the effort to the new model's default. Clearing retains the AI, account
 and model settings. Compaction releases the provider session and starts the next turn with
 Nexus's bounded transcript handoff. Both context operations require an idle conversation.
 When signed out, the stock client clears its own visible messages on `/clear`.
@@ -432,8 +434,8 @@ the prompt. The catalog's `order` array preserves harness discovery order across
 The first listed model is the startup choice when the session has no explicit model. Model identifiers remain the harness's own identifiers.
 When the harness supplies a concrete target for a rolling alias, the model list and session info show it.
 The prompt's Tab binding completes effort against the model typed in the draft.
-The `/info` notice includes the selected friend, optional configured pronouns, account email and sign-in state, model,
-effort, home repository and working directories. The friend-driver wrapper publishes public launch
+The `/info` notice includes the selected AI, optional configured pronouns, account email and sign-in state, model,
+effort, home repository and working directories. The AI-driver wrapper publishes public launch
 metadata from nova-config and its launch arguments. An unavailable field is identified in the notice.
 
 The prompt insertion point is a rounded orange segment. Set `prompt_style.caret_ink` for its color and
@@ -443,7 +445,7 @@ The scanner reads the same height, aspect and corner radius. Both start at the p
 Return these settings in `prompt_style` from the Starlark `window` event, or set them in the client profile and apply it. Reduced motion keeps the cursor steady.
 
 The activity strip uses the tab selection color unless `transcript_style.scanner_ink` supplies another.
-Each segment uses the same dimensions as the prompt cursor. Each active agent gets one cell, including the friend during its own turn. A single cell pulses. Across multiple cells a narrow peak of light sweeps back and forth over a dim strip of the same color, holding briefly at each end. Long strips show
+Each segment uses the same dimensions as the prompt cursor. Each active agent gets one cell, including the AI during its own turn. A single cell pulses. Across multiple cells a narrow peak of light sweeps back and forth over a dim strip of the same color, holding briefly at each end. Long strips show
 the remaining count numerically. `scanner_gap` sets the space between cells in points before zoom. `scanner_offset` shifts the strip horizontally from the prompt’s starting column (default 0).
 `highlight_seconds` sets the duration of a complete selection pulse (default 4 seconds). `flash_seconds` sets the selection flash’s exponential decay time (default 0.22 seconds). Idle settles to one cell in the prompt fill. Set `scanner_seconds`
 (0.4–10, default 1.5) for a full sweep, `scanner_peak` (1–8, default 3) for peak linear light,
@@ -473,14 +475,14 @@ The window policy can return a `sounds` object with `tab` and `confirm` cues. Ea
 
 `prompt_style.text_peak` sets steady HDR brightness for the entire draft, capped by display headroom. The keyboard profile uses `prompt_style.bold` for the editor and `transcript_style.person_bold` for the person's messages. In `transcript_style`, `person_flash_peak` and `person_flash_seconds` set the initial brightness and fade of a submitted message. `glyph_peak`, `glyph_seconds`, and `glyph_stagger` control the short-lived glow of newly streamed reply text. Peak brightness is a linear-light multiplier capped by the display's available HDR headroom. A peak of 1 disables the corresponding effect. Reduced Motion disables both.
 
-The client profile's `clear_draft_keys` binds the `clear_composer` action, which clears the active friend's draft and all its locally staged bubbles in one press. The defaults cover Command with either the Mac Delete key (Backspace) or forward Delete.
+The client profile's `clear_draft_keys` binds the `clear_composer` action, which clears the active AI's draft and all its locally staged bubbles in one press. The defaults cover Command with either the Mac Delete key (Backspace) or forward Delete.
 
 Set `hold_on_enter` for client-side message staging. Enter holds the current draft in memory for that tab. Each additional Enter appends a line to the same bubble. Empty Enter sends the combined message. Command-Enter appends the current draft and sends it. Messages reach the server only on release. Slash commands execute directly.
 
-Pasting a file, clipboard image, or at least 4096 bytes of text into a friend prompt inserts a compact filename or byte count. The contents are held in client memory until send. Releasing the bubble uploads each attachment over SSH to the server helper `~/.local/bin/nexus-receive` (Python 3 and Git). The helper resolves the friend’s configured instance and stores the bytes under `incoming/<unique directory>/<original basename>` inside its working directory. The friend receives that relative path. Clipboard images use `pasted-image.png` and text uses `pasted.txt`. The client accepts up to 32 MiB per attachment and 128 MiB staged across tabs. An interrupted upload keeps the bubble available to retry during the current run.
+Pasting a file, clipboard image, or at least 4096 bytes of text into an AI prompt inserts a compact filename or byte count. The contents are held in client memory until send. Releasing the bubble uploads each attachment over SSH to the server helper `~/.local/bin/nexus-receive` (Python 3 and Git). The helper resolves the AI’s configured instance and stores the bytes under `incoming/<unique directory>/<original basename>` inside its working directory. The AI receives that relative path. Clipboard images use `pasted-image.png` and text uses `pasted.txt`. The client accepts up to 32 MiB per attachment and 128 MiB staged across tabs. An interrupted upload keeps the bubble available to retry during the current run.
 
 The optional `sounds` entries `open`, `close`, `dialog`, `confirm`, `cancel`, and `ready` use the same chirp fields. The client remembers /quiet across launches. /quiet off and /loud restore sound.
 
 Copying selected transcript text clears its highlight and plays `sounds.copy`. All cues pass through the client audio player, where `/quiet` mutes them globally.
 
-In a friend chat, `transcript_scroll_keys` maps key chords to `top`, `bottom`, `page_up` or `page_down`. Control-Up and Control-Down snap to the oldest and newest displayed output. Page Up and Page Down move one viewport. The prompt retains focus.
+In an AI chat, `transcript_scroll_keys` maps key chords to `top`, `bottom`, `page_up` or `page_down`. Control-Up and Control-Down snap to the oldest and newest displayed output. Page Up and Page Down move one viewport. The prompt retains focus.
