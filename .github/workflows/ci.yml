@@ -64,7 +64,7 @@ jobs:
         uses: ./.github/actions/hosted-caches
         with:
           name: mac-release
-          brew: ccache ninja protobuf
+          brew: ninja protobuf
       # The link's functional tests reach this machine over `ssh localhost` without a password prompt
       # (tests/link/CMakeLists.txt): a key made here, for this job only, authorized for the runner's own login.
       - name: Passwordless ssh to this machine
@@ -151,7 +151,7 @@ jobs:
         uses: ./.github/actions/hosted-caches
         with:
           name: mac-asan-${{ matrix.part }}
-          brew: ccache ninja
+          brew: ninja
       - name: Configure and build the programs for this part
         uses: ./.github/actions/nexus-build
         with:
@@ -577,7 +577,7 @@ jobs:
         uses: ./.github/actions/hosted-caches
         with:
           name: linux-release
-          apt: ccache ninja-build lld
+          apt: ""
       - name: Configure and build
         uses: ./.github/actions/nexus-build
         with:
@@ -663,7 +663,7 @@ jobs:
         uses: ./.github/actions/hosted-caches
         with:
           name: linux-asan-${{ matrix.part }}
-          apt: ccache ninja-build lld
+          apt: ""
       - name: Configure and build the programs it runs
         uses: ./.github/actions/nexus-build
         with:
