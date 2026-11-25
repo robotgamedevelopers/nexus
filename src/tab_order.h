@@ -108,7 +108,7 @@ struct SavedTab {
 };
 
 // The file's text for the model's active tab: a header line, then "sprint", "terminal <n>" (its place among the terminal
-// tabs, from 1) or "AI <name>". Pure.
+// tabs, from 1) or "ai <name>". Pure.
 std::string formatSelectedTab(const Model& model);
 
 // Reads the file's text into `saved`. Returns false, with `error` saying what is wrong, for text that is not a selected

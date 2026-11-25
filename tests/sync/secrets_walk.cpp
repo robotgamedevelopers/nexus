@@ -582,8 +582,8 @@ struct Walk {
         opts.quiet = true;
         opts.readTable = [](std::string* text, std::string*) {
             *text = "driver claude /fake/driver\n"
-                    "AI f claude /work/f\n"
-                    "AI g claude /work/g\n";
+                    "ai f claude /work/f\n"
+                    "ai g claude /work/g\n";
             return true;
         };
         drivers = std::make_unique<server::Drivers>(store, std::move(opts));

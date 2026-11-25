@@ -379,6 +379,18 @@ The shipped Claude adapter appends the text to the Claude Code system prompt on 
 Codex, Antigravity, Grok and Muse consume the same descriptor through the [RPC adapters](../drivers/rpc/README.md).
 An identity profile alone does not install a driver or add an AI to the roster.
 
+<a id="names-before-ai"></a>
+
+## Names before AI
+
+Before nexus called its AIs "AI" (2026-11-25), a policy saw them as `"friend"`: the tab kind (`state["tab"]`,
+`t["kind"]`, a group's `"types"`), the key of the AI's name (`state["friend"]`, `context["friend"]`, a session's
+`source["friend"]`, the sign-in account's `"friend"`), and the directory `config["nova_friends"]`. They are `"ai"` and
+`config["nova_ais"]` now, with the stock group `"ais"`. Applying or loading a policy whose sources or `config.json` still
+say `"friend"` or `"nova_friends"` is refused, naming the file, the line and the new name, rather than loaded to match
+nothing. Rename them in your fork and apply it again. The server's launcher command `nexus_policy friend-driver` and a
+drivers file's `friend <name> <harness>` lines and `{friend}` argument still read as `ai-driver`, `ai` and `{ai}`.
+
 ## Install and use
 
 On the server, install the policy host once with Python 3.11 or newer. From the Nexus checkout:

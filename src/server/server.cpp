@@ -554,6 +554,9 @@ bool Server::restoreAll(std::string* why) {
     accounts::Registry registry;
     std::vector<std::string> report;
     const bool opened = config_->open(&configWhy);
+    if (opened && !config_->moved().empty()) {
+        std::fprintf(stderr, "nexus-server: config: %s\n", config_->moved().c_str());
+    }
     if (!opened) {
         std::fprintf(stderr, "nexus-server: config: %s; the server holds no accounts and no AIs list, so no "
             "AI's driver starts and no prompt is sent; queued prompts are kept\n", configWhy.c_str());

@@ -3,7 +3,7 @@
 // the person or the AI who edits them; models/Accounts.tla is the model the hub's decisions are checked against.
 //
 // An account is a login with one provider (the harness its sessions run: "claude", later others). It is set up on its
-// own, and its credentials live under ~/.nexus/server/accounts/<name>/, never in the registry. A
+// own, and its credentials live under ~/.nexus/server/accounts/<name>/, never in the registry. An
 // AI links to any number of accounts, of any providers, and an account serves any number of AIs.
 //
 // Two files, each pretty-printed JSON a person can edit by hand (accounts.json and ais.json), with a "version"
@@ -115,7 +115,7 @@ struct Read {
     bool ok = false;
     std::vector<std::string> errors;   // each "<path>:<line>: <what is wrong>; <what to change>"
     int version = 0;                   // the version the file said
-    bool upgraded = false;             // it was older than kVersion, and read as kVersion
+    bool upgraded = false;             // older than kVersion (or its list under the old key), read as kVersion
 };
 
 // Reads the accounts file's `text` (`path` for the errors) into registry->accounts, or the AIs file's into

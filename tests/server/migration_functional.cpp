@@ -153,7 +153,7 @@ void seedOldLayout(const fs::path& homeDir) {
 
     writeFile(top / "drivers",
               "driver claude /usr/bin/node /opt/drivers/claude/main.js --account main\n"
-              "AI ada claude ~/work\n",
+              "ai ada claude ~/work\n",
               false, 0600);
     writeFile(top / "config", "# migrated server config\n", false, 0600);
     writeFile(top / "server.log", "old server log line\n", false, 0600);

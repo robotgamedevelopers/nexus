@@ -2686,7 +2686,7 @@ void ai_names_are_checked() {
     CHECK(bigStrip.take(big, many).past == 44 && big.tab_count() == kMaxAITabs);
 }
 
-// What the person typed to an AI the server's list leaves out is kept by name and given back with a new tab for a
+// What the person typed to an AI the server's list leaves out is kept by name and given back with a new tab for an
 // AI of that name: one AI removed and back; every AI gone (an empty list) and the list back; an empty
 // draft is not kept. Nothing kept is lost: a kept draft for an AI that never returns stays.
 void drafts_outlive_their_tabs() {
@@ -2919,7 +2919,7 @@ void stop_target_rules() {
     CHECK(!stopTarget(m, terminal, mirror, &session) && session == 0);  // a terminal's
 }
 
-// The window never filters a stop: whatever the session shows and whether or not the link is up, Command-Escape on a
+// The window never filters a stop: whatever the session shows and whether or not the link is up, Command-Escape on an
 // AI's tab that shows a session is an action in the outbox, sent in order with the others once the link carries
 // them. The server decides each against its state when it processes it.
 void stop_never_filtered_by_the_window() {

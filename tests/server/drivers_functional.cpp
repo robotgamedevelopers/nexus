@@ -783,7 +783,7 @@ void setUpAccounts(Server& s, const std::string& dir, const std::string& fake, c
                    const std::string& provider = "fake") {
     writeFile(dir + "/ada.script", script);
     writeFile(dir + "/drivers", "driver " + provider + " " + fake + " --script " + dir + "/ada.script --account from-the-file\n"
-        "AI ada " + provider + " " + dir + "\n");
+        "ai ada " + provider + " " + dir + "\n");
     accounts::Registry r;
     r.accounts = {{"a1", provider}, {"a2", provider}};
     r.ais = {{"ada", {"a1", "a2"}, "a1"}};
@@ -1274,7 +1274,7 @@ void aiBackMoved(Server& s, const std::string& dir, const std::string& fake) {
         "on-start 2 emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n" + record +
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
     writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script --account from-the-file\n"
-        "AI ada fake " + dir + "\n");
+        "ai ada fake " + dir + "\n");
     accounts::Registry inA;
     inA.accounts = {{"a1", "fake"}};
     inA.ais = {{"ada", {"a1"}, "a1", {{"here", kHost, dir + "/a"}}, true}};
@@ -1623,7 +1623,7 @@ const std::string kFakeToken = "fakeDf7rKsVm" + std::string(64, 'q');
 void setUpClaude(Server& s, const std::string& dir, const std::string& fake, const std::string& script) {
     writeFile(dir + "/ada.script", script);
     writeFile(dir + "/drivers", "driver claude " + fake + " --script " + dir + "/ada.script --account from-the-file\n"
-        "AI ada claude " + dir + "\n");
+        "ai ada claude " + dir + "\n");
     accounts::Registry r;
     r.accounts = {{"a1", "claude"}};
     r.ais = {{"ada", {"a1"}, "a1"}};
