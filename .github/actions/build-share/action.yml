@@ -18,7 +18,7 @@ runs:
         set -euo pipefail
         if ! command -v zstd >/dev/null 2>&1; then echo "::error::no zstd on $(hostname -s)"; exit 1; fi
         start=$(date +%s)
-        tar -cf - --exclude='*.o' --exclude='*.a' --exclude='*.obj' build | zstd -q -T0 -3 -o "$RUNNER_TEMP/build.tar.zst"
+        tar -cf - --exclude='*.o' --exclude='*.a' --exclude='*.obj' build | zstd -q -T0 -1 -o "$RUNNER_TEMP/build.tar.zst"
         echo "packed $(du -h "$RUNNER_TEMP/build.tar.zst" | cut -f1) in $(( $(date +%s) - start )) s"
     - name: Upload
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
