@@ -111,9 +111,20 @@ jobs:
       - name: Record the sources the build was made from
         shell: bash
         run: bash .github/source-times.sh record build/.nexus-ci-sources
-      - name: Trim ccache to its size
+      # ccache is not kept in the cache. A pull request's build rebuilds only the files whose content changed
+      # (.github/source-times.sh keeps every other file's old time), and ccache cannot hold a result for content it has
+      # not seen: on 2026-11-25 big pull requests' builds hit it in 0 to 4 percent of their compiles (1 of 24, 0 of 28,
+      # 0 of 15). Kept, it only made the cache larger and slower to restore. The sizes are printed for the record.
+      - name: Leave ccache out of the cache
         shell: bash
-        run: ccache --cleanup
+        run: |
+          set -euo pipefail
+          ccache --show-stats
+          rm -rf "${CCACHE_DIR:?}"
+          mkdir -p "$CCACHE_DIR"
+          for path in build "$NEXUS_CACHES"/* ~/.cargo/registry/index ~/.cargo/registry/cache; do
+            if [ -e "$path" ]; then du -sh "$path"; fi
+          done
       - name: Save
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
@@ -183,9 +194,17 @@ jobs:
       - name: Record the sources the build was made from
         shell: bash
         run: bash .github/source-times.sh record build/.nexus-ci-sources
-      - name: Trim ccache to its size
+      # ccache is not kept in the cache (the unix job says why); the sizes are printed for the record.
+      - name: Leave ccache out of the cache
         shell: bash
-        run: ccache --cleanup
+        run: |
+          set -euo pipefail
+          ccache --show-stats
+          rm -rf "${CCACHE_DIR:?}"
+          mkdir -p "$CCACHE_DIR"
+          for path in build "$NEXUS_CACHES"/* ~/.cargo/registry/index ~/.cargo/registry/cache; do
+            if [ -e "$path" ]; then du -sh "$path"; fi
+          done
       - name: Save
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
