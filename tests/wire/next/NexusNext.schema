@@ -28,6 +28,7 @@ enum EntryKind
     Friend,
     Notice,
     Tool,
+    Bus,
     Image
 }
 
@@ -38,6 +39,7 @@ enum Activity
     Idle,
     Busy,
     Down,
+    Working,
     Waiting
 }
 
@@ -52,6 +54,12 @@ table SessionInfo
     model       *string
     effort      *string
     instance    *string
+    auto_account bool
+    limit_request uint64
+    limit_account *string
+    limit_model   *string
+    context_epoch uint64
+    catalog *string
     title       *string
 }
 
@@ -63,6 +71,7 @@ table EntryChange
     closed bool
     offset uint64
     tail   *string
+    account_email_end uint32
 }
 
 // One session of a sessions diff. Unchanged (`changed` false): the state diffed from holds it as it is, and nothing
@@ -80,6 +89,10 @@ table SessionChange
     entries       []EntryChange
     queue_changed bool
     queue         []string
+    active_agents uint32
+    bus_senders_known bool
+    bus_senders   []string
+    primary_account *AccountChoice
 }
 
 // An open secret request as every window that can take one receives it (sync/secrets.h): its id, its account, the file
@@ -94,11 +107,22 @@ table SecretRequest
     why        *string
 }
 
+// The account id used by SetAccount and its optional display label.
+table AccountChoice
+{
+    name  *string
+    label *string
+    needs_sign_in bool
+    email *string
+}
+
 // A friend the server holds (its friends.json, docs/accounts.md): what a window needs to show the friend's tab and to
 // start a session with it, which it does with an ensure naming the friend.
 table Friend
 {
     name *string
+    accounts []AccountChoice
+    can_auto_account bool
 }
 
 // A live in-app sign-in flow as one window sees it (sync/signin.h SignInOffer), from format 5: its id, its account, its
@@ -132,6 +156,7 @@ table SessionsDiff
     friends       []Friend
     friends_sent  bool
     signins       []SignInOffer
+    next_action   uint64
 }
 
 // ---- The actions, window to server (src/sync/actions.h) ----
@@ -157,6 +182,8 @@ enum ActionKind
     SignInClaim,
     SignInOpened,
     SignInCallback,
+    SignOut,
+    ResolveLimit
     Rename
 }
 
@@ -192,6 +219,7 @@ table StoreEntry
     kind   EntryKind
     closed bool
     text   *string
+    account_email_end uint32
 }
 
 // A session's driver as the server keeps it across restarts: the next turn number, the turn open (0: none), the last

@@ -3,14 +3,14 @@
 // prTerminalFrame for the one that shows (its view fills the room the strip leaves in the window) and
 // prTerminalService for the others, prTerminalDestroy on close and at exit.
 //
-// The screen's background is the window's (style::kBackground), see-through at style::kOverlayOpacity in the overlay
+// The screen's background is the window's (style::kBackground), at the overlay opacity from the window's policy
 // and opaque otherwise, as behind the friends' tabs. Prax takes the background from the kit theme's bg1, opaque
 // (terminal.cpp updateTheme 738-751, color8Of 368-371): each frame sets the screen's background colour back to the
 // window's, and paints it on the window element (PrTerminalBackground_Parent). A request for Prax: a host-set
 // background role that survives palette changes, or a screen opacity apart from the ink.
 //
 // Nothing here waits on the frame thread (AGENTS.md, the frame budget). A thread of the terminals' own starts each
-// shell (prTerminalCreate waits for the fork and exec, and the directory is checked there too) and ends it
+// shell (the first measured terminal frame waits for fork and exec, and the directory is checked there too) and ends it
 // (prTerminalDestroy kills the shell, joins its reader and waits for it), and four times a second reads each shell's
 // foreground process group for its tab's label (sysctl, foreground.h), reading the arguments of a new one. The label
 // must see the foreground as of each new title (remote.h TabLabel: a title ssh's remote side sets is the session's),
@@ -36,6 +36,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -57,7 +58,7 @@ class PraxTerminals final : public Terminals {
 public:
     // `app` may be null (no wake, clipboard or notifications), and `window`, the window that holds the terminals, null
     // (no attention requests). `overlay`: the background is see-through.
-    PraxTerminals(PrKit* kit, PrFontSet* fonts, PrApp* app, PrAppWindow* window, bool overlay);
+    PraxTerminals(PrKit* kit, PrFontSet* fonts, PrApp* app, PrAppWindow* window);
     ~PraxTerminals() override;   // ends every terminal and waits for them (at exit), then the launcher
     PraxTerminals(const PraxTerminals&) = delete;
     PraxTerminals& operator=(const PraxTerminals&) = delete;
@@ -65,6 +66,7 @@ public:
     // What a new terminal runs, and where: empty runs the platform's shell (terminal_launch.h) in the home directory.
     std::string program;
     std::string directory;
+    bool keepShellReady = false;
     // The fleet's machines, which name a terminal's tab while its shell runs ssh to one of them (remote.h).
     std::vector<Machine> machines;
 
@@ -74,6 +76,7 @@ public:
     // if no shell can start here (no launcher); a shell that fails to start prints why and ends (ended).
     bool openIn(std::size_t id, const std::string& dir);
     void close(std::size_t id) override;        // hands its terminal to the start thread to end
+    void startPending(PrVec2 extent) override;
     void show(std::size_t id, PrLayoutNode parent) override;
     void update(std::size_t id) override;
     bool ended(std::size_t id) override;
@@ -120,13 +123,15 @@ private:
         std::string program;
         std::string dir;
         float scale;
+        PrVec2 extent{};
+        float ratio = 1;
+        PrKitPalette palette{};
     };
     // A shell the start thread started (`terminal` null: it could not), with its process id (-1: not found), and the
     // line its tab shows if no shell can run here at all (problem).
     struct Started {
         std::size_t id;
         PrTerminal* terminal;
-        int shell;
         float scale;
         std::string dir;
         std::string problem;
@@ -135,6 +140,7 @@ private:
     PrTerminal* find(std::size_t id);
     bool applyBackground(PrTerminal* terminal) const;
     PrTextFontDesc font(float scale) const;
+    void attach(const Started& s);
     void take();                                // the frame thread takes the terminals started since
     void run();                                 // the start thread
     Started start(const Start& s);              // on the start thread
@@ -144,11 +150,13 @@ private:
     PrFontSet* fonts_;
     PrApp* app_;
     PrAppWindow* window_;
-    PrColor8 background_;
     float scale_ = 1;
     PrProcessLauncher* launcher_ = nullptr;     // used on the start thread only
 
     // The frame thread's.
+    bool spareRequested_ = false;
+    std::optional<Started> spare_;
+    std::map<std::size_t, Start> awaitingSize_;
     std::map<std::size_t, PrTerminal*> terminals_;
     std::map<std::size_t, TabLabel> labels_;
     std::map<std::size_t, int> pids_;           // each terminal's shell, by process id; absent if not found
@@ -168,6 +176,7 @@ private:
     std::condition_variable wake_;
     bool ending_ = false;
     bool recheck_ = false;
+    uint64_t notificationTag_ = 0; // launch thread only, including prestarted shells
     std::deque<Start> starts_;
     std::vector<PrTerminal*> ends_;
     std::vector<Started> started_;

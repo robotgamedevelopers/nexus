@@ -1,3 +1,9 @@
+#include "pr/app_select.h"
+#include "pr/app_device.h"
+#include "pr/gpu_select.h"
+#include "pr/draw_select.h"
+#include "pr/compress_select.h"
+#include "pr/image_select.h"
 // nexus: one person and several AIs ("friends") in one window. Layer 1 is the window only: tabs, transcripts and the
 // prompt, with nothing connected to any AI yet.
 //
@@ -43,6 +49,8 @@
 // Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]
 //              [--state FILE [--lost]]] [--bench FRAMES] [--print-window-config] [--server HOST]
 
+#include "pr/png.h"
+#include "pr/compress_select.h"
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -51,6 +59,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <functional>
 #include <iterator>
 #include <memory>
@@ -61,7 +70,7 @@
 
 #include "pr/app_data.h"
 #include "pr/app_shell.h"
-#include "pr/compress.h"
+#include "pr/compress_select.h"
 #include "pr/draw_list.h"
 #include "pr/draw_renderer.h"
 #include "pr/file.h"
@@ -91,8 +100,10 @@
 #include "style.h"
 #include "tab_order.h"
 #include "terminals.h"
+#include "terminal_launch.h"
 #include "url_opener.h"
 #include "view.h"
+#include "ui_audio.h"
 
 #if NEXUS_LINK
 #include "link/client_port.h"
@@ -118,14 +129,20 @@ struct FrameStats {
 struct App {
     Model* model = nullptr;
     View view;
+    UiAudio audio;
     Look look;
     PrFontSet* fonts = nullptr;
     bool overlay = true;            // the overlay window; --windowed gives a normal window
     PrStudioWindow* window = nullptr;   // from open() to close(); the overlay's from start()
     const PrStudioWindowDesc* overlayWindow = nullptr;  // the overlay's window, which start() creates
+    bool preparingReveal = false;
+    bool revealFrameReady = false;
+    std::optional<uint64_t> boardRevealStep;
     bool opened = false;            // open() ran for the window
     bool stopping = false;          // the run's shutdown has begun
     bool failed = false;            // Prax closed the overlay's window before it opened (overlayCloseFailed)
+    uint64_t hotkeyGeneration = 0;
+    PrAppHotkey registeredHotkey{};
     OverlayRules rules;             // when the overlay shows and hides (overlay.h)
     bool demoTerminal = false;      // --demo-terminal: the screenshot shows a terminal tab after a command
     bool backdrop = false;          // --backdrop: the screenshot is see-through over stripes
@@ -167,6 +184,7 @@ App& appOf(void* context) {
 // The overlay's tags: its hotkey's, and the timer of the key check after each show.
 constexpr uint64_t kHotkeyTag = 1;
 constexpr uint64_t kKeyCheckTag = 2;
+constexpr uint64_t kPolicyCheckTag = 3;
 // How long after a show the overlay must have the keyboard. Not measured: Prax gives an overlay the keyboard within
 // prAppWindowFocus, so this only has to outlast the frames that report it (a guess, as the earlier code's was).
 constexpr double kKeyCheckSeconds = 0.5;
@@ -188,19 +206,39 @@ void carryOut(App& a, OverlayAct act) {
         return;
     PrAppWindow* window = prStudioWindowAppWindow(a.window);
     PrApp* app = prStudioWindowApp(a.window);
+#ifdef __APPLE__
+    if ((act == OverlayAct::Hide) == bool(prAppWindowIsVisible(window))) prioritizeOverlayTransition();
+#endif
     if (act == OverlayAct::Hide) {
+        a.preparingReveal = false;
+        if (a.board) a.board->cancelPreparation();
+        a.boardRevealStep.reset();
+        a.view.accountPicker.reset();
         prAppTimerCancel(app, kKeyCheckTag);
+        if (prAppWindowIsVisible(window)) a.audio.play(a.view.windowApp.surface.closeChirp);
         prAppWindowSetVisible(window, false);
         return;
     }
-    PrAppSurface surface{};
+    PrSurface surface{};
     if (prAppWindowSurface(window, &surface) != PrStatus_Ok || !coverScreen(surface))
         std::fprintf(stderr, "nexus: the overlay could not be given the whole screen (no native view, window or "
             "screen), so it covers the screen's work area only, inside the menu bar or the taskbar\n");
-    prAppWindowFocus(window);
-    prAppTimerSet(app, kKeyCheckTag, kKeyCheckSeconds, 0);
-    // Shown: the window may claim one account's sign-in (frame_host.h LinkSignIn), and opens its page in the browser.
-    a.host.signIn.shown();
+    if (!prAppWindowIsVisible(window)) {
+        if (a.board && a.model->tab_count() && a.model->tab(a.model->active()).kind == TabKind::Sprint)
+            a.board->prepare({});
+        a.preparingReveal = true;
+        a.revealFrameReady = false;
+        a.boardRevealStep.reset();
+        prAppWindowSetOpacity(window, 0);
+        prAppWindowSetVisible(window, true);
+        prAppWindowRequestUnpacedFrame(window);
+        a.host.signIn.shown();
+        return;
+    }
+    if (!a.preparingReveal) {
+        prAppWindowFocus(window);
+        prAppTimerSet(app, kKeyCheckTag, kKeyCheckSeconds, 0);
+    }
 }
 
 bool overlayVisible(const App& a) {
@@ -229,19 +267,125 @@ void pasted(void* context, PrStatus status, PrStringView text) {
     }
 }
 
+// Pin each asynchronous clipboard read to the tab and the focused composer that requested it.
+struct ComposerPaste {
+    App& app;
+    size_t tab;
+    struct File { std::string name, path; size_t size; };
+    std::vector<File> files;
+    uint32_t index = 0;
+    bool active() const {
+        return app.window && app.model->tab_count() && app.model->tab(app.model->active()).id == tab &&
+            app.view.prompt != kPrLayoutNodeNone && prUiFocus(app.host.ui) == app.view.prompt;
+    }
+    void redraw() const { if (app.window) prAppWindowRequestFrame(prStudioWindowAppWindow(app.window)); }
+};
+
+void readClipboardFile(ComposerPaste* request);
+void clipboardBytes(void* context, PrStatus status, PrByteView bytes) {
+    std::unique_ptr<ComposerPaste> request(static_cast<ComposerPaste*>(context));
+    if (!request->active()) return;
+    const auto& file = request->files[request->index];
+    // AppKit supplies clipboard file URLs but only supports indexed byte reads on retained drop sources.
+    std::string local;
+    if (status == PrStatus_NotFound && !file.path.empty()) {
+        std::error_code error;
+        const auto path = std::filesystem::path(std::u8string(file.path.begin(), file.path.end()));
+        if (std::filesystem::is_regular_file(path, error)) {
+            std::ifstream input(path, std::ios::binary);
+            local.resize(file.size);
+            if (input && input.read(local.data(), std::streamsize(local.size())) && input.peek() == EOF) {
+                bytes = {reinterpret_cast<const uint8_t*>(local.data()), local.size()};
+                status = PrStatus_Ok;
+            }
+        }
+    }
+    if (status != PrStatus_Ok || bytes.size != file.size)
+        request->app.view.problem = "Could not read " + file.name + " from the clipboard.";
+    else
+        request->app.host.stageFile(file.name, bytes.size ? std::string(reinterpret_cast<const char*>(bytes.data), bytes.size) : std::string());
+    request->redraw();
+    if (++request->index < request->files.size()) readClipboardFile(request.release());
+}
+
+void readClipboardFile(ComposerPaste* request) {
+    prAppDataReadFile(prStudioWindowApp(request->app.window), kPrAppDataSourceClipboard, request->index, 0,
+        request->files[request->index].size, clipboardBytes, request);
+}
+
+void clipboardForms(void* context, PrStatus status, PrAppDataFormFlags forms) {
+    std::unique_ptr<ComposerPaste> request(static_cast<ComposerPaste*>(context));
+    if (!request->active()) return;
+    auto* app = prStudioWindowApp(request->app.window);
+    if (status != PrStatus_Ok) {
+        request->app.view.problem = "Could not read the clipboard.";
+        request->redraw();
+    } else if (forms & PrAppDataFormFlag_Files) {
+        prAppDataReadFiles(app, kPrAppDataSourceClipboard, [](void* ctx, PrStatus read, const PrAppDataFile* files, uint32_t count) {
+            std::unique_ptr<ComposerPaste> r(static_cast<ComposerPaste*>(ctx));
+            if (!r->active()) return;
+            if (read != PrStatus_Ok || !count) {
+                r->app.view.problem = "No files could be read from the clipboard.";
+                r->redraw();
+                return;
+            }
+            for (uint32_t i = 0; i < count; ++i) {
+                if (files[i].directory || files[i].size > kMaxAttachmentBytes) {
+                    r->app.view.problem = "Paste individual files up to 32 MiB each.";
+                    r->redraw();
+                    return;
+                }
+                r->files.push_back({std::string(files[i].name.data, files[i].name.size),
+                    files[i].path.size ? std::string(files[i].path.data, files[i].path.size) : std::string(), size_t(files[i].size)});
+            }
+            readClipboardFile(r.release());
+        }, request.release());
+    } else if (forms & PrAppDataFormFlag_Image) {
+        prAppDataReadImage(app, kPrAppDataSourceClipboard, [](void* ctx, PrStatus read, PrPixelView pixels) {
+            std::unique_ptr<ComposerPaste> r(static_cast<ComposerPaste*>(ctx));
+            if (!r->active()) return;
+            std::unique_ptr<PrCompressCodecSet, decltype(&prCompressCodecSetDestroy)> codecs(
+                prCompressCodecSetCreateDefault(), prCompressCodecSetDestroy);
+            size_t size = 0;
+            if (read == PrStatus_Ok && codecs && uint64_t(pixels.extent.x) * pixels.extent.y <= 32 * 1024 * 1024)
+                size = prPngEncode(pixels, 0, codecs.get(), nullptr, 0);
+            if (size && size <= kMaxAttachmentBytes) {
+                std::string png(size, '\0');
+                prPngEncode(pixels, 0, codecs.get(), reinterpret_cast<uint8_t*>(png.data()), size);
+                r->app.host.stageFile("pasted-image.png", std::move(png));
+            } else r->app.view.problem = "The clipboard image could not be read within the 32 MiB limit.";
+            r->redraw();
+        }, request.release());
+    } else if (forms & PrAppDataFormFlag_Text) {
+        prAppDataReadText(app, kPrAppDataSourceClipboard, [](void* ctx, PrStatus read, PrStringView text) {
+            std::unique_ptr<ComposerPaste> r(static_cast<ComposerPaste*>(ctx));
+            if (r->active()) pasted(&r->app, read, text);
+        }, request.release());
+    }
+}
+
 // The window's kit theme (view.h). Over the overlay's Transparent backdrop the window draws no background of its own,
 // so the see-through fill is the window part's (view.cpp, style::kOverlayOpacity), which the window clears to.
 bool open(void* context, PrStudioWindow* window) {
     App& a = appOf(context);
     a.window = window;
     a.opened = true;
+#ifdef __APPLE__
+    PrSurface surface{};
+    if (prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok)
+        trackForegroundPriority(surface, a.view.hide);
+#endif
+    const auto power = prAppPower(prStudioWindowApp(window));
+    a.view.savingPower = power.lowPower || power.source == PrAppPowerSource_Battery;
     PrKitTheme theme = windowTheme(a.fonts, a.overlay);
     prKitSetTheme(prStudioWindowKit(window), &theme);
     // The faces of the window's text fonts made in the Studio app's shaper now, before the first frame (font_prefetch.h):
     // made on the first frame, they were most of its work.
-    warmShaper(prStudioWindowShaper(window), a.fonts, a.overlay);
+    a.view.windowShaper = prStudioWindowShaper(window);
+    warmShaper(a.view.windowShaper, a.fonts, a.overlay);
     a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
-        prStudioWindowAppWindow(window), a.overlay);
+        prStudioWindowAppWindow(window));
+    a.terminals->keepShellReady = kShellHost == ShellHost::Posix;
     a.terminals->machines = a.machines;
     a.view.terminals = a.terminals.get();
     // The terminal tabs kept from the last launch, each a new shell in its directory; a tab whose shell cannot start
@@ -263,23 +407,39 @@ bool open(void* context, PrStudioWindow* window) {
     board.fonts = a.fonts;
     board.app = prStudioWindowApp(window);
     board.window = prStudioWindowAppWindow(window);
+    std::string clientDir, why;
+    if (clientHome(&clientDir, &why)) board.storageDirectory = clientDir + "/dashboard-storage";
+    board.initialExtent = {1000, 780};
+    PrAppDisplayInfo screen{};
+    if (a.overlay && prAppDisplays(board.app, &screen, 1))
+        board.initialExtent = {float(screen.extent.x), float(screen.extent.y)};
+    board.initialExtent.y -= a.look.tabs.height * style::textScale(a.look.textSteps) + 1;
     board.open = a.urls->handle();
     if (a.overlay)
         board.visible = [&a] { return overlayVisible(a); };
-    a.board = std::make_unique<PraxBoard>(board);
+    if (clientConfig().sprintEnabled) a.board = std::make_unique<PraxBoard>(board);
     a.view.board = a.board.get();
     a.host.terminals = a.terminals.get();
     a.host.board = a.board.get();
     a.host.ui = prStudioWindowUi(window);
     // Command-V in the prompt: the clipboard's text comes back through the host, which cuts it to the prompt's room.
+    a.view.copy = [&a](const std::string& text) {
+        if (!a.window || prAppDataWriteText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard,
+                {text.data(), text.size()}) != PrStatus_Ok) return false;
+        a.audio.play(a.view.windowApp.surface.copyChirp);
+        return true;
+    };
     a.view.paste = [&a] {
         if (a.window != nullptr) {
-            prAppDataReadText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard, pasted, &a);
+            prAppDataReadForms(prStudioWindowApp(a.window), kPrAppDataSourceClipboard, clipboardForms,
+                new ComposerPaste{a, a.model->tab(a.model->active()).id, {}});
         }
     };
     // In-app sign-in's URL, in the default browser off the frame thread (frame_host.h LinkSignIn, url_opener.h); a URL
     // the system cannot open is the flow's to end at its deadline, and is never printed. A window that is not an overlay
     // shows from the start, so it may claim now.
+    a.view.openLink = a.urls->handle();
+    a.view.playChirp = [&a](const Chirp& cue) { a.audio.play(cue); };
     a.host.signIn.openUrl = a.urls->handle();
     if (!a.overlay) {
         a.host.signIn.shown();
@@ -292,7 +452,7 @@ bool open(void* context, PrStudioWindow* window) {
 
 // The terminals and the board end with the window, while its kit still exists. An overlay window that Prax closes
 // before it opened could not draw (its swap chain): the run stops with it, as its last window, and fails.
-void closeWindow(void* context, PrStudioWindow*) {
+void closeWindow(void* context, PrStudioWindow*, PrStatus) {
     App& a = appOf(context);
     if (a.overlay && overlayCloseFailed(a.opened, a.stopping)) {
         std::fprintf(stderr, "nexus: the overlay window could not open (Prax could not make its swap chain)\n");
@@ -306,6 +466,7 @@ void closeWindow(void* context, PrStudioWindow*) {
     a.wakeApp = nullptr;
     a.window = nullptr;
     a.view.paste = nullptr;
+    a.view.openLink = nullptr;
     a.host.signIn.openUrl = nullptr;
     a.host.ui = nullptr;
     a.host.board = nullptr;
@@ -329,6 +490,11 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     // The frame's work starts here, after the swap chain's wait; it ends in trace(), once the frame is rendered.
     a.hitch.begin();
     a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
+    if (a.preparingReveal) {
+        const bool sprint = a.board && a.model->tab_count() && a.model->tab(a.model->active()).kind == TabKind::Sprint;
+        a.revealFrameReady = !sprint || (a.boardRevealStep && a.board->readyToReveal(*a.boardRevealStep));
+        return;
+    }
     // A change of the window's visibility or keyboard asks for a frame, so each one is seen here.
     if (a.overlay)
         carryOut(a, a.rules.observe(overlayVisible(a), overlayActive(a)));
@@ -350,20 +516,27 @@ bool start(void* context, PrStudioApp* studio) {
     }
     // Sized to the screen now, while hidden, so that the first show (carryOut) finds the window at the size it shows at
     // and its first frame makes the swap chain once, at that size, rather than once and again after a resize.
-    PrAppSurface surface{};
+    PrSurface surface{};
     if (prAppWindowSurface(prStudioWindowAppWindow(a.window), &surface) == PrStatus_Ok) {
         coverScreen(surface);
     }
-    PrStatus status = prAppHotkeyRegister(prStudioAppApp(studio), style::kOverlayHotkey, kHotkeyTag);
+    a.hotkeyGeneration = a.view.application->refresh();
+    std::string why;
+    a.registeredHotkey = overlayBinding(*a.view.application, why);
+    if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
+    PrStatus status = prAppHotkeyRegister(prStudioAppApp(studio), a.registeredHotkey, kHotkeyTag);
+    prAppTimerSet(prStudioAppApp(studio), kPolicyCheckTag, 1, 1);
     if (status != PrStatus_Ok) {
         char line[512];
-        std::snprintf(line, sizeof line, "nexus: the overlay hotkey (%s-backtick) did not register (status %d: %s), so "
-            "only launching nexus shows the overlay; another app may hold the key: change kOverlayHotkey in src/style.h",
-            style::kCommandName, int(status),
+        std::snprintf(line, sizeof line, "nexus: the overlay hotkey (key code %u) did not register (status %d: %s), so "
+            "only launching nexus shows the overlay; another app may hold the key: edit overlay_hotkey in the client profile",
+            unsigned(a.registeredHotkey.code), int(status),
             status == PrStatus_NotAllowed ? "another app or the system holds it" : "no global hotkeys");
         std::fprintf(stderr, "%s\n", line);
         // The one launch failure the person must be told: on Windows nexus has no terminal, so a message box says it.
         showLaunchError(line);
+    } else {
+        a.audio.play(a.view.windowApp.surface.startupChirp);
     }
     // Launch shows nothing and takes no focus (the owner 2026-11-10: "I want nothing visible no change, no input focus
     // change ... until the hotkey"); the link connects meanwhile. Only with no hotkey does launch show it, else never.
@@ -378,15 +551,37 @@ void shutdown(void* context, PrStudioApp*) {
 }
 
 // The app's events: the hotkey, and the key check after a show.
-void appEvent(void* context, PrStudioApp*, const PrAppEvent* e) {
+void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
     App& a = appOf(context);
     HitchScope scope(&a.hitch, Phase::Input);
+    if (e->kind == PrAppEventKind_Wake) a.host.finishUpload();
+    if (e->kind == PrAppEventKind_PowerChanged) {
+        const auto power = prAppPower(prStudioAppApp(studio));
+        a.view.savingPower = power.lowPower || power.source == PrAppPowerSource_Battery;
+        if (a.window && overlayVisible(a)) prAppWindowRequestFrame(prStudioWindowAppWindow(a.window));
+    }
     if (e->kind == PrAppEventKind_DisplaysChanged && a.window != nullptr)
         setBudget(a, prStudioWindowApp(a.window));
     if (!a.overlay)
         return;
     if (e->kind == PrAppEventKind_Hotkey && e->tag == kHotkeyTag) {
-        carryOut(a, a.rules.hotkey(overlayVisible(a), overlayActive(a)));
+        carryOut(a, a.preparingReveal ? OverlayAct::Hide : a.rules.hotkey(overlayVisible(a), overlayActive(a)));
+    } else if (e->kind == PrAppEventKind_Timer && e->tag == kPolicyCheckTag) {
+        const auto generation = a.view.application->refresh();
+        if (generation == a.hotkeyGeneration) return;
+        a.hotkeyGeneration = generation;
+        std::string why;
+        const auto next = overlayBinding(*a.view.application, why);
+        auto* app = prStudioAppApp(studio);
+        if (why.empty() && (next.code != a.registeredHotkey.code || next.modifiers != a.registeredHotkey.modifiers)) {
+            if (prAppHotkeyRegister(app, next, kHotkeyTag) == PrStatus_Ok) a.registeredHotkey = next;
+            else {
+                prAppHotkeyRegister(app, a.registeredHotkey, kHotkeyTag);
+                why = "The overlay shortcut is unavailable. Choose another overlay_hotkey in the client profile.";
+            }
+        }
+        if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
+        if (a.window) prAppWindowRequestFrame(prStudioWindowAppWindow(a.window));
     } else if (e->kind == PrAppEventKind_Timer && e->tag == kKeyCheckTag) {
         OverlayAct act = a.rules.keyCheck(overlayVisible(a), overlayActive(a));
         if (act == OverlayAct::Hide)
@@ -399,7 +594,10 @@ void appEvent(void* context, PrStudioApp*, const PrAppEvent* e) {
 // While the sprint tab shows, its page takes the events it is routed (sprint.h routeBoardEvent); the rest go to the
 // window's tree.
 bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
-    return appOf(context).host.event(*e);
+    auto& a = appOf(context);
+    if (e->kind == PrAppEventKind_KeyDown || e->kind == PrAppEventKind_Text ||
+            e->kind == PrAppEventKind_PointerDown) a.view.lastInput = e->time;
+    return a.host.event(*e);
 }
 
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 extent) {
@@ -423,7 +621,23 @@ bool laidOut(void* context, PrStudioWindow* window) {
 // Prax's wait (the swap chain's) is not work; the rounds are the layout, the scene and its play the draw, and the
 // render the present.
 void trace(void* context, const PrStudioWindowFrameTimes* t) {
-    HitchDetector& hitch = appOf(context).hitch;
+    App& a = appOf(context);
+    if (a.preparingReveal) {
+        auto* window = prStudioWindowAppWindow(a.window);
+        if (a.revealFrameReady && t->extent.x > 0 && t->extent.y > 0) {
+            // Studio submitted the updated frame. Complete it before exposing the surface.
+            prGpuDeviceWaitIdle(prStudioAppDevice(prStudioWindowStudioApp(a.window)));
+            a.preparingReveal = false;
+            prAppWindowFocus(window);
+            prAppWindowSetOpacity(window, 1);
+            a.audio.play(a.view.windowApp.surface.openChirp);
+            prAppTimerSet(prStudioWindowApp(a.window), kKeyCheckTag, kKeyCheckSeconds, 0);
+        } else {
+            if (a.board && !a.boardRevealStep) a.boardRevealStep = a.board->postedStep();
+            prAppWindowRequestFrame(window);
+        }
+    }
+    HitchDetector& hitch = a.hitch;
     if (hitch.inFrame()) {
         hitch.add(Phase::Layout, t->build);
         hitch.add(Phase::Draw, t->scene + t->play);
@@ -460,7 +674,7 @@ void buildOffscreen(void* context, PrUi*, const PrUiRound*) {
 }
 
 bool writePng(std::vector<uint8_t>& bytes, PrUVec2 size, const char* path) {
-    // The render is premultiplied; the encoder takes straight alpha. Everything is opaque, so only alpha 0 needs care.
+    // The render is premultiplied; the encoder takes straight alpha.
     for (size_t i = 0; i < bytes.size(); i += 4) {
         uint8_t alpha = bytes[i + 3];
         if (alpha != 0 && alpha != 255) {
@@ -468,20 +682,20 @@ bool writePng(std::vector<uint8_t>& bytes, PrUVec2 size, const char* path) {
                 bytes[i + c] = uint8_t(std::min(255, bytes[i + c] * 255 / alpha));
         }
     }
-    PrCompressCodec* compress = prCompressCodecCreate(PrCompressCodecBackend_Default);
-    PrImageCodec* codec = compress != nullptr ? prImageCodecCreate(PrImageCodecBackend_Default, compress) : nullptr;
+    PrCompressCodecSet* compress = prCompressCodecSetCreateDefault();
+    PrImageCodecSet* codec = compress != nullptr ? prImageCodecSetCreateDefault(compress) : nullptr;
     if (codec == nullptr) {
         std::fprintf(stderr, "nexus: no image codec in this build\n");
-        prCompressCodecDestroy(compress);
+        prCompressCodecSetDestroy(compress);
         return false;
     }
     PrPixelView view{bytes.data(), size_t(size.x) * 4, size};
     size_t encoded = 0;
-    prImageCodecEncode(codec, "image/png", view, nullptr, 0, &encoded);
+    prImageCodecSetEncode(codec, {"image/png", 9}, view, nullptr, 0, &encoded);
     std::vector<uint8_t> png(encoded);
-    PrStatus status = prImageCodecEncode(codec, "image/png", view, png.data(), png.size(), &encoded);
-    prImageCodecDestroy(codec);
-    prCompressCodecDestroy(compress);
+    PrStatus status = prImageCodecSetEncode(codec, {"image/png", 9}, view, png.data(), png.size(), &encoded);
+    prImageCodecSetDestroy(codec);
+    prCompressCodecSetDestroy(compress);
     if (status != PrStatus_Ok) {
         std::fprintf(stderr, "nexus: encoding the PNG failed (status %d)\n", int(status));
         return false;
@@ -494,7 +708,7 @@ bool writePng(std::vector<uint8_t>& bytes, PrUVec2 size, const char* path) {
     return true;
 }
 
-// Lays the window out at `extent` px for a display of `ratio`, renders it on the GPU into memory, and writes a PNG.
+// Lays the window out at `extent` px for a display of `ratio`, renders it into a pixel buffer, and writes a PNG.
 // A workaround: Prax has no public offscreen render of a UI tree (only its test fixture, tools/harness/kit_fixture.h).
 int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
@@ -503,14 +717,14 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     // With --backdrop the window is drawn as the overlay draws it, see-through; otherwise opaque, since an offscreen
     // frame has nothing behind it to show through.
     PrKitTheme theme = windowTheme(a.fonts, a.backdrop);
-    prLayoutTreeSetCanvasColor(tree, prColor16FromColor(theme.palette.bg0));
+    // The window paints its fill once over the transparent canvas, as in the live overlay.
     PrUi* ui = prUiCreate(tree);
     PrKit* kit = prKitCreate(ui, &theme);
     Offscreen off{&a, kit};
     PrAppDisplay display = prAppDisplayDefault();
     display.pixelRatio = ratio;
     a.view.extent = extent;
-    auto terminals = std::make_unique<PraxTerminals>(kit, a.fonts, nullptr, nullptr, a.backdrop);
+    auto terminals = std::make_unique<PraxTerminals>(kit, a.fonts, nullptr, nullptr);
     a.view.terminals = terminals.get();
     PraxBoard::Desc boardDesc;
     boardDesc.kit = kit;
@@ -586,10 +800,10 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     prLayoutSceneRelease(scene);
 
     int code = 1;
-    PrGpuDevice* device = nullptr;
+    PrGpuDevice* device = prGpuDeviceCreate(PrGpuBackend_Memory, nullptr);
     PrDrawRenderer* renderer = nullptr;
-    if (prGpuDeviceCreate(PrGpuBackend_Default, nullptr, &device) != PrStatus_Ok ||
-            prDrawRendererCreate(PrDrawRendererBackend_Default, device, nullptr, &renderer) != PrStatus_Ok) {
+    if (!device ||
+            prDrawRendererCreate(PrDrawRendererBackend_Cpu, device, nullptr, &renderer) != PrStatus_Ok) {
         std::fprintf(stderr, "nexus: no GPU device or renderer for the screenshot\n");
     } else {
         PrUVec2 size{uint32_t(extent.x * ratio), uint32_t(extent.y * ratio)};
@@ -701,11 +915,18 @@ int main(int argc, char** argv) {
     // The window's home, ~/.nexus/client (client_home.h), made mode 0700 if missing. On Windows the window has no
     // terminal: its error lines go to nexus.log there (src/platform.h). Then its config, whose problems are logged
     // (clientConfig also says when there is no home to read it from). A screenshot of a state file reads neither.
+    std::string home;
     if (state == nullptr) {
-        std::string home;
         std::string homeWhy;
         const bool haveHome = clientHome(&home, &homeWhy);
         const bool madeHome = haveHome && makeClientHome(home, &homeWhy);
+        if (!usage && !shot && !printConfig) {
+            if (!madeHome || !claimClientHome(home, &homeWhy)) {
+                if (homeWhy.empty()) return 0;
+                std::fprintf(stderr, "nexus: %s\n", homeWhy.c_str());
+                return 1;
+            }
+        }
         startErrorLog(madeHome ? home : std::string());
         if (haveHome && !madeHome) {
             std::fprintf(stderr, "nexus: %s\n", homeWhy.c_str());
@@ -729,6 +950,10 @@ int main(int argc, char** argv) {
         return 2;
     }
 #endif
+#if NEXUS_LINK
+    if (server == nullptr && state == nullptr && shot == nullptr && !demo && !demoTerminal && !bench && !printConfig)
+        server = clientConfig().serverHost.c_str();
+#endif
     if (server != nullptr) {
 #if NEXUS_LINK
         if (shot != nullptr || demo || demoTerminal || bench != 0 || printConfig) {
@@ -743,17 +968,33 @@ int main(int argc, char** argv) {
     }
 
     if (printConfig) {
+        policy::Host policy("client");
+        if (!home.empty()) policy.watch(home + "/policy.bundle.json");
+        WindowApplication description;
+        description.update(policy, "sprint", {}, false, false, 0, 0);
+        std::string why;
+        const auto hotkey = overlayBinding(policy, why);
+        if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
+        std::string name;
+        for (const auto modifier : {PrAppModifierFlag_Shift, PrAppModifierFlag_Control, PrAppModifierFlag_Alt, PrAppModifierFlag_Super}) {
+            if (!(hotkey.modifiers & modifier)) continue;
+            const auto label = prAppModifierName(modifier);
+            name += modifier == style::kCommand ? style::kCommandName : std::string(label.data, label.size);
+            name += '-';
+        }
+        const auto code = prAppKeyCodeName(hotkey.code);
+        name += hotkey.code == PrAppKeyCode_Backquote ? "backtick" : std::string(code.data, code.size);
         std::printf("nexus: the overlay window, as nexus asks Prax for it\n"
             "role: Overlay (a borderless panel above other apps, on every Space and beside fullscreen apps)\n"
             "backdrop: %s; opens hidden; shown by the hotkey\n"
             "presence: %s\n"
-            "hotkey: %s-backtick (PrAppKeyCode %u, modifiers 0x%x)\n"
+            "hotkey: %s (PrAppKeyCode %u, modifiers 0x%x)\n"
             "frame: the whole screen with the pointer, menu bar or taskbar included, set through the native window at "
             "each show\n"
-            "background alpha: %.2f; tab strip fill alpha: %.2f\n",
+            "default background alpha: %.2f; tab strip fill alpha: %.2f\n",
             style::kOverlayBlur ? "Blur" : "Transparent", style::kOverlayAccessory ? "Accessory" : "Regular",
-            style::kCommandName, unsigned(style::kOverlayHotkey.code), unsigned(style::kOverlayHotkey.modifiers),
-            double(style::kOverlayOpacity), double(style::kOverlayStripFill));
+            name.c_str(), unsigned(hotkey.code), unsigned(hotkey.modifiers),
+            double(description.overlayOpacity), double(description.surface.tabs.opacity));
         return 0;
     }
 
@@ -820,32 +1061,88 @@ int main(int argc, char** argv) {
         }
     }
     // The sprint tab first, and no friends yet.
-    static Model model({}, true);
+    static Model model({}, fromState || clientConfig().sprintEnabled);
 #if NEXUS_LINK
     if (fromState) {
-        sync::applyFriends(model, sync::friendsOf(held), held.friendsKnown(), {});
+        sync::FriendStrip{}.take(model, held);
+        if (!tabGiven) tab = model.active() + 1;
     }
 #endif
-    // The terminal tabs open when nexus last quit, after the friends in the order they stood, each to start a new shell
-    // in its directory when the window opens (tab_order.h). A screenshot reopens none.
     const bool live = shot == nullptr;
-    std::vector<std::pair<std::size_t, std::string>> reopen;
+    TabOrderStore layoutStore;
+    SavedLayout savedLayout;
+    bool haveLayout = false;
+    bool layoutReadable = true;
     if (live) {
+        layoutStore = writer.wrap(fileLayoutStore());
+        std::string text, error;
+        if (layoutStore.read(&text, &error)) {
+            haveLayout = parseLayout(text, &savedLayout);
+            if (!haveLayout) error = "unrecognized or malformed layout";
+        }
+        if (!error.empty()) {
+            layoutReadable = false;
+            std::fprintf(stderr, "nexus: %s could not be restored (%s); leaving the file in place\n",
+                         layoutStore.where.c_str(), error.c_str());
+        }
+    }
+    TabLayout layout(std::move(savedLayout));
+    if (tabGiven) layout.personSelected();
+    std::vector<std::pair<std::size_t, std::string>> reopen;
+    if (haveLayout) {
+        reopen = layout.reopenTerminals(model);
+        const auto savedTerminals = std::count_if(layout.saved().tabs.begin(), layout.saved().tabs.end(),
+            [](const auto& row) { return row.key.starts_with("terminal:"); });
+        if (static_cast<std::size_t>(savedTerminals) > reopen.size())
+            std::fprintf(stderr, "nexus: the saved layout contains %zu terminals; reopening the first %zu\n",
+                         static_cast<std::size_t>(savedTerminals), reopen.size());
+    } else if (live) {
         std::string terminalsWarning;
         for (const std::string& dir : loadTerminals(terminalStore, &terminalsWarning))
             reopen.emplace_back(model.add_terminal(), dir);
-        if (!terminalsWarning.empty())
-            std::fprintf(stderr, "nexus: %s\n", terminalsWarning.c_str());
+        if (!terminalsWarning.empty()) std::fprintf(stderr, "nexus: %s\n", terminalsWarning.c_str());
+    }
+    App a;  // Destroy the embedded VM before process-level thread-local teardown.
+    a.model = &model;
+    a.view.model = &model;
+    a.view.look = &a.look;
+    if (live && !home.empty()) {
+        const auto store = fileTabOrderStore(home + "/quiet.txt");
+        std::string saved, error;
+        if (store.read(&saved, &error)) a.audio.setQuiet(saved == "on\n");
+        a.view.setQuiet = [&a, store](bool quiet) {
+            a.audio.setQuiet(quiet);
+            std::string why;
+            if (!store.write(quiet ? "on\n" : "off\n", &why)) a.view.problem = why;
+        };
+    }
+    a.host.model = &model;
+    a.host.view = &a.view;
+    if (live) {
+        if (!home.empty()) a.view.application->watch(home + "/policy.bundle.json");
+        a.host.layout = std::move(layout);
+        a.host.layoutStore = layoutReadable ? &layoutStore : nullptr;
+        a.view.restoreTabLayout = [&a] {
+            if (!a.view.windowApp.layoutGeneration) return;
+            a.host.groupPolicyReady = true;
+            a.host.restoreLayout();
+        };
+        a.view.windowApp.update(*a.view.application, "sprint", {}, false, false, 0, model.tab_count(), {});
+        model.set_tab_groups(a.view.windowApp.groups);
+        model.select_tab(savedTabPosition(model, SavedTab{}));
+        a.view.restoreTabLayout();
+        if (haveLayout && !tabGiven) tab = model.active() + 1;
     }
     // The window opens on the tab --tab names; without it, on the tab selected when nexus last quit, found by who it is
     // or, for a terminal, by its place among the terminals (tab_order.h), or the sprint tab. A saved friend's tab is
     // selected once the server's friends arrive (sync/friend_strip.h). A --tab past the tabs there at launch, with a
     // server, is judged once the server's friends have arrived (below, after the link starts). A screenshot without
-    // --tab shows the sprint tab, whatever was saved.
+    // --tab uses the state file's primary chat when present, or the sprint tab.
     SavedTab savedTab;
-    if (!tabGiven && live) {
+    bool savedSelection = haveLayout && !a.host.layout.saved().selected.empty();
+    if (!tabGiven && live && !haveLayout) {
         std::string selectionWarning;
-        savedTab = loadSavedTab(selection, &selectionWarning);
+        savedTab = loadSavedTab(selection, &selectionWarning, &savedSelection);
         if (!selectionWarning.empty())
             std::fprintf(stderr, "nexus: %s\n", selectionWarning.c_str());
         tab = savedTabPosition(model, savedTab) + 1;
@@ -858,29 +1155,21 @@ int main(int argc, char** argv) {
         }
     }
 
-    static App a;
-    a.model = &model;
-    a.view.model = &model;
-    a.view.look = &a.look;
     // The tab selected at launch is no choice of the person's (FrameHost::personSelected): only a later one is.
     if (model.tab_count() != 0) {
         a.view.selectedId = model.tab(model.active()).id;
-    }
-    // Until the server's state arrives (frame_host.h takeFriends says then what a strip without friends lacks): with no
-    // server to take friends from, the line that says where they come from.
-    if (server == nullptr && !fromState) {
-        a.view.notice = "nexus shows the friends of a nexus-server: start nexus with --server and the server's host.";
     }
     // The screenshot stays opaque: an offscreen frame has nothing behind it to show through.
     a.overlay = !windowed && shot == nullptr;
     a.look.overlay = a.overlay;
     // Escape hides the overlay, as the hotkey does; a normal window has nothing to hide.
     if (a.overlay)
-        a.view.hide = [] { carryOut(a, a.rules.escape(overlayVisible(a))); };
+        a.view.hide = [&a] { carryOut(a, a.rules.escape(overlayVisible(a))); };
     // The friends' order is saved as the person moves a tab, once the server's friends are in the strip: a move before
     // them (a terminal's) leaves the saved order as it was.
     if (!fromState) {
-        a.view.moved = [] {
+        a.view.moved = [&a] {
+            a.host.keepTerminals();
             if (!a.host.strip.taken()) {
                 return;
             }
@@ -896,13 +1185,14 @@ int main(int argc, char** argv) {
     const bool waitForSaved = live && server != nullptr && savedTab.kind == TabKind::Friend;
     a.host.strip = sync::FriendStrip(std::move(savedOrder), waitForSaved ? savedTab.name : std::string(),
         std::move(kept));
+    if (tabGiven || (savedSelection && !waitForSaved)) a.host.strip.personSelected();
     if (live) {
         a.host.keep = true;
         a.host.terminalStore = &terminalStore;
         a.host.selectionStore = &selection;
         a.host.keptStore = keptReadable ? &keptDrafts : nullptr;
         a.reopen = std::move(reopen);
-        a.view.selected = [] { a.host.personSelected(); };
+        a.view.selected = [&a] { a.host.personSelected(); };
     }
     // The text scale the person last chose, applied at the first frame, and each change saved as it is applied. A
     // screenshot draws at the default scale and saves nothing.
@@ -911,23 +1201,22 @@ int main(int argc, char** argv) {
         a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &scaleWarning);
         if (!scaleWarning.empty())
             std::fprintf(stderr, "nexus: %s\n", scaleWarning.c_str());
-        a.view.scaled = [] {
+        a.view.scaled = [&a] {
             std::string error;
             if (!saveTextScale(scale, a.look.textSteps, &error))
                 std::fprintf(stderr, "nexus: %s\n", error.c_str());
         };
     }
-    a.host.model = &model;
-    a.host.view = &a.view;
     a.host.hitch = &a.hitch;
 #if NEXUS_LINK
     if (server != nullptr) {
         link::ClientLink::Options options;
         options.bootstrap.host = server;
-        options.wake = [] {
+        options.wake = [&a] {
             if (PrApp* app = a.wakeApp.load())
                 prAppWake(app);
         };
+        a.host.uploadWake = options.wake;
         a.link = std::make_unique<link::ClientPort>(std::move(options));
         a.host.connect(a.link.get(), server);
         // A --tab past the tabs at launch names a friend's tab, perhaps, that the server's friends bring: the window
@@ -994,14 +1283,11 @@ int main(int argc, char** argv) {
             .extent = {1000, 780},
             .role = a.overlay ? PrAppWindowRole(PrAppWindowRole_Overlay) : PrAppWindowRole(PrAppWindowRole_Normal),
             .backdrop = a.overlay ? overlayBackdrop() : PrAppWindowBackdrop(PrAppWindowBackdrop_Opaque),
+            .transparent = a.overlay,
             .hidden = a.overlay,
             .placement = PrAppWindowPlacement_Center,
-            // Frames come from Prax's display link at the display's own rate (120 Hz on a ProMotion or XDR display)
-            // and only when one is asked for, so the idle overlay draws nothing. The swap chain stays SDR: the window,
-            // the board and the terminals draw only sRGB colours at or below SDR white, and Prax's HDR path presents
-            // every pixel opaque (lib/draw/src/draw_display.slang convertPixel), which would cover the screen behind
-            // the see-through overlay. HDR waits on that (docs/roadmap.sexp "hdr").
-            .intent = PrGpuSwapChainIntent_Sdr,
+            // Prax negotiates an extended-range surface on HDR displays and an SDR surface elsewhere.
+            .intent = PrGpuSwapChainIntent_Hdr,
             .open = open,
             .palette = palette,
             .beginFrame = beginFrame,
@@ -1013,6 +1299,7 @@ int main(int argc, char** argv) {
             .context = &a,
         };
         PrAppOptions options = prAppOptionsDefault();
+        options.windowModel = PrAppWindowModel_Desktop;
         if (a.overlay && style::kOverlayAccessory)
             options.presence = PrAppPresence_Accessory;
         // start() creates the overlay's window itself, so that nexus holds it before its first frame.

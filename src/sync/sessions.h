@@ -25,7 +25,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "model.h"
@@ -37,6 +39,14 @@ namespace nexus::sync {
 
 // A session's id: minted by the server from 1, never reused, the one name a session has on the wire and in the store.
 using SessionId = std::uint64_t;
+
+struct AccountChoice {
+    std::string name;
+    std::string label{};
+    bool needsSignIn = false;    // the server can sign this linked account in and has no login for it
+    std::string email{};         // configured sign-in address; empty when omitted or sent by an older server
+    bool operator==(const AccountChoice&) const = default;
+};
 
 // What a session is, apart from its transcript and queue: the friend it is with (an attribute, so that a window can
 // group sessions by friend; it names no tab), the harness its driver runs (Claude, for now), the account the driver
@@ -51,6 +61,14 @@ struct SessionInfo {
     std::string effort;
     std::string instance{};     // which of its friend's instances (accounts/registry.h): a machine and a directory; empty
                                 // before the server holds the friend's instances, or when the friend has none
+    bool autoAccount = false;    // account names the concrete credential in both modes
+    // Published by the server while a turn is paused. Empty targets are unavailable options.
+    std::uint64_t limitRequest = 0;
+    std::string limitAccount{};
+    std::string limitModel{};
+    std::uint64_t contextEpoch = 0;
+    std::string catalog{}; // server-advertised harness model and effort choices in JSON
+    std::optional<AccountChoice> primaryAccount{}; // current bound account status, projected for windows only
     bool operator==(const SessionInfo&) const = default;
 };
 
@@ -58,16 +76,21 @@ struct SessionEntry {
     EntryKind kind = EntryKind::Notice;
     std::string text;
     bool closed = true;     // an open entry may still grow by text appended to its end; a closed one never changes
+    std::uint32_t accountEmailEnd = 0;
     bool operator==(const SessionEntry&) const = default;
 };
 
 using EntryRef = std::shared_ptr<const SessionEntry>;
+
+inline constexpr char kAutoAccountTarget[] = "!auto";  // reserved SetAccount intent, invalid as a registry name
 
 // A friend the server holds (accounts/registry.h, its friends.json): what a window needs to show the friend's tab and
 // to start a session with it (an ensure naming it). The server is the authority on who the friends are; the window
 // shows them. A later version adds fields here and in schema/Nexus.schema's Friend.
 struct ServerFriend {
     std::string name;
+    std::vector<AccountChoice> accounts{};   // in link order, empty with an older server
+    bool canAutoAccount = false;
     bool operator==(const ServerFriend&) const = default;
 };
 
@@ -76,7 +99,7 @@ struct ServerFriend {
 // nothing will until the person sends (every queued prompt taken); Down when the friend cannot run (its driver crashed,
 // failed to start too many times in a row, or has no login) until the person's next prompt. In memory only, never in
 // the store: a server that starts again works it out afresh. The window's state cursor shows it (sync/client.h).
-enum class Activity : std::uint8_t { Idle = 0, Busy = 1, Down = 2 };
+enum class Activity : std::uint8_t { Idle = 0, Busy = 1, Down = 2, Working = 3 };
 
 struct SessionView {
     SessionId id = 0;
@@ -85,11 +108,17 @@ struct SessionView {
     std::uint64_t first = 0;            // the transcript index (from 0) of entries[0]
     std::vector<EntryRef> entries;      // the transcript's tail, oldest first, through its newest entry
     std::vector<std::string> queue;     // prompts queued for later, oldest first
+    std::uint32_t activeAgents = 0;
+    // Visible bus senders, sorted and unique. An older server supplies no roster.
+    std::optional<std::vector<std::string>> busSenders{};
     std::uint64_t total() const { return first + entries.size(); }  // the transcript's length
     bool operator==(const SessionView& x) const;
 };
 
 using SessionRef = std::shared_ptr<const SessionView>;
+
+// Whether the serialized sender and body of a Bus entry may be displayed under this session's roster.
+bool visibleBus(std::string_view text, const SessionView& view);
 
 // How much of a transcript a state carries: the newest entries, at most `entries` of them, while their text totals at
 // most `bytes`; the newest entry always, whatever its size.
@@ -101,7 +130,8 @@ struct Tail {
 // A session's tail of a whole transcript, by those rules; `open`, when given, is the newest entry, after the tail, and
 // outside its rules (it is within the hub's text limit): the newest closed entry is always carried with it.
 SessionView tailOf(SessionId id, SessionInfo info, const std::vector<EntryRef>& transcript,
-                   std::vector<std::string> queue, Tail tail, EntryRef open = nullptr);
+                   std::vector<std::string> queue, Tail tail, EntryRef open = nullptr,
+                   std::optional<std::vector<std::string>> busSenders = std::nullopt);
 
 class Sessions {
 public:
@@ -110,6 +140,11 @@ public:
     explicit Sessions(std::vector<SessionRef> sessions);
 
     const std::vector<SessionRef>& sessions() const { return *sessions_; }
+    void replaceSessions(std::vector<SessionRef> entries) {
+        sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(entries));
+    }
+    // The session supplied by the server's primary harness binding, or zero when none is present.
+    SessionId primaryChat() const { return primaryChat_; }
     // The open secret requests (sync/secrets.h), oldest first, after the sessions: from format 3 on the wire, never a
     // value. A window of an older format receives none.
     const std::vector<SecretRequest>& requests() const { return *requests_; }
@@ -134,6 +169,9 @@ public:
     // state of the link of the window that holds it (Hub::stateFor); never in a state file.
     const std::vector<SignInOffer>& offers() const { return *offers_; }
     void setOffers(std::vector<SignInOffer> offers);
+    // First action from this client still unapplied when the server built this exact state. Zero on older links.
+    std::uint64_t nextAction() const { return nextAction_; }
+    void setNextAction(std::uint64_t next) { nextAction_ = next; }
     const SessionView* find(SessionId id) const;
     // The friend's first session: the one with the lowest id. Null when the friend has none.
     const SessionView* first(const std::string& friendName) const;
@@ -150,7 +188,10 @@ public:
     // The format (sync/formats.h) diff_from writes and apply_string reads: a link's, agreed when it is made. A copy
     // keeps it; equality ignores it.
     std::uint32_t format() const { return format_; }
-    void setFormat(std::uint32_t format) { format_ = format; }
+    void setFormat(std::uint32_t format) {
+        format_ = format;
+        if (format < kSignInFormat) nextAction_ = 0;
+    }
     // How many fields and enum values the last diff applied held that this build does not know and skipped (a later
     // server's: schema's report.unknown, from format 4), so that the window can log them. A copy keeps it; equality
     // ignores it.
@@ -162,12 +203,14 @@ public:
 
 private:
     std::shared_ptr<const std::vector<SessionRef>> sessions_;
+    SessionId primaryChat_ = 0;
     std::shared_ptr<const std::vector<SecretRequest>> requests_;
     std::shared_ptr<const std::vector<ServerFriend>> friends_;
     bool friendsKnown_ = false;
     std::shared_ptr<const std::vector<SignInOffer>> offers_;
     std::uint32_t format_ = kStateFormat;
     int unknown_ = 0;
+    std::uint64_t nextAction_ = 0;
 };
 
 // A state kept in a file, for `nexus --state` (a screenshot of what a server's state draws) and tests' fixtures: the

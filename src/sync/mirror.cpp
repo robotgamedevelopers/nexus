@@ -42,14 +42,68 @@ const SessionEntry* Mirror::open(std::size_t id) const {
     return it == seen_.end() ? nullptr : it->second.open.get();
 }
 
+std::uint32_t Mirror::activeAgents(std::size_t id) const {
+    auto it = seen_.find(id);
+    return it == seen_.end() || !it->second.held ? 0 : it->second.agents;
+}
+
 const Activity* Mirror::activity(std::size_t id) const {
     auto it = seen_.find(id);
     return it == seen_.end() || !it->second.held ? nullptr : &it->second.activity;
 }
 
+void Mirror::clearOpen(std::size_t tabId) {
+    auto it = seen_.find(tabId);
+    if (it != seen_.end()) {
+        // The window just cleared this transcript locally. A future roster change must not bring it back.
+        it->second.missingHistory = false;
+        it->second.bus.clear();
+        it->second.visibleBus = 0;
+        if (it->second.open) {
+            it->second.open.reset();
+            ++it->second.next;
+        }
+    }
+}
+
 void Mirror::forget(std::size_t id) {
     session_.erase(id);
     seen_.erase(id);
+}
+
+bool Mirror::reconcileBus(Model& model, std::size_t tab, Shown& seen, const SessionView& view) {
+    const auto& transcript = model.tab(tab).transcript;
+    std::vector<TranscriptEdit> edits;
+    std::size_t oldVisible = 0;
+    for (auto& slot : seen.bus) {
+        const std::size_t at = slot.ordinaryBefore + oldVisible;
+        oldVisible += slot.visible;
+        const SessionEntry* tail = nullptr;
+        if (slot.rawIndex >= view.first && slot.rawIndex < view.total())
+            tail = view.entries[static_cast<std::size_t>(slot.rawIndex - view.first)].get();
+        const Entry* cached = slot.visible ? &transcript[at] : slot.withdrawn.get();
+        const bool visible = tail ? tail->kind == EntryKind::Bus && tail->closed && visibleBus(tail->text, view)
+                                  : cached && (slot.visible || view.busSenders) && visibleBus(cached->text, view);
+        if (visible == slot.visible && (!visible || !tail || tail->text == transcript[at].text)) continue;
+        TranscriptEdit edit{at, slot.visible, std::nullopt};
+        if (visible) {
+            if (tail) edit.replacement = Entry{EntryKind::Bus, tail->text, tail->accountEmailEnd};
+            else edit.replacement = std::move(*slot.withdrawn);
+            slot.withdrawn.reset();
+        } else {
+            slot.withdrawn = std::make_unique<Entry>();
+            edit.removed = slot.withdrawn.get();
+        }
+        edits.push_back(std::move(edit));
+        if (visible != slot.visible) {
+            if (visible) ++seen.visibleBus;
+            else --seen.visibleBus;
+            slot.visible = visible;
+        }
+    }
+    if (edits.empty()) return false;
+    model.edit_transcript(tab, std::move(edits));
+    return true;
 }
 
 bool Mirror::apply(Model& model, const Sessions& state) {
@@ -78,12 +132,27 @@ bool Mirror::apply(Model& model, const Sessions& state) {
             continue;
         }
         Shown& seen = seen_[tab.id];
-        if (!seen.held || seen.activity != view->activity) {
+        if (seen.epoch != view->info.contextEpoch || (seen.missingHistory && view->first == 0)) {
+            model.clear_transcript(i);
+            seen = {};
+            seen.epoch = view->info.contextEpoch;
+            changed = true;
+        }
+        // A returning or expanded tail can supply bodies we dropped earlier. Usual appends and streaming updates
+        // leave all earlier slots alone.
+        if (!seen.held || seen.busSenders != view->busSenders || view->first < seen.tailFirst) {
+            if (reconcileBus(model, i, seen, *view)) changed = true;
+            seen.busSenders = view->busSenders;
+        }
+        seen.tailFirst = view->first;
+        if (!seen.held || seen.activity != view->activity || seen.agents != view->activeAgents) {
             seen.held = true;
             seen.activity = view->activity;
+            seen.agents = view->activeAgents;
             changed = true;
         }
         if (view->first > seen.next) {
+            seen.missingHistory = true;
             model.append(i, Entry{EntryKind::Notice, notShownNotice(view->first - seen.next)});
             seen.next = view->first;
             changed = true;
@@ -93,7 +162,21 @@ bool Mirror::apply(Model& model, const Sessions& state) {
             if (!e.closed) {
                 break;
             }
-            model.append(i, Entry{e.kind, e.text});
+            if (e.kind == EntryKind::Bus) {
+                const bool visible = visibleBus(e.text, *view);
+                seen.bus.push_back({seen.next, tab.transcript.size() - seen.visibleBus, visible});
+                if (!visible) {
+                    ++seen.next;
+                    continue;
+                }
+                ++seen.visibleBus;
+            }
+            // Driver lifecycle diagnostics remain in server history, including on older servers.
+            if (e.kind == EntryKind::Notice && e.text.starts_with(tab.name + "'s driver was ended by signal ")) {
+                ++seen.next;
+                continue;
+            }
+            model.append(i, Entry{e.kind, e.text, e.accountEmailEnd});
             ++seen.next;
             changed = true;
         }

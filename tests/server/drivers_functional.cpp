@@ -44,6 +44,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -613,6 +614,70 @@ void failsFirstStart(Server& s, const std::string& dir, const std::string& fake)
     CHECK(s.pids.size() == 2);
 }
 
+// The primary conversation uses the installation's neutral driver, account and workspace.
+void primaryRoute(Server& s, const std::string& dir, const std::string& fake) {
+    const std::string workspace = dir + "/installer workspace";
+    std::filesystem::create_directory(workspace);
+    const std::string script = dir + "/primary.script";
+    writeFile(script, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" + kHello +
+        "send\non-start 1 emit {\"kind\":\"session\",\"id\":\"reported-1\"}\n"
+        "on-start 1 emit {\"kind\":\"child-agents\",\"count\":2}\non-start 1 await-stop\n"
+        "on-start 1 emit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
+        "on-start 2 emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nexit 0\n");
+    std::ostringstream driver;
+    driver << "driver codex /unconfigured-named-friend-driver\nprimary-driver codex ["
+           << std::quoted(fake) << ",\"--script\"," << std::quoted(script) << "]\n";
+    const auto route = [&](const std::string& cwd) { return driver.str() + "primary codex personal " + cwd + "\n"; };
+    writeFile(dir + "/drivers", route(workspace));
+    const DriverTable table = parseDriverTable(route(workspace), dir);
+    CHECK(table.errors.empty() && table.primary.has_value());
+    if (!table.primary) return;
+
+    auto registry = adaRegistry();
+    registry.accounts.push_back({"personal", "codex"});
+    CHECK(s.hub->useAccounts(registry, nullptr).empty());
+    s.hub->reportSignedIn("personal", true);
+    const sync::SessionInfo binding{std::string(kPrimaryChat), "codex", "personal", {}, {}, table.primary->instance()};
+    std::string why;
+    CHECK(s.hub->ensurePrimary(binding, &why));
+    const auto id = s.hub->primarySession();
+    CHECK(id.has_value());
+    if (!id) return;
+    const auto act = [&](sync::ActionKind kind, const std::string& text) {
+        sync::Action a = s.action(kind, text);
+        a.session = *id;
+        CHECK(s.hub->apply(a));
+    };
+    act(sync::ActionKind::Send, "first");
+    CHECK(s.serveUntil([&] {
+        const auto* view = s.hub->state().find(*id);
+        return view && view->activeAgents == 3;
+    }, 10));
+    act(sync::ActionKind::Stop, {});
+    CHECK(s.serveUntil([&] {
+        return s.drivers->pid(*id) < 0 && s.store.find(*id)->driver.session == "reported-1";
+    }, 10));
+    act(sync::ActionKind::Send, "second");
+    CHECK(s.serveUntil([&] {
+        return s.drivers->pid(*id) < 0 && s.store.find(*id)->driver.nextTurn == 3;
+    }, 10));
+    const std::string starts = readFile(dir + "/starts.log");
+    CHECK(has(starts, "cwd=" + workspace + "\n"));
+    CHECK(has(starts, "resume=\naccount=personal\nlimit=cwd\n"));
+    CHECK(has(starts, "resume=reported-1\naccount=personal\nlimit=cwd\n"));
+    CHECK(readFile(dir + "/starts") == "2\n");
+    CHECK(s.hub->accounts()->friendNamed(kPrimaryChat) == nullptr);
+
+    // A session still held by a window cannot move to the next installation's workspace.
+    writeFile(dir + "/drivers", route(dir));
+    act(sync::ActionKind::Send, "from the old workspace");
+    CHECK(s.drivers->pid(*id) < 0);
+    CHECK(readFile(dir + "/starts") == "2\n");
+    const auto* retained = s.store.find(*id);
+    CHECK(retained && retained->driver.nextTurn == 3 && !retained->transcript.empty() &&
+          retained->transcript.back()->kind == EntryKind::Notice);
+}
+
 // The session id a driver reports is the next start's --resume, and the directory is its --cwd.
 void resume(Server& s, const std::string& dir, const std::string& fake) {
     setUp(dir, fake, "record " + dir + "/starts.log\n" + kHello + "send\nemit {\"kind\":\"session\",\"id\":\"s-9\"}\n"
@@ -690,6 +755,9 @@ void account(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.store.find(kAda)->info.model == "fast");
     CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "work")));
     CHECK(s.store.find(kAda)->info.account == "work");
+    const std::string actual = s.sup().driverAccount();
+    CHECK(!s.drivers->retireForSignOut(actual).empty());
+    CHECK(s.drivers->retireForSignOut("unrelated").empty());
     // the turn open runs on under the account it started with
     CHECK(s.drivers->pid(kAda) == before && s.sup().gathering());
     CHECK(s.hub->apply(s.action(sync::ActionKind::Stop, "")));
@@ -699,19 +767,25 @@ void account(Server& s, const std::string& dir, const std::string& fake) {
     s.send("second");
     CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 3; }, 10));
     CHECK(s.drivers->pid(kAda) != before && s.drivers->pid(kAda) > 0);
-    CHECK((s.transcript() == std::vector<std::string>{"P first", "F one", "N Stopped.", "P second"}));
+    CHECK(s.transcript().size() == 5 && has(s.transcript().back(), "belongs to a different account"));
     CHECK(s.store.size() == 1 && s.store.find(kAda)->info.account == "work");
-    CHECK(has(readFile(dir + "/starts.log"), "resume=s-1"));
+    CHECK(!has(readFile(dir + "/starts.log"), "resume=s-1"));
+    CHECK(s.drivers->retireForSignOut("unrelated").empty() && idle(s));
+    CHECK(s.drivers->retireForSignOut("work").empty());
+    CHECK(s.sup().phase() == Phase::Ending);
+    CHECK(s.serveUntil([&] { return none(s); }, 10));
+    CHECK(s.sup().failedStarts() == 0);
 }
 
 // ada's drivers file and script for a driver that takes an account (`--account`, as the Claude driver's line does), and
 // the server's accounts: a1 and a2, both ada's, a1 her default.
-void setUpAccounts(Server& s, const std::string& dir, const std::string& fake, const std::string& script) {
+void setUpAccounts(Server& s, const std::string& dir, const std::string& fake, const std::string& script,
+                   const std::string& provider = "fake") {
     writeFile(dir + "/ada.script", script);
-    writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script --account from-the-file\n"
-        "friend ada fake " + dir + "\n");
+    writeFile(dir + "/drivers", "driver " + provider + " " + fake + " --script " + dir + "/ada.script --account from-the-file\n"
+        "friend ada " + provider + " " + dir + "\n");
     accounts::Registry r;
-    r.accounts = {{"a1", "fake"}, {"a2", "fake"}};
+    r.accounts = {{"a1", provider}, {"a2", provider}};
     r.friends = {{"ada", {"a1", "a2"}, "a1"}};
     CHECK(s.hub->useAccounts(r, nullptr).empty());
 }
@@ -720,19 +794,84 @@ bool signedIn(Server& s, const std::string& account) {
     return s.hub->signedIn().count(account) == 1;
 }
 
+// A bus prompt takes the real driver's bounded admission route, with its own transcript attribution.
+void busAdmission(Server& s, const std::string& dir, const std::string& fake) {
+    const std::string sends = dir + "/bus-sends";
+    const std::string record = "send\nrecord-send " + sends + "\n";
+    const std::string done = "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
+    setUpAccounts(s, dir, fake, std::string(kHello) + record + "await-stop\n" + done +
+        record + done + record + done + record + done);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
+    CHECK(s.hub->apply(sync::Action{0, sync::ActionKind::Create, 0, "ada", {}, {}}));
+    std::string why;
+    auto receive = [&](const std::string& id, const std::string& text) {
+        return s.hub->receiveBus("ada", id, "bea", text, text, &why);
+    };
+    CHECK(!receive("100-0", "/clear") && !s.hub->hasBusReceipt("ada", "100-0"));
+    s.hub->reportSignedIn("a1", true);
+    CHECK(!receive("0100-0", "/clear") && !receive("18446744073709551616-0", "/clear"));
+    CHECK(!s.hub->receiveBus("ada", "100-0", "bea\nspoof", "/clear", "/clear", &why));
+    CHECK(!s.hub->receiveBus("ada", "100-0", "bea", std::string("x\0y", 3), "/clear", &why));
+    CHECK(!s.hub->hasBusReceipt("ada", "100-0"));
+    CHECK(receive("100-0", "/clear"));
+    CHECK(s.serveUntil([&] { return has(readFile(sends), "/clear\n"); }, 10));
+    const auto* primary = s.store.find(kAda);
+    CHECK(primary->info.contextEpoch == 0);
+    CHECK(primary->transcript.back()->kind == EntryKind::Bus && primary->transcript.back()->text == "bea\n/clear");
+
+    // The open turn stays open, the next incoming turn waits. Older explicitly queued work has priority.
+    CHECK(receive("99-0", "/model literal"));
+    CHECK(s.driver().waiting == std::vector<std::string>{"/model literal"});
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "human queued")));
+    CHECK(!receive("101-0", "later") && !s.hub->hasBusReceipt("ada", "101-0"));
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Stop, "")));
+    CHECK(s.serveUntil([&] { return has(readFile(sends), "human queued\n") && idle(s); }, 10));
+    CHECK(receive("101-0", "later"));
+    CHECK(s.serveUntil([&] { return has(readFile(sends), "later\n") && idle(s); }, 10));
+    const std::string observed = readFile(sends);
+    CHECK(observed == "send 1:\n/clear\nsend 2:\n/model literal\nsend 3:\nhuman queued\nsend 4:\nlater\n");
+    CHECK(s.store.find(2)->driver.nextTurn == 1);
+    for (const auto& e : primary->transcript)
+        CHECK(e->kind != EntryKind::Person || e->text == "human queued");
+
+    // The receipt outlives the visible message and a login change. A replay cannot affect another recipient.
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Send, "/clear")));
+    s.hub->reportSignedIn("a1", false);
+    const auto afterClear = primary->transcript.size();
+    CHECK(receive("100-0", "different replay body") && why.empty());
+    CHECK(primary->transcript.size() == afterClear && primary->driver.nextTurn == 5);
+    CHECK(!s.hub->hasBusReceipt("bea", "100-0") && !s.hub->hasBusReceipt("ada:100-0", "101-0"));
+}
+
 // A driver's credential event reports its account signed in, and the driver runs on the session's account: the
 // drivers file's --account value is replaced by it.
 void signIn(Server& s, const std::string& dir, const std::string& fake) {
-    setUpAccounts(s, dir, fake, "record " + dir + "/starts.log\n" + kHello + "send\n"
-        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" + kHello +
+        "send\nrecord-send " + dir + "/sends\n"
+        "on-start 1 emit {\"kind\":\"session\",\"id\":\"first-id\"}\n"
+        "on-start 2 emit {\"kind\":\"session\",\"id\":\"second-id\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nexit 0\n");
     CHECK(s.hub->signedIn().empty());
     CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
-    s.send("q");
-    CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 2; }, 10));
+    s.send("first turn");
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().session == "first-id"; }, 10));
     CHECK(signedIn(s, "a1") && !signedIn(s, "a2"));
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a2")));
+    s.send("second turn");
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().session == "second-id"; }, 10));
+    CHECK(signedIn(s, "a1") && signedIn(s, "a2"));
+    s.send("third turn");
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 4; }, 10));
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
+    s.send("last turn");
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 5; }, 10));
     const std::string log = readFile(dir + "/starts.log");
-    CHECK(has(log, "account=a1\n"));
-    CHECK(!has(log, "from-the-file"));
+    CHECK(!has(log, "from-the-file") && !has(log, "resume=first-id"));
+    CHECK(has(log, "resume=\naccount=a1\n") && has(log, "resume=\naccount=a2\n"));
+    CHECK(has(log, "resume=second-id\naccount=a2\n") && !has(log, "resume=second-id\naccount=a1\n"));
+    const std::string sends = readFile(dir + "/sends");
+    CHECK(has(sends, "The person: first turn\n") && has(sends, "send 3:\nthird turn\n"));
+    CHECK(has(sends, "The person: third turn\n") && has(sends, "prompt follows.]\n\nlast turn\n"));
 }
 
 // A driver that has no credential for its account reports it as needing sign-in: the account is signed in no more.
@@ -778,20 +917,165 @@ void usageLimit(Server& s, const std::string& dir, const std::string& fake) {
         "on-start 1 emit {\"kind\":\"error\",\"cause\":\"the limit\",\"fix\":\"wait\",\"code\":\"usage-limit\"}\n"
         "on-start 1 emit {\"kind\":\"done\",\"outcome\":\"error\"}\n"
         "on-start 2 emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    s.hub->reportSignedIn("a1", true);
     s.hub->reportSignedIn("a2", true);
-    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
     s.send("first");
     CHECK(s.serveUntil([&] { return s.store.find(kAda)->info.account == "a2"; }, 10));
     CHECK(s.store.find(kAda)->info.account == "a2");
     bool told = false;
     for (const std::string& line : s.transcript()) {
-        told = told || has(line, "The account a1 reached its usage limit, so this session now runs on the account a2");
+        told = told || has(line, "Switched to a2");
     }
     CHECK(told);
     CHECK(s.serveUntil([&] { return none(s) || idle(s); }, 10));
     s.send("second");
     CHECK(s.serveUntil([&] { return idle(s) && has(readFile(dir + "/starts.log"), "account=a2\n"); }, 10));
     CHECK(has(readFile(dir + "/starts.log"), "account=a2\n"));
+}
+
+// Exercise both acknowledged choices through a responding supervisor and two real child processes. The friend
+// links a third subscription which is signed in but belongs to a different driver's provider.
+// Observe the real pipe writes across two account-owned processes. A tool already ran and the interrupted reply
+// was still streaming when the first process reported quota. One visible request yields two distinct sends.
+void continuation(Server& s, const std::string& dir, const std::string& fake) {
+    setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" + kHello +
+        "send\nrecord-send " + dir + "/sends\n"
+        "on-start 1 emit {\"kind\":\"session\",\"id\":\"private-first-id\"}\n"
+        "on-start 1 emit {\"kind\":\"tool\",\"name\":\"Write\",\"summary\":\"created draft.txt\"}\n"
+        "on-start 1 emit {\"kind\":\"text\",\"delta\":\"" + std::string(20000, 'x') + " I finished the first section.\"}\n"
+        "on-start 1 emit {\"kind\":\"error\",\"cause\":\"subscription limit\",\"fix\":\"wait\",\"code\":\"usage-limit\"}\n"
+        "on-start 2 emit {\"kind\":\"text\",\"delta\":\"Finished the remainder.\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nexit 0\n");
+    s.hub->reportSignedIn("a1", true);
+    s.hub->reportSignedIn("a2", true);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
+    s.send("finish my draft");
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 3; }, 10));
+    const std::string sends = readFile(dir + "/sends");
+    CHECK(has(sends, "send 1:\nfinish my draft\n") && has(sends, "send 2:\n[nexus:"));
+    CHECK(has(sends, "Tool activity: Write: created draft.txt") && has(sends, " I finished the first section."));
+    CHECK(has(sends, "Do not repeat completed work.]\n\nfinish my draft\n"));
+    const std::string starts = readFile(dir + "/starts.log");
+    CHECK(has(starts, "account=a1\n") && has(starts, "account=a2\n") && !has(starts, "resume=private-first-id"));
+    const auto transcript = s.transcript();
+    CHECK(std::count(transcript.begin(), transcript.end(), "P finish my draft") == 1);
+    CHECK(std::count(transcript.begin(), transcript.end(), "F Finished the remainder.") == 1);
+    CHECK(s.store.size() == 1 && s.store.find(kAda)->info.account == "a2" && s.driver().continuationPrompt.empty());
+}
+
+// A quota handoff replays one attributed bus request. Earlier bus attachments keep their readable
+// paths in the handoff, and messages already waiting keep their own later turns.
+void busContinuation(Server& s, const std::string& dir, const std::string& fake) {
+    const std::string record = "send\nrecord-send " + dir + "/sends\n";
+    const std::string done = "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
+    setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\n" + kHello + record + done + record +
+        "on-start 1 emit {\"kind\":\"error\",\"cause\":\"quota\",\"fix\":\"wait\",\"code\":\"usage-limit\"}\n"
+        "on-start 1 emit {\"kind\":\"done\",\"outcome\":\"error\"}\n"
+        "on-start 2 " + done + "on-start 3 " + done + "exit 0\n");
+    s.hub->reportSignedIn("a1", true);
+    s.hub->reportSignedIn("a2", true);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
+    const std::string path = "incoming/bus-123/message.txt";
+    const std::string past = "Message from bea on the message bus (id 10-0)\nSubject: reference\n\nText attachment: " + path;
+    const std::string current = "Message from bo on the message bus (id 11-0)\nSubject: editing\n\nedit the reference";
+    const std::string later = "Message from cy on the message bus (id 12-0)\nSubject: publishing\n\npublish afterwards";
+    std::string why;
+    CHECK(s.hub->receiveBus("ada", "10-0", "bea", "[message.txt (4097 bytes)]", past, &why));
+    CHECK(s.serveUntil([&] { return idle(s); }, 10));
+    CHECK(s.hub->receiveBus("ada", "11-0", "bo", "edit the reference", current, &why));
+    CHECK(s.hub->receiveBus("ada", "12-0", "cy", "publish afterwards", later, &why));
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 5; }, 10));
+    CHECK(s.store.find(kAda)->info.account == "a2");
+    const std::string sends = readFile(dir + "/sends");
+    const std::string prefix = "send 1:\n" + past + "\nsend 2:\n" + current + "\nsend 3:\n";
+    const std::string suffix = "Do not repeat completed work.]\n\n" + current + "\nsend 4:\n" + later + "\n";
+    CHECK(sends.starts_with(prefix) && sends.ends_with(suffix));
+    if (!sends.starts_with(prefix) || !sends.ends_with(suffix)) return;
+    const std::string history = sends.substr(prefix.size(), sends.size() - prefix.size() - suffix.size());
+    CHECK(has(history, "Message bus: " + past));
+    CHECK(!has(history, "edit the reference") && !has(history, "publish afterwards"));
+
+    // An ordinary fresh context after /compact builds a summary through a separate driver path.
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Send, "/compact")));
+    const std::string fresh = "Message from bo on the message bus (id 13-0)\n\nreview final draft";
+    const std::string queued = "Message from cy on the message bus (id 14-0)\n\nnotify the editor";
+    CHECK(s.hub->receiveBus("ada", "13-0", "bo", "review final draft", fresh, &why));
+    CHECK(s.hub->receiveBus("ada", "14-0", "cy", "notify the editor", queued, &why));
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 7; }, 10));
+    const std::string all = readFile(dir + "/sends");
+    const std::string start = sends + "send 5:\n";
+    const std::string finish = "\n\n" + fresh + "\nsend 6:\n" + queued + "\n";
+    CHECK(all.starts_with(start) && all.ends_with(finish));
+    if (!all.starts_with(start) || !all.ends_with(finish)) return;
+    const std::string compacted = all.substr(start.size(), all.size() - start.size() - finish.size());
+    CHECK(has(compacted, "Message bus: " + past));
+    CHECK(!has(compacted, "review final draft") && !has(compacted, "notify the editor"));
+}
+
+// Exercise the same decision a window sees across the wire. The first process has already done work;
+// either choice continues it under the explicitly selected account and model in a second process.
+void fableChoice(Server& s, const std::string& dir, const std::string& fake, bool switchAccount) {
+    setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/launches\n"
+        "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"claude\",\"features\":[\"limit\"]}\n"
+        "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n"
+        "send\nrecord-send " + dir + "/sends\n"
+        "on-start 1 emit {\"kind\":\"session\",\"id\":\"first-fable-session\"}\n"
+        "on-start 1 emit {\"kind\":\"tool\",\"name\":\"Write\",\"summary\":\"draft saved\"}\n"
+        "on-start 1 emit {\"kind\":\"text\",\"delta\":\"First section done.\"}\n"
+        "on-start 1 emit {\"kind\":\"error\",\"cause\":\"Fable limit reached\",\"fix\":\"choose\",\"code\":\"model-limit\"}\n"
+        "on-start 2 emit {\"kind\":\"text\",\"delta\":\"Second section done.\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nexit 0\n", "claude");
+    accounts::Registry r;
+    r.accounts = {{"a1", "claude"}, {"foreign", "codex"}, {"a2", "claude"}};
+    r.friends = {{"ada", {"foreign", "a1"}, "a1"}};
+    CHECK(s.hub->useAccounts(r, nullptr).empty());
+    CHECK(!s.hub->state().friends().front().canAutoAccount);
+    CHECK(!s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
+    r.friends[0].accounts.push_back("a2");
+    CHECK(s.hub->useAccounts(r, nullptr).empty());
+    for (const auto& a : r.accounts) s.hub->reportSignedIn(a.name, true);
+    CHECK(s.hub->state().friends().front().canAutoAccount);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
+    CHECK(s.store.find(kAda)->info.account == "a1");
+    std::string why;
+    CHECK(s.hub->nextSubscription(kAda, {}, why) == "a2");
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetModel, "fable")));
+    s.send("finish both sections");
+
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().modelLimitPending; }, 10));
+    CHECK(s.driver().continuationPrompt == "finish both sections" && !has(readFile(dir + "/sends"), "send 2:"));
+    sync::Sessions mirror;
+    mirror.apply_string(s.hub->state().init_diff());
+    const auto& offer = mirror.find(kAda)->info;
+    CHECK(offer.limitRequest != 0 && offer.account == "a1" && offer.model == "fable");
+    CHECK(offer.limitAccount == "a2" && offer.limitModel == "opus");
+
+    auto choice = s.action(sync::ActionKind::ResolveLimit, switchAccount ? "account" : "model");
+    choice.account = offer.account;
+    choice.request = offer.limitRequest;
+    choice.friendName = switchAccount ? offer.limitAccount : offer.limitModel;
+    CHECK(s.hub->apply(choice));
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 3; }, 10));
+
+    const auto& info = s.store.find(kAda)->info;
+    CHECK(info.account == (switchAccount ? "a2" : "a1") && info.model == (switchAccount ? "fable" : "opus"));
+    CHECK(s.pids.size() == 2 && s.sup().model() == info.model);
+    CHECK(!s.driver().modelLimitPending && s.driver().continuationPrompt.empty());
+    const auto launches = readFile(dir + "/launches");
+    CHECK(has(launches, "resume=\naccount=a1\n"));
+    if (switchAccount) {
+        CHECK(has(launches, "resume=\naccount=a2\n") && !has(launches, "resume=first-fable-session"));
+    } else {
+        CHECK(has(launches, "resume=first-fable-session\naccount=a1\n"));
+    }
+    const auto sends = readFile(dir + "/sends");
+    CHECK(has(sends, "send 1:\nfinish both sections\n") && has(sends, "send 2:\n[nexus:"));
+    CHECK(has(sends, "Tool activity: Write: draft saved") && has(sends, "First section done."));
+    CHECK(has(sends, "Do not repeat completed work.]\n\nfinish both sections\n"));
+    const auto transcript = s.transcript();
+    CHECK(std::count(transcript.begin(), transcript.end(), "P finish both sections") == 1);
+    CHECK(std::count(transcript.begin(), transcript.end(), "F Second section done.") == 1);
 }
 
 // A session on no account, whose friend's driver takes one: no driver starts, and the session is told how to link an
@@ -1156,7 +1440,7 @@ void instanceMoved(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(readFile(dir + "/starts") == "2\n");
     // The first send there carries the summary of the turns before its prompt, then the prompt, once.
     const std::string sends = readFile(dir + "/sends");
-    CHECK(has(sends, "send 1:\nq\nsend 2:\n[nexus: this conversation with ada was held in another working directory"));
+    CHECK(has(sends, "send 1:\nq\nsend 2:\n[nexus: this conversation with ada continues in a fresh harness session"));
     CHECK(has(sends, "The person: q\n") && !has(sends, "The person: r\n"));
     CHECK(has(sends, "[nexus: the person's prompt follows.]\n\nr\n"));
     // Its machine edited to another: the driver is ended, and the next prompt is not sent.
@@ -1191,6 +1475,36 @@ void instanceRemoved(Server& s, const std::string& dir, const std::string& fake)
     CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 3; }, 10));
     CHECK(readFile(dir + "/starts") == "2\n");
     CHECK(has(readFile(dir + "/starts.log"), "cwd=" + dir + "\n"));
+}
+
+// An inbound message follows the default instance, even when only another instance has a session.
+void busDefaultInstance(Server& s, const std::string& dir, const std::string& fake) {
+    const accounts::Instance first{"first", kHost, dir + "/first"};
+    const accounts::Instance second{"second", kHost, dir + "/second"};
+    std::filesystem::create_directories(first.dir);
+    std::filesystem::create_directories(second.dir);
+    setUpInstance(s, dir, fake, std::string(kHello) + "send\nrecord-send " + dir +
+        "/sends\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n", first);
+    auto roster = withInstance(second);
+    roster.friends.front().instances.push_back(first);
+    CHECK(s.hub->applyAccounts(roster, "change default", nullptr));
+    s.hub->reportSignedIn("a1", true);
+    CHECK(s.store.size() == 1 && s.store.find(kAda)->info.instance == first.name);
+    std::string why;
+    CHECK(s.hub->receiveBus("ada", "100-0", "bea", "second workspace", "second workspace", &why));
+    const auto next = s.store.find(2);
+    CHECK(next && next->info.instance == second.name);
+    if (!next) return;
+    CHECK(s.serveUntil([&] { return next->driver.nextTurn == 2 && next->driver.openTurn == 0; }, 10));
+    CHECK(s.store.find(kAda)->driver.nextTurn == 1);
+
+    std::swap(roster.friends.front().instances[0], roster.friends.front().instances[1]);
+    CHECK(s.hub->applyAccounts(roster, "restore default", nullptr));
+    CHECK(s.hub->receiveBus("ada", "100-0", "bea", "duplicate", "duplicate", &why));
+    CHECK(s.hub->receiveBus("ada", "101-0", "bea", "first workspace", "first workspace", &why));
+    CHECK(s.serveUntil([&] { return s.driver().nextTurn == 2 && !s.driver().openTurn; }, 10));
+    CHECK(next->driver.nextTurn == 2 && s.store.size() == 2);
+    CHECK(readFile(dir + "/sends") == "send 1:\nsecond workspace\nsend 1:\nfirst workspace\n");
 }
 
 // A session that names no instance, while its friend has some (as a store that failed before the session was
@@ -1644,11 +1958,15 @@ int main(int argc, char** argv) {
             const std::vector<std::pair<std::string, Case>> cases = {{"normal", normal}, {"stop", stop},
                 {"silent", silent}, {"exit_mid_turn", exitMidTurn}, {"malformed", malformed},
                 {"ignores_stop", ignoresStop}, {"kill", kill}, {"flood", flood},
-                {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
+                {"fails_first_start", failsFirstStart}, {"resume", resume}, {"primary_route", primaryRoute}, {"orphan", orphan},
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
                 {"unconfigured", unconfigured}, {"stop_hammered", stopHammered}, {"account", account},
-                {"window", window}, {"sign_in", signIn}, {"no_credential", noCredential},
-                {"usage_limit", usageLimit}, {"limit_unsupported", limitUnsupported}, {"no_account", noAccount},
+                {"window", window}, {"bus_admission", busAdmission}, {"bus_default_instance", busDefaultInstance},
+                {"sign_in", signIn}, {"no_credential", noCredential},
+                {"usage_limit", usageLimit}, {"continuation", continuation}, {"bus_continuation", busContinuation},
+                {"fable_switch_account", [](Server& s, const std::string& d, const std::string& f) { fableChoice(s, d, f, true); }},
+                {"fable_switch_model", [](Server& s, const std::string& d, const std::string& f) { fableChoice(s, d, f, false); }},
+                {"limit_unsupported", limitUnsupported}, {"no_account", noAccount},
                 {"friend_removed", friendRemoved}, {"friend_back_limited", friendBackLimited},
                 {"friend_removed_starting", friendRemovedStarting}, {"friend_back_before_stop", friendBackBeforeStop},
                 {"friend_back_limited_queue", friendBackLimitedQueue}, {"friend_back_moved", friendBackMoved},

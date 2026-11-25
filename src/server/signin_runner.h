@@ -20,6 +20,9 @@
 // own, and the group is what is ended: by stop(), at its grace, and once the program has ended, so that nothing it
 // started outlives it.
 //
+// Other providers use their configured enrollment helper. Its authenticated socket message carries only a local
+// page URL. Terminal output is discarded. A successful exit asks the hub to verify the named enrollment receipt.
+//
 // POSIX (a pty, poll, posix_spawn), like the rest of nexus-server: macOS and Linux, and Linux inside WSL2 on Windows.
 
 #pragma once
@@ -38,6 +41,8 @@
 #include "sync/signin.h"
 
 namespace nexus::server {
+
+std::string claudeOnPath(const std::string& path);
 
 class SignInRunner {
 public:
@@ -58,6 +63,7 @@ public:
         std::function<void(const std::string& account, const sync::SecretValue& token)> printed;
         std::function<void(const std::string& account, std::uint64_t id, const std::string& why)> exited;
         std::function<void(const std::string& line)> log;
+        std::function<void(const std::string& account, const std::string& provider, std::uint64_t id)> enrolled;
     };
 
     SignInRunner(Options options, Events events);
@@ -75,7 +81,8 @@ public:
     // line each, for server.log.
     std::vector<std::string> sweep();
     // The hub's hooks.
-    void start(std::uint64_t id, const std::string& account);
+    void start(std::uint64_t id, const std::string& account, const std::string& provider = "claude",
+               std::vector<std::string> command = {});
     void stop(const std::string& account);
     void replay(std::uint64_t id, const std::string& account, const sync::SignInTarget& target,
                 const sync::SecretValue& query);
@@ -99,6 +106,8 @@ private:
         int lock = -1;              // .signin/lock, locked; the process holds it too (its fd 3), for sweep()
         sync::TokenScanner token;
         sync::UrlScanner url{"claude"};     // the runner runs `claude setup-token`: its hosts
+        std::string provider;
+        bool setupToken = false;
         bool urlSent = false;
         std::uint64_t killAt = 0;   // when SIGKILL follows the SIGTERM; 0: not ending
     };

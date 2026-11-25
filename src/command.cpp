@@ -98,6 +98,10 @@ std::string commandProblem(const Command& command, const CommandResult& r, int t
 }
 
 CommandResult runCommand(const Command& command, int timeoutSeconds) {
+    return runCommandWithInput(command, timeoutSeconds, {});
+}
+
+CommandResult runCommandWithInput(const Command& command, int timeoutSeconds, std::string_view input) {
     CommandResult result;
     PrProcessLauncher* launcher = prProcessLauncherCreate(PrProcessBackend_Default);
     if (launcher == nullptr)
@@ -121,12 +125,14 @@ CommandResult runCommand(const Command& command, int timeoutSeconds) {
         prProcessLauncherDestroy(launcher);
         return result;
     }
+    if (!input.empty()) prProcessWrite(process, {reinterpret_cast<const uint8_t*>(input.data()), input.size()});
+    prProcessCloseInput(process);
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
-    PrProcessInfo info{};
+    PrProcessState info{};
     for (;;) {
         drain(process, PrProcessStream_Output, result.out);
         drain(process, PrProcessStream_Error, result.err);
-        info = prProcessInfo(process);
+        info = prProcessState(process);
         if (info.exited && info.outputEnded)
             break;
         if (std::chrono::steady_clock::now() > deadline) {

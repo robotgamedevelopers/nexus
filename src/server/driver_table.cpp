@@ -1,4 +1,9 @@
 #include "server/driver_table.h"
+#include "server/sha256.h"
+#include "sync/sessions.h"
+#include "pr/json.h"
+
+#include <memory>
 
 namespace nexus::server {
 
@@ -23,10 +28,46 @@ std::vector<std::string> words(std::string_view line) {
     return out;
 }
 
+std::string_view tailAfter(std::string_view line, size_t words) {
+    for (size_t i = 0; i < words; ++i) {
+        line.remove_prefix(line.find_first_not_of(" \t"));
+        const auto end = line.find_first_of(" \t");
+        if (end == line.npos) return {};
+        line.remove_prefix(end);
+    }
+    const auto start = line.find_first_not_of(" \t");
+    return start == line.npos ? std::string_view{} : line.substr(start);
+}
+
+std::vector<std::string> commandWords(std::string_view value) {
+    if (!value.starts_with('[')) return words(value);
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    if (!doc || !prJsonParse(doc.get(), {value.data(), value.size()}, nullptr) ||
+        prJsonKind(doc.get(), 0) != PrJsonKind_Array) return {};
+    std::vector<std::string> out;
+    for (auto i = prJsonFirst(doc.get(), 0); i != kPrJsonMissing; i = prJsonAfter(doc.get(), 0, i)) {
+        if (prJsonKind(doc.get(), i) != PrJsonKind_String) return {};
+        const auto v = prJsonString(doc.get(), i);
+        std::string word(v.data ? v.data : "", v.size);
+        if (word.find('\0') != word.npos) return {};
+        out.push_back(std::move(word));
+    }
+    return out;
+}
+
 } // namespace
+
+std::string DriverTable::Primary::instance() const {
+    return sha256Hex(harness + '\0' + account + '\0' + cwd + '\0' + resume).substr(0, 32);
+}
+
+bool DriverTable::Primary::matches(const sync::SessionInfo& info) const {
+    return info.friendName == kPrimaryChat && info.account == account && info.harness == harness && info.instance == instance();
+}
 
 DriverTable parseDriverTable(std::string_view text, const std::string& home) {
     DriverTable table;
+    std::string resume;
     std::size_t number = 0;
     while (!text.empty()) {
         ++number;
@@ -43,6 +84,18 @@ DriverTable parseDriverTable(std::string_view text, const std::string& home) {
         const std::string where = "line " + std::to_string(number) + ": ";
         if (w[0] == "driver" && w.size() >= 3) {
             table.drivers[w[1]] = std::vector<std::string>(w.begin() + 2, w.end());
+        } else if (w[0] == "primary" && w.size() >= 4 && accounts::isProvider(w[1]) && accounts::isName(w[2]) &&
+                   accounts::isDir(tailAfter(line, 3)) && !table.primary) {
+            table.primary = DriverTable::Primary{w[1], w[2], std::string(tailAfter(line, 3)), {}};
+        } else if (w[0] == "primary-resume" && w.size() == 2 && resume.empty()) {
+            resume = w[1];
+        } else if (w[0] == "primary-driver" || w[0] == "signin") {
+            auto command = w.size() >= 3 ? commandWords(tailAfter(line, 2)) : std::vector<std::string>{};
+            if (command.empty() || !accounts::isProvider(w[1]) || !command.front().starts_with('/')) {
+                table.errors.push_back(where + w[0] + " needs a provider and an absolute program");
+            } else {
+                (w[0] == "signin" ? table.signins : table.primaryDrivers)[w[1]] = std::move(command);
+            }
         } else if (w[0] == "friend" && (w.size() == 3 || w.size() == 4)) {
             std::string cwd = w.size() == 4 ? w[3] : home;
             if (cwd == "~" || cwd.rfind("~/", 0) == 0) {
@@ -54,9 +107,10 @@ DriverTable parseDriverTable(std::string_view text, const std::string& home) {
         } else if (w[0] == "friend") {
             table.errors.push_back(where + "a friend line is `friend <name> <harness> [<directory>]`");
         } else {
-            table.errors.push_back(where + "\"" + w[0] + "\" is not `driver` or `friend`");
+            table.errors.push_back(where + "\"" + w[0] + "\" is not `driver`, `signin` or `friend`");
         }
     }
+    if (table.primary) table.primary->resume = resume;
     return table;
 }
 
@@ -81,6 +135,10 @@ ResolvedDriver resolveDriver(const DriverTable& table, const std::string& name, 
         return r;
     }
     r.command = d->second;
+    for (std::size_t i = 1; i < r.command.size(); ++i) {
+        if (r.command[i] == "{friend}") r.command[i] = name;
+        else if (r.command[i] == "{harness}") r.command[i] = f->second.harness;
+    }
     r.cwd = f->second.cwd;
     return r;
 }
@@ -102,6 +160,8 @@ accounts::Registry accountsFromDrivers(const DriverTable& table, const std::stri
             }
         }
     }
+    if (table.primary && !r.account(table.primary->account))
+        r.accounts.push_back(accounts::Account{table.primary->account, table.primary->harness});
     for (const auto& [name, f] : table.friends) {
         if (!accounts::isName(name)) {
             continue;

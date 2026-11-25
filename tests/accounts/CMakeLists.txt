@@ -18,27 +18,24 @@ add_dependencies(model_checks accounts_test)
 
 # The walk TLC checks, on Linux and macOS only (NEXUS_SERVER_PARTS in CMakeLists.txt).
 if(NEXUS_SERVER_PARTS)
-    add_executable(accounts_walk accounts_walk.cpp)
+    add_executable(accounts_walk accounts_walk.cpp credit_handoff_trace.cpp)
     target_link_libraries(accounts_walk PRIVATE nexus_sync)
     target_compile_options(accounts_walk PRIVATE ${warnings})
     add_dependencies(model_checks accounts_walk)
 endif()
 
-foreach(group layout refusals versions consistency picks hub_actions hub_reload_rotate hub_store_fails
+foreach(group layout refusals versions consistency picks hub_actions hub_reload_rotate hub_auto_subscriptions hub_store_fails
               hub_adopt_defaults hub_probe instances hub_instances limits keeps_out hub_friends friends_cap)
     add_test(NAME accounts_unit_${group} COMMAND accounts_test ${group})
     set_tests_properties(accounts_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
 
 # TLC (tlc_test is tests/model's): Accounts.tla, all properties (states and times on two workers on a Linux bench).
-# MCAccounts.cfg is two accounts of two providers, two friends, two sessions, every action, reload and report (162,128
-# distinct states since a dropped friend's sessions are kept as they were; 14 s on eight workers on an M-series Mac).
-# Nightly: MCAccountsThree.cfg, three accounts (two of one provider), one session (1,640,352
-# distinct states, 6 min 41 s on two workers; capped at 15 min on eight).
-# Per commit on eight workers: 17-23 s, timed two at a time on a loaded tlc runner host (16 cores); alone on an idle
-# one (amd-2, 2026-11-15) 16.2 s / 124 CPU s, against 26.3 s / 106 on four. In a CI shard of its own (SHARD: capped at
-# the shard's budget, 80 s).
+# MCAccounts.cfg covers two providers, two accounts, two friends and two sessions. Permuting the two friend names
+# leaves each safety property unchanged (150,704 distinct states, 22 s on eight workers on an M-series Mac).
+# It runs alone in its CI shard, capped at 80 s. The nightly three-account instance is capped at 15 min.
 tlc_test(tlc_accounts       MCAccounts MCAccounts.cfg      pass WORKERS 8 SHARD)
+tlc_test(tlc_accounts_policy MCAccounts MCAccountsPolicy.cfg pass WORKERS 2)
 tlc_test(tlc_accounts_three MCAccounts MCAccountsThree.cfg pass WORKERS 8 NIGHTLY CAP 900)
 # MCAccountsInstances.cfg: one account, two friends, two instance names, two sessions: the instances' rules.
 tlc_test(tlc_accounts_instances MCAccounts MCAccountsInstances.cfg pass WORKERS 4)
@@ -46,6 +43,21 @@ tlc_test(tlc_accounts_instances MCAccounts MCAccountsInstances.cfg pass WORKERS 
 # start and end: the limit's rules (docs/accounts.md, "limit") beside every other operation (29,175 distinct states,
 # 6 s on four workers on a loaded Mac, 2026-11-15).
 tlc_test(tlc_accounts_limit MCAccounts MCAccountsLimit.cfg pass WORKERS 4)
+
+# One unfinished turn: signed-in subscription order, explicit pins, finite exhaustion and transcript continuity.
+tlc_test(tlc_accounts_credit_handoff CreditHandoff CreditHandoff.cfg pass)
+tlc_test(tlc_accounts_credit_bounce_rejected CreditHandoff WCreditBounce.cfg invariant PROPERTY NeverReturn)
+tlc_test(tlc_accounts_credit_pin_rejected CreditHandoff WCreditIgnorePin.cfg invariant PROPERTY PinHolds)
+tlc_test(tlc_accounts_credit_duplicate_rejected CreditHandoff WCreditDuplicate.cfg invariant PROPERTY WorkIntact)
+foreach(mode auto pin)
+    tlc_test(tlc_accounts_credit_trace_${mode} CreditHandoffTrace CreditHandoffTrace.cfg pass CREDITMODE ${mode})
+endforeach()
+
+tlc_test(tlc_accounts_model_limit_choice LimitChoice LimitChoice.cfg pass)
+tlc_test(tlc_accounts_model_limit_unapproved_rejected LimitChoice WLimitNoApproval.cfg invariant PROPERTY ChosenOnce)
+foreach(mode account model)
+    tlc_test(tlc_accounts_model_limit_trace_${mode} LimitChoiceTrace LimitChoiceTrace.cfg pass CREDITMODE fable-${mode})
+endforeach()
 
 # Reversed witnesses: each broken variant must be rejected by the property named.
 tlc_test(tlc_accounts_witness_remove_stays       WAccRemoveStays       WAccRemoveStays.cfg       invariant

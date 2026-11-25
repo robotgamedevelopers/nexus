@@ -45,7 +45,7 @@ codec::EntryChange entryChange(const SessionEntry& e, const EntryRef* had, bool 
             (!tables || (codec::tableText((*had)->text) && codec::tableText(e.text)))) {
         offset = (*had)->text.size();
     }
-    return codec::EntryChange{e.kind, e.closed, offset, e.text.substr(offset)};
+    return codec::EntryChange{e.kind, e.closed, offset, e.text.substr(offset), e.accountEmailEnd};
 }
 
 // One changed session: what it is, its activity, its first index, the index k of the first entry `a` does not hold as
@@ -56,6 +56,8 @@ codec::SessionChange sessionChange(const SessionView& b, const SessionView* a, b
     c.changed = true;
     c.info = b.info;
     c.activity = b.activity;
+    c.activeAgents = b.activeAgents;
+    if (tables) c.busSenders = b.busSenders;
     c.first = b.first;
     std::uint64_t k = b.first;
     while (k < b.total()) {
@@ -85,6 +87,8 @@ SessionRef applySession(codec::SessionChange&& c, const SessionView* a) {
     const std::string name = named(c.id);
     t->info = std::move(c.info);
     t->activity = c.activity;
+    t->activeAgents = c.activeAgents;
+    t->busSenders = std::move(c.busSenders);
     t->first = c.first;
     const std::uint64_t k = c.keepFrom;
     const std::uint64_t count = c.entries.size();
@@ -119,7 +123,7 @@ SessionRef applySession(codec::SessionChange&& c, const SessionView* a) {
             }
             text = (*had)->text + text;
         }
-        t->entries.push_back(std::make_shared<const SessionEntry>(SessionEntry{e.kind, std::move(text), e.closed}));
+        t->entries.push_back(std::make_shared<const SessionEntry>(SessionEntry{e.kind, std::move(text), e.closed, e.accountEmailEnd}));
         ++i;
     }
     if (!c.queueChanged) {
@@ -175,8 +179,8 @@ void Sessions::setOffers(std::vector<SignInOffer> offers) {
 }
 
 bool SessionView::operator==(const SessionView& x) const {
-    if (id != x.id || !(info == x.info) || activity != x.activity || first != x.first ||
-            entries.size() != x.entries.size() || queue != x.queue) {
+    if (id != x.id || !(info == x.info) || activity != x.activity || activeAgents != x.activeAgents || first != x.first ||
+            entries.size() != x.entries.size() || queue != x.queue || busSenders != x.busSenders) {
         return false;
     }
     for (std::size_t i = 0; i < entries.size(); ++i) {
@@ -187,30 +191,47 @@ bool SessionView::operator==(const SessionView& x) const {
     return true;
 }
 
+bool visibleBus(std::string_view text, const SessionView& view) {
+    if (text.empty()) return false;  // a redacted slot, still counted in raw transcript indexes
+    const auto separator = text.find('\n');
+    // A broadcast can arrive back in its sender's own inbox, including in saved history.
+    if (separator != text.npos && text.substr(0, separator) == view.info.friendName) return false;
+    if (!view.busSenders) return true;
+    return separator != text.npos && std::binary_search(view.busSenders->begin(), view.busSenders->end(),
+                                                        text.substr(0, separator));
+}
+
 SessionView tailOf(SessionId id, SessionInfo info, const std::vector<EntryRef>& transcript,
-                   std::vector<std::string> queue, Tail tail, EntryRef open) {
+                   std::vector<std::string> queue, Tail tail, EntryRef open,
+                   std::optional<std::vector<std::string>> busSenders) {
     SessionView t;
     t.id = id;
     t.info = std::move(info);
     t.queue = std::move(queue);
+    t.busSenders = std::move(busSenders);
     // The tail of the closed entries, then the open entry, if any, which the tail's rules do not count: so a state
     // always carries the newest closed entry, and a window that missed entries always gets one after its notice.
     const std::size_t count = transcript.size();
     std::size_t from = count;
     std::size_t bytes = 0;
     while (from > 0) {
-        const std::size_t size = transcript[from - 1]->text.size();
+        EntryRef e = transcript[from - 1];
+        if (e->kind == EntryKind::Bus && !visibleBus(e->text, t)) {
+            // Preserve the durable position without sending any part of this event to a window.
+            static const EntryRef hidden = std::make_shared<const SessionEntry>(SessionEntry{EntryKind::Bus, {}, true});
+            e = hidden;
+        }
+        const std::size_t size = e->text.size();
         const bool newest = from == count;
         if (!newest && (count - from >= tail.entries || bytes + size > tail.bytes)) {
             break;
         }
         bytes += size;
+        t.entries.push_back(std::move(e));
         --from;
     }
     t.first = from;
-    for (std::size_t i = from; i < count; ++i) {
-        t.entries.push_back(transcript[i]);
-    }
+    std::reverse(t.entries.begin(), t.entries.end());
     if (open) {
         t.entries.push_back(std::move(open));
     }
@@ -231,6 +252,7 @@ Sessions::Sessions(std::vector<SessionRef> sessions)
             throw std::logic_error("Sessions: sessions out of id order or with one id twice: " +
                 std::to_string(sessions[i - 1]->id) + ", " + std::to_string(sessions[i]->id));
         }
+        if (sessions[i]->info.friendName == kPrimaryChat && primaryChat_ == 0) primaryChat_ = sessions[i]->id;
     }
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));
 }
@@ -283,6 +305,7 @@ std::string Sessions::diff_from(const Sessions& existing) const {
     // The sign-in flows ride only on a link of 5 or later (sync/formats.h); a window below it gets none.
     if (format_ >= kSignInFormat) {
         change.offers = *offers_;
+        change.nextAction = nextAction_;
     }
     return tables ? codec::writeTables(change, format_) : codec::writeLegacy(change, format_);
 }
@@ -303,6 +326,7 @@ void Sessions::apply_string(const std::string& diff) {
     }
     std::vector<SessionRef> sessions;
     sessions.reserve(change.sessions.size());
+    SessionId primary = 0;
     for (codec::SessionChange& c : change.sessions) {
         const SessionId id = c.id;
         if (id == 0) {
@@ -321,6 +345,7 @@ void Sessions::apply_string(const std::string& diff) {
         } else {
             sessions.push_back(applySession(std::move(c), a));
         }
+        if (sessions.back()->info.friendName == kPrimaryChat && primary == 0) primary = id;
     }
     for (std::size_t i = 0; i < change.requests.size(); ++i) {
         const SecretRequest& q = change.requests[i];
@@ -335,6 +360,7 @@ void Sessions::apply_string(const std::string& diff) {
         }
     }
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));
+    primaryChat_ = primary;
     setRequests(std::move(change.requests));
     if (change.friendsSent && change.friendsKnown) {
         setFriends(std::move(change.friends));
@@ -342,10 +368,12 @@ void Sessions::apply_string(const std::string& diff) {
         clearFriends();
     }
     setOffers(std::move(change.offers));
+    nextAction_ = change.nextAction;
     unknown_ = unknown;
 }
 
 bool Sessions::operator==(const Sessions& x) const {
+    if (nextAction_ != x.nextAction_) return false;
     if (requests_ != x.requests_ && *requests_ != *x.requests_) {
         return false;
     }
@@ -379,6 +407,7 @@ std::string stateFile(const Sessions& state) {
     // No sign-in goes in a file: an offer's URL is for the window holding it alone.
     Sessions kept = state;
     kept.setOffers({});
+    kept.setNextAction(0);
     return kStateFileTag + std::to_string(state.format()) + "\n" + kept.init_diff();
 }
 

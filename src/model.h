@@ -1,27 +1,54 @@
 #pragma once
 #include <cstddef>
+#include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace nexus {
+
+// A conversation supplied by the server's harness binding, outside the registered friends' name space.
+inline constexpr char kPrimaryChat[] = "@primary";
 
 struct FriendInfo { std::string name; std::string model; };
 
 // Person: the person's prompt; Friend: the friend's text; Notice: a line from nexus; Tool: the friend used a tool, one
 // line naming it and what it does (its name, a colon, its summary).
-enum class EntryKind { Person, Friend, Notice, Tool };
+// Bus is an envelope accepted by the server. Its text is the sender, one newline, then the display body.
+// Value 4 is reserved for a durable context boundary and is never a visible entry.
+enum class EntryKind { Person, Friend, Notice, Tool, Bus = 5 };
 
-struct Entry { EntryKind kind; std::string text; };
+inline constexpr std::string_view kAccountSwitchPrefix = "Switched to ";
+struct Entry {
+    EntryKind kind;
+    std::string text;
+    std::uint32_t accountEmailEnd = 0;  // byte offset after the address in an account-switch notice; zero for other entries
+};
 
-// What a tab is. The sprint tab, when the model has one, is first and never moves or closes; friend tabs come and go
-// with the server's friend list (add_friend, remove_friend) and are never closed by the person; terminal tabs come and
-// go.
-enum class TabKind { Sprint, Friend, Terminal };
+// A change at an index in the original transcript: insert before it, erase it, or replace it.
+struct TranscriptEdit {
+    std::size_t at;
+    bool erase;
+    std::optional<Entry> replacement;
+    Entry* removed = nullptr;   // when supplied, move the erased row here
+};
 
-// The zone a tab of `kind` stands in: the strip holds the zones in ascending order, and a tab moves only inside its own.
-// The sprint tab is zone 0, alone; friends are zone 1 and terminals zone 2.
+// Native presentation and lifecycle. The active fork separately assigns each tab type to a group.
+enum class TabKind { Sprint, Friend, Terminal, Extension };
+
+// The built-in order used by older window descriptions without tab groups.
 int zone(TabKind kind);
+
+struct TabGroup {
+    std::string id;
+    std::vector<std::string> types{};
+    bool closable = false;
+    std::vector<std::string> acceptsFrom{};
+    bool operator==(const TabGroup&) const = default;
+};
 
 struct Tab {
     std::size_t id;     // who the tab is, wherever it stands, never reused: a friend's place in the constructor's list;
@@ -33,6 +60,14 @@ struct Tab {
     std::string draft;
     std::vector<std::string> queue;  // prompts queued for later, oldest first; apart from the transcript
     TabKind kind = TabKind::Friend;
+    std::string type{};
+    std::string group{};
+    std::string declaredGroup{};  // the plugin default when an older fork provides no tab_groups
+    std::uint64_t transcriptGeneration = 0;
+    std::string held{};  // one multiline message staged locally until release
+
+    bool primaryChat() const { return kind == TabKind::Friend && name == kPrimaryChat; }
+    std::string_view displayName() const { return primaryChat() ? std::string_view("Chat") : std::string_view(name); }
 };
 
 class Model {
@@ -52,16 +87,32 @@ public:
                                 // transcript, clear that draft, true; else false, no change. Never touches a queue.
     bool queue(std::size_t i);  // a friend's tab whose draft is not all-whitespace: append the draft to that tab's queue,
                                 // clear that draft, true; else false, no change. Never touches a transcript.
+    bool hold_draft(std::size_t i);
+    void clear_composer(std::size_t i);
+    void restore_held(std::size_t i, std::string text);
+    void pop_held(std::size_t i);
     bool take_queued(std::size_t i);  // a friend's tab whose queue is not empty: its oldest queued prompt leaves the
                                       // queue (the server delivered it), true; else false, no change. Never touches a
                                       // transcript or a draft.
+    void clear_transcript(std::size_t i);
     bool append(std::size_t i, Entry e);         // false and no change unless i is a friend's tab
+    // Edits are ordered by original index. Multiple insertions before one entry retain their order.
+    void edit_transcript(std::size_t i, std::vector<TranscriptEdit> edits);
     bool move_tab(std::size_t from, std::size_t to); // false and no change unless both < tab_count() and the tabs at
-                                                     // `from` and `to` are in the same zone; else the tab at `from`
+                                                     // the destination group accepts the move; else the tab at `from`
                                                      // ends at `to`, the tabs between shift by one, everything the tab
                                                      // holds goes with it, and active() follows its friend
+    std::uint64_t layout_revision() const { return layoutRevision_; }
+    // Reconcile a newly loaded group description, preserving active identity and permitted instance moves.
+    bool set_tab_groups(const std::vector<TabGroup>& groups);
+    bool move_to_group(std::size_t from, const std::string& group, std::size_t slot);
+    // Saved ids with their destination group, in saved order. Only groups reachable under the active fork are restored.
+    void restore_tab_layout(const std::vector<std::pair<std::size_t, std::string>>& ordered);
+    std::size_t open_extension(std::string type, std::string group, std::string title);
+    bool edit_extension(std::size_t i, std::string text);
     std::size_t add_terminal();  // appends a terminal tab at the end, makes it active (its id at the end of
                                  // selection_history()), returns its new id
+    bool dismiss_tab(std::size_t i); // window policy authorized closing this tab; preserves selection history
     bool close_tab(std::size_t i); // a terminal's tab: removes it, the tabs after shift left, its id leaves
                                    // selection_history(), true; the sprint tab, a friend's tab or i >= tab_count(): false,
                                    // no change. If it was active, the tab selected before it is active: the last id left
@@ -96,6 +147,16 @@ protected:
     bool sendable(std::size_t i) const;
     void touch(std::size_t id);     // Window.tla's Touch: id at the end of history_, and nowhere else
     void remove_at(std::size_t i);  // the tab at i out, by Window.tla's Removed, Forget and ClosedActive
+    std::string home_group(TabKind kind, const std::string& type = {}, const std::string& declared = {}) const;
+    std::size_t group_rank(const std::string& group) const;
+    std::size_t group_end(const std::string& group) const;
+    bool accepts(const std::string& from, const std::string& to) const;
+    bool reachable(const std::string& from, const std::string& to) const;
+    bool reorder(std::size_t from, std::size_t to);
+    void sort_layout(const std::vector<std::pair<std::size_t, std::string>>& ordered);
+    std::uint64_t layoutRevision_ = 0;
+    std::vector<TabGroup> groups_;
+    std::vector<std::string> legacyGroups_{"dashboards", "friends", "terminals"};
     std::vector<Tab> tabs_;
     std::vector<std::size_t> history_;
     std::size_t active_ = 0;

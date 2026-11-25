@@ -11,6 +11,9 @@
 #include <cstring>
 #include <ctime>
 #include <regex>
+#include <filesystem>
+#include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -135,7 +138,7 @@ footer { margin-top: 3rem; font-size: 1.5rem; line-height: 2.25rem; text-align: 
 a { display: inline-block; }</style></head>
 <body><header class="top"><div class="brand"><h1><img id="logo" class="logo-tile" width="120" height="120"
 alt="nova-sprint" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><span class="wordmark" id="wordmark">nova-sprint</span></h1>
-<div class="meta"><span class="chip">epoch <b>3</b></span></div></div>
+<div class="meta"><span class="chip" id="ver-chip">version <b id="ver">v99.fixture</b></span><span class="chip">epoch <b>3</b></span></div></div>
 <div class="right"><span class="live" id="live">Live</span></div></header>
 <p><a id="other" href="https://github.com/mas-bandwidth/nova-tools">nova-tools</a></p>
 <footer id="foot"><a id="repo" href="https://github.com/mas-bandwidth/nova-sprint">https://github.com/mas-bandwidth/nova-sprint</a></footer>
@@ -214,7 +217,7 @@ struct Harness {
     double time = 1000;
     PrVec2 extent{1000, 780};       // the window's, px
 
-    explicit Harness(std::function<SprintBoardAddress()> find = nullptr) {
+    explicit Harness(std::function<SprintBoardAddress()> find = nullptr, bool prewarm = false, std::string storageDirectory = {}) {
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 1};
@@ -223,6 +226,8 @@ struct Harness {
         PrKitTheme theme = windowTheme(fonts, false);
         kit = prKitCreate(ui, &theme);
         PraxBoard::Desc b;
+        if (prewarm) b.initialExtent = extent;
+        b.storageDirectory = std::move(storageDirectory);
         b.kit = kit;
         b.fonts = fonts;
         if (find)
@@ -412,6 +417,28 @@ void offScreenRunsNothingAndCatchesUp() {
     CHECK(h.server.polls > polls);
 }
 
+// A cleared sprint replaces a populated chart while the friend page remains selected.
+void preparationWaitsForTheNewChart() {
+    Harness h;
+    h.frames(10);
+    CHECK(h.board->settled());
+    h.model.select_tab(1);
+    h.frame();
+    h.server.page = R"(<body><span id="landed">0</span><svg id="pie"></svg>
+        <script>setTimeout(function () {
+            document.querySelector("#pie").appendChild(document.createElementNS("http://www.w3.org/2000/svg","circle"));
+        }, 500);</script></body>)";
+    h.board->prepare(h.extent);
+    h.view.pendingBoardId = h.model.tab(0).id;
+    h.frames(4);
+    CHECK(h.server.pages == 2 && h.model.active() == 1 && !h.board->prepared());
+    h.frames(20);
+    CHECK(h.board->prepared() && h.model.active() == 0);
+    h.dom([&](PrDomDocument* d) {
+        CHECK(prDomNodeFirstElementChild(prDomElementAsNode(Harness::byId(d, "pie"))) != nullptr);
+    });
+}
+
 // A new build reloads the page, and nexus's script runs again in the new document: the clock and the digits are still
 // formatted, and the style is added again.
 void aNewBuildReloadsWithThePrelude() {
@@ -453,10 +480,13 @@ void aFailedLookupIsTheLine() {
 
 // The lookup's address is the page's.
 void aFoundAddressLoads() {
-    Harness h([] { return SprintBoardAddress{kUrl, {}}; });
-    for (int i = 0; i < 200 && !h.board->settled(); ++i)
-        h.frame();
+    Harness h([] { return SprintBoardAddress{kUrl, {}}; }, true);
+    h.model.select_tab(1);
+    for (int i = 0; i < 200 && !h.board->settled(); ++i) h.frame();
     CHECK(h.board->settled() && h.server.pages == 1);
+    h.model.select_tab(0);
+    h.frame();
+    CHECK(h.board->problem().empty() && has(h.text(), "first") && h.server.pages == 1);
 }
 
 // The Cost breakdown reaches one gap above the bottom of the first screen at a tall window and a short one, the gap the
@@ -674,7 +704,7 @@ void linksThatLeaveTheBoardOpenInTheBrowser() {
     CHECK(h.server.pages == 2 && h.board->documentUrl() == kUrl && h.board->settled());
 }
 
-// The board's header shows as served: its logo and its "nova-sprint" title. The footer's link to nova-sprint's
+// The embedded header uses the short name and hides the logo. The footer's link to nova-sprint's
 // repository is not rendered, and a footer that held only it is not either; in a footer with more, the rest stays.
 // Another link still renders, and still opens in the browser.
 void theRepositoryLinkIsHidden() {
@@ -688,13 +718,30 @@ void theRepositoryLinkIsHidden() {
         PrStringView v = prRawStringView(&t);
         word.assign(v.data != nullptr ? v.data : "", v.size);
         prRawStringReset(&t);
+        auto version = prDomNodeTextContent(prDomElementAsNode(Harness::byId(d, "ver")));
+        const auto value = prRawStringView(&version);
+        CHECK(value.size > 1 && value.data[0] == 'v' && std::string_view(value.data, value.size) != "v99.fixture");
+        prRawStringReset(&version);
     });
-    CHECK(word == "nova-sprint");
+    CHECK(word == "nexus");
     const PrDomRect mark = h.rect("wordmark");
+    const PrDomRect badge = h.rect("ver-chip");
+    CHECK(badge.width > 0);
+    h.board->onPage([&](PrHtmlPage* page) {
+        CHECK(prHtmlPageNavigate(page, {kUrl, std::strlen(kUrl)}) == PrStatus_Ok);
+    });
+    for (int i = 0; i < 10; ++i) {
+        h.frame();
+        const auto title = h.rect("wordmark");
+        const auto version = h.rect("ver-chip");
+        CHECK(title.x == mark.x && title.y == mark.y && title.width == mark.width && title.height == mark.height);
+        CHECK(version.x == badge.x && version.y == badge.y);
+    }
+    CHECK(h.server.pages == 2);
     const PrDomRect logo = h.rect("logo");
     CHECK(mark.width > 50 && mark.height > 80);
-    CHECK(logo.width > 90 && logo.height > 90);                     // the 6rem tile
-    CHECK(mark.x > logo.x + logo.width);                            // the title beside it
+    CHECK(logo.width == 0 && logo.height == 0);
+    CHECK(logo.y >= badge.y && logo.y <= badge.y + badge.height);
     const PrDomRect repo = h.rect("repo");
     CHECK(repo.width == 0 && repo.height == 0);                     // not rendered
     const PrDomRect foot = h.rect("foot");
@@ -708,11 +755,107 @@ void theRepositoryLinkIsHidden() {
     CHECK((h.opened == std::vector<std::string>{"https://github.com/mas-bandwidth/nova-tools"}));
 }
 
+void largeDashboardRefresh(bool reuse) {
+    Harness h;
+    std::string page = "<body><div id='streams'>";
+    for (int i = 0; i < 250; ++i)
+        page += "<div class='row'><span>Stream " + std::to_string(i) + "</span><span>Working</span><span>8</span></div>";
+    page += "</div><script>function poll(){fetch('/api/sprint').then(r=>r.json())}poll();";
+    if (reuse) page += "function renderOverall(){}";
+    page += "</script></body>";
+    h.server.page = page.c_str();
+    h.frames(10);
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 5; ++i) {
+        h.model.select_tab(1); h.frame();
+        h.board->prepare(h.extent);
+        h.view.pendingBoardId = h.model.tab(0).id;
+        h.frames(5);
+        CHECK(h.model.active() == 0);
+    }
+    CHECK(h.server.pages == (reuse ? 1 : 6) && h.server.polls == 6);
+    std::printf("250 streams, five returns (%s): %.0f ms\n", reuse ? "reuse" : "reload",
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+}
+
+void activeAndTransferredCellsAnimate() {
+    Harness h;
+    h.server.page = R"HTML(<style>
+        #overall .cell { animation: pulse 2.4s ease-in-out infinite; }
+        .flash { animation: flash 1.5s ease-out; }
+        .cell { display:inline-block;width:20px;height:20px;background-color:rgb(90,50,10) }
+        </style><div id="overall"><i id="active" class="cell working"></i></div>
+        <div id="friends"><i id="moved" class="cell"></i></div>
+        <script>setTimeout(function(){document.querySelector("#moved").classList.add("flash")},500);
+        setInterval(function(){
+        document.body.setAttribute("data-pulse",getComputedStyle(document.querySelector("#active")).opacity);
+        document.body.setAttribute("data-transfer",getComputedStyle(document.querySelector("#moved")).backgroundColor);
+        },100)</script>)HTML";
+    std::set<std::string> pulses, flashes;
+    for (int i = 0; i < 55; ++i) {
+        h.frame();
+        h.dom([&](PrDomDocument* d) {
+            auto sample = [&](const char* key, auto& samples) {
+                if (auto* body = prDomDocumentBody(d)) {
+                    auto v = prDomElementGetAttribute(body, {key, std::strlen(key)});
+                    if (v.size) samples.emplace(v.data, v.size);
+                }
+            };
+            sample("data-pulse", pulses);
+            sample("data-transfer", flashes);
+        });
+    }
+    CHECK(pulses.size() > 2);
+    CHECK(flashes.size() > 2);
+}
+
+// The live board can poll in place. An app relaunch restores its section preference
+// and scroll offset from the origin's storage before exposing the first settled frame.
+void dashboardReaderState() {
+    const auto dir = std::filesystem::temp_directory_path() / ("nexus-board-" + std::to_string(std::random_device{}()));
+    constexpr auto page = R"HTML(<body style="height:4000px"><button id="fold">Section</button>
+        <script>const button=document.querySelector("#fold");
+        button.textContent=localStorage.getItem("section") || "open";
+        button.onclick=function(){button.textContent="closed";localStorage.setItem("section","closed")};
+        function renderOverall(){}
+        function poll(){fetch("/api/sprint").then(r=>r.json())}
+        </script></body>)HTML";
+    {
+        Harness h(nullptr, false, dir.string());
+        h.server.page = page;
+        h.frames(10);
+        h.click("fold");
+        CHECK(has(h.text(), "closed"));
+        h.setScrollTop(550);
+        h.frames(3);
+        h.model.select_tab(1);
+        h.frame();
+        h.board->prepare(h.extent);
+        h.view.pendingBoardId = h.model.tab(0).id;
+        h.frames(10);
+        CHECK(h.server.pages == 1 && h.server.polls > 0 && h.model.active() == 0);
+        CHECK(h.scrollTop() == 550);
+    }
+    {
+        Harness h(nullptr, false, dir.string());
+        h.server.page = page;
+        h.frames(10);
+        CHECK(has(h.text(), "closed"));
+        CHECK(h.scrollTop() == 550);
+    }
+    std::filesystem::remove_all(dir);
+}
+
 } // namespace
 
 int main() {
+    largeDashboardRefresh(false);
+    largeDashboardRefresh(true);
+    activeAndTransferredCellsAnimate();
+    dashboardReaderState();
     loadsPollsAndFormats();
     offScreenRunsNothingAndCatchesUp();
+    preparationWaitsForTheNewChart();
     aNewBuildReloadsWithThePrelude();
     anUnreachableBoardSaysWhyAndRecovers();
     aFailedLookupIsTheLine();

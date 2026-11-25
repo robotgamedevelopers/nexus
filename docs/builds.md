@@ -276,6 +276,9 @@ end
 <server dir>/current/bin/nexus-server supervise --dir <server dir>
 ```
 
+The serving process also runs the selected Nova services for this machine. Use
+`nexus-server services status` to see their state. [Configure and transfer a service](service-migration.md).
+
 At most one supervisor runs per `<server dir>` under `flock(LOCK_EX)` on `supervise/`'s own descriptor:
 
 1. **Cold start and handover adoption**: checks `handover/`'s lock (waiting if an external `handover` is in flight, and

@@ -17,7 +17,7 @@ add_test(NAME link_unit COMMAND link_unit)
 set_tests_properties(link_unit PROPERTIES LABELS unit TIMEOUT 30)
 
 add_executable(link_e2e link_e2e.cpp)
-target_link_libraries(link_e2e PRIVATE nexus_link)
+target_link_libraries(link_e2e PRIVATE nexus_link nexus_builds)
 target_include_directories(link_e2e PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sync ${CMAKE_SOURCE_DIR}/tests)
 target_compile_options(link_e2e PRIVATE ${warnings})
 add_dependencies(link_e2e nexus-server nexus_fake_driver nexus_fake_claude nexus-server-leaky)
@@ -41,15 +41,24 @@ add_test(NAME link_e2e_friends COMMAND link_e2e ${server} ${e2e_dir}-friends fri
 # In-app sign-in through the real server with the FAKE claude (tests/server/fake_claude.cpp), and its reversed witness:
 # nexus-server-leaky, which writes the forwarded query to server.log, which the run's search must find.
 add_test(NAME link_e2e_signin COMMAND link_e2e ${server} ${e2e_dir}-signin signin $<TARGET_FILE:nexus_fake_claude>)
+add_test(NAME link_e2e_verified_claude COMMAND link_e2e ${server} ${e2e_dir}-verified-claude verified-claude
+         $<TARGET_FILE:nexus_fake_claude>)
 add_test(NAME link_e2e_signin_leaky COMMAND link_e2e $<TARGET_FILE:nexus-server-leaky> ${e2e_dir}-leaky signin
          $<TARGET_FILE:nexus_fake_claude> leaky)
 # The window's own link reconnecting by itself: after a clean stop (told by the server's shutdown, keeping a stopped
 # server stopped until the next starts, and resending unacknowledged actions), then after SIGKILL (found by silence).
 add_test(NAME link_e2e_takeover COMMAND link_e2e ${server} ${e2e_dir}-takeover takeover)
 set(e2e_tests link_e2e_loopback link_e2e_outage link_e2e_soak link_e2e_restart link_e2e_older_server link_e2e_flush
-    link_e2e_secret link_e2e_friends link_e2e_signin link_e2e_signin_leaky link_e2e_takeover)
+    link_e2e_secret link_e2e_friends link_e2e_signin link_e2e_signin_leaky link_e2e_verified_claude link_e2e_takeover)
 set(e2e_dirs ${e2e_dir}-loopback ${e2e_dir}-outage ${e2e_dir}-soak ${e2e_dir}-restart ${e2e_dir}-older
-    ${e2e_dir}-flush ${e2e_dir}-secret ${e2e_dir}-friends ${e2e_dir}-signin ${e2e_dir}-leaky ${e2e_dir}-takeover)
+    ${e2e_dir}-flush ${e2e_dir}-secret ${e2e_dir}-friends ${e2e_dir}-signin ${e2e_dir}-leaky ${e2e_dir}-verified-claude ${e2e_dir}-takeover)
+find_package(Python3 3.11 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME link_e2e_private_signin COMMAND link_e2e ${server} ${e2e_dir}-private-signin private-signin
+        ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/private_signin.py)
+    list(APPEND e2e_tests link_e2e_private_signin)
+    list(APPEND e2e_dirs ${e2e_dir}-private-signin)
+endif()
 if(NEXUS_E2E_TAILNET)
     add_test(NAME link_e2e_tailnet COMMAND link_e2e ${server} ${e2e_dir}-tailnet roundtrip ${NEXUS_E2E_TAILNET}
         $<TARGET_FILE:nexus_fake_driver>)

@@ -67,15 +67,17 @@ void ClientLink::nudge() {
     }
 }
 
-void ClientLink::send(sync::Action action) {
+std::uint64_t ClientLink::send(sync::Action action) {
+    std::uint64_t number;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         pending_.push_back(std::move(action));
-        ++sent_;
+        number = ++sent_;
         snapshot_.sent = sent_;
         snapshot_.acknowledged = false;
     }
     nudge();
+    return number;
 }
 
 bool ClientLink::poll(Snapshot* out) {
@@ -168,6 +170,7 @@ void ClientLink::run() {
             std::fprintf(stderr, "nexus: link to %s: a new session, from action %llu\n", host.c_str(),
                 static_cast<unsigned long long>(b.next));
         }
+        s.loopback = ip == "127.0.0.1" || ip == "::1";
         session = std::move(made);   // the old one goes: its server ended it, or ends it for this one
         return true;
     };

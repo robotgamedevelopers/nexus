@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,6 +31,7 @@ struct EntryChange {
     bool closed = true;
     std::uint64_t offset = 0;
     std::string tail;
+    std::uint32_t accountEmailEnd = 0;
 };
 
 // One session of a diff. Unchanged: the state diffed from holds it as it is, and only its id is set. Changed: what it
@@ -45,6 +47,8 @@ struct SessionChange {
     std::vector<EntryChange> entries;
     bool queueChanged = false;
     std::vector<std::string> queue;
+    std::uint32_t activeAgents = 0;
+    std::optional<std::vector<std::string>> busSenders{};
 };
 
 // A sessions diff: every session of the state, in id order, then the open secret requests, then the server's friends
@@ -58,6 +62,7 @@ struct SessionsChange {
     bool friendsKnown = false;
     std::vector<ServerFriend> friends;
     std::vector<SignInOffer> offers;
+    std::uint64_t nextAction = 0;
 };
 
 // Formats 1 to 3. A format that lacks a field does not write it (activity before 2, the instance before 2, the
@@ -96,6 +101,12 @@ void checkReadSize(std::size_t diffBytes, std::int64_t need, const char* what);
 // nothing else (which every server refuses), and readActionsTables reads a sign-in's kind as Unknown. A flow's URL is
 // written only from the offer of the window that holds it (Hub::stateFor), the one route a sign-in secret has into a
 // table down; a callback's query, the one route up, rides in an action's `secret` as an answer's value does.
+// A complete picker roster can share a snapshot with transcripts, requests and offers. Reserve one
+// quarter of both link limits for those other fields. Check the generated representation near the limits.
+constexpr std::size_t kRosterWireBytes = kMaxDiffBytes * 3 / 4;
+constexpr std::size_t kRosterReadBytes = kMaxReadBytes * 3 / 4;
+bool rosterFits(std::vector<ServerFriend> friends);
+
 std::string writeTables(const SessionsChange& change, std::uint32_t format);
 SessionsChange readTables(const std::string& diff, int* unknown);
 std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& held, std::size_t from,

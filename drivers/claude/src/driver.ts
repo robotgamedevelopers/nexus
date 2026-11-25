@@ -17,7 +17,9 @@
 // refusals) is models/ClaudeDriver.tla. Each step below that the model names is recorded through Host.step, and the
 // model job checks the traces of the unit tests and of test/walk.ts against it (models/ClaudeDriverTrace.tla).
 
+import type { VerifiedLogin } from './verified.js';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
 import type {
@@ -33,6 +35,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { busSendTool } from './bus-sender.js';
 
 import { isAccountName, kTokenFile } from './account.js';
 import {
@@ -55,7 +58,7 @@ import {
 
 /** What the driver uses of the SDK's Query. */
 export type Harness = Pick<Query, 'interrupt' | 'setModel' | 'applyFlagSettings' | 'accountInfo' | 'close'> &
-    AsyncIterable<SDKMessage>;
+    AsyncIterable<SDKMessage> & {catalogReady?: Promise<unknown>};
 
 /** How a harness is started: a new session (`sessionId`) or a resumed one (`resume`). */
 export interface HarnessStart {
@@ -65,9 +68,16 @@ export interface HarnessStart {
     resume?: string;
     model?: string;
     effort?: EffortLevel;
+    startupContext?: string;
     settingSources: SettingSource[];
     claudePath?: string;
     limited: boolean;                   // the friend is limited to `cwd` (--limit cwd; wall.ts limitOf)
+    writeDirs?: string[];
+    readDirs?: string[];
+    gitRemote?: string;
+    busListener?: string;
+    busSender?: string;
+    noSandbox?: boolean;
     keepsOut: string[];                 // and kept out of these too (--keep-out <dir>; wall.ts limitOf)
     askSecret: (account: string, what: string, why: string) => Promise<string>;
 }
@@ -86,7 +96,7 @@ export interface DriverState {
     stage: 'none' | 'waiting' | 'applying' | 'pushed' | 'taken';
     stopping: boolean;
     textOpen: boolean;
-    failure: 'none' | 'harness' | 'no-credential';
+    failure: 'none' | 'harness' | 'no-credential' | 'rate-limit' | 'usage-limit' | 'model-limit';
     interrupting: number;               // the turn whose interrupt has not answered yet, 0 for none
     pending: Changes;                   // settings for the next send
     carry: Changes;                     // the open turn's settings, not yet applied
@@ -103,7 +113,8 @@ export interface StepArgs {
     ask?: number;
     changes?: Changes;
     kind?: 'ok' | 'error' | 'lost';
-    code?: 'harness' | 'no-credential';
+    code?: DriverState['failure'];
+    rejectedLimit?: Turn['rejectedLimit'];
 }
 
 /** The world outside the driver. */
@@ -113,6 +124,7 @@ export interface Host {
     exit(code: number): void;           // end the process (after what was written reaches the server)
     startHarness(start: HarnessStart): Harness;
     newSessionId(): string;
+    refreshCredential?(): Promise<'same' | 'changed' | 'sign-in' | 'unavailable'>;
     /** A step of the turn's state machine and the state after it (models/ClaudeDriver.tla); only tests listen. */
     step?(op: string, args: StepArgs, state: DriverState): void;
 }
@@ -131,26 +143,60 @@ export interface Arguments {
     resume?: string;
     model?: string;
     effort?: EffortLevel;
+    verified?: VerifiedLogin;
+    startupContextFd?: number;
+    startupContext?: string;
+    primarySession?: boolean;
     settingSources: SettingSource[];
     claudePath?: string;
     limit?: 'cwd';                      // from the server: the friend may read and write only in --cwd
+    writeDirs?: string[];
+    readDirs?: string[];
+    gitRemote?: string;
+    busListener?: string;
+    busSender?: string;
+    noSandbox?: boolean;
     keepsOut?: string[];                // from the server, with --limit: more directories it is kept out of (--keep-out)
 }
 
-const kUsage = 'the arguments are --cwd <dir>, --resume <session id>, --limit cwd and --keep-out <dir> (from the server), and from the drivers file '
+const kUsage = 'the arguments are --cwd <dir>, --resume <session id>, --limit cwd and --keep-out <dir>, with --account-email <email>, --verified-helper <path> and --auth-claude <path> for verified accounts (from the server), and from the drivers file '
     + '--account <name> (required), --model <model>, --effort <' + kEffortLevels.join('|') + '>, --setting-sources <user,project,local> and '
     + '--claude <path of a claude executable>';
 
 export function parseArguments(argv: readonly string[]): Arguments | { error: string } {
     const a: Partial<Arguments> & { settingSources: SettingSource[]; keepsOut: string[] } = { settingSources: [], keepsOut: [] };
+    let email, helper, claude;
     for (let i = 0; i < argv.length; i++) {
         const name = argv[i];
+        if (name === "--no-sandbox") { a.noSandbox = true; continue; }
         const value = argv[i + 1];
-        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--keep-out', '--model', '--effort', '--setting-sources', '--claude'].includes(name ?? '')) {
+        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--write-dir', '--git-remote', '--bus-listener', '--bus-sender', '--read-dir', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd', '--primary-context-fd', '--account-email', '--verified-helper', '--auth-claude'].includes(name ?? '')) {
             return { error: `unknown or incomplete argument ${name ?? ''}; ${kUsage}` };
         }
         i++;
         switch (name) {
+            case '--startup-context-fd':
+            case '--primary-context-fd': {
+                const fd = Number(value);
+                if (!/^\d+$/.test(value) || !Number.isSafeInteger(fd) || fd < 3 || a.startupContextFd !== undefined)
+                    return { error: 'expected one inherited startup context descriptor (3 or greater)' };
+                a.startupContextFd = fd;
+                if (name === '--primary-context-fd') a.primarySession = true;
+                break;
+            }
+            case '--account-email':
+                if (email !== undefined || !value || Buffer.byteLength(value) > 254 || /[\s\p{Cc}]/u.test(value))
+                    return { error: 'expected one configured email for the selected account' };
+                email = value;
+                break;
+            case '--verified-helper':
+                if (helper !== undefined || !isAbsolute(value)) return { error: 'expected one absolute verified helper path' };
+                helper = value;
+                break;
+            case '--auth-claude':
+                if (claude !== undefined || !isAbsolute(value)) return { error: 'expected one absolute authentication CLI path' };
+                claude = value;
+                break;
             case '--account': a.account = value; break;
             case '--cwd': a.cwd = value; break;
             case '--resume': a.resume = value; break;
@@ -162,6 +208,16 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
                     return { error: `--limit ${value} is not a limit this driver knows; the one it knows is --limit cwd` };
                 }
                 a.limit = value;
+                break;
+            case '--bus-sender': a.busSender = value; break;
+            case '--bus-listener': a.busListener = value; break;
+            case '--git-remote': a.gitRemote = value; break;
+            case '--read-dir':
+            case '--write-dir':
+                if (!isAbsolute(value) || value === '/' || Array.from(value).some(c => c.charCodeAt(0) < 32 || '*?[]'.includes(c))) {
+                    return { error: '--write-dir requires an absolute directory without wildcard characters' };
+                }
+                (name === '--read-dir' ? a.readDirs ??= [] : a.writeDirs ??= []).push(value);
                 break;
             case '--keep-out':
                 // One more directory a limited friend is kept out of: absolute and not the root, or refused.
@@ -187,12 +243,21 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
             }
         }
     }
+    if (email !== undefined || helper !== undefined || claude !== undefined) {
+        if (email === undefined || helper === undefined || claude === undefined)
+            return { error: 'verified Claude accounts require --account-email, --verified-helper and --auth-claude together' };
+        a.verified = { email, helper, claude };
+    }
     if (a.cwd === undefined || a.cwd === '') {
         return { error: `--cwd <dir> is required; ${kUsage}` };
     }
     if (a.account === undefined || a.account === '') {
         return { error: `--account <name> is required: the account's login is ~/.nexus/server/accounts/<name>; ${kUsage}` };
     }
+    if (a.noSandbox && (a.limit || a.keepsOut.length || a.gitRemote || a.writeDirs?.length || a.readDirs?.length))
+        return {error: '--no-sandbox conflicts with workspace restrictions'};
+    if ((a.gitRemote || a.busListener || (a.busSender && !a.noSandbox) || a.readDirs?.length) && a.limit !== 'cwd') return {error: 'workspace grants require --limit cwd'};
+    if (a.writeDirs?.length && a.limit !== 'cwd') return { error: '--write-dir requires --limit cwd' };
     if (a.keepsOut.length > 0 && a.limit !== 'cwd') {
         return { error: `--keep-out is for a limited friend, and comes with --limit cwd; ${kUsage}` };
     }
@@ -268,6 +333,7 @@ interface Turn {
     textOpen: boolean;          // a text block is open
     held: string;               // a high surrogate held back from the last delta, to go with the next
     streamed: Set<string>;      // ids of the API messages whose text arrived as stream events
+    rejectedLimit?: 'model-limit' | 'usage-limit' | 'harness';
     failure?: Failure;
 }
 
@@ -275,6 +341,7 @@ interface Failure {
     cause: string;
     code: ErrorCode;
     fix: string;
+    rateLimited?: boolean;      // the SDK tagged the assistant error rate_limit
     model?: boolean;            // the model cannot be used
 }
 
@@ -321,13 +388,14 @@ export const kSecretMcpToolName = `mcp__nexus__${kSecretToolName}`;
 export const kSecretToolTimeoutMs = 11 * 60 * 1000;
 
 /** The in-process SDK MCP server that gives Claude the nexus_ask_secret(account, what, why) tool (docs/secrets.md). */
-export function secretMcpServer(askSecret: HarnessStart['askSecret']): McpSdkServerConfigWithInstance {
+export function secretMcpServer(askSecret: HarnessStart['askSecret'], busSender?: string): McpSdkServerConfigWithInstance {
     return createSdkMcpServer({
         name: 'nexus',
         version: '0.1.0',
         alwaysLoad: true,
         timeout: kSecretToolTimeoutMs,
         tools: [
+            ...(busSender ? [busSendTool(busSender)] : []),
             tool(
                 kSecretToolName,
                 'Ask the person, in the nexus window\'s secret dialog, to paste a secret for an account this friend is '
@@ -348,6 +416,7 @@ export function secretMcpServer(askSecret: HarnessStart['askSecret']): McpSdkSer
 }
 
 export class Driver {
+    private readonly children = new Map<string, string | undefined>();
     private readonly host: Host;
     private readonly args: Arguments;
     private readonly reader = new LineReader();
@@ -383,7 +452,13 @@ export class Driver {
     /** Writes the hello and starts the harness; nothing reaches it before the credential check passes. */
     start(): void {
         this.write({ kind: 'hello', protocol: kProtocolVersion, harness: 'claude', features: ['limit'] });
-        this.launch(this.args.resume);
+        if (this.args.verified) {
+            this.starting = this.refreshCredential().then(() => {
+                if (!this.ended) this.launch(this.args.resume);
+            });
+        } else {
+            this.launch(this.args.resume);
+        }
         this.record('init');
     }
 
@@ -422,10 +497,6 @@ export class Driver {
 
     private state(): DriverState {
         const t = this.open;
-        let failure: DriverState['failure'] = 'none';
-        if (t?.failure !== undefined) {
-            failure = t.failure.code === 'no-credential' ? 'no-credential' : 'harness';
-        }
         let stage: DriverState['stage'] = 'none';
         if (t !== undefined) {
             stage = t.taken ? 'taken' : t.pushed ? 'pushed' : t.applying ? 'applying' : 'waiting';
@@ -437,7 +508,7 @@ export class Driver {
             stage,
             stopping: t?.stopping ?? false,
             textOpen: t?.textOpen ?? false,
-            failure,
+            failure: traceFailure(t?.failure),
             interrupting: this.interrupting,
             pending: { ...this.pending },
             carry: { ...(t?.changes ?? {}) },
@@ -485,14 +556,39 @@ export class Driver {
 
     // ---- The harness ----
 
+    // Keep the durable refresh grant outside the SDK. A changed access token requires a new SDK process,
+    // since the running one already consumed its credential descriptor.
+    private async refreshCredential(): Promise<boolean> {
+        const result = await this.host.refreshCredential?.().catch(() => 'unavailable' as const);
+        if (this.ended) return false;
+        if (result === 'changed' || result === 'same') return result === 'changed';
+        if (result === 'sign-in') {
+            this.refuseCredential('The selected Claude login is missing or its verified email does not match.', tokenFix(this.args));
+        } else {
+            this.error('The verified Claude login could not be checked or refreshed.', 'Check the credential helper and provider connection, then retry.', 'harness', this.open?.turn);
+            if (this.open) this.write({ kind: 'done', turn: this.open.turn, outcome: 'error' });
+            this.quit(1);
+        }
+        return false;
+    }
+
     private launch(resume: string | undefined): void {
+        if (this.children.size) {
+            this.children.clear();
+            this.write({kind: 'child-agents', count: 0});
+        }
         const generation = ++this.generation;
         this.ready = false;
         this.prompts = new Prompts((m) => { this.took(m); });
         this.replaced = new Promise<void>((resolve) => { this.replace = resolve; });
         const start: HarnessStart = { prompts: this.prompts, cwd: this.args.cwd, settingSources: this.args.settingSources,
-            limited: this.args.limit === 'cwd', keepsOut: [...(this.args.keepsOut ?? [])],
+            limited: this.args.limit === 'cwd', ...(this.args.writeDirs ? {writeDirs: this.args.writeDirs} : {}), keepsOut: [...(this.args.keepsOut ?? [])],
             askSecret: (account, what, why) => this.askSecret(generation, account, what, why) };
+        if (this.args.noSandbox) start.noSandbox = true;
+        if (this.args.busSender) start.busSender = this.args.busSender;
+        if (this.args.busListener) start.busListener = this.args.busListener;
+        if (this.args.gitRemote) start.gitRemote = this.args.gitRemote;
+        if (this.args.readDirs) start.readDirs = this.args.readDirs;
         if (resume === undefined) {
             start.sessionId = this.host.newSessionId();
         } else {
@@ -512,6 +608,8 @@ export class Driver {
         }
         let harness: Harness;
         try {
+            const setupGuide = this.args.primarySession ? '' : readFileSync(new URL('friend-setup.txt', import.meta.url), 'utf8').trim();
+            start.startupContext = [this.args.startupContext, setupGuide].filter(Boolean).join('\n\n');
             harness = this.host.startHarness(start);
         } catch (e) {
             this.fail(`the Claude harness did not start: ${message(e)}`);
@@ -526,6 +624,7 @@ export class Driver {
     private async check(harness: Harness, generation: number, sessionId: string): Promise<void> {
         let info: AccountInfo;
         try {
+            if (harness.catalogReady) await harness.catalogReady;
             info = await harness.accountInfo();
         } catch (e) {
             if (generation !== this.generation || this.ended) {
@@ -561,17 +660,21 @@ export class Driver {
         } else {
             billing = 'none';
         }
+        if (this.args.verified && billing === 'subscription' && token !== 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR') {
+            this.refuseCredential('Claude did not use the verified account credential supplied on its descriptor.', tokenFix(this.args));
+            return;
+        }
         this.plan = plan;
         this.write(plan === '' ? { kind: 'credential', billing } : { kind: 'credential', billing, plan: whole(plan) });
         if (billing === 'api-key') {
             this.refuseCredential(`Claude would bill ${provider === 'firstParty' ? `an API key or auth token (apiKeySource ${keySource}${token === '' ? '' : `, tokenSource ${token}`})` : `the ${provider} provider`}, not a subscription login; nexus runs Claude only on a subscription`,
-                `remove the API key or provider setting Claude finds (an apiKeyHelper in the account's settings, or a provider in managed settings), then ${tokenFix(this.args.account)}`);
+                `remove the API key or provider setting Claude finds (an apiKeyHelper in the account's settings, or a provider in managed settings), then ${tokenFix(this.args)}`);
             this.record('refused');
             return;
         }
         if (billing === 'none') {
             this.refuseCredential('Claude has no subscription login: the account reports no subscription',
-                tokenFix(this.args.account));
+                tokenFix(this.args));
             this.record('refused');
             return;
         }
@@ -773,6 +876,19 @@ export class Driver {
      */
     private async begin(t: Turn): Promise<void> {
         const waiting = (): boolean => this.open === t && !t.stopping && !t.pushed && !this.ended;
+        if (this.args.verified) {
+            await this.started();
+            if (!waiting() || !this.ready) return;
+            const changed = await this.refreshCredential();
+            if (!waiting()) return;
+            if (changed) {
+                this.prompts.close();
+                this.harness?.close();
+                this.replace();
+                this.args.resume = this.session;
+                this.launch(this.session);
+            }
+        }
         for (;;) {
             await this.started();
             if (!waiting() || !this.ready) {
@@ -937,16 +1053,32 @@ export class Driver {
             this.reportSession(m.session_id);
         }
         switch (m.type) {
-            case 'system':
+            case 'system': {
+                const before = this.children.size;
+                if (m.subtype === 'task_started' && (m.task_type === 'local_agent' || m.subagent_type || m.spawn_depth)) {
+                    this.children.set(m.task_id, m.run_id);
+                } else if (m.subtype === 'task_notification' && (!m.run_id || this.children.get(m.task_id) === m.run_id)) {
+                    this.children.delete(m.task_id);
+                }
+                if (this.children.size !== before) this.write({kind: 'child-agents', count: this.children.size});
                 if (m.subtype === 'init' && m.apiKeySource !== 'none') {
                     this.write({ kind: 'credential', billing: 'api-key', ...(this.plan === '' ? {} : { plan: this.plan }) });
                     this.refuseCredential(`Claude started a turn billing an API key (apiKeySource ${m.apiKeySource}), not the subscription login; nexus runs Claude only on a subscription`,
-                        `remove the API key Claude finds (an apiKeyHelper in the account's settings), then ${tokenFix(this.args.account)}`);
+                        `remove the API key Claude finds (an apiKeyHelper in the account's settings), then ${tokenFix(this.args)}`);
                     this.record('refused');
                 }
                 return;
+            }
             case 'rate_limit_event': {
                 const info = m.rate_limit_info;
+                const turn = this.current();
+                if (turn && info.status === 'rejected') {
+                    // Only turn failures consume this observation. Service throttling and quota warnings do not move accounts.
+                    const window: string = info.rateLimitType ?? '';
+                    if (window === 'seven_day_fable') turn.rejectedLimit = 'model-limit';
+                    else if (window === 'five_hour' || window === 'seven_day') turn.rejectedLimit = 'usage-limit';
+                    else if (window) turn.rejectedLimit = 'harness';
+                }
                 if (info.isUsingOverage === true || info.overageInUse === true) {
                     this.refuseCredential('Claude began drawing on paid extra usage (overage) beyond the subscription; nexus runs Claude only on the subscription\'s included usage',
                         'turn extra usage off for this account in its Claude settings, or wait until the subscription\'s limit resets');
@@ -1005,8 +1137,8 @@ export class Driver {
         }
         if (m.error !== undefined) {
             const said = m.message.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join(' ');
-            t.failure = failure(m.error, said, this.args.account);
-            this.record('assistant-error', { code: t.failure.code === 'no-credential' ? 'no-credential' : 'harness' });
+            t.failure = failure(m.error, said, this.args);
+            this.record('assistant-error', { code: traceFailure(t.failure) });
             return;
         }
         for (const b of m.message.content) {
@@ -1015,6 +1147,7 @@ export class Driver {
                 this.closeText(t);
                 this.record('block-text');
             } else if (b.type === 'tool_use' || b.type === 'server_tool_use' || b.type === 'mcp_tool_use') {
+                if (b.name === 'mcp__nexus__nexus_bus_send' || b.name === 'nexus_bus_send') continue;
                 this.closeText(t);
                 const name = cut(oneLine(b.name), 200) || 'tool';
                 this.write({ kind: 'tool', turn: t.turn, name, summary: toolSummary(b.name, b.input) });
@@ -1072,7 +1205,8 @@ export class Driver {
         const ok = r.subtype === 'success' && !r.is_error;
         const said = (r.subtype === 'success' ? [r.result] : r.errors).join('; ');
         this.resultOf(t, r, ok, said);
-        this.record('result', { kind: ok ? 'ok' : isSessionNotFound(said) ? 'lost' : 'error' });
+        this.record('result', { kind: ok ? 'ok' : isSessionNotFound(said) ? 'lost' : 'error',
+            rejectedLimit: t.rejectedLimit });
     }
 
     private resultOf(t: Turn, r: SDKResultMessage, ok: boolean, said: string): void {
@@ -1087,11 +1221,14 @@ export class Driver {
         if (t.failure === undefined && this.resumeLost(said)) {
             return;
         }
-        const f = t.failure ?? {
+        const f: Failure = t.failure ?? {
             cause: `Claude ended the turn with an error (${r.subtype}): ${said || 'no cause given'}`,
             code: 'harness' as const,
             fix: kFixAgain,
         };
+        if (t.rejectedLimit && (!t.failure || f.rateLimited) && f.code !== 'model-limit') {
+            f.code = t.rejectedLimit;
+        }
         if (t.failure?.model === true && t.revertTo !== undefined) {
             // The model this turn changed to cannot run: the one before comes back from the next turn.
             const back = t.revertTo.model ?? this.args.model ?? '';
@@ -1186,14 +1323,22 @@ export class Driver {
 }
 
 /** How to give the account a new subscription login (account.ts). */
-function tokenFix(account: string): string {
+function tokenFix(args: Arguments): string {
+    if (args.verified) return `Sign in again to ${args.account} in Nexus with ${args.verified.email}.`;
+    const account = args.account;
     const dir = `~/.nexus/server/accounts/${account}`;
     return `make a new token with \`CLAUDE_CONFIG_DIR=${dir} claude setup-token\` on the subscription account, and save it, `
         + `alone on one line, to ${dir}/${kTokenFile} with mode 0600`;
 }
 
+function traceFailure(f: Failure | undefined): DriverState['failure'] {
+    if (!f) return 'none';
+    if (f.code === 'usage-limit' || f.code === 'model-limit' || f.code === 'no-credential') return f.code;
+    return f.rateLimited ? 'rate-limit' : 'harness';
+}
+
 /** The failure an assistant message's error code names. */
-function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string, account: string): Failure {
+function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string, args: Arguments): Failure {
     const detail = said === '' ? code : `${code}: ${said}`;
     switch (code) {
         case 'authentication_failed':
@@ -1202,10 +1347,15 @@ function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string, 
         case 'verification_required':
         case 'billing_error':
             return { cause: `Claude's login cannot be used (${detail})`, code: 'no-credential',
-                fix: tokenFix(account) };
-        case 'rate_limit':
-            return { cause: `the subscription's usage limit is reached (${detail})`, code: 'harness',
-                fix: 'wait until the limit resets (the cause says when), or move the session to another account' };
+                fix: tokenFix(args) };
+        case 'rate_limit': {
+            // Older SDKs only give the scope in the provider's typed error message.
+            const fable = /\bfable(?:['’]s)?(?: usage| weekly| credit)? limits?\b|\bout of fable\b|\blimit (?:reached )?for (?:claude[- ])?fable\b/i.test(said);
+            const accountQuota = /\b(?:weekly|session|subscription|five[- ]hour|5[- ]hour|usage) limit\b|\bout of (?:subscription |usage )?credits\b/i.test(said);
+            return { cause: `Claude reported a rate limit (${detail})`, rateLimited: true,
+                code: fable ? 'model-limit' : accountQuota ? 'usage-limit' : 'harness',
+                fix: 'check the reported limit and reset time' };
+        }
         case 'model_not_found':
             return { cause: `Claude has no such model (${detail})`, code: 'harness', fix: 'choose a model Claude has', model: true };
         default:

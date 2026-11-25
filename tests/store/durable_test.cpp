@@ -4,7 +4,7 @@
 // actions are skipped and the rest applied once, in order, and no id is ever minted twice.
 //
 //   durable_test            runs every group
-//   durable_test <group>    runs one: restart resend crash batch batch_flush take migrate kinds
+//   durable_test <group>    runs one group from kGroups below
 
 #include "server/durable.h"
 #include "store/codec.h"
@@ -12,6 +12,7 @@
 #include "store/journal.h"
 #include "sync/actions.h"
 #include "sync/hub.h"
+#include "sync/mirror.h"
 
 #include <cstdio>
 #include <cstring>
@@ -454,7 +455,7 @@ void test_migrate() {
 }
 
 // An entry of a kind a later server wrote, which this build does not know, is shown as a notice (a plain dim line);
-// the kinds it knows, Tool among them, as they are.
+// the clear boundary still consumes kind 4, and Tool and Bus survive with their original kinds.
 void test_kinds() {
     store::MemFs fs;
     {
@@ -464,10 +465,10 @@ void test_kinds() {
         made.kind = store::Change::Kind::SetInfo;
         made.info = store::Info{"ada", "claude", "", "", ""};
         std::vector<store::Change> step = {made};
-        for (std::uint8_t kind : {std::uint8_t(3), std::uint8_t(7)}) {
+        for (std::uint8_t kind : {0, 4, 3, 5, 7}) {
             store::Change c;
             c.kind = store::Change::Kind::Append;
-            c.entry = store::Entry{kind, "kind " + std::to_string(kind), true};
+            c.entry = store::Entry{kind, kind == 5 ? "bo\nhello" : "kind " + std::to_string(kind), true};
             step.push_back(c);
         }
         CHECK(s != nullptr && s->commit(1, step).is_ok());
@@ -475,11 +476,186 @@ void test_kinds() {
     server::DurableStore ds;
     CHECK(openOn(fs, ds));
     const StoredSession* t = ds.find(1);
-    CHECK(t != nullptr && t->transcript.size() == 2);
-    if (t != nullptr && t->transcript.size() == 2) {
+    CHECK(t != nullptr && t->info.contextEpoch == 1 && t->transcript.size() == 3);
+    if (t != nullptr && t->transcript.size() == 3) {
         CHECK(t->transcript[0]->kind == EntryKind::Tool && t->transcript[0]->text == "kind 3");
-        CHECK(t->transcript[1]->kind == EntryKind::Notice && t->transcript[1]->text == "kind 7");
+        CHECK(t->transcript[1]->kind == EntryKind::Bus && t->transcript[1]->text == "bo\nhello");
+        CHECK(t->transcript[2]->kind == EntryKind::Notice && t->transcript[2]->text == "kind 7");
     }
+}
+
+// Reconnect uses the saved destination, including the extent of its address, in both log and snapshot recovery.
+void test_switch_notice_reconnect() {
+    const std::string address = "rotation@example.test";
+    const std::string switched = std::string(kAccountSwitchPrefix) + address + " (work)";
+    const auto end = static_cast<std::uint32_t>(kAccountSwitchPrefix.size() + address.size());
+    for (bool compact : {false, true}) {
+        store::MemFs fs;
+        {
+            server::DurableStore ds;
+            store::StoreOptions options;
+            if (compact) options.compact_bytes = 0;
+            CHECK(openOn(fs, ds, options));
+            Hub hub(ds);
+            CHECK(hub.apply(ensure(1, "ada"), nullptr, "w"));
+            auto notice = std::make_shared<const SessionEntry>(SessionEntry{EntryKind::Notice, switched, true, end});
+            CHECK(hub.commit(1, {SessionChange{notice, {}}}, nullptr));
+        }
+        fs.crash(fs.plan_all(false));
+        server::DurableStore ds;
+        CHECK(openOn(fs, ds));
+        Hub hub(ds);
+        Sessions window;
+        window.apply_string(hub.state().init_diff());
+        const auto* session = window.find(1);
+        CHECK(session && session->entries.size() == 1);
+        if (session && session->entries.size() == 1) {
+            CHECK(session->entries[0]->text == switched && session->entries[0]->accountEmailEnd == end);
+        }
+    }
+}
+
+// A new window can reconstruct the sender and body after journal recovery or compaction. An
+// identical human-authored payload remains a human entry, even when it resembles a bus record.
+void test_bus_reconnect() {
+    const std::string payload = "bo\nfirst line\nsecond line";
+    const std::string driverPrompt = "Message from bo on the message bus (id 123-1)\nText attachment: incoming/bus-stored/message.txt";
+    for (bool compact : {false, true}) {
+        store::MemFs fs;
+        {
+            server::DurableStore ds;
+            store::StoreOptions options;
+            if (compact) options.compact_bytes = 0;
+            CHECK(openOn(fs, ds, options));
+            Hub hub(ds);
+            CHECK(hub.apply(ensure(1, "ada"), nullptr, "w"));
+            CHECK(hub.commit(1, {{entry(EntryKind::Person, payload), {}},
+                                 {entry(EntryKind::Bus, payload), driverPrompt}}, nullptr));
+        }
+        fs.crash(fs.plan_all(false));
+        server::DurableStore recovered;
+        CHECK(openOn(fs, recovered));
+        const auto* stored = recovered.find(1);
+        CHECK(stored && stored->busPrompts.size() == 1 && stored->busPrompts.contains(1));
+        if (stored && stored->busPrompts.contains(1)) CHECK(stored->busPrompts.at(1) == driverPrompt);
+        Hub server(recovered);
+        server.setBusSenders({{"ada", {"bo"}}});
+        Sessions window;
+        const auto firstDiff = server.state().init_diff();
+        CHECK(firstDiff.find("incoming/bus-stored/message.txt") == std::string::npos);
+        window.apply_string(firstDiff);
+        Model model({{"ada", ""}});
+        Mirror mirror;
+        CHECK(mirror.apply(model, window));
+        CHECK(!mirror.apply(model, window));
+        const auto& transcript = model.tab(0).transcript;
+        CHECK(transcript.size() == 2);
+        if (transcript.size() == 2) {
+            CHECK(transcript[0].kind == EntryKind::Person && transcript[0].text == payload);
+            CHECK(transcript[1].kind == EntryKind::Bus && transcript[1].text == payload);
+        }
+    }
+}
+
+// Rows written before sender restrictions have no policy metadata. On reopen, use each
+// recipient's current senders for both new windows and windows following a policy change.
+void test_bus_history() {
+    const std::string retired = "eve\nexpired message for ada";
+    const std::string crossProfile = "bo\nmessage from the other profile";
+    const std::string allowed = "bo\nallowed in ada";
+    const std::string alsoAllowed = "cy\nsecond peer in ada";
+    const std::string otherAllowed = "eve\nallowed in di";
+    const std::string human = "eve\nquoted by a person";
+    store::MemFs fs;
+    {
+        server::DurableStore store;
+        CHECK(openOn(fs, store));
+        Hub hub(store);
+        CHECK(hub.apply(ensure(1, "ada"), nullptr, "w"));
+        CHECK(hub.apply(ensure(2, "di"), nullptr, "w"));
+        CHECK(store.commit(1, {{entry(EntryKind::Person, human), {}},
+                               {entry(EntryKind::Bus, retired), {}},
+                               {entry(EntryKind::Friend, "friend reply"), {}},
+                               {entry(EntryKind::Bus, alsoAllowed), {}},
+                               {entry(EntryKind::Bus, allowed), {}},
+                               {entry(EntryKind::Notice, "notice"), {}}}, "nexus:bus:in:ada:123-0", 1, nullptr));
+        CHECK(store.commit(2, {{entry(EntryKind::Bus, crossProfile), {}},
+                               {entry(EntryKind::Bus, otherAllowed), {}}}, {}, 0, nullptr));
+    }
+    fs.crash(fs.plan_all(false));
+    server::DurableStore reopened;
+    CHECK(openOn(fs, reopened));
+    Hub hub(reopened);
+    const Sessions initial = hub.state();
+    CHECK(hub.setBusSenders({{"ada", {"cy", "bo", "unused"}}, {"di", {"eve"}}}));
+    const Sessions granted = hub.state();
+    CHECK(hub.setBusSenders({{"ada", {}}})); // empty selection for ada, missing selection for di
+    const Sessions revoked = hub.state();
+
+    auto checkRows = [&](const Sessions& window, bool grantedNow) {
+        const auto* ada = window.find(1);
+        const auto* di = window.find(2);
+        CHECK(ada && ada->first == 0 && ada->entries.size() == 6);
+        CHECK(di && di->first == 0 && di->entries.size() == 2);
+        if (!ada || ada->entries.size() != 6 || !di || di->entries.size() != 2) return;
+        const auto busKind = window.format() >= kTablesFormat ? EntryKind::Bus : EntryKind::Notice;
+        CHECK(*ada->entries[0] == *entry(EntryKind::Person, human));
+        CHECK(*ada->entries[1] == *entry(busKind, ""));
+        CHECK(*ada->entries[2] == *entry(EntryKind::Friend, "friend reply"));
+        CHECK(*ada->entries[3] == *entry(busKind, grantedNow ? alsoAllowed : ""));
+        CHECK(*ada->entries[4] == *entry(busKind, grantedNow ? allowed : ""));
+        CHECK(*ada->entries[5] == *entry(EntryKind::Notice, "notice"));
+        CHECK(*di->entries[0] == *entry(busKind, ""));
+        CHECK(*di->entries[1] == *entry(busKind, grantedNow ? otherAllowed : ""));
+        if (window.format() >= kTablesFormat) {
+            std::vector<std::string> adaSenders, diSenders;
+            if (grantedNow) {
+                adaSenders = {"bo", "cy"};
+                diSenders = {"eve"};
+            }
+            CHECK(ada->busSenders == adaSenders);
+            CHECK(di->busSenders == diSenders);
+        } else {
+            CHECK(!ada->busSenders && !di->busSenders);
+        }
+    };
+    for (std::uint32_t format = kMinPeer; format <= kStateFormat; ++format) {
+        Sessions window, previous;
+        window.setFormat(format);
+        previous.setFormat(format);
+        for (const Sessions* projection : {&initial, &granted, &revoked}) {
+            Sessions next = *projection;
+            next.setFormat(format);
+            const bool grantedNow = projection == &granted;
+            const auto delta = next.diff_from(previous);
+            const auto full = next.init_diff();
+            for (const auto* bytes : {&full, &delta}) {
+                CHECK(bytes->find("expired message for ada") == std::string::npos);
+                CHECK(bytes->find("message from the other profile") == std::string::npos);
+                if (!grantedNow) {
+                    CHECK(bytes->find("allowed in ada") == std::string::npos);
+                    CHECK(bytes->find("second peer in ada") == std::string::npos);
+                    CHECK(bytes->find("allowed in di") == std::string::npos);
+                }
+                CHECK(bytes->find("unused") == std::string::npos);
+            }
+            window.apply_string(delta);
+            checkRows(window, grantedNow);
+            Sessions reconnect;
+            reconnect.setFormat(format);
+            reconnect.apply_string(full);
+            checkRows(reconnect, grantedNow);
+            previous = std::move(next);
+        }
+    }
+    CHECK(hub.hasBusReceipt("ada", "123-0"));
+    CHECK(hub.receiveBus("ada", "123-0", "eve", "duplicate", "duplicate", nullptr));
+    const auto* stored = reopened.find(1);
+    CHECK(stored && stored->transcript.size() == 6 && stored->transcript[1]->text == retired &&
+          stored->transcript[3]->text == alsoAllowed && stored->transcript[4]->text == allowed);
+    stored = reopened.find(2);
+    CHECK(stored && stored->transcript.size() == 2 && stored->transcript[0]->text == crossProfile &&
+          stored->transcript[1]->text == otherAllowed);
 }
 
 struct Group {
@@ -489,7 +665,8 @@ struct Group {
 
 const Group kGroups[] = {{"restart", test_restart}, {"resend", test_resend}, {"crash", test_crash},
                          {"batch", test_batch}, {"batch_flush", test_batch_flush}, {"take", test_take},
-                         {"migrate", test_migrate}, {"kinds", test_kinds}};
+                         {"migrate", test_migrate}, {"kinds", test_kinds}, {"switch_notice_reconnect", test_switch_notice_reconnect},
+                         {"bus_reconnect", test_bus_reconnect}, {"bus_history", test_bus_history}};
 
 } // namespace
 

@@ -76,6 +76,7 @@
 #include <vector>
 
 #include "fake_mosh.h"
+#include "accounts/registry.h"
 #include "command.h"
 #include "leak_scan.h"
 #include "link/bootstrap.h"
@@ -85,6 +86,7 @@
 #include "sync/client.h"
 #include "sync/friend_strip.h"
 #include "sync/hub.h"
+#include "server/sha256.h"
 #include "sync/mirror.h"
 
 extern char** environ;
@@ -1309,6 +1311,45 @@ int friendsFromServer(const std::string& binary, const std::string& dir, const s
     CHECK((friendTabs(w.model) == std::vector<std::string>{"ada", "bo"}));
     CHECK(w.model.tab(tabOf(w.model, "bo")).draft == "half a prompt for bo" && w.strip.kept().empty());
 
+    // The same open window and server handle an application edit on the next message.
+    const std::string rules = dir + "/rules";
+    CHECK(::mkdir(rules.c_str(), 0700) == 0);
+    CHECK(writeFile(rules + "/config.json", "{}"));
+    CHECK(writeFile(rules + "/server.star", "def handle(event, state, config):\n"
+        "    return [{\"op\": \"notice\", \"text\": \"handled: \" + state[\"text\"]}]\n"));
+    const auto cli = (std::filesystem::path(binary).parent_path() / "nexus-policy").string();
+    const auto applied = runCommand(Command{cli, {"apply", "server", rules, dir}, "apply message application"}, 20);
+    CHECK(applied.end == CommandResult::End::Exited && applied.code == 0);
+    w.session->add(act(sync::ActionKind::Send, adaSession, "after edit"));
+    CHECK(settle([&] {
+        const auto& transcript = w.model.tab(tabOf(w.model, "ada")).transcript;
+        return w.session->allAcknowledged() && !transcript.empty() && transcript.back().text == "handled: after edit";
+    }));
+
+    // Asking the production server for a test-only plugin reports a missing registration over the link.
+    CHECK(writeFile(rules + "/server.star", "def handle(event, state, config):\n"
+        "    return [{\"op\": \"native\", \"name\": \"text.sha256\"}]\n"));
+    const auto rebound = runCommand(Command{cli, {"apply", "server", rules, dir}, "bind native service"}, 20);
+    CHECK(rebound.end == CommandResult::End::Exited && rebound.code == 0);
+    w.session->add(act(sync::ActionKind::Send, adaSession, "abc"));
+    CHECK(settle([&] {
+        const auto& transcript = w.model.tab(tabOf(w.model, "ada")).transcript;
+        return w.session->allAcknowledged() && !transcript.empty() &&
+            transcript.back().text == "No native service registered as text.sha256.";
+    }));
+
+    // The test host registers its own implementation against the same applied application.
+    sync::MemoryStore pluginStore;
+    std::string pluginPolicy;
+    sync::Hub pluginHub(pluginStore, {}, nullptr, [&] { return pluginPolicy; });
+    pluginHub.registerService("text.sha256", server::sha256Hex);
+    CHECK(pluginHub.apply(ensures().front()));
+    pluginPolicy = dir + "/policy.bundle.json";
+    CHECK(pluginHub.apply(act(sync::ActionKind::Send, sid("ada"), "abc")));
+    const auto* result = pluginHub.state().find(sid("ada"));
+    CHECK(result && !result->entries.empty() &&
+        result->entries.back()->text == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+
     w.session->shutdown();
     const auto end = Clock::now() + std::chrono::seconds(3);
     while (Clock::now() < end && !w.session->shutdownDone()) {
@@ -1544,6 +1585,229 @@ std::string control(const std::string& dir, const std::string& request) {
     return line;
 }
 
+// A private account enrolled on demand through the real server, link and local sign-in page. Only the provider
+// executable is synthetic. A fresh server on the same HOME recognizes the receipt without starting a second flow.
+int privateSignIn(const std::string& binary, const std::string& dir, const std::string& python,
+                  const std::string& fixture) {
+    Server server(binary, dir);
+    const std::string home = dir + "/home";
+    const std::string config = dir + "/nexus-config";
+    std::filesystem::create_directories(home);
+    std::filesystem::create_directories(config);
+    const std::string account = "fixture-account";
+    accounts::Registry registry;
+    accounts::Account a{account, "codex"};
+    a.signInOnUse = true;
+    a.email = "member@example.test";
+    a.label = "work";
+    registry.accounts.push_back(a);
+    registry.friends.push_back({"fixture-friend", {account}, account});
+
+    CHECK(writeFile(config + "/accounts.json", accounts::accountsText(registry)));
+    CHECK(writeFile(config + "/friends.json", accounts::friendsText(registry)));
+    // Keep the drivers command's words free of spaces even if the source tree or interpreter path contains them.
+    std::filesystem::create_symlink(python, dir + "/python");
+    std::filesystem::create_symlink(fixture, dir + "/enroll.py");
+    const std::string provider = dir + "/fake-codex";
+    CHECK(writeFile(provider, R"(#!/bin/sh
+set -eu
+test "$1" = login
+test "$2" = --device-auth
+umask 077
+printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"synthetic-id","access_token":"synthetic-access","refresh_token":"synthetic-refresh"}}' > "$CODEX_HOME/auth.json"
+)"));
+    CHECK(::chmod(provider.c_str(), 0700) == 0);
+    CHECK(writeFile(dir + "/drivers", "friend fixture-friend codex " + dir + "\nsignin codex " + dir + "/python -IB " + dir + "/enroll.py codex --binary " +
+                    provider + "\n"));
+    for (int start = 0; start < 2; ++start) {
+        const pid_t pid = startServe(binary, dir);
+        CHECK(pid > 0 && waitFor([&] { return answering(dir); }, kStallSeconds));
+        Window w;
+        link::Connect connect;
+        if (!openWindow(server, "localhost", "127.0.0.1", nullptr, &w, &connect)) {
+            return 1;
+        }
+        std::vector<Window*> windows{&w};
+        const auto until = [&](const std::function<bool()>& done) {
+            return waitFor([&] { step(windows, nullptr, 20); return done(); }, kStallSeconds);
+        };
+        CHECK(until([&] { return w.session->stateNum() != 0; }));
+        CHECK(w.session->state().offers().empty());
+        const auto needsSignIn = [&]() -> std::optional<bool> {
+            for (const auto& friendRow : w.session->state().friends())
+                for (const auto& choice : friendRow.accounts)
+                    if (friendRow.name == "fixture-friend" && choice.name == account) {
+                        CHECK(choice.email == a.email && choice.label == a.label);
+                        return choice.needsSignIn;
+                    }
+            return std::nullopt;
+        };
+        CHECK(until([&] { return needsSignIn() == (start == 0); }));
+        const auto request = [&] { return control(dir, "config sign-in " + account); };
+        if (start == 0) {
+            sync::Action ensure;
+            ensure.kind = sync::ActionKind::Ensure;
+            ensure.friendName = "fixture-friend";
+            w.session->add(ensure);
+            if (!until([&] {
+                const auto& sessions = w.session->state().sessions();
+                return sessions.size() == 1 && sessions.front()->info.account == account;
+            })) {
+                CHECK(false);
+                return 1;
+            }
+            CHECK(w.session->state().offers().empty());
+            // Exactly the action sent when the person activates the selected friend's Sign in card or presses Enter.
+            const std::string claim = "fixtureWindowOpener1";
+            auto gesture = signInAction(sync::ActionKind::SignInClaim, 0, claim);
+            gesture.session = w.session->state().sessions().front()->id;
+            gesture.account = account;
+            w.session->add(gesture);
+            if (!until([&] {
+                const auto& offers = w.session->state().offers();
+                return offers.size() == 1 && offers.front().opener == claim && !offers.front().url.empty();
+            })) {
+                CHECK(false);
+                return 1;
+            }
+            const auto* claimed = &w.session->state().offers().front();
+            const auto flowId = claimed->id;
+            CHECK(claimed->account == account && claimed->provider == "codex");
+            const std::string url = claimed->url.bytes();
+            sync::SignInTarget target;
+            if (!sync::parseSignInUrl("codex", url, &target)) {
+                CHECK(false);
+                return 1;
+            }
+            w.session->add(signInAction(sync::ActionKind::SignInOpened, flowId, claim));
+            const auto page = runCommand(Command{python, {"-IB", fixture, "visit", url}, "visit test sign-in page"}, 20);
+            CHECK(page.end == CommandResult::End::Exited && page.code == 0);
+            CHECK(until([&] { return w.session->state().offers().empty(); }));
+            CHECK(readFile(home + "/.nexus/server/harness/codex/" + account + "/.nexus-enrolled") == "codex\n");
+        }
+        CHECK(until([&] { return needsSignIn() == false && w.session->state().offers().empty(); }));
+        CHECK(request() == "OK signed in");
+        w.session->shutdown();
+        CHECK(until([&] { return w.session->shutdownDone(); }));
+        const auto stopped = runCommand(Command{binary, {"stop", "--dir", dir}, "stop test server"}, 10);
+        CHECK(stopped.end == CommandResult::End::Exited && stopped.code == 0);
+        int status = 0;
+        CHECK(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    }
+    return failures == 0 ? 0 : 1;
+}
+
+// Two browser callbacks for the same requested email. The fake provider independently chooses a different
+// identity for the first and the requested one for the second. The window only knows the configured email.
+int verifiedClaude(const std::string& binary, const std::string& dir, const std::string& fakeClaude) {
+    Server server(binary, dir);
+    const std::string config = dir + "/nexus-config";
+    const std::string accounts = dir + "/home/.nexus/server/accounts";
+    const std::string account = "work";
+    const std::string other = "other";
+    std::filesystem::create_directories(config);
+    for (const auto& name : {account, other}) {
+        std::filesystem::create_directories(accounts + "/" + name);
+        CHECK(::chmod((accounts + "/" + name).c_str(), 0700) == 0);
+        const auto file = accounts + "/" + name + "/oauth-token";
+        CHECK(writeFile(file, kFakeToken));
+        CHECK(::chmod(file.c_str(), 0600) == 0);
+    }
+    accounts::Registry registry;
+    accounts::Account row{account, "claude"};
+    row.email = "work@example.test";
+    row.signInOnUse = true;
+    registry.accounts = {row, accounts::Account{other, "claude"}};
+    registry.friends = {{"fixture-friend", {account}, account}, {"fixture-other", {other}, other}};
+    CHECK(writeFile(config + "/accounts.json", accounts::accountsText(registry)));
+    CHECK(writeFile(config + "/friends.json", accounts::friendsText(registry)));
+    CHECK(writeFile(dir + "/config", "claude " + fakeClaude + "\n"));
+    CHECK(writeFile(dir + "/drivers", "driver claude /usr/bin/false --account work\nfriend fixture-friend claude " +
+                    dir + "\nfriend fixture-other claude " + dir + "\n"));
+    const pid_t pid = startServe(binary, dir);
+    CHECK(pid > 0 && waitFor([&] { return answering(dir); }, kStallSeconds));
+    Window w;
+    link::Connect connect;
+    if (!openWindow(server, "localhost", "127.0.0.1", nullptr, &w, &connect)) return 1;
+    std::vector<Window*> windows{&w};
+    const auto until = [&](const std::function<bool()>& done) {
+        return waitFor([&] { step(windows, nullptr, 20); return done(); }, kStallSeconds);
+    };
+    sync::Action ensure;
+    ensure.kind = sync::ActionKind::Ensure;
+    ensure.friendName = "fixture-friend";
+    w.session->add(ensure);
+    if (!until([&] { return w.session->state().sessions().size() == 1; })) { CHECK(false); return 1; }
+    const auto id = w.session->state().sessions().front()->id;
+    const auto selectedNeedsLogin = [&](bool expected) {
+        for (const auto& f : w.session->state().friends()) {
+            for (const auto& a : f.accounts) {
+                if (a.name == account) return a.email == registry.accounts.front().email && a.needsSignIn == expected;
+            }
+        }
+        return false;
+    };
+    const auto notice = [&](const std::string& fragment) {
+        for (const auto& entry : w.session->state().sessions().front()->entries)
+            if (entry->kind == EntryKind::Notice && entry->text.find(fragment) != std::string::npos) return true;
+        return false;
+    };
+    const std::string verified = accounts + "/" + account + "/verified-claude.json";
+    CHECK(selectedNeedsLogin(true));
+    for (bool wrong : {true, false}) {
+        const std::string opener = "fixtureWindowOpener1";
+        auto claim = signInAction(sync::ActionKind::SignInClaim, 0, opener);
+        claim.session = id;
+        claim.account = account;
+        w.session->add(claim);
+        if (!until([&] {
+                const auto& offers = w.session->state().offers();
+                return offers.size() == 1 && offers.front().opener == opener && !offers.front().url.empty();
+            })) { CHECK(false); return 1; }
+        const auto& offer = w.session->state().offers().front();
+        CHECK(offer.account == account && offer.provider == "claude");
+        const auto flow = offer.id;
+        w.session->add(signInAction(sync::ActionKind::SignInOpened, flow, opener));
+        const std::string code = std::string(kFakeCode) + (wrong ? "Other" : "");
+        w.session->add(signInAction(sync::ActionKind::SignInCallback, flow, opener,
+                                    "code=" + code + "&state=" + kFakeState));
+        if (wrong) {
+            if (!until([&] { return notice("signed-in email differs"); })) { CHECK(false); return 1; }
+            CHECK(selectedNeedsLogin(true) && !std::filesystem::exists(verified));
+            CHECK(readFile(accounts + "/" + account + "/oauth-token") == kFakeToken);
+        } else {
+            if (!until([&] { return selectedNeedsLogin(false); })) { CHECK(false); return 1; }
+            CHECK(std::filesystem::exists(verified) && control(dir, "config sign-in " + account) == "OK signed in");
+        }
+    }
+    // Changing a configured email invalidates the cached login immediately. Switching back recognizes the
+    // existing matching grant, without a second browser approval.
+    for (const bool change : {true, false}) {
+        registry.accounts.front().email = change ? "new@example.test" : row.email;
+        CHECK(writeFile(config + "/accounts.json", accounts::accountsText(registry)));
+        const auto reload = runCommand(Command{"/usr/bin/env", {"HOME=" + dir + "/home", binary, "config", "reload",
+                                               "--dir", dir}, "reload test accounts"}, 20);
+        CHECK(reload.end == CommandResult::End::Exited && reload.code == 0);
+        CHECK(until([&] { return selectedNeedsLogin(change); }));
+        CHECK(std::filesystem::exists(verified));
+    }
+    sync::Action logout;
+    logout.kind = sync::ActionKind::SignOut;
+    logout.session = id;
+    logout.account = account;
+    w.session->add(logout);
+    CHECK(until([&] { return selectedNeedsLogin(true) && notice("Signed out of work"); }));
+    CHECK(!std::filesystem::exists(verified) && !std::filesystem::exists(accounts + "/" + account + "/oauth-token"));
+    CHECK(readFile(accounts + "/" + other + "/oauth-token") == kFakeToken);
+    CHECK(control(dir, "config sign-in " + other) == "OK signed in");
+    w.session->shutdown();
+    CHECK(until([&] { return w.session->shutdownDone(); }));
+    CHECK(control(dir, "stop") == "OK");
+    int status;
+    CHECK(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    return failures == 0 ? 0 : 1;
+}
+
 // How many sessions the server log says were made (`new` answered): one line per CONNECT.
 std::size_t sessionsLogged(const std::string& dir) {
     return static_cast<std::size_t>(count(readFile(dir + "/server.log"), " on UDP port "));
@@ -1761,13 +2025,19 @@ int main(int argc, char** argv) {
     if ((argc == 5 || argc == 6) && std::strcmp(argv[3], "signin") == 0) {
         return signin(argv[1], argv[2], argv[4], argc == 6 && std::strcmp(argv[5], "leaky") == 0);
     }
+    if (argc == 5 && std::strcmp(argv[3], "verified-claude") == 0) {
+        return verifiedClaude(argv[1], argv[2], argv[4]);
+    }
+    if (argc == 6 && std::strcmp(argv[3], "private-signin") == 0) {
+        return privateSignIn(argv[1], argv[2], argv[4], argv[5]);
+    }
     if (argc == 4 && std::strcmp(argv[3], "takeover") == 0) {
         return takeover(argv[1], argv[2]);
     }
     std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
                          "soak <clients> <prompts> | restart | older_server | flush <nexus-fake-driver> |\n"
                          "       secret <nexus-fake-driver> | friends <nexus-fake-driver> | "
-                         "signin <fake claude> [leaky] | takeover\n"
+                         "signin <fake claude> [leaky] | private-signin <python> <fixture> | verified-claude <fake claude> | takeover\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }

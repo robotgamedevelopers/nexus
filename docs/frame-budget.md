@@ -99,6 +99,8 @@ Every hitch below failed the test before its fix.
 | 3.4 to 5.2 ms on every window's first frame (9 to 9.7 ms with every core busy) | the shaper making each text font's face (CoreText reading the font's tables) the first time it shapes with it: over half the frame, and nearly all of it with no history | `warmShaper` (`src/font_prefetch.h`): when the window opens, before its first frame, a line of Latin text is set in every text role of the window's theme over the Studio app's shaper, which keeps the faces; first frames are now 0.2 to 1.1 ms |
 | a swap chain made twice at the first show | the overlay made at one size and resized to the screen as it showed | the window is given the screen's frame at launch, while hidden (not covered by the test: there is no window in it) |
 
+Prax starts a terminal process in its first measured frame. The worker runs that frame at the tab’s measured size and pixel ratio before handing the terminal to the window. A Prax API to launch at a supplied view extent would remove the need for the worker’s temporary layout tree.
+
 ## Known hitches: fixes outside nexus
 
 Each is a case marked known in the test. Only the frames the case marks known (`Window::known`) may pass the budget,

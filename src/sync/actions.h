@@ -38,6 +38,8 @@ enum class ActionKind : std::uint8_t {
                     // or, with session 0, the friend's defaults
     Ensure = 5,     // a session with a friend (friendName) only if the friend has none: what a window sends for each
                     // friend it shows, so that each has a session to show
+    // A SetAccount text beginning with "+" names a command in server account policy. Real account IDs cannot
+    // start with "+". A window sends these commands only when the server advertises linked accounts.
     SetAccount = 6, // the session's account, model or effort becomes `text` (empty: the harness's default), from its
     SetModel = 7,   // next turn on
     SetEffort = 8,
@@ -57,10 +59,12 @@ enum class ActionKind : std::uint8_t {
     SignInClaim = 17,   // the window claims sign-in flow `request`, by its claim token (`text`)
     SignInOpened = 18,  // the window holding flow `request` (`text`, its claim token) opened its URL in the browser
     SignInCallback = 19,// the window's gate took flow `request`'s callback: its query (`secret`), from `text`'s window
+    SignOut = 20,       // Claude logout, only when session still selects the exact named account
+    ResolveLimit = 21, // accept a paused turn's offered target (friendName) for account, request and choice kind (text)
 };
 
 // The last kind this build knows.
-constexpr ActionKind kLastActionKind = ActionKind::SignInCallback;
+constexpr ActionKind kLastActionKind = ActionKind::ResolveLimit;
 
 struct Action {
     std::uint64_t num = 0;  // its place in the list, from 1, never reused

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nexus-rpc-drivers"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "Nexus drivers for Codex, Antigravity, Grok and Muse"
+
+[tool.setuptools]
+packages = ["nexus_rpc"]
+
+[tool.setuptools.package-data]
+nexus_rpc = ["friend-setup.txt"]

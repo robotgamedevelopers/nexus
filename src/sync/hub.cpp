@@ -1,11 +1,15 @@
 #include "sync/hub.h"
+#include "sync/bus_peer.h"
+#include "policy/session.h"
 
 #include <algorithm>
+#include <charconv>
 #include <deque>
 #include <memory>
 #include <numeric>
 
 #include "sync/client.h"
+#include "sync/codec.h"
 
 namespace nexus::sync {
 
@@ -52,30 +56,31 @@ bool stepFits(SessionId id, const StoredSession* had, SessionId next, const std:
         }
         if (c.take) {
             --queued;
-        } else if (!c.driver && !c.entry && !c.info) {
+        } else if (!c.driver && !c.entry && !c.info && !c.clearTranscript) {
             ++queued;
         }
     }
     return true;
 }
 
-namespace {
-
-void applyTo(StoredSession& s, const SessionChange& c) {
-    if (c.take) {
+void applyStoredChange(StoredSession& s, const SessionChange& c) {
+    if (c.clearTranscript) {
+        s.transcript.clear();
+        s.busPrompts.clear();
+        ++s.info.contextEpoch;
+    } else if (c.take) {
         s.queue.erase(s.queue.begin());
     } else if (c.info) {
         s.info = *c.info;
     } else if (c.driver) {
         s.driver = *c.driver;
     } else if (c.entry) {
+        if (c.entry->kind == EntryKind::Bus && !c.prompt.empty()) s.busPrompts.emplace(s.transcript.size(), c.prompt);
         s.transcript.push_back(c.entry);
     } else {
         s.queue.push_back(c.prompt);
     }
 }
-
-} // namespace
 
 const StoredSession* MemoryStore::find(SessionId id) const {
     auto it = sessions_.find(id);
@@ -113,7 +118,7 @@ bool MemoryStore::commit(SessionId id, const std::vector<SessionChange>& changes
         }
         StoredSession& s = sessions_[id];
         for (const SessionChange& c : changes) {
-            applyTo(s, c);
+            applyStoredChange(s, c);
         }
     }
     if (!client.empty()) {
@@ -127,8 +132,8 @@ std::uint64_t MemoryStore::applied(const std::string& client) const {
     return it == applied_.end() ? 0 : it->second;
 }
 
-Hub::Hub(SessionStore& store, Limits limits, Responder* responder)
-    : store_(store), limits_(limits), responder_(responder) {
+Hub::Hub(SessionStore& store, Limits limits, Responder* responder, std::function<std::string()> bundlePath)
+    : store_(store), limits_(limits), responder_(responder), bundlePath_(std::move(bundlePath)) {
     for (SessionId id : store_.ids()) {
         refresh(id);
     }
@@ -168,6 +173,26 @@ bool isSet(ActionKind kind) {
     return kind == ActionKind::SetAccount || kind == ActionKind::SetModel || kind == ActionKind::SetEffort;
 }
 
+bool onDefaultInstance(const std::string& instance, const accounts::Friend* owner) {
+    return instance.empty() || (owner && !owner->instances.empty() && instance == owner->instances.front().name);
+}
+
+std::string busReceiptKey(const std::string& recipient, const std::string& id) {
+    const std::string_view streamId(id);
+    const auto dash = streamId.find('-');
+    const auto number = [](std::string_view digits) {
+        if (digits.empty() || (digits.size() > 1 && digits.front() == '0')) return false;
+        std::uint64_t value;
+        const auto end = digits.data() + digits.size();
+        const auto parsed = std::from_chars(digits.data(), end, value);
+        return parsed.ec == std::errc{} && parsed.ptr == end;
+    };
+    if (!accounts::isName(recipient) || dash == std::string_view::npos ||
+            !number(streamId.substr(0, dash)) || !number(streamId.substr(dash + 1))) return {};
+    // Window IDs cannot contain ':'. Replays may arrive out of order, so every message ID has its own receipt.
+    return "nexus:bus:in:" + recipient + ":" + id;
+}
+
 } // namespace
 
 // An action that changes no session: the client's counter moves in a step of its own, so it is never taken again.
@@ -194,6 +219,9 @@ bool Hub::counted(const Action& action, const std::string& refused, std::string*
 }
 
 bool Hub::apply(const Action& action, std::string* why, const std::string& client) {
+    if (const auto* s = action.session ? store_.find(action.session) : nullptr;
+            s && s->info.friendName == kPrimaryChat && !isPrimary(action.session))
+        return counted(action, "This conversation is unavailable with the current primary harness configuration.", why, client);
     if (action.kind == ActionKind::SecretAnswer || action.kind == ActionKind::SecretCancel) {
         return secretAction(action, why, client);
     }
@@ -201,60 +229,20 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
             action.kind == ActionKind::SignInCallback) {
         return signInAction(action, why, client);
     }
+    if (action.kind == ActionKind::SignOut) {
+        return signOutAction(action, why, client);
+    }
     if (action.kind == ActionKind::Unknown) {
         return counted(action, describe(action) + " is of a kind this server does not know: counted, not applied", why,
             client);
     }
+    if (action.kind == ActionKind::ResolveLimit)
+        return resolveLimit(action, why, client);
     if (action.kind >= ActionKind::AddAccount) {
         return accountAction(action, why, client);
     }
-    if (action.kind == ActionKind::Create || action.kind == ActionKind::Ensure) {
-        if (action.friendName.empty() || action.friendName.size() > limits_.friendName) {
-            return counted(action, "a session's friend is named by 1 to " + std::to_string(limits_.friendName) +
-                " bytes", why, client);
-        }
-        if (!action.text.empty()) {
-            return counted(action, "a create or an ensure carries no text", why, client);
-        }
-        if (action.kind == ActionKind::Ensure) {
-            for (SessionId id : store_.ids()) {
-                if (store_.find(id)->info.friendName == action.friendName) {
-                    // The friend has a session: nothing to make, and nothing refused.
-                    return count(action, why, client);
-                }
-            }
-        }
-        SessionInfo info = responder_ != nullptr ? responder_->defaults(action.friendName)
-                                                 : SessionInfo{action.friendName, kDefaultHarness, {}, {}, {}};
-        info.friendName = action.friendName;
-        if (action.kind == ActionKind::Create && action.session != 0) {
-            const StoredSession* from = store_.find(action.session);
-            if (from == nullptr) {
-                return counted(action, "no session " + std::to_string(action.session) + " to copy", why, client);
-            }
-            info.account = from->info.account;
-            info.model = from->info.model;
-            info.effort = from->info.effort;
-            if (from->info.friendName == action.friendName) {
-                info.instance = from->info.instance;
-            }
-        }
-        if (accounts_) {
-            // The account copied only when linked to this friend (or none), else the friend's default.
-            const accounts::Friend* f = accounts_->friendNamed(action.friendName);
-            const bool copied = action.kind == ActionKind::Create && action.session != 0;
-            if (!copied || !(info.account.empty() || accounts_->linked(action.friendName, info.account))) {
-                info.account = f == nullptr ? std::string() : f->preferred;
-            }
-            info.harness = harnessOf(info.account, info.harness);
-            // The instance copied from a session of the same friend while the friend still has it, else the friend's
-            // default instance (its first), or none.
-            if (f == nullptr || f->instance(info.instance) == nullptr) {
-                info.instance = f == nullptr || f->instances.empty() ? std::string() : f->instances.front().name;
-            }
-        }
-        return make(action, info, why, client);
-    }
+    if (action.kind == ActionKind::Create || action.kind == ActionKind::Ensure)
+        return createSession(action, why, client);
     const StoredSession* session = store_.find(action.session);
     if (session == nullptr) {
         // Nothing runs in a session the server does not hold, and no session is made for it: refused, and counted.
@@ -263,6 +251,196 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
     if (isSet(action.kind)) {
         return set(action, why, client);
     }
+    return applyMessage(action, *session, why, client);
+}
+
+bool Hub::createSession(const Action& action, std::string* why, const std::string& client, bool requireDefault) {
+    if (action.friendName == kPrimaryChat)
+        return counted(action, "Only the server can open the primary conversation.", why, client);
+    if (action.friendName.empty() || action.friendName.size() > limits_.friendName) {
+        return counted(action, "a session's friend is named by 1 to " + std::to_string(limits_.friendName) +
+            " bytes", why, client);
+    }
+    if (!action.text.empty()) {
+        return counted(action, "a create or an ensure carries no text", why, client);
+    }
+    if (action.kind == ActionKind::Ensure) {
+        for (SessionId id : store_.ids()) {
+            if (store_.find(id)->info.friendName == action.friendName) {
+                // The friend has a session: nothing to make, and nothing refused.
+                return count(action, why, client);
+            }
+        }
+    }
+    SessionInfo info = responder_ != nullptr ? responder_->defaults(action.friendName)
+                                             : SessionInfo{action.friendName, kDefaultHarness, {}, {}, {}};
+    info.friendName = action.friendName;
+    const auto* f = accounts_ ? accounts_->friendNamed(action.friendName) : nullptr;
+    const auto* from = action.kind == ActionKind::Create && action.session ? store_.find(action.session) : nullptr;
+    if (action.kind == ActionKind::Create && action.session && !from)
+        return counted(action, "no session " + std::to_string(action.session) + " to copy", why, client);
+    const SessionInfo defaults = info;
+    std::string error;
+    const auto pool = subscriptionsFor(info.friendName);
+    if (!policy::newSession(application_, bundlePath_(), defaults, from ? &from->info : nullptr, f,
+                            bool(accounts_), pool.size() > 1, info, error))
+        return counted(action, "New session application: " + error, why, client);
+    if (requireDefault && !onDefaultInstance(info.instance, f))
+        return counted(action, "The new session policy must select the recipient's default instance for bus delivery.", why, client);
+    if (info.autoAccount) {
+        if (pool.size() < 2)
+            return counted(action, "Automatic account selection needs two linked subscriptions.", why, client);
+        if (!from || from->info.friendName != info.friendName || !from->info.autoAccount ||
+                !signedIn_.contains(info.account) || std::find(pool.begin(), pool.end(), info.account) == pool.end())
+            info.account = firstAutoAccount(pool);
+    }
+    if (info.model.size() > limits_.setting || info.effort.size() > limits_.setting ||
+            !printable(info.model) || !printable(info.effort) ||
+            (accounts_ && !info.account.empty() && !accounts_->linked(action.friendName, info.account)) ||
+            (accounts_ && !info.instance.empty() && (!f || !f->instance(info.instance))) ||
+            (!accounts_ && info.account != defaults.account && (!from || info.account != from->info.account)) ||
+            (!accounts_ && info.instance != defaults.instance &&
+                (!from || from->info.friendName != info.friendName || info.instance != from->info.instance)))
+        return counted(action, "New session application: choose an available account and instance and "
+            "printable model and effort within the setting limit", why, client);
+    if (accounts_)
+        info.harness = harnessOf(info.account, info.harness);
+    return make(action, info, why, client);
+}
+
+bool Hub::ignoreBus(const std::string& recipient, const std::string& id, std::string* why, const std::string& source) {
+    auto key = busReceiptKey(recipient, id);
+    if (key.empty() || source.empty()) {
+        if (why) *why = "The message bus source, recipient or message ID is invalid.";
+        return false;
+    }
+    key += ":filtered:" + source;
+    return store_.applied(key) || store_.commit(0, {}, key, 1, why);
+}
+
+bool Hub::hasIgnoredBusReceipt(const std::string& recipient, const std::string& id, const std::string& source) const {
+    auto key = busReceiptKey(recipient, id);
+    return !key.empty() && !source.empty() && store_.applied(key + ":filtered:" + source);
+}
+
+namespace {
+std::string primaryReceipt(SessionId id) {
+    // The receipt and the new session share a store step. Older servers allowed arbitrary names in Create.
+    return "nexus:primary:" + std::to_string(id);
+}
+}
+
+bool Hub::ensurePrimary(const SessionInfo& binding, std::string* why) {
+    const auto* account = accounts_ ? accounts_->account(binding.account) : nullptr;
+    if (binding.friendName != kPrimaryChat || !account || account->billing != accounts::Billing::Subscription ||
+            account->provider != binding.harness || !accounts::isProvider(binding.harness) || binding.autoAccount ||
+            binding.instance.size() != 32 || binding.instance.find_first_not_of("0123456789abcdef") != std::string::npos) {
+        clearPrimary();
+        if (why) *why = "Configure an installed primary harness, its matching subscription account and a workspace.";
+        return false;
+    }
+    const auto matches = [&](SessionId id) {
+        const auto& info = store_.find(id)->info;
+        return info.friendName == kPrimaryChat && info.account == binding.account &&
+               info.harness == binding.harness && info.instance == binding.instance;
+    };
+    if (primary_ && matches(*primary_)) return true;
+    clearPrimary();
+    for (SessionId id : store_.ids()) {
+        if (matches(id) && store_.applied(primaryReceipt(id))) {
+            primary_ = id;
+            refresh(id);
+            if (responder_) responder_->present(id, true);
+            return true;
+        }
+    }
+    if (store_.size() >= limits_.sessions) {
+        if (why) *why = "The primary conversation could not be created because the session limit was reached.";
+        return false;
+    }
+    const auto id = store_.nextId();
+    const SessionInfo info{kPrimaryChat, binding.harness, binding.account, {}, {}, binding.instance};
+    if (!store_.commit(id, {infoChange(info)}, primaryReceipt(id), 1, why)) return false;
+    primary_ = id;
+    refresh(id);
+    if (responder_) responder_->made(id);
+    return true;
+}
+
+bool Hub::clearPrimary() {
+    if (!primary_) return false;
+    const auto id = *primary_;
+    primary_.reset();
+    refresh(id);
+    if (responder_) responder_->present(id, false);
+    return true;
+}
+
+std::optional<AccountChoice> Hub::primaryChoice() const {
+    if (!primary_ || !accounts_) return {};
+    const auto* account = accounts_->account(store_.find(*primary_)->info.account);
+    if (!account) return {};
+    return AccountChoice{account->name, account->label,
+                         signsIn(account->name) && !signedIn_.contains(account->name), account->email};
+}
+
+bool Hub::hasBusReceipt(const std::string& recipient, const std::string& id) const {
+    const auto key = busReceiptKey(recipient, id);
+    return !key.empty() && store_.applied(key) != 0;
+}
+
+bool Hub::receiveBus(const std::string& recipient, const std::string& id, const std::string& sender,
+                     const std::string& displayBody, const std::string& promptBody, std::string* why) {
+    if (why) why->clear();
+    const auto refuse = [&](const std::string& problem) {
+        if (why) *why = problem;
+        return false;
+    };
+    const auto receipt = busReceiptKey(recipient, id);
+    if (receipt.empty()) return refuse("The message bus recipient or message ID is invalid.");
+    if (store_.applied(receipt)) return true;
+    if (!busPeerName(sender)) return refuse("The message bus sender is invalid.");
+    if (displayBody.size() > limits_.text || sender.size() + 1 + displayBody.size() > limits_.text ||
+            promptBody.size() > limits_.text)
+        return refuse("The message exceeds this Nexus server's prompt limit.");
+    if (blankText(displayBody) || blankText(promptBody) || !codec::tableText(displayBody) || !codec::tableText(promptBody))
+        return refuse("The message needs nonempty UTF-8 text.");
+
+    const auto* fr = accounts_ ? accounts_->friendNamed(recipient) : nullptr;
+    if (!fr || !responder_) return refuse("The recipient has no configured Nexus friend and driver.");
+    SessionId sessionId = 0;
+    for (const auto& s : state_.sessions()) {
+        if (s->info.friendName == recipient && onDefaultInstance(s->info.instance, fr)) {
+            sessionId = s->id;
+            break;
+        }
+    }
+    if (!sessionId) {
+        sessionId = store_.nextId();
+        if (!createSession(Action{0, ActionKind::Create, 0, recipient, {}, {}}, why, {}, true)) return false;
+    }
+    const auto& session = *store_.find(sessionId);
+    const auto* account = accounts_->account(session.info.account);
+    if (account && (needsVerifiedLogin(*account) || !signedIn_.contains(account->name)))
+        return refuse("Sign in to the recipient's account to receive this message.");
+    if (!session.queue.empty())
+        return refuse("The recipient has older queued prompts. Delivery will retry after they are taken.");
+
+    std::string problem;
+    auto changes = responder_->prepareBus(sessionId, promptBody, problem);
+    if (!problem.empty()) {
+        responder_->sent(sessionId, false);
+        return refuse(problem);
+    }
+    changes.insert(changes.begin(), SessionChange{entry(EntryKind::Bus, sender + "\n" + displayBody), promptBody});
+    const bool accepted = store_.commit(sessionId, changes, receipt, 1, &problem);
+    responder_->sent(sessionId, accepted);
+    if (!accepted) return refuse(problem);
+    refresh(sessionId);
+    return true;
+}
+
+bool Hub::applyMessage(const Action& action, const StoredSession& session, std::string* why, const std::string& client) {
     std::string failed;
     auto commit = [&](const std::vector<SessionChange>& changes) {
         if (changes.empty() && client.empty()) {
@@ -276,24 +454,112 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         }
         return false;
     };
+    std::vector<SessionChange> notices;
+    policy::MessagePlan plan;
     std::string refused;
-    if (action.kind == ActionKind::Stop) {
-        if (!action.text.empty()) {
-            return counted(action, "a stop that carried text was not applied: a stop carries none", why, client);
+    ActionKind kind = action.kind;
+    const std::string* text = &action.text;
+    if (kind != ActionKind::Stop && text->size() <= limits_.text) {
+        policy::MessageState state{*text, session.info.friendName, session.info.model, session.queue.size(),
+            session.driver.openTurn != 0, session.info.effort, session.info.harness,
+            responder_ ? responder_->catalog(session.info) : std::string{}};
+        if (const auto* account = accounts_ ? accounts_->account(session.info.account) : nullptr) {
+            state.accountEmail = account->email;
+            state.loginState = signedIn_.contains(account->name) ? "signed in" :
+                (signsIn(account->name) ? "signed out" : "unconfirmed");
         }
-    } else if (blankText(action.text)) {
-        refused = std::string("An empty prompt was not ") + verb(action.kind) + ".";
-    } else if (action.text.size() > limits_.text) {
-        refused = "A prompt of " + std::to_string(action.text.size()) + " bytes was not " + verb(action.kind) +
-            ": the limit is " + kib(limits_.text) + ".";
-    } else if (action.kind == ActionKind::Queue) {
-        const std::size_t bytes = std::accumulate(session->queue.begin(), session->queue.end(), std::size_t(0),
-            [](std::size_t n, const std::string& q) { return n + q.size(); });
-        if (session->queue.size() >= limits_.queue) {
-            refused = "A prompt was not queued: the queue holds " + std::to_string(limits_.queue) +
-                " prompts, its limit.";
-        } else if (bytes + action.text.size() > limits_.queueBytes) {
-            refused = "A prompt was not queued: the queue would hold more than " + kib(limits_.queueBytes) + ".";
+        if (responder_ && text->find("/info") != std::string::npos) state.friendInfo = responder_->friendInfo(session.info.friendName);
+        if (!policy::messagePlan(application_, bundlePath_(), false, kind == ActionKind::Queue ? "queue" : "send", state, plan, refused)) {
+            refused = "Message application: " + refused;
+        } else {
+            for (const auto& notice : plan.notices)
+                notices.emplace_back(entry(EntryKind::Notice, notice), std::string());
+            if (plan.text)
+                text = &*plan.text;
+            if (plan.delivery == policy::Delivery::SetModel || plan.delivery == policy::Delivery::SetEffort) {
+                Action setting = action;
+                setting.kind = plan.delivery == policy::Delivery::SetModel ? ActionKind::SetModel : ActionKind::SetEffort;
+                setting.text = *text;
+                return set(setting, why, client, true, plan.effort);
+            }
+            if (plan.delivery == policy::Delivery::Clear || plan.delivery == policy::Delivery::Compact) {
+                const bool compact = plan.delivery == policy::Delivery::Compact;
+                if (session.driver.openTurn || !session.driver.waiting.empty() || !session.queue.empty() ||
+                        !session.driver.continuationPrompt.empty()) {
+                    refused = "Finish or stop the current work before changing its context.";
+                } else {
+                    DriverState fresh;
+                    fresh.nextTurn = session.driver.nextTurn;
+                    fresh.summary = compact;
+                    auto changes = responder_ ? responder_->resetContext(action.session, session.driver, compact)
+                                              : std::vector<SessionChange>{{nullptr, {}, fresh}};
+                    if (!compact) {
+                        SessionChange reset{};
+                        reset.clearTranscript = true;
+                        changes.push_back(reset);
+                    } else {
+                        changes.push_back({entry(EntryKind::Notice, "Context compacted for the next turn."), {}});
+                    }
+                    const bool ok = commit(changes);
+                    if (responder_) responder_->sent(action.session, ok);
+                    if (ok) refresh(action.session);
+                    return ok;
+                }
+            }
+            if (plan.delivery == policy::Delivery::Native) {
+                auto service = services_.find(plan.service);
+                if (service == services_.end())
+                    refused = "No native service registered as " + plan.service + ".";
+                else if (text->size() > limits_.text)
+                    refused = "Native service input exceeds the message limit.";
+                else {
+                    try {
+                        const auto result = service->second(*text);
+                        if (result.size() > limits_.text)
+                            refused = "Native service output exceeds the message limit.";
+                        else
+                            notices.emplace_back(entry(EntryKind::Notice, result), std::string());
+                    } catch (const std::exception&) {
+                        refused = "Native service " + plan.service + " failed to handle the request.";
+                    }
+                }
+            }
+            if (refused.empty() && (plan.delivery == policy::Delivery::None || plan.delivery == policy::Delivery::Native)) {
+                if (!commit(notices))
+                    return false;
+                refresh(action.session);
+                return true;
+            }
+            kind = plan.delivery == policy::Delivery::Send ? ActionKind::Send : ActionKind::Queue;
+        }
+    }
+    if (refused.empty()) {
+        if (kind == ActionKind::Stop) {
+            if (!text->empty()) {
+                return counted(action, "a stop that carried text was not applied: a stop carries none", why, client);
+            }
+        } else if (blankText(*text)) {
+            refused = std::string("An empty prompt was not ") + verb(kind) + ".";
+        } else if (text->size() > limits_.text) {
+            refused = "A prompt of " + std::to_string(text->size()) + " bytes was not " + verb(kind) +
+                ": the limit is " + kib(limits_.text) + ".";
+        } else if (kind == ActionKind::Queue) {
+            const std::size_t bytes = std::accumulate(session.queue.begin(), session.queue.end(), std::size_t(0),
+                [](std::size_t n, const std::string& q) { return n + q.size(); });
+            if (session.queue.size() >= limits_.queue) {
+                refused = "A prompt was not queued: the queue holds " + std::to_string(limits_.queue) +
+                    " prompts, its limit.";
+            } else if (bytes + text->size() > limits_.queueBytes) {
+                refused = "A prompt was not queued: the queue would hold more than " + kib(limits_.queueBytes) + ".";
+            }
+        }
+    }
+    if (refused.empty() && (kind == ActionKind::Send || kind == ActionKind::Queue) && accounts_) {
+        const auto* a = accounts_->account(session.info.account);
+        if (a && needsVerifiedLogin(*a)) {
+            refused = "Sign in to " + a->email + " (" + a->name + ") in Nexus before sending a prompt.";
+        } else if (a && isPrimary(action.session) && signsIn(a->name) && !signedIn_.contains(a->name)) {
+            refused = "Sign in to " + a->name + " in Nexus before sending a prompt.";
         }
     }
     if (!refused.empty()) {
@@ -307,18 +573,19 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         return false;
     }
     std::vector<SessionChange> changes;
-    if (action.kind == ActionKind::Send && responder_ != nullptr) {
-        changes = responder_->send(action.session, action.text);
-    } else if (action.kind == ActionKind::Send) {
-        changes.push_back(SessionChange{entry(EntryKind::Person, action.text), {}});
+    if (kind == ActionKind::Send && responder_ != nullptr) {
+        changes = responder_->send(action.session, *text);
+    } else if (kind == ActionKind::Send) {
+        changes.push_back(SessionChange{entry(EntryKind::Person, *text), {}});
         changes.push_back(SessionChange{entry(EntryKind::Friend, kReceived), {}});
-    } else if (action.kind == ActionKind::Queue && responder_ != nullptr) {
-        changes = responder_->queue(action.session, action.text);
-    } else if (action.kind == ActionKind::Queue) {
-        changes.push_back(SessionChange{nullptr, action.text});
+    } else if (kind == ActionKind::Queue && responder_ != nullptr) {
+        changes = responder_->queue(action.session, *text);
+    } else if (kind == ActionKind::Queue) {
+        changes.push_back(SessionChange{nullptr, *text});
     } else if (responder_ != nullptr) {
         changes = responder_->stop(action.session);
     }
+    changes.insert(changes.begin(), notices.begin(), notices.end());
     const bool committed = commit(changes);
     if (responder_ != nullptr) {
         responder_->sent(action.session, committed);
@@ -352,29 +619,56 @@ bool Hub::make(const Action& action, const SessionInfo& info, std::string* why, 
 }
 
 // A session's account, model or effort, from its next turn on.
-bool Hub::set(const Action& action, std::string* why, const std::string& client) {
+bool Hub::set(const Action& action, std::string* why, const std::string& client, bool announce,
+              const std::optional<std::string>& effort) {
+    if (action.kind == ActionKind::SetAccount && isPrimary(action.session))
+        return counted(action, "The primary conversation uses its configured subscription account.", why, client);
     const StoredSession* session = store_.find(action.session);
     std::string refused;
     if (action.text.size() > limits_.setting || !printable(action.text)) {
         refused = std::string("The ") + settingName(action.kind) + " was not changed: a setting is at most " +
             std::to_string(limits_.setting) + " printable characters.";
     }
+    if (effort && (effort->size() > limits_.setting || !printable(*effort))) refused = "Invalid effort identifier.";
+    if (session->driver.modelLimitPending &&
+            (action.kind == ActionKind::SetAccount || action.kind == ActionKind::SetModel))
+        return counted(action, "Resolve the pending model-limit choice or stop the interrupted work before changing its account or model.", why, client);
     SessionInfo info = session->info;
-    if (refused.empty() && action.kind == ActionKind::SetAccount && accounts_ && !action.text.empty() &&
-            !accounts_->linked(info.friendName, action.text)) {
-        refused = "The account was not changed: " + action.text + " is not one of " + info.friendName +
-            "'s accounts" + (accounts_->account(action.text) == nullptr ? " (no account " + action.text +
+    std::string account = action.text;
+    const bool chooseAuto = action.kind == ActionKind::SetAccount && account == kAutoAccountTarget;
+    if (refused.empty() && chooseAuto) {
+        const auto pool = subscriptionsFor(info.friendName);
+        if (pool.size() < 2)
+            refused = "Link at least two subscription accounts for this friend’s driver in friends.json to use auto.";
+        else
+            account = firstAutoAccount(pool);
+    } else if (refused.empty() && action.kind == ActionKind::SetAccount && account.starts_with('+')) {
+        const auto* who = accounts_ ? accounts_->friendNamed(info.friendName) : nullptr;
+        if (!who || who->accounts.empty()) {
+            refused = "Link an account to " + info.friendName + " in friends.json to switch accounts.";
+        } else {
+            account = policy::accountCommand(application_, bundlePath_(), info.account, who->accounts,
+                                             account.substr(1), refused);
+        }
+    }
+    if (refused.empty() && action.kind == ActionKind::SetAccount && accounts_ && !account.empty() &&
+            !accounts_->linked(info.friendName, account)) {
+        refused = "The account was not changed: " + account + " is not one of " + info.friendName +
+            "'s accounts" + (accounts_->account(account) == nullptr ? " (no account " + account +
             " is set up in accounts.json)" : "") + ". Link it to " + info.friendName + " first: add it to " +
             info.friendName + "'s \"accounts\" in friends.json and run `nexus-server config reload` "
             "(docs/accounts.md).";
     }
     if (action.kind == ActionKind::SetAccount) {
-        info.account = action.text;
+        info.account = account;
+        info.autoAccount = chooseAuto;
         if (accounts_) {
             info.harness = harnessOf(info.account, info.harness);
         }
     } else if (action.kind == ActionKind::SetModel) {
+        if (announce && info.model != action.text) info.effort.clear();
         info.model = action.text;
+        if (effort) info.effort = *effort;
     } else {
         info.effort = action.text;
     }
@@ -383,7 +677,12 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client)
         changes.push_back(SessionChange{entry(EntryKind::Notice, refused), {}});
     } else if (!(info == session->info)) {
         changes.push_back(infoChange(info));
+        if (!session->info.account.empty() && !info.account.empty() && session->info.account != info.account) {
+            changes.push_back(SessionChange{switchNotice(info.account), {}});
+        }
     }
+    if (announce && refused.empty())
+        changes.push_back({entry(EntryKind::Notice, std::string(settingName(action.kind)) + " set to " + action.text + (effort ? " with " + *effort + " effort" : "") + "."), {}});
     std::string failed;
     if ((!changes.empty() || !client.empty()) &&
             !store_.commit(changes.empty() ? 0 : action.session, changes, client, action.num, &failed)) {
@@ -398,6 +697,9 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client)
             *why = "session " + std::to_string(action.session) + ": " + refused;
         }
         return false;
+    }
+    if (action.kind == ActionKind::SetAccount && signsIn(info.account)) {
+        needSignIn(info.account);
     }
     if (changes.empty()) {
         return true;    // already so
@@ -445,16 +747,62 @@ bool Hub::setOpen(SessionId id, const std::string& text) {
     return true;
 }
 
+namespace {
+// An absent routing constraint belongs to an unrestricted responder. A missing friend in an installed table
+// has no account-capable driver. Its registry can still be edited and its named accounts displayed.
+bool canRoute(const std::optional<AccountRoutes>& routes, const std::string& who, const std::string& provider) {
+    if (!routes) return true;
+    const auto it = routes->find(who);
+    return it != routes->end() && it->second == provider;
+}
+} // namespace
+
+std::vector<std::string> Hub::subscriptionsFor(const std::string& friendName) const {
+    std::vector<std::string> pool;
+    const auto* who = accounts_ ? accounts_->friendNamed(friendName) : nullptr;
+    if (who) {
+        const auto routes = responder_ ? responder_->accountRoutes() : std::nullopt;
+        for (const auto& name : who->accounts) {
+            const auto* account = accounts_->account(name);
+            if (account && account->billing == accounts::Billing::Subscription && canRoute(routes, who->name, account->provider))
+                pool.push_back(name);
+        }
+    }
+    return pool;
+}
+
+std::string Hub::firstAutoAccount(const std::vector<std::string>& pool) const {
+    for (const auto& name : pool)
+        if (signedIn_.contains(name)) return name;
+    // With no usable login, the concrete first choice can show its sign-in card.
+    return pool.empty() ? std::string{} : pool.front();
+}
+
 std::string Hub::harnessOf(const std::string& account, const std::string& otherwise) const {
     const accounts::Account* a = accounts_ && !account.empty() ? accounts_->account(account) : nullptr;
     return a == nullptr ? otherwise : a->provider;
 }
 
+EntryRef Hub::switchNotice(const std::string& account) const {
+    const auto* destination = accounts_ ? accounts_->account(account) : nullptr;
+    const auto& label = destination && !destination->label.empty() ? destination->label : account;
+    std::string text(kAccountSwitchPrefix);
+    if (destination && !destination->email.empty()) text += destination->email;
+    const auto emailEnd = static_cast<std::uint32_t>(text.size());
+    if (emailEnd == kAccountSwitchPrefix.size()) text += label;
+    else text += " (" + label + ")";
+    return std::make_shared<const SessionEntry>(SessionEntry{EntryKind::Notice, std::move(text), true, emailEnd});
+}
+
 // A session's new settings, from the server rather than the person, with the notice that tells it why: one step.
 bool Hub::moveTo(SessionId id, const SessionInfo& info, const std::string& notice) {
     std::string failed;
-    if (!store_.commit(id, {infoChange(info), SessionChange{entry(EntryKind::Notice, notice), {}}}, std::string(), 0,
-                       &failed)) {
+    std::vector<SessionChange> changes{infoChange(info)};
+    if (!notice.empty()) changes.push_back({entry(EntryKind::Notice, notice), {}});
+    const auto& previous = store_.find(id)->info.account;
+    if (!previous.empty() && !info.account.empty() && previous != info.account)
+        changes.push_back({switchNotice(info.account), {}});
+    if (!store_.commit(id, changes, std::string(), 0, &failed)) {
         return false;
     }
     refresh(id);
@@ -582,23 +930,39 @@ bool Hub::settleOne(SessionId id, std::vector<std::string>* report, const std::s
             "): this session's driver restarts keeping them out; a turn already open is stopped now if more are "
             "kept out, and otherwise finishes as it started.";
     }
-    if (info.account.empty()) {
-        return instanceNotice.empty() || moveTo(id, info, instanceNotice);
-    }
     const std::string was = info.account;
     std::string notice;
-    if (!accounts_->linked(info.friendName, was)) {
+    if (info.autoAccount) {
+        const auto pool = subscriptionsFor(info.friendName);
+        if (pool.size() < 2) {
+            info.autoAccount = false;
+            notice = "Automatic account selection ended because fewer than two subscription accounts remain linked to " +
+                info.friendName + " (" + cause + ").";
+        }
+        if (std::find(pool.begin(), pool.end(), was) == pool.end()) {
+            info.account = firstAutoAccount(pool);
+            info.harness = harnessOf(info.account, info.harness);
+            if (!notice.empty()) notice += " ";
+            notice += info.account.empty() ? "No subscription account is selected." :
+                "The selected subscription account is now " + info.account + ".";
+        }
+    } else if (!was.empty() && !accounts_->linked(info.friendName, was)) {
         info.account = accounts::landing(*accounts_, signedIn_, info.friendName);
         info.harness = harnessOf(info.account, info.harness);
         notice = "The account " + was + " is no longer one of " + info.friendName + "'s accounts (" + cause +
             "), so this session now runs on " + (info.account.empty() ? std::string("no account (the harness's own "
             "login)") : "the account " + info.account) + ". Link an account to " + info.friendName + " in "
             "friends.json to choose another.";
-    } else if (info.harness != harnessOf(was, info.harness)) {
+    }
+    if (info.account == was && info.harness != harnessOf(was, info.harness)) {
         info.harness = harnessOf(was, info.harness);
-        notice = "The account " + was + "'s provider is now " + info.harness + " (" + cause + "), so this session "
+        if (!notice.empty()) notice += " ";
+        notice += "The account " + was + "'s provider is now " + info.harness + " (" + cause + "), so this session "
             "now runs " + info.harness + ".";
-    } else if (instanceNotice.empty()) {
+    } else if (const auto* row = accounts_->account(was); before && row && row->provider == "claude" &&
+               before->account(was) && before->account(was)->email != row->email) {
+        notice = "The configured Claude email for " + was + " changed. This session will use the updated login.";
+    } else if (notice.empty() && instanceNotice.empty()) {
         return true;
     }
     if (!moveTo(id, info, instanceNotice.empty() ? notice : notice.empty() ? instanceNotice :
@@ -615,7 +979,78 @@ bool Hub::settleOne(SessionId id, std::vector<std::string>* report, const std::s
     return true;
 }
 
+namespace {
+
+using AccountIndex = std::map<std::string_view, const accounts::Account*>;
+
+AccountIndex indexAccounts(const accounts::Registry& registry) {
+    AccountIndex index;
+    for (const auto& account : registry.accounts) {
+        index.emplace(account.name, &account);
+    }
+    return index;
+}
+
+std::vector<ServerFriend> windowRoster(const accounts::Registry& registry, const AccountIndex& index,
+                                      const std::set<std::string>* signedIn = nullptr, bool canSignIn = false,
+                                      const std::optional<AccountRoutes>& routes = {}) {
+    std::vector<ServerFriend> friends;
+    friends.reserve(registry.friends.size());
+    for (const auto& f : registry.friends) {
+        ServerFriend& row = friends.emplace_back(ServerFriend{f.name});
+        row.accounts.reserve(f.accounts.size());
+        std::size_t subscriptions = 0;
+        for (const auto& name : f.accounts) {
+            if (const auto a = index.find(name); a != index.end()) {
+                // Measure admission with every optional sign-in bit set.
+                const bool needs = !signedIn || (canSignIn && hasSignIn(a->second->provider) &&
+                                                  !signedIn->contains(name));
+                row.accounts.push_back({name, a->second->label, needs, a->second->email});
+                if (a->second->billing == accounts::Billing::Subscription && canRoute(routes, f.name, a->second->provider))
+                    ++subscriptions;
+            }
+        }
+        row.canAutoAccount = subscriptions > 1;
+    }
+    return friends;
+}
+
+} // namespace
+
+std::string accountRosterProblem(const accounts::Registry& registry) {
+    const auto index = indexAccounts(registry);
+    const char* problem = "friends.json: the linked account choices exceed the window roster budget "
+                          "(3 MiB on the wire or 12 MiB decoded); shorten repeated account labels or emails in accounts.json "
+                          "or remove links from friends.json";
+    std::size_t textBytes = 0;
+    std::size_t rows = 0;
+    for (const auto& f : registry.friends) {
+        textBytes += f.name.size();
+        rows++;
+        for (const auto& name : f.accounts) {
+            if (const auto account = index.find(name); account != index.end()) {
+                // Each string is written inline for every link. Check before expanding shared
+                // account metadata into thousands of distinct entries in memory.
+                textBytes += name.size() + account->second->label.size() + account->second->email.size();
+                rows++;
+                if (textBytes > codec::kRosterWireBytes) {
+                    return problem;
+                }
+            }
+        }
+    }
+    // Small rosters are far below both generated sizes even with per-field framing, aligned
+    // string storage, and replacement of invalid UTF-8. Measure all larger ones with the real codec.
+    if (rows <= 1024 && textBytes <= 64 * 1024) {
+        return {};
+    }
+    return codec::rosterFits(windowRoster(registry, index)) ? "" : problem;
+}
+
 std::vector<std::string> Hub::useAccounts(accounts::Registry registry, AccountsKeeper* keeper) {
+    if (auto problem = accountRosterProblem(registry); !problem.empty()) {
+        return {std::move(problem)};
+    }
     take(std::move(registry));
     keeper_ = keeper;
     std::vector<std::string> report;
@@ -625,6 +1060,11 @@ std::vector<std::string> Hub::useAccounts(accounts::Registry registry, AccountsK
 
 bool Hub::applyAccounts(const accounts::Registry& next, const std::string& message, std::vector<std::string>* report) {
     std::vector<std::string> lines = accounts::problems(next);
+    if (lines.empty()) {
+        if (auto problem = accountRosterProblem(next); !problem.empty()) {
+            lines.push_back(std::move(problem));
+        }
+    }
     std::string failed;
     if (lines.empty() && keeper_ != nullptr && !keeper_->keep(next, message, &failed)) {
         lines.push_back(failed);
@@ -648,7 +1088,7 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
             "moves them, against what was committed");
     } else if (unknown && responder_ != nullptr) {
         for (SessionId id : store_.ids()) {
-            responder_->present(id, accounts_->friendNamed(store_.find(id)->info.friendName) != nullptr);
+            responder_->present(id, isPrimary(id) || accounts_->friendNamed(store_.find(id)->info.friendName) != nullptr);
         }
     }
     if (report != nullptr) {
@@ -659,42 +1099,72 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
 
 // The registry becomes `next`; an account it no longer holds loses its sign-in, and one it did not hold before is
 // probed (probeSignInWith).
+static bool sameLogin(const accounts::Account* previous, const accounts::Account& current) {
+    return previous && previous->provider == current.provider &&
+        (current.provider != "claude" || previous->email == current.email);
+}
+
 void Hub::take(accounts::Registry next) {
     std::optional<accounts::Registry> was = std::move(accounts_);
     accounts_ = std::move(next);
-    stateFriends();
+    if (primary_) {
+        const auto& info = store_.find(*primary_)->info;
+        const auto* account = accounts_->account(info.account);
+        if (!account || account->provider != info.harness || account->billing != accounts::Billing::Subscription)
+            clearPrimary();
+    }
     for (auto it = signedIn_.begin(); it != signedIn_.end();) {
-        it = accounts_->account(*it) == nullptr ? signedIn_.erase(it) : std::next(it);
+        const auto* current = accounts_->account(*it);
+        const auto* previous = was ? was->account(*it) : nullptr;
+        it = !current || (previous && !sameLogin(previous, *current))
+            ? signedIn_.erase(it) : std::next(it);
     }
     for (const accounts::Account& a : accounts_->accounts) {
         const accounts::Account* before = was ? was->account(a.name) : nullptr;
-        if (probe_ && (before == nullptr || before->provider != a.provider) && probe_(a)) {
-            signedIn_.insert(a.name);
+        if (sameLogin(before, a)) {
+            if (a.requiresVerifiedEmail() && signedIn_.contains(a.name) && (!probe_ || !probe_(a))) {
+                signedIn_.erase(a.name);
+            }
+        } else {
+            if (before && a.requiresVerifiedEmail()) secretEffects(desk_.retireLogin(a.name, loginFile(a.provider)));
+            if (probe_ && probe_(a)) signedIn_.insert(a.name);
         }
     }
+    stateFriends();
     // A flow for an account removed, or now of another provider, ends with it.
     for (const SignInOffer& o : signIns_.offers()) {
         const accounts::Account* a = accounts_->account(o.account);
-        if (a == nullptr || a->provider != o.provider) {
+        if (!a || (was && !sameLogin(was->account(o.account), *a))) {
             signInEffects(signIns_.signedIn(o.account));
         }
     }
     needAll();
 }
 
+bool Hub::needsVerifiedLogin(const accounts::Account& account) {
+    if (!account.requiresVerifiedEmail()) return false;
+    if (signedIn_.contains(account.name) && probe_ && probe_(account)) return false;
+    reportSignedIn(account.name, false);
+    return true;
+}
+
 void Hub::reportSignedIn(const std::string& account, bool signedIn) {
     if (accounts_ && accounts_->account(account) == nullptr) {
         return;
     }
+    const auto* accountRow = accounts_ ? accounts_->account(account) : nullptr;
+    if (signedIn && accountRow && accountRow->requiresVerifiedEmail()) {
+        signedIn = probe_ && probe_(*accountRow);
+    }
     if (signedIn) {
-        signedIn_.insert(account);
+        if (signedIn_.insert(account).second && accounts_) stateFriends();
         // Signed in otherwise (a paste, its driver): a flow for it ends, its process ended.
         if (signIns_.live(account)) {
             signInEffects(signIns_.signedIn(account));
         }
         return;
     }
-    signedIn_.erase(account);
+    if (signedIn_.erase(account) && accounts_) stateFriends();
     // An account whose provider signs in in the app: a flow, one browser sign-in, unless one is live or a login for it
     // is held already.
     if (signsIn(account)) {
@@ -721,7 +1191,7 @@ void Hub::needsSignIn(const std::string& account, const std::string& why) {
     if (accounts_ && accounts_->account(account) == nullptr) {
         return;
     }
-    signedIn_.erase(account);
+    if (signedIn_.erase(account) && accounts_) stateFriends();
     if (signsIn(account)) {
         needSignIn(account);
         return;
@@ -738,6 +1208,7 @@ void Hub::needsSignIn(const std::string& account, const std::string& why) {
 void Hub::signInWith(SignInHooks hooks, std::string host) {
     signInHooks_ = std::move(hooks);
     signIns_.setHost(std::move(host));
+    if (accounts_) stateFriends();
     needAll();
 }
 
@@ -752,7 +1223,7 @@ void Hub::needAll() {
         return;
     }
     for (const accounts::Account& a : accounts_->accounts) {
-        if (signedIn_.count(a.name) == 0 && signsIn(a.name)) {
+        if (!a.signInOnUse && signedIn_.count(a.name) == 0 && signsIn(a.name)) {
             needSignIn(a.name);
         }
     }
@@ -777,7 +1248,7 @@ void Hub::needSignIn(const std::string& account) {
     if (a == nullptr || signedIn_.count(account) != 0 || signIns_.live(account) || desk_.busy(account)) {
         return;
     }
-    if (pasteInstead()) {
+    if (pasteInstead() && !a->requiresVerifiedEmail()) {
         askPasteLogin(account);
         return;
     }
@@ -811,9 +1282,13 @@ bool Hub::requestSignIn(const std::string& account, std::string* said) {
         *said = "this server does not sign accounts in in the window";
         return false;
     }
-    if (signedIn_.count(account) != 0) {
+    if (!needsVerifiedLogin(*a) && signedIn_.count(account) != 0) {
         *said = "signed in";
         return true;
+    }
+    if (a->requiresVerifiedEmail() && pasteInstead()) {
+        *said = "Open an updated Nexus window to verify " + a->email + " in the browser.";
+        return false;
     }
     const bool before = desk_.busy(account);
     needSignIn(account);
@@ -830,6 +1305,10 @@ void Hub::signInUrl(const std::string& account, std::uint64_t id, const SecretVa
 }
 
 void Hub::signInPrinted(const std::string& account, const SecretValue& token) {
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (!a || a->provider != "claude" || a->requiresVerifiedEmail() || !secretKeeper_) {
+        return;
+    }
     const auto flow = signIns_.flowOf(account);
     const bool running = flow && signInRunning(flow->second);
     // The re-check: a subscription's login, not an API key (nor anything else the process printed).
@@ -854,10 +1333,6 @@ void Hub::signInPrinted(const std::string& account, const SecretValue& token) {
     SignInEffects e;
     signIns_.printed(account, &e);
     signInEffects(e);
-    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
-    if (a == nullptr || secretKeeper_ == nullptr) {
-        return;
-    }
     // Straight into the one-chance store, as a request of nexus's own (never in any window's state): stored when
     // durable, else held and written again; never dropped.
     const std::uint64_t id = store_.applied(kSecretIdsClient) + 1;
@@ -877,8 +1352,32 @@ void Hub::signInPrinted(const std::string& account, const SecretValue& token) {
     }
 }
 
+void Hub::signInEnrolled(const std::string& account, const std::string& provider, std::uint64_t id) {
+    const auto flow = signIns_.flowOf(account);
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (!flow || flow->first != id || !signInRunning(flow->second) || a == nullptr || a->provider != provider) {
+        return;
+    }
+    if (!probe_ || !probe_(*a)) {
+        signInExited(account, id, "the provider did not confirm this account's enrollment");
+        return;
+    }
+    SignInEffects effects;
+    signIns_.printed(account, &effects);
+    signInEffects(effects);
+    reportSignedIn(account, true);
+    if (responder_ != nullptr) {
+        responder_->signedIn(account);
+    }
+}
+
 void Hub::signInExited(const std::string& account, std::uint64_t id, const std::string& why) {
-    signInEffects(signIns_.exited(account, id, why));
+    auto effects = signIns_.exited(account, id, why);
+    const auto* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (a && a->requiresVerifiedEmail() && !effects.notes.empty() && !why.empty()) {
+        effects.notes.front().text = "Could not sign in to " + a->email + ". " + why;
+    }
+    signInEffects(effects);
 }
 
 void Hub::signInWindowsChanged() {
@@ -886,7 +1385,13 @@ void Hub::signInWindowsChanged() {
         return;
     }
     SignInEffects out;
-    const std::vector<std::string> accounts = signIns_.fallBack(&out);
+    std::set<std::string> browserOnly;
+    if (accounts_) {
+        for (const auto& a : accounts_->accounts) {
+            if (a.requiresVerifiedEmail()) browserOnly.insert(a.name);
+        }
+    }
+    const std::vector<std::string> accounts = signIns_.fallBack(&out, browserOnly);
     signInEffects(out);
     for (const std::string& account : accounts) {
         askPasteLogin(account);
@@ -918,10 +1423,33 @@ std::vector<SignInOffer> Hub::publicOffers() const {
     return offers;
 }
 
-Sessions Hub::stateFor(const std::string& opener) const {
+Sessions Hub::historyPage(SessionId id, std::uint64_t epoch, std::uint64_t first) const {
+    const auto* live = state_.find(id);
+    const auto* stored = store_.find(id);
+    if (!live || !stored || live->info.contextEpoch != epoch || first >= stored->transcript.size()) return {};
+    auto page = std::make_shared<SessionView>();
+    page->id = id;
+    page->info = live->info;
+    page->first = first;
+    page->busSenders = live->busSenders;
+    std::size_t bytes = 0;
+    for (auto index = first; index < stored->transcript.size() && page->entries.size() < 256; ++index) {
+        auto entry = stored->transcript[index];
+        if (entry->kind == EntryKind::Bus && !visibleBus(entry->text, *live))
+            entry = std::make_shared<const SessionEntry>(SessionEntry{EntryKind::Bus, {}, true});
+        if (!page->entries.empty() && bytes + entry->text.size() > 65536) break;
+        bytes += entry->text.size();
+        page->entries.push_back(std::move(entry));
+    }
+    return Sessions({page});
+}
+
+Sessions Hub::stateFor(const std::string& opener, const std::string& client) const {
+    Sessions s = state_;
+    if (!client.empty()) s.setNextAction(store_.applied(client) + 1);
     std::vector<SignInOffer> offers = signIns_.offers();
     if (opener.empty() || offers.empty()) {
-        return state_;
+        return s;
     }
     for (SignInOffer& o : offers) {
         if (o.opener != opener) {
@@ -931,9 +1459,43 @@ Sessions Hub::stateFor(const std::string& opener) const {
             }
         }
     }
-    Sessions s = state_;
     s.setOffers(std::move(offers));
     return s;
+}
+
+bool Hub::signOutAction(const Action& action, std::string* why, const std::string& client) {
+    const auto* session = store_.find(action.session);
+    if (!session)
+        return counted(action, "The selected session no longer exists. Select a friend and retry.", why, client);
+    // Count before removing a credential, so an interrupted command cannot remove a replacement on replay.
+    if (!count(action, why, client)) return false;
+    std::string error;
+    const auto& name = action.account;
+    const auto* account = accounts_ ? accounts_->account(name) : nullptr;
+    const auto flow = signIns_.flowOf(name);
+    if (!account || session->info.account != name ||
+            (!isPrimary(action.session) && !accounts_->linked(session->info.friendName, name))) {
+        error = "The account selection changed. Select the account to sign out and try again.";
+    } else if ((!usesLocalSignInPage(account->provider) && account->provider != "claude") || !signOut_) {
+        error = "This server cannot sign out this provider.";
+    } else if (desk_.busy(name) || (flow && flow->second != SignInState::Needed)) {
+        error = "Finish or cancel the open sign-in for this account, then retry /logout.";
+    } else {
+        error = signOut_(*account);
+    }
+    if (error.empty()) {
+        signedIn_.erase(name);
+        stateFriends();
+    }
+    const auto message = error.empty() ? "Signed out of " + name + " in Nexus." : error;
+    std::string failed;
+    if (!store_.commit(action.session, {SessionChange{entry(EntryKind::Notice, message), {}}}, {}, 0, &failed)) {
+        if (why) *why = failed;
+        return false;
+    }
+    refresh(action.session);
+    if (why) *why = error;
+    return error.empty();
 }
 
 bool Hub::signInAction(const Action& action, std::string* why, const std::string& client) {
@@ -947,9 +1509,30 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
         return false;
     }
     switch (action.kind) {
-        case ActionKind::SignInClaim:
-            signInEffects(signIns_.claim(action.request, action.text, clock_ ? clock_() : 0));
+        case ActionKind::SignInClaim: {
+            auto id = action.request;
+            if (!action.account.empty() || action.session != 0) {
+                // A card or Enter names the exact session/account the person chose. Recheck it
+                // after any pending account changes and before allocating or claiming a flow.
+                const auto* session = store_.find(action.session);
+                if (!isClaimToken(action.text) || !session || action.account.empty() ||
+                    session->info.account != action.account || !signsIn(action.account) ||
+                    (!isPrimary(action.session) && !accounts_->linked(session->info.friendName, action.account)) ||
+                    signedIn_.contains(action.account)) {
+                    if (why) *why = "The selected session or its sign-in changed. Use the current account's sign-in.";
+                    return false;
+                }
+                if (!id) needSignIn(action.account);
+                const auto flow = signIns_.flowOf(action.account);
+                if (!flow || (id && flow->first != id)) {
+                    if (why) *why = "The sign-in offer changed or could not be created. Retry the current account.";
+                    return false;
+                }
+                id = flow->first;
+            }
+            signInEffects(signIns_.claim(id, action.text, clock_ ? clock_() : 0));
             break;
+        }
         case ActionKind::SignInOpened:
             signInEffects(signIns_.opened(action.request, action.text));
             break;
@@ -1057,9 +1640,14 @@ bool Hub::askSecret(const SecretAsker& asker, const std::string& account, const 
         return refuse("no account " + account + " is set up in accounts.json (docs/accounts.md)");
     }
     // A friend's AI asks only for an account its friend is linked to; nexus itself asks for any.
-    if (asker.session != 0 && !accounts_->linked(asker.name, account)) {
+    const bool primaryAccount = isPrimary(asker.session) && asker.name == kPrimaryChat &&
+                                store_.find(asker.session)->info.account == account;
+    if (asker.session != 0 && !primaryAccount && !accounts_->linked(asker.name, account)) {
         return refuse("the account " + account + " is not linked to the friend of session " +
                       std::to_string(asker.session) + " in friends.json, so its AI may not ask for its secrets");
+    }
+    if (a->requiresVerifiedEmail() && what == loginFile(a->provider)) {
+        return refuse("Sign in to " + a->email + " in the browser so Nexus can verify the email.");
     }
     const std::vector<std::string> files = secretFiles(a->provider);
     if (std::find(files.begin(), files.end(), what) == files.end()) {
@@ -1200,7 +1788,7 @@ void Hub::secretEffects(const SecretEffects& effects) {
     // asked to paste a login that is there (models/SignIn.tla NoAskWhenSignedIn).
     for (const SecretRequest& r : effects.stored) {
         const accounts::Account* a = accounts_ ? accounts_->account(r.account) : nullptr;
-        if (a != nullptr && r.what == loginFile(a->provider)) {
+        if (a != nullptr && !a->requiresVerifiedEmail() && r.what == loginFile(a->provider)) {
             secretEffects(desk_.satisfied(r.account, r.what));
             reportSignedIn(r.account, true);
             if (responder_ != nullptr) {
@@ -1210,38 +1798,61 @@ void Hub::secretEffects(const SecretEffects& effects) {
     }
 }
 
-bool Hub::rotate(SessionId id, std::string* why) {
+std::string Hub::nextSubscription(SessionId id, const std::vector<std::string>& exhausted, std::string& reason,
+                                  const std::string& provider) const {
+    reason.clear();
+    const auto* session = store_.find(id);
+    const auto* who = session && accounts_ ? accounts_->friendNamed(session->info.friendName) : nullptr;
+    if (!who) {
+        reason = "No subscription roster is available for this session";
+        return {};
+    }
+    const auto& current = session->info.account;
+    std::vector<std::string> eligible;
+    for (const auto& name : subscriptionsFor(who->name)) {
+        if ((provider.empty() || harnessOf(name, {}) == provider) && name != current && signedIn_.contains(name) &&
+                std::find(exhausted.begin(), exhausted.end(), name) == exhausted.end())
+            eligible.push_back(name);
+    }
+    const auto next = policy::accountAfterLimit(application_, bundlePath_(), current, who->accounts, eligible, reason);
+    if (reason.empty() && next.empty() && !eligible.empty())
+        reason = "account_after_limit chose to keep the current account";
+    return next;
+}
+
+bool Hub::rotate(SessionId id, std::string* why, const std::vector<std::string>& exhausted, bool* noEligible) {
+    if (noEligible) *noEligible = false;
     auto refuse = [&](const std::string& what) {
-        if (why != nullptr) {
-            *why = what;
-        }
+        if (why != nullptr) *why = what;
         return false;
     };
     const StoredSession* s = store_.find(id);
-    if (s == nullptr) {
-        return refuse("no session " + std::to_string(id));
-    }
-    if (!accounts_) {
-        return refuse("this server holds no accounts to rotate to");
-    }
+    if (!s) return refuse("no session " + std::to_string(id));
     SessionInfo info = s->info;
-    const std::string was = info.account.empty() ? std::string("in use") : info.account;
-    const std::string next = accounts::nextUp(*accounts_, signedIn_, info.friendName, info.account);
+    if (!info.autoAccount) {
+        if (noEligible) *noEligible = true;
+        return refuse("session " + std::to_string(id) + " is pinned to its selected account");
+    }
+    const std::string was = info.account;
+    std::string policyReason;
+    const auto next = nextSubscription(id, exhausted, policyReason);
     if (next.empty()) {
-        const std::string notice = "The account " + was + " reached its usage limit, and " + info.friendName +
-            " has no other signed-in account to move to. Link another account to " + info.friendName + " in "
+        const std::string notice = !policyReason.empty() ? "Account policy: " + policyReason + ". See docs/policy.md." :
+            "The account " + was + " reached its usage limit, and " + info.friendName +
+            " has no other signed-in account available for this turn. Link another account to " + info.friendName + " in "
             "friends.json, or sign in one it has (docs/accounts.md).";
         std::string failed;
         if (!store_.commit(id, {SessionChange{entry(EntryKind::Notice, notice), {}}}, std::string(), 0, &failed)) {
             return refuse(failed);
         }
         refresh(id);
-        return refuse("session " + std::to_string(id) + ": " + info.friendName + " has no other signed-in account");
+        if (noEligible) *noEligible = true;
+        return refuse("session " + std::to_string(id) + ": " +
+            (policyReason.empty() ? info.friendName + " has no other signed-in account" : policyReason));
     }
     info.account = next;
     info.harness = harnessOf(next, info.harness);
-    if (!moveTo(id, info, "The account " + was + " reached its usage limit, so this session now runs on the account " +
-                next + ", the next signed-in account of " + info.friendName + "'s.")) {
+    if (!moveTo(id, info, {})) {
         return refuse("session " + std::to_string(id) + ": the store did not take the move");
     }
     return true;
@@ -1362,6 +1973,9 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
     if (!refused.empty()) {
         return counted(action, "the accounts were not changed: " + refused, why, client);
     }
+    if (auto problem = accountRosterProblem(next); !problem.empty()) {
+        return counted(action, problem, why, client);
+    }
     const std::vector<std::string> lines = accounts::changes(*accounts_, next);
     std::string message;
     for (const std::string& l : lines) {
@@ -1385,32 +1999,133 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
     return true;
 }
 
-bool Hub::setActivity(SessionId id, Activity activity) {
+bool Hub::setActivity(SessionId id, Activity activity, std::uint32_t agents) {
     if (store_.find(id) == nullptr) {
         return false;
     }
     auto it = activity_.find(id);
-    const Activity was = it == activity_.end() ? Activity::Idle : it->second;
-    if (was == activity) {
+    const auto was = it == activity_.end() ? std::pair{Activity::Idle, std::uint32_t(0)} : it->second;
+    if (was == std::pair{activity, agents}) {
         return false;
     }
     if (activity == Activity::Idle) {
         activity_.erase(it);
     } else {
-        activity_[id] = activity;
+        activity_[id] = {activity, agents};
     }
     refresh(id);
     return true;
 }
 
+// Compute the same offer for display and acceptance. An account can sign out or a fork
+// can change its policy between those two calls.
+void Hub::offerLimitChoice(SessionId id, const DriverState& driver, SessionInfo& info) {
+    info.limitRequest = driver.nextTurn;
+    if (info.harness != "claude" || !accounts_)
+        return;
+    std::string reason;
+    info.limitAccount = nextSubscription(id, driver.exhaustedAccounts, reason, info.harness);
+    if (!accounts_->linked(info.friendName, info.account) || !signedIn_.count(info.account))
+        return;
+    auto model = policy::modelAfterLimit(application_, bundlePath_(), info.friendName, info.account, info.model);
+    if (!model.empty() && model != info.model && model.size() <= limits_.setting && printable(model))
+        info.limitModel = std::move(model);
+}
+
+bool Hub::resolveLimit(const Action& action, std::string* why, const std::string& client) {
+    const auto* session = store_.find(action.session);
+    if (!session || !session->driver.modelLimitPending || action.request != session->driver.nextTurn ||
+            action.account != session->info.account)
+        return counted(action, "This model-limit choice is no longer pending.", why, client);
+
+    SessionInfo info = session->info;
+    DriverState driver = session->driver;
+    SessionInfo offer = info;
+    offerLimitChoice(action.session, driver, offer);
+    const bool account = action.text == "account";
+    const std::string& target = account ? offer.limitAccount : offer.limitModel;
+    if ((!account && action.text != "model") || target.empty() || action.friendName != target) {
+        refresh(action.session);
+        return counted(action, "That model-limit option is no longer available.", why, client);
+    }
+
+    std::vector<SessionChange> changes;
+    if (account) {
+        info.account = target;
+        changes.push_back(SessionChange{switchNotice(target), {}});
+    } else {
+        info.model = target;
+        std::erase(driver.exhaustedAccounts, info.account);
+        changes.push_back(SessionChange{entry(EntryKind::Notice, "Switched to model " + target), {}});
+    }
+    driver.modelLimitPending = false;
+    changes.push_back(infoChange(info));
+    changes.push_back(SessionChange{nullptr, {}, std::move(driver)});
+    if (!store_.commit(action.session, changes, client, action.num, why))
+        return false;
+    refresh(action.session);
+    if (responder_)
+        responder_->configured(action.session, info);
+    return true;
+}
+
+bool Hub::setBusSenders(const std::map<std::string, std::set<std::string>>& names) {
+    if (names == busSenders_) return false;
+    busSenders_ = names;
+    bool changed = false;
+    for (auto& [id, history] : busHistory_) {
+        const auto roster = names.find(store_.find(id)->info.friendName);
+        std::vector<std::string> allowed;
+        if (roster != names.end()) {
+            for (const auto& sender : history.senders)
+                if (roster->second.contains(sender)) allowed.push_back(sender);
+        }
+        if (history.allowed != allowed) {
+            history.allowed = std::move(allowed);
+            refresh(id);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 // The session's new tail, in place of its old one; every other session is shared with the state before.
 void Hub::refresh(SessionId id) {
     const StoredSession* stored = store_.find(id);
+    if (stored->info.friendName == kPrimaryChat && !isPrimary(id)) {
+        if (!state_.find(id)) return;
+        auto sessions = state_.sessions();
+        std::erase_if(sessions, [id](const SessionRef& s) { return s->id == id; });
+        publishSessions(std::move(sessions));
+        return;
+    }
+    // Previously displayed rows can precede the tail. Publish the allowed names of their actual
+    // speakers too, so a connected window can withdraw revoked bubbles anywhere in its history.
+    auto& history = busHistory_[id];
+    if (history.contextEpoch != stored->info.contextEpoch) {
+        history = {};
+        history.contextEpoch = stored->info.contextEpoch;
+    }
+    const auto roster = busSenders_.find(stored->info.friendName);
+    for (; history.indexed < stored->transcript.size(); ++history.indexed) {
+        const auto& e = *stored->transcript[history.indexed];
+        if (e.kind != EntryKind::Bus) continue;
+        const auto newline = e.text.find('\n');
+        if (newline == 0 || newline == std::string::npos) continue;
+        auto [sender, first] = history.senders.insert(e.text.substr(0, newline));
+        if (first && roster != busSenders_.end() && roster->second.contains(*sender))
+            history.allowed.insert(std::lower_bound(history.allowed.begin(), history.allowed.end(), *sender), *sender);
+    }
     auto open = open_.find(id);
     SessionView view = tailOf(id, stored->info, stored->transcript, stored->queue, limits_.tail,
-        open == open_.end() ? nullptr : open->second);
+        open == open_.end() ? nullptr : open->second, history.allowed);
+    if (isPrimary(id)) view.info.primaryAccount = primaryChoice();
+    if (responder_) view.info.catalog = responder_->catalog(stored->info);
+    if (stored->driver.modelLimitPending)
+        offerLimitChoice(id, stored->driver, view.info);
     auto activity = activity_.find(id);
-    view.activity = activity == activity_.end() ? Activity::Idle : activity->second;
+    view.activity = activity == activity_.end() ? Activity::Idle : activity->second.first;
+    view.activeAgents = activity == activity_.end() ? 0 : activity->second.second;
     auto fresh = std::make_shared<const SessionView>(std::move(view));
     std::vector<SessionRef> sessions = state_.sessions();
     auto it = std::lower_bound(sessions.begin(), sessions.end(), id,
@@ -1420,6 +2135,10 @@ void Hub::refresh(SessionId id) {
     } else {
         sessions.insert(it, fresh);
     }
+    publishSessions(std::move(sessions));
+}
+
+void Hub::publishSessions(std::vector<SessionRef> sessions) {
     // The friends as they were: one list, shared by every state until the registry's friends change (stateFriends).
     Sessions next(std::move(sessions));
     next.setRequests(desk_.open());
@@ -1431,13 +2150,16 @@ void Hub::refresh(SessionId id) {
 // The friends of the registry the hub holds, in its order, into the state the windows receive: who the friends are is
 // the server's, and a window shows a tab for each (sync/client.h applyFriends).
 void Hub::stateFriends() {
-    std::vector<ServerFriend> friends;
-    friends.reserve(accounts_->friends.size());
-    for (const accounts::Friend& f : accounts_->friends) {
-        friends.push_back(ServerFriend{f.name});
-    }
+    auto friends = windowRoster(*accounts_, indexAccounts(*accounts_), &signedIn_,
+                                signInHooks_.has_value() && secretKeeper_ != nullptr,
+                                responder_ ? responder_->accountRoutes() : std::nullopt);
     if (!state_.friendsKnown() || state_.friends() != friends) {
         state_.setFriends(std::move(friends));
+    }
+    if (primary_) refresh(*primary_);
+    for (SessionId id : store_.ids()) {
+        if (store_.find(id)->driver.modelLimitPending)
+            refresh(id);
     }
 }
 

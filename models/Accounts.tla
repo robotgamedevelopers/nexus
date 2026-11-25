@@ -14,9 +14,10 @@
 (* is linked to its friend, else on the friend's default. The person sets  *)
 (* a session's account to one linked to its friend, or to none             *)
 (* (`SetSession`); its harness becomes the account's provider, so a switch *)
-(* may cross providers. The server rotates a session to its friend's next  *)
-(* signed-in linked account, in link order, when its account reports a     *)
-(* usage limit (`Rotate`).                                                 *)
+(* may cross providers. Multi-subscription friends default to automatic   *)
+(* selection. On a usage limit Rotate moves only automatic sessions, in   *)
+(* link order, to another signed-in subscription. CreditHandoff models    *)
+(* the exhausted-payer set for the unfinished request.                    *)
 (*                                                                         *)
 (* The accounts and friends are also two files a person or an AI edits by  *)
 (* hand; `nexus-server config reload` applies an edit (`Reload*`): a       *)
@@ -118,7 +119,7 @@ model == <<acct, prov, known, links, dflt, insts, ses, nextSes, lim, bill, run>>
 vars == <<acct, prov, known, links, dflt, insts, ses, nextSes, lim, bill, run, told, last>>
 View == model
 
-NoSes == [made |-> FALSE, friend |-> None, inst |-> None, acct |-> None, harness |-> None]
+NoSes == [made |-> FALSE, friend |-> None, inst |-> None, acct |-> None, harness |-> None, automatic |-> FALSE]
 Off == [st |-> "off", api |-> FALSE, flim |-> FALSE]
 
 Up(a) == acct[a] = "in"
@@ -129,7 +130,8 @@ After(sq, x) == LET i == Pos(sq, x) IN
     IF i = 0 THEN sq ELSE SubSeq(sq, i + 1, Len(sq)) \o SubSeq(sq, 1, i - 1)
 FirstUp(sq) == LET c == SelectSeq(sq, Up) IN IF c = << >> THEN None ELSE Head(c)
 \* The friend's next signed-in linked account after x, in link order, or None.
-NextUp(f, x) == FirstUp(After(links[f], x))
+Subs(sq, nb) == SelectSeq(sq, LAMBDA a : nb[a] = "sub")
+NextUp(f, x) == FirstUp(After(Subs(links[f], bill), x))
 HarnessFor(a, p, h) == IF a = None THEN h ELSE p[a]
 FirstOr(sq) == IF sq = << >> THEN None ELSE Head(sq)
 
@@ -147,16 +149,22 @@ InstOf(ni, s) == IF StrayInst(ni, s) THEN FirstOr(ni[ses[s].friend]) ELSE ses[s]
 \* settled like the rest once its friend is set up again. One whose friend the step took out is told (its work is
 \* stopped: Supervisor.tla RemoveFriend).
 Out(kn, s) == ses[s].friend \notin kn
-SettledI(nl, nd, np, ni, kn) ==
-    [s \in Ids |-> IF Out(kn, s) THEN ses[s]
-                   ELSE IF Stray(nl, s)
-                   THEN LET n == Landing(nl, nd, ses[s].friend) IN
-                        [ses[s] EXCEPT !.acct = n, !.harness = HarnessFor(n, np, @), !.inst = InstOf(ni, s)]
-                   ELSE IF ses[s].made /\ ses[s].acct /= None
-                   THEN [ses[s] EXCEPT !.harness = np[ses[s].acct], !.inst = InstOf(ni, s)]
-                   ELSE [ses[s] EXCEPT !.inst = InstOf(ni, s)]]
+FirstAuto(subs) == IF FirstUp(subs) /= None THEN FirstUp(subs) ELSE FirstOr(subs)
+SettledAccount(nl, nd, nb, s) ==
+    LET f == ses[s].friend
+        subs == Subs(nl[f], nb)
+    IN IF ses[s].automatic THEN IF ses[s].acct \in Range(subs) THEN ses[s].acct ELSE FirstAuto(subs)
+       ELSE IF Stray(nl, s) THEN Landing(nl, nd, f) ELSE ses[s].acct
+
+SettledWithBilling(nl, nd, np, ni, kn, nb) ==
+    [s \in Ids |-> IF Out(kn, s) THEN ses[s] ELSE
+        LET a == SettledAccount(nl, nd, nb, s)
+        IN [ses[s] EXCEPT !.acct = a, !.automatic = @ /\ Len(Subs(nl[ses[s].friend], nb)) > 1,
+                          !.harness = HarnessFor(a, np, @), !.inst = InstOf(ni, s)]]
+SettledI(nl, nd, np, ni, kn) == SettledWithBilling(nl, nd, np, ni, kn, bill)
 SettledToldI(nl, np, ni, kn) ==
     {s \in Ids : ~Out(kn, s) /\ (Stray(nl, s) \/ StrayInst(ni, s)
+                                 \/ (ses[s].automatic /\ Len(Subs(nl[ses[s].friend], bill)) < 2)
                                  \/ (ses[s].made /\ ses[s].acct /= None /\ np[ses[s].acct] /= ses[s].harness))}
     \cup {s \in Ids : ses[s].made /\ ses[s].friend \in known \ kn}
 \* A friend not set up has no instances.
@@ -273,7 +281,9 @@ ReloadDropLink(f, a) == Reload(f, a, acct, prov, known, [links EXCEPT ![f] = Dro
 \* An account taken out of the accounts file, the links left as they were (refused while linked).
 ReloadDropAccount(a) == Reload(None, a, [acct EXCEPT ![a] = "absent"], prov, known, links, dflt)
 \* An account's provider changed.
-ReloadProvider(a, p) == Reload(None, a, acct, [prov EXCEPT ![a] = p], known, links, dflt)
+ReloadProvider(a, p) ==
+    LET ac == IF prov[a] /= p /\ acct[a] = "in" THEN [acct EXCEPT ![a] = "out"] ELSE acct
+    IN Reload(None, a, ac, [prov EXCEPT ![a] = p], known, links, dflt)
 \* A friend's limit set (refused for a friend not set up, or false while it links an account billed at API rate).
 \* When it changes, each of the friend's sessions is told (tightened, an open turn stops and the driver restarts limited;
 \* loosened, once no turn is open: Supervisor.tla SetLimit).
@@ -288,9 +298,10 @@ ReloadLimit(f, v) ==
 ReloadBilling(a, b) ==
     IF acct[a] /= "absent" /\ ConsistentLB(acct, known, links, dflt, insts, lim, [bill EXCEPT ![a] = b])
     THEN /\ bill' = [bill EXCEPT ![a] = b]
-         /\ told' = {}
+         /\ ses' = SettledWithBilling(links, dflt, prov, insts, known, bill')
+         /\ told' = {s \in Ids : ses'[s] /= ses[s]}
          /\ Done("billing", None, a, 0, TRUE)
-         /\ UNCHANGED <<acct, prov, known, links, dflt, insts, ses, nextSes, lim, run>>
+         /\ UNCHANGED <<acct, prov, known, links, dflt, insts, nextSes, lim, run>>
     ELSE Refused("billing", None, a, 0, {})
 \* An instance added to the end of a friend's (refused for a friend not set up, or a name it already has).
 ReloadAddInstance(f, i) == ReloadI(f, i, acct, prov, known, links, dflt, [insts EXCEPT ![f] = Append(@, i)])
@@ -307,21 +318,30 @@ ReloadMoveInstance(f, i) ==
 \* refusal is a notice in the session's transcript.
 SetSession(s, a) ==
     IF ses[s].made /\ (a = None \/ a \in Range(links[ses[s].friend]))
-    THEN /\ ses' = [ses EXCEPT ![s].acct = a, ![s].harness = HarnessFor(a, prov, @)]
-         /\ Done("set", None, a, s, TRUE) /\ told' = {}
+    THEN /\ ses' = [ses EXCEPT ![s].acct = a, ![s].automatic = FALSE, ![s].harness = HarnessFor(a, prov, @)]
+         /\ Done("set", None, a, s, TRUE)
+         /\ told' = IF a /= None /\ ses[s].acct /= None /\ ses[s].acct /= a THEN {s} ELSE {}
          /\ UNCHANGED <<acct, prov, known, links, dflt, insts, nextSes, lim, bill, run>>
     ELSE Refused("set", None, a, s, IF ses[s].made THEN {s} ELSE {})
 
 \* The server's, where a usage limit is reported: the friend's next signed-in linked account after the session's, in
 \* link order. The session is told either way: of the switch, or that there is none to switch to.
-Rotate(s) ==
+RotateTo(s, n) ==
     IF ses[s].made
-    THEN LET n == NextUp(ses[s].friend, ses[s].acct) IN
-         IF n = None
+    THEN IF n = None
          THEN Refused("rotate", None, None, s, {s})
          ELSE /\ ses' = [ses EXCEPT ![s].acct = n, ![s].harness = prov[n]]
               /\ Done("rotate", None, n, s, TRUE) /\ told' = {s}
               /\ UNCHANGED <<acct, prov, known, links, dflt, insts, nextSes, lim, bill, run>>
+    ELSE Refused("rotate", None, None, s, {})
+
+Rotate(s) == IF ses[s].automatic THEN RotateTo(s, NextUp(ses[s].friend, ses[s].acct))
+             ELSE Refused("rotate", None, None, s, {})
+
+\* A fork may decline the move or pick any other signed-in linked account.
+PolicyRotate(s) ==
+    IF ses[s].automatic
+    THEN \E n \in {None} \cup {a \in Range(Subs(links[ses[s].friend], bill)) : a /= ses[s].acct /\ Up(a)} : RotateTo(s, n)
     ELSE Refused("rotate", None, None, s, {})
 
 \* A session made with friend f, copying session `from` (0: none): its account when linked to f (or none), else
@@ -329,12 +349,17 @@ Rotate(s) ==
 \* copying a session not made, refused.
 Create(f, from) ==
     IF nextSes <= MaxSes /\ (from = 0 \/ ses[from].made)
-    THEN LET a == IF from /= 0 /\ (ses[from].acct = None \/ ses[from].acct \in Range(links[f]))
+    THEN LET subs == Subs(links[f], bill)
+             same == from /= 0 /\ ses[from].friend = f
+             auto == Len(subs) > 1 /\ (~same \/ ses[from].automatic)
+             a == IF auto THEN IF same /\ ses[from].acct \in Range(subs) /\ Up(ses[from].acct)
+                               THEN ses[from].acct ELSE FirstAuto(subs)
+                  ELSE IF from /= 0 /\ (ses[from].acct = None \/ ses[from].acct \in Range(links[f]))
                   THEN ses[from].acct ELSE dflt[f]
              i == IF from /= 0 /\ ses[from].friend = f /\ ses[from].inst \in Range(insts[f])
                   THEN ses[from].inst ELSE FirstOr(insts[f]) IN
          /\ ses' = [ses EXCEPT ![nextSes] = [made |-> TRUE, friend |-> f, inst |-> i, acct |-> a,
-                                             harness |-> HarnessFor(a, prov, StartHarness)]]
+                                             harness |-> HarnessFor(a, prov, StartHarness), automatic |-> auto]]
          /\ nextSes' = nextSes + 1
          /\ Done("create", f, a, from, TRUE) /\ told' = {}
          /\ UNCHANGED <<acct, prov, known, links, dflt, insts, lim, bill, run>>
@@ -400,11 +425,15 @@ Next == NextWith(AddAccount, RemoveAccount, Unlink, SetDefault, SetSession, Rota
 
 Spec == Init /\ [][Next]_vars
 
+PolicyNext == NextWith(AddAccount, RemoveAccount, Unlink, SetDefault, SetSession, PolicyRotate, Create, ReloadDropLink,
+                       ReloadProvider)
+PolicySpec == Init /\ [][PolicyNext]_vars
+
 -----------------------------------------------------------------------------
 \* Invariants.
 
 Session == [made : BOOLEAN, friend : Friends \cup {None}, inst : Insts \cup {None}, acct : Accts \cup {None},
-            harness : Harnesses \cup {None}]
+            harness : Harnesses \cup {None}, automatic : BOOLEAN]
 
 TypeOK ==
     /\ acct \in [Accts -> {"absent", "in", "out"}]
@@ -476,15 +505,18 @@ MovedIsTold ==
                       /\ ~(last'.op = "set" /\ last'.s = s)
                         => s \in told']_vars
 
-\* An account the server picks (a rotation, or a move off an account no longer linked) is signed in.
+\* A rotation always lands on a signed-in subscription. On reload auto may land on a signed-out
+\* subscription only when every linked subscription is signed out (to offer its sign-in).
 ServerPicksSignedIn ==
     [][\A s \in Ids : ses[s].made /\ ses'[s].acct /= ses[s].acct /\ ses'[s].acct /= None /\ last'.op /= "set"
+                      /\ (~ses[s].automatic \/ last'.op = "rotate"
+                          \/ (\E a \in Range(Subs(links'[ses[s].friend], bill')) : acct'[a] = "in"))
                         => acct'[ses'[s].acct] = "in"]_vars
 
-\* A rotation moves the session whenever its friend has another signed-in linked account.
+\* Automatic selection moves when the friend has another signed-in subscription.
 RotateMoves ==
-    [][last'.op = "rotate" /\ ses[last'.s].made
-       /\ (\E b \in Range(links[ses[last'.s].friend]) : b /= ses[last'.s].acct /\ acct[b] = "in")
+    [][last'.op = "rotate" /\ ses[last'.s].automatic
+       /\ (\E b \in Range(Subs(links[ses[last'.s].friend], bill)) : b /= ses[last'.s].acct /\ acct[b] = "in")
          => ses'[last'.s].acct /= ses[last'.s].acct]_vars
 
 \* A set is taken exactly for a session made and an account linked to its friend (or none), and gives it that one.

@@ -37,7 +37,7 @@ ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
 Fields == {"phase", "stage", "open", "prompt", "next", "waiting", "queue", "session", "gathered", "finished",
            "failed", "blocked", "nocred", "down", "procs", "written", "stops", "fx", "resumed", "setting", "told",
-           "account", "drv", "retiring", "crashed", "unconf", "dir", "here", "ddir", "sdir", "summary", "lim", "dlim",
+           "account", "drv", "retiring", "crashed", "unconf", "dir", "here", "ddir", "sdir", "owner", "summary", "lim", "dlim",
            "absent"}
 
 Matches(k) ==
@@ -114,6 +114,7 @@ AccountKeepsTurn == L!AccountKeepsTurn
 NoSendInOldPlace == L!NoSendInOldPlace
 PlaceKeepsTurn == L!PlaceKeepsTurn
 ResumesItsDir == L!ResumesItsDir
+ResumesItsAccount == L!ResumesItsAccount
 SummaryOwed == L!SummaryOwed
 SummaryCarried == L!SummaryCarried
 IdleWaitsForPerson == L!IdleWaitsForPerson

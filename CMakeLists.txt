@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.28)
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
 set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0 CACHE STRING "Oldest macOS the build runs on")
 
-project(nexus LANGUAGES C CXX)
+project(nexus VERSION 0.2.0 LANGUAGES C CXX)
 # The app's platform layer (src/platform_mac.mm) is Objective-C++.
 if(APPLE)
     enable_language(OBJCXX)
@@ -26,8 +26,8 @@ set(PR_CHARSET_LEGACY OFF CACHE BOOL "" FORCE)
 
 include(FetchContent)
 FetchContent_Declare(prax
-    GIT_REPOSITORY https://github.com/pdoane/prax.git
-    GIT_TAG e39b205bbba4845077889f4a0fbfb38525d943ff
+    URL https://codeload.github.com/pdoane/prax/tar.gz/87bcd16a6657ab8d93573cdf1291ba14c169f0dc
+    URL_HASH SHA256=9bb8fc2473af41ae1cef8a19d61444db82125a2477ea7b95faa24adb43f25909
     # SYSTEM: Prax's headers use Clang nullability, which -Wpedantic rejects in our code otherwise.
     SYSTEM
     EXCLUDE_FROM_ALL)
@@ -134,6 +134,8 @@ if(NEXUS_SANDBOX_TOOLS)
     include(cmake/sandbox.cmake)
 endif()
 
+include(cmake/policy.cmake)
+
 # The non-drawing logic: tabs, transcripts, drafts, send and queue, and when the overlay shows and hides (overlay.h).
 # No OS, no time.
 add_library(nexus_model STATIC src/model.cpp src/overlay.cpp src/cursor.cpp)
@@ -145,7 +147,7 @@ target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 add_library(nexus_accounts STATIC src/accounts/registry.cpp)
 target_include_directories(nexus_accounts PUBLIC src)
 target_compile_options(nexus_accounts PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_accounts PUBLIC prax::json prax::core)
+target_link_libraries(nexus_accounts PUBLIC prax::json prax::core nexus_policy)
 
 # The two states mosh's transport keeps in step between the window and nexus-server (the person's actions up, the tabs
 # down), what the server does with an action, and what the window shows of the tabs. No OS, no time.
@@ -156,7 +158,7 @@ add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/formats.cpp src/sync/ac
     src/sync/signin.cpp src/sync/redial.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts nexus_wire)
+target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts nexus_wire nexus_policy)
 
 if(NEXUS_SERVER_PARTS)
     # nexus-server's durable state: the tabs and each client's applied counter over a crash-safe journal, behind a
@@ -198,12 +200,19 @@ if(NEXUS_SERVER_PARTS)
     target_compile_options(nexus_drivers PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_drivers PUBLIC nexus_supervisor)
 
+    add_library(nexus_services STATIC src/server/service_process.cpp src/server/service_manifest.cpp)
+    target_include_directories(nexus_services PUBLIC src)
+    target_compile_options(nexus_services PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_services PRIVATE nexus_accounts prax::json)
+
     # In-app sign-in's processes (src/server/signin_runner.h): `claude setup-token` under a pty, the helper's socket,
     # the callback's replay on loopback; and the helper itself, nexus-signin-open, which stands in for a browser.
     add_library(nexus_signin_runner STATIC src/server/signin_runner.cpp)
     target_include_directories(nexus_signin_runner PUBLIC src)
     target_compile_options(nexus_signin_runner PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_signin_runner PUBLIC nexus_sync)
+    target_link_libraries(nexus_signin_runner PUBLIC nexus_sync PRIVATE nexus_durable)
+    configure_file(src/server/nexus-claude-auth ${CMAKE_CURRENT_BINARY_DIR}/nexus-claude-auth COPYONLY)
+    add_custom_target(nexus-claude-auth)
     add_executable(nexus-signin-open src/server/signin_open.cpp)
     target_compile_options(nexus-signin-open PRIVATE ${NEXUS_WARNINGS})
 
@@ -220,6 +229,7 @@ if(NEXUS_SERVER_PARTS)
     target_include_directories(nexus_builds PUBLIC src)
     target_compile_options(nexus_builds PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_builds PUBLIC nexus_store)
+    target_link_libraries(nexus_supervisor PRIVATE nexus_builds)
 
     # Handover (src/server/handover.h, src/server/drain.h, docs/builds.md): durable, resumable handover state machine
     # under an OS lock, draining the old server and rolling back to previous when a target build fails to serve.
@@ -294,11 +304,11 @@ endif()
 
 if(NEXUS_WINDOW)
     # The window's tree over Prax's UI context and Studio Kit: built by the app, and headless by tests/window/.
-    add_library(nexus_view STATIC src/view.cpp src/font_prefetch.cpp)
+    add_library(nexus_view STATIC src/view.cpp src/chat_markdown.cpp src/chat_selection.cpp src/window_app.cpp src/native_tabs.cpp src/font_prefetch.cpp)
     target_include_directories(nexus_view PUBLIC src)
     target_compile_options(nexus_view PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_view PUBLIC nexus_window_logic nexus_hitch
-        prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app prax::core_cpp)
+    target_link_libraries(nexus_view PUBLIC nexus_policy nexus_window_logic nexus_hitch
+        prax::markdown prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app prax::core_cpp)
 
     # The terminal tabs' shells over Prax's terminal (view.h Terminals): built by the app, and run by the functional test.
     add_library(nexus_terminals STATIC src/terminals.cpp src/foreground.cpp)
@@ -310,10 +320,11 @@ if(NEXUS_WINDOW)
     # The sprint tab's page over Prax's HTML view, scripts and network (view.h Board): built by the app, and run by the
     # functional test on pages it serves from memory.
     add_library(nexus_board STATIC src/board.cpp)
+    target_compile_definitions(nexus_board PRIVATE NEXUS_DISPLAY_VERSION="v${PROJECT_VERSION}")
     target_include_directories(nexus_board PUBLIC src)
     target_compile_options(nexus_board PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_board PUBLIC nexus_view prax::html prax::html_quickjs prax::svg_quickjs prax::url_quickjs
-        prax::dom prax::fetch prax::net prax::tls prax::http prax::image prax::compress prax::text prax::font prax::draw
+        prax::dom prax::fetch prax::net prax::tls prax::http prax::image_select prax::compress_select prax::text prax::font prax::draw
         prax::layout prax::ui prax::studio_kit prax::app prax::core_cpp)
 
     # What the window does around the view each frame (src/frame_host.h), and its links opened in the system's browser
@@ -336,10 +347,14 @@ if(NEXUS_LINK)
     target_link_libraries(nexus_link PUBLIC nexus_sync nexus_window_logic mosh_transport)
 
     # The server the window talks to with --server: headless, on the machine that keeps going.
+    add_library(nexus_bus STATIC src/server/bus_listener.cpp src/server/bus_attachment.cpp
+        src/server/bus_grants.cpp src/server/bus_inbox.cpp)
+    target_compile_options(nexus_bus PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_bus PUBLIC nexus_link nexus_builds nexus_drivers)
     add_library(nexus_server STATIC src/server/server.cpp src/server/flush_gate.cpp)
     target_compile_options(nexus_server PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_server PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo nexus_builds
-        nexus_signin_runner nexus_handover nexus_supervision)
+    target_link_libraries(nexus_server PUBLIC nexus_bus nexus_policy nexus_link nexus_durable nexus_drivers nexus_config_repo nexus_builds
+        nexus_signin_runner nexus_handover nexus_supervision nexus_services)
     add_executable(nexus-server src/server/main.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server PRIVATE nexus_server)
@@ -354,8 +369,8 @@ if(NEXUS_LINK)
     add_library(nexus_server_leaky STATIC EXCLUDE_FROM_ALL src/server/server.cpp src/server/flush_gate.cpp)
     target_compile_options(nexus_server_leaky PRIVATE ${NEXUS_WARNINGS})
     target_compile_definitions(nexus_server_leaky PRIVATE NEXUS_LEAKY_SIGNIN_WITNESS=1)
-    target_link_libraries(nexus_server_leaky PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo
-        nexus_builds nexus_signin_runner nexus_handover nexus_supervision)
+    target_link_libraries(nexus_server_leaky PUBLIC nexus_bus nexus_policy nexus_link nexus_durable nexus_drivers nexus_config_repo
+        nexus_builds nexus_signin_runner nexus_handover nexus_supervision nexus_services)
     add_executable(nexus-server-leaky EXCLUDE_FROM_ALL src/server/main.cpp)
     target_compile_options(nexus-server-leaky PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server-leaky PRIVATE nexus_server_leaky)
@@ -367,6 +382,12 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
     # launch shows nothing), which still starts at main(). The system's part of the overlay is src/platform.h.
     if(APPLE)
         add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm)
+        set(NEXUS_MAC_SIGN_IDENTITY "" CACHE STRING "Signing identity for local nexus.app builds")
+        if(NEXUS_MAC_SIGN_IDENTITY)
+            add_custom_command(TARGET nexus POST_BUILD
+                COMMAND /usr/bin/codesign --force --sign "${NEXUS_MAC_SIGN_IDENTITY}" "$<TARGET_BUNDLE_DIR:nexus>"
+                VERBATIM)
+        endif()
         set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         target_link_libraries(nexus PRIVATE "-framework AppKit")
         # The app's name is nexus: the bundle's name and display name (cmake/Info.plist.in, CMake's
@@ -376,17 +397,19 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
             MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/cmake/Info.plist.in
             MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus
             MACOSX_BUNDLE_BUNDLE_NAME nexus
-            MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1.0
-            MACOSX_BUNDLE_BUNDLE_VERSION 0.1.0)
+            MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+            MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
     else()
         add_executable(nexus WIN32 src/main.cpp src/platform_win.cpp)
         if(MSVC)
             target_link_options(nexus PRIVATE /ENTRY:mainCRTStartup)
         endif()
     endif()
+    target_sources(nexus PRIVATE src/ui_audio.cpp)
+    target_link_libraries(nexus PRIVATE prax::audio prax::png)
     target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus PRIVATE nexus_frame nexus_view nexus_terminals nexus_board
-        prax::studio_app prax::gpu prax::image prax::compress)
+    target_link_libraries(nexus PRIVATE nexus_policy nexus_frame nexus_view nexus_terminals nexus_board
+        prax::studio_app prax::app_select prax::gpu_select prax::draw_select prax::image_select prax::compress_select)
     if(NEXUS_LINK)
         target_compile_definitions(nexus PRIVATE NEXUS_LINK=1)
         target_link_libraries(nexus PRIVATE nexus_link nexus_sync)
@@ -398,13 +421,19 @@ if(WIN32 AND NOT NEXUS_WINDOW)
     # src/platform_win.cpp, is still compiled (never linked) so CI holds it to the same warnings.
     add_library(nexus_platform_win_check OBJECT src/platform_win.cpp)
     target_compile_options(nexus_platform_win_check PRIVATE ${NEXUS_WARNINGS})
-    # Prax's headers by path, not by linking prax::app: any link to it (even $<COMPILE_ONLY:...>) makes the Visual
-    # Studio generator build pr_app, which does not compile at the pin.
-    target_include_directories(nexus_platform_win_check PRIVATE ${prax_SOURCE_DIR}/lib/core/include
-        ${prax_SOURCE_DIR}/lib/app/include)
+    target_link_libraries(nexus_platform_win_check PRIVATE prax::surface)
 endif()
 
 enable_testing()
+if(TARGET nexus_policy)
+    add_executable(policy_reload_test tests/policy/reload.cpp)
+    target_link_libraries(policy_reload_test PRIVATE nexus_policy)
+    target_compile_options(policy_reload_test PRIVATE ${NEXUS_WARNINGS})
+    add_test(NAME policy_functional_reload COMMAND ${CMAKE_COMMAND}
+        "-DTOOL=${policy_tool}" "-DCHECK=$<TARGET_FILE:policy_reload_test>"
+        "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/policy-reload-test" -P "${PROJECT_SOURCE_DIR}/tests/policy/reload.cmake")
+    set_tests_properties(policy_functional_reload PROPERTIES LABELS functional TIMEOUT 30)
+endif()
 add_subdirectory(tests/model)
 add_subdirectory(tests/sync)
 add_subdirectory(tests/accounts)

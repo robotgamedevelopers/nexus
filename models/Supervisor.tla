@@ -63,8 +63,8 @@
 (* driver started in another directory (the ghost ddir), or any driver     *)
 (* while the instance is elsewhere, is ended like one under an old account; *)
 (* while elsewhere no driver starts and nothing queued is taken. The        *)
-(* harness keeps its sessions by directory: the session id is durable with *)
-(* the directory it was made in (sdir), and a start in another one drops   *)
+(* harness session id is durable with its directory (sdir) and account    *)
+(* (owner). A start in another directory or under another account drops   *)
 (* it and starts afresh, owing (summary, durable) the conversation's       *)
 (* summary to the first send, which carries it (each send's sum).          *)
 (*                                                                         *)
@@ -133,13 +133,17 @@ Init ==
             nocred |-> FALSE, down |-> FALSE, crashed |-> FALSE, procs |-> 0, written |-> <<>>, stops |-> <<>>,
             fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> "", asked |-> FALSE, signin |-> FALSE,
             setting |-> Default, told |-> Default, account |-> "", drv |-> "", retiring |-> FALSE,
-            unconf |-> FALSE, dir |-> "", here |-> TRUE, ddir |-> "", sdir |-> "", summary |-> FALSE,
+            unconf |-> FALSE, dir |-> "", here |-> TRUE, ddir |-> "", sdir |-> "", owner |-> "", summary |-> FALSE,
             lim |-> FALSE, dlim |-> FALSE, absent |-> FALSE, rm |-> 0, removing |-> FALSE, known |-> TRUE]
 
 ----------------------------------------------------------------------------
 \* The parts of a step, each from one supervisor record to the next.
 
-Fx(x, e) == [x EXCEPT !.fx = Append(@, e)]
+\* These three output sequences are observations for the safety properties and code traces. No Next guard,
+\* operational update or fairness guard reads them. The fair Timeout, StopWorking and ExitKilled actions also
+\* change phase or escalation stage, so none becomes a stuttering step when Settles omits output history.
+RecordOutput(history, event) == Append(history, event)
+Fx(x, e) == [x EXCEPT !.fx = RecordOutput(@, e)]
 
 \* The text gathered for the open turn goes into the tab as the friend's entry.
 Flush(x) == IF x.gathered THEN [Fx(x, E("F", x.open, 0)) EXCEPT !.gathered = FALSE] ELSE x
@@ -171,7 +175,7 @@ WriteNextWith(V(_), x) ==
     IF x.phase = "idle" /\ x.waiting # <<>>
     THEN LET p == Head(x.waiting) IN
          [x EXCEPT !.open = x.next, !.prompt = p, !.next = x.next + 1, !.waiting = Tail(x.waiting),
-                   !.written = Append(@, [p |-> p, t |-> x.next, v |-> V(x), sum |-> x.summary]), !.fate[p] = "open",
+                   !.written = RecordOutput(@, [p |-> p, t |-> x.next, v |-> V(x), sum |-> x.summary]), !.fate[p] = "open",
                    !.phase = "working", !.told = V(x), !.summary = FALSE]
     ELSE x
 Told(x) == [m |-> IF x.setting.m # "" THEN x.setting.m ELSE x.told.m,
@@ -179,12 +183,12 @@ Told(x) == [m |-> IF x.setting.m # "" THEN x.setting.m ELSE x.told.m,
 WriteNext(x) == WriteNextWith(Told, x)
 
 \* Start a driver when a prompt waits and none is alive and the instance is here, in the session's directory, under
-\* the session's account, with --resume the last session id when it was made in that directory; one made in another
+\* the session's account, with --resume the last ID reported by that account in that directory. An incompatible ID
 \* is dropped (D), and when the conversation has turns the first send owes a summary, said in a notice. With no driver
 \* configured the start names no program, and so nothing to resume: it fails, as the exit that follows says.
 Drop(x) ==
-    IF x.session # "" /\ x.sdir # x.dir
-    THEN [(IF x.next > 1 THEN Fx(x, E("N", 0, 0)) ELSE x) EXCEPT !.session = "", !.sdir = "",
+    IF x.session # "" /\ (x.sdir # x.dir \/ x.owner # x.account)
+    THEN [(IF x.next > 1 THEN Fx(x, E("N", 0, 0)) ELSE x) EXCEPT !.session = "", !.sdir = "", !.owner = "",
                                                                  !.summary = @ \/ x.next > 1]
     ELSE x
 StartDriverWith(D(_), x) ==
@@ -252,7 +256,7 @@ ReceiveWith(x, m, Txt(_, _)) ==
                                  ELSE End(x)
       [] m.kind = "hello"      -> End(x)
       [] m.kind = "credential" -> IF m.v = "subscription" THEN x ELSE [End(x) EXCEPT !.blocked = TRUE]
-      [] m.kind = "session"    -> [x EXCEPT !.session = m.v, !.sdir = x.ddir]
+      [] m.kind = "session"    -> [x EXCEPT !.session = m.v, !.sdir = x.ddir, !.owner = x.drv]
       [] m.kind = "error"      -> NoCredential(m, IF m.t = 0 THEN Fx(x, E("N", 0, 0))
                                                  ELSE IF m.t = x.open THEN Fx(x, E("E", m.t, 0)) ELSE x)
       [] m.kind = "text"       -> Txt(x, m)
@@ -321,7 +325,7 @@ QueuePrompt == QueuePromptWith(Advance)
 \* The person stops the friend's work: a stop for the open turn, if one is open and no stop is out; while the driver
 \* starts, the turn about to begin is cancelled (C). It never waits: it acts in the step it is given, or not at all.
 \* The stop of the open turn, written once (Supervisor::stopOpen).
-StopOpen(x) == [x EXCEPT !.phase = "stopping", !.stops = Append(@, x.open)]
+StopOpen(x) == [x EXCEPT !.phase = "stopping", !.stops = RecordOutput(@, x.open)]
 StopWith(Ok(_), C(_)) ==
     /\ Keep
     /\ s' = LET x == [Fresh EXCEPT !.asked = TRUE] IN
@@ -484,7 +488,7 @@ SetLimitWith(Sl(_, _), v) ==
 LimitSet(x, v) ==
     LET y == [x EXCEPT !.lim = v] IN
     Advance(IF v /\ ~y.dlim /\ y.phase = "working"
-            THEN [Fx(y, E("N", 0, 0)) EXCEPT !.phase = "stopping", !.stops = Append(@, y.open)]
+            THEN [Fx(y, E("N", 0, 0)) EXCEPT !.phase = "stopping", !.stops = RecordOutput(@, y.open)]
             ELSE y)
 SetLimit(v) == SetLimitWith(LimitSet, v)
 
@@ -594,6 +598,7 @@ TypeOK ==
     /\ s.told \in Settings
     /\ (s.procs = 0) => s.told = Default
     /\ s.account \in Accounts \cup {""}
+    /\ s.owner \in Accounts \cup {""}
     /\ (s.procs = 0) => s.drv = "" /\ ~s.retiring
     /\ s.crashed \in BOOLEAN
     /\ s.unconf \in BOOLEAN
@@ -749,6 +754,9 @@ LooseningKeepsTurn == [][s.lim /\ ~s'.lim => s'.open = s.open /\ s'.written = s.
 
 \* A driver resumes a harness session only in the directory it was made in.
 ResumesItsDir == [][s'.procs > s.procs /\ s'.resumed # "" => s.sdir = s'.ddir]_vars
+
+\* A resume ID is sent only to a driver running under the account that reported it.
+ResumesItsAccount == [][s'.procs > s.procs /\ s'.resumed # "" => s.owner = s'.drv]_vars
 
 \* A harness session dropped from a conversation with turns owes a summary, and the next send carries what is owed,
 \* once.

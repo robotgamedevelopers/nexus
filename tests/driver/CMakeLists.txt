@@ -13,6 +13,13 @@
 
 set(warnings ${NEXUS_WARNINGS})
 
+if(APPLE)
+    add_test(NAME driver_bus_listener_idle
+        COMMAND /usr/bin/python3 "${CMAKE_CURRENT_SOURCE_DIR}/bus_listener_idle.py"
+                "${CMAKE_SOURCE_DIR}/drivers/claude/bin/bus/nova-bus")
+    set_tests_properties(driver_bus_listener_idle PROPERTIES LABELS functional TIMEOUT 15)
+endif()
+
 add_executable(driver_protocol_test protocol_test.cpp)
 target_link_libraries(driver_protocol_test PRIVATE nexus_driver)
 target_compile_options(driver_protocol_test PRIVATE ${warnings})

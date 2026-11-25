@@ -162,6 +162,7 @@ Read nextReadSessions(const Bytes& bytes) {
     out.title = textOf(s.info.title);
     for (const EntryChange& e : s.entries) {
         out.kinds.push_back(EnumName(e.kind));
+        out.texts.push_back(textOf(e.tail));
     }
     for (int32_t i = 0; i < s.queue.size(); ++i) {
         int32_t length = 0;

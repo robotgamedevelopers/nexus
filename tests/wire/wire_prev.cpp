@@ -120,6 +120,7 @@ Read prevReadSessions(const Bytes& bytes) {
         out.instance = textOf(d->sessions[0].info.instance);
         for (const EntryChange& e : d->sessions[0].entries) {
             out.kinds.push_back(EnumName(e.kind));
+            out.texts.push_back(textOf(e.tail));
         }
     }
     for (const SecretRequest& r : d->requests) {

@@ -116,6 +116,11 @@ struct TextEnd {
 };
 
 // The friend used a tool: its name and one line saying what it did.
+struct ChildAgents {
+    std::uint32_t count;
+    bool operator==(const ChildAgents&) const = default;
+};
+
 struct Tool {
     std::uint64_t turn = 0;
     std::string name;
@@ -146,7 +151,7 @@ struct Done {
 
 // What kind of error: a broken protocol rule, no usable credential, a --resume id the harness does not know, the
 // harness's own failure, or anything else (also what a code this version does not know reads as).
-enum class ErrorCode { Protocol, NoCredential, SessionNotFound, Harness, UsageLimit, Other };
+enum class ErrorCode { Protocol, NoCredential, SessionNotFound, Harness, UsageLimit, ModelLimit, Other };
 
 // Something went wrong: what, and what a person does about it. `turn` when it belongs to one.
 struct Error {
@@ -167,7 +172,7 @@ struct AskSecret {
     bool operator==(const AskSecret&) const = default;
 };
 
-using DriverMessage = std::variant<Hello, Credential, Session, Text, TextEnd, Tool, Done, Error, AskSecret, Unknown>;
+using DriverMessage = std::variant<Hello, Credential, Session, Text, TextEnd, Tool, ChildAgents, Done, Error, AskSecret, Unknown>;
 
 // ---- Encoding and decoding ----
 

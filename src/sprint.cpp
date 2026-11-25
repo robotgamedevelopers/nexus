@@ -178,6 +178,12 @@ constexpr std::string_view kPrelude = R"JS((function () {
   "use strict";
   var g = globalThis;
   var STANDARD = @STD@, DAYLIGHT = @DST@;
+  if (g.addEventListener) g.addEventListener("nexus-dashboard-refresh", function (e) {
+    if (typeof g.poll === "function" && typeof g.renderOverall === "function") {
+      g.poll();
+      e.preventDefault();
+    }
+  });
 
   function group(digits) { return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
   // en-US grouping of a number's integer part, with at most three fraction digits, as en-US formats by default.
@@ -311,6 +317,17 @@ void replace(std::string& text, std::string_view mark, const std::string& with) 
 
 std::string sprintPageStyle(const SpendFit& fit) {
     std::string style(kSprintRepoLinkStyle);
+    // Use directly animatable paint properties in the embedded engine.
+    style += R"CSS(
+@keyframes nexus-active { 0%,17%,100% {opacity:1} 58.5% {opacity:.55} }
+@keyframes nexus-transfer { from {background-color:#a8d5ff} }
+@media (prefers-reduced-motion: no-preference) {
+  #overall .cell { animation-name:none; }
+  #overall:not(.stopped) .cell.merging, #overall:not(.stopped) .cell.review,
+  #overall:not(.stopped) .cell.fix, #overall:not(.stopped) .cell.working { animation-name:nexus-active; }
+  .cell.flash { animation-name:nexus-transfer; }
+}
+)CSS";
     if (fit.top < 0)
         return style;
     // The open panel a column whose body takes the height to spare: the body's grid row stretches, so the pie's column

@@ -13,6 +13,11 @@ namespace {
 
 using namespace nexus::driver;
 
+std::string_view expectedEmail(const std::vector<std::string>& command) {
+    const auto flag = std::find(command.begin(), command.end(), "--account-email");
+    return flag != command.end() && std::next(flag) != command.end() ? std::string_view(*std::next(flag)) : std::string_view();
+}
+
 // The kind a message has on the line.
 std::string kindOf(const DriverMessage& message) {
     return std::visit([](const auto& m) -> std::string {
@@ -27,6 +32,8 @@ std::string kindOf(const DriverMessage& message) {
             return "text";
         } else if constexpr (std::is_same_v<M, TextEnd>) {
             return "text-end";
+        } else if constexpr (std::is_same_v<M, ChildAgents>) {
+            return "child-agents";
         } else if constexpr (std::is_same_v<M, Tool>) {
             return "tool";
         } else if constexpr (std::is_same_v<M, Done>) {
@@ -114,6 +121,7 @@ Supervisor::Supervisor(Config config, sync::DriverState state, Millis now, Outpu
             " was answering. Whether " + config_.name + " got the prompt is unknown; send it again if you still want "
             "an answer.", state_.openTurn);
         state_.openTurn = 0;
+        clearContinuation();     // the interrupted send may already have run in its provider
         out_.durable = true;
     }
     advance(now);
@@ -207,7 +215,80 @@ Output Supervisor::setOptions(std::string model, std::string effort, Millis now)
     return finish();
 }
 
-Output Supervisor::setAccount(std::string account, Millis now) {
+bool Supervisor::awaitingRotation() const {
+    return !state_.continuationPrompt.empty() && state_.openTurn == 0 && !state_.modelLimitPending &&
+        std::find(state_.exhaustedAccounts.begin(), state_.exhaustedAccounts.end(), config_.account) !=
+        state_.exhaustedAccounts.end();
+}
+
+void Supervisor::clearContinuation() {
+    state_.continuationPrompt.clear();
+    state_.exhaustedAccounts.clear();
+    state_.modelLimitPending = false;
+}
+
+void Supervisor::acceptModelChoice(const sync::DriverState& durable) {
+    if (state_.modelLimitPending && !durable.modelLimitPending) {
+        state_.modelLimitPending = false;
+        state_.exhaustedAccounts = durable.exhaustedAccounts;
+    }
+}
+
+Output Supervisor::rotationExhausted() {
+    if (awaitingRotation()) {
+        if (!config_.autoAccount)
+            effect(Effect::What::Notice, "The selected account " + config_.account +
+                " already reached its limit on this request. The interrupted work stopped.");
+        clearContinuation();
+        held_ = true;
+        out_.durable = true;
+    }
+    return finish();
+}
+
+Output Supervisor::resetContext(bool compact, Millis now) {
+    const auto next = state_.nextTurn;
+    state_ = {};
+    state_.nextTurn = next;
+    state_.summary = compact;
+    gathered_.clear();
+    openPrompt_.clear();
+    if (phase_ != Phase::None && phase_ != Phase::Ending) {
+        retiring_ = true;
+        endQuietly(now);
+    }
+    out_.durable = true;
+    return finish();
+}
+
+Output Supervisor::refreshSandbox(bool tightened, Millis now) {
+    if (phase_ == Phase::None || phase_ == Phase::Ending) return finish();
+    sandboxChanged_ = true;
+    if (phase_ == Phase::Starting) {
+        retiring_ = true;
+        endQuietly(now);
+    } else if (tightened && phase_ == Phase::Working) {
+        stopOpen(now);
+    }
+    advance(now);
+    return finish();
+}
+
+Output Supervisor::retireIdleLogin(Millis now) {
+    if (phase_ == Phase::Idle) {
+        retiring_ = true;
+        endQuietly(now);
+    }
+    return finish();
+}
+
+Output Supervisor::setAccount(std::string account, Millis now, bool automatic,
+                              const std::vector<std::string>* command) {
+    // Changing the account may start queued work. Bind its verified launch arguments first.
+    if (command) config_.command = *command;
+    // A named selection can finish a pending handoff. advance() checks the new payer against
+    // the checkpoint, just as recovery does when the selection was committed before a restart.
+    config_.autoAccount = automatic;
     config_.account = std::move(account);
     advance(now);
     return finish();
@@ -217,7 +298,9 @@ sync::Activity Supervisor::activity() const {
     if (held_) {
         return sync::Activity::Down;
     }
-    if (state_.openTurn != 0 || (!state_.waiting.empty() && config_.here && config_.present) ||
+    if (childAgents_) return sync::Activity::Working;
+    if (state_.openTurn != 0 || ((!state_.waiting.empty() || !state_.continuationPrompt.empty()) &&
+            !state_.modelLimitPending && config_.here && config_.present) ||
         phase_ == Phase::Starting) {
         return sync::Activity::Busy;
     }
@@ -283,6 +366,11 @@ Output Supervisor::signedIn(Millis now) {
 Output Supervisor::stop(Millis now) {
     if (phase_ == Phase::Working) {
         stopOpen(now);
+    } else if (state_.openTurn == 0 && !state_.continuationPrompt.empty()) {
+        clearContinuation();
+        effect(Effect::What::Stopped, "Stopped.");
+        out_.durable = true;
+        advance(now);
     } else if (phase_ == Phase::Starting && !state_.waiting.empty()) {
         state_.waiting.erase(state_.waiting.begin());
         effect(Effect::What::Stopped, "Stopped.");
@@ -350,8 +438,9 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
             held_ = true;
         }
     } else if (const Session* s = std::get_if<Session>(&message)) {
-        if (state_.session != s->id || state_.sessionDir != driverCwd_) {
+        if (state_.session != s->id || state_.sessionDir != driverCwd_ || state_.sessionAccount != driverAccount_) {
             state_.session = s->id;
+            state_.sessionAccount = driverAccount_;
             state_.sessionDir = driverCwd_;     // the harness keeps it by directory: resumed only there
             out_.durable = true;
         }
@@ -362,13 +451,37 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
             ? "The earlier conversation with " + config_.name + " could not be resumed, so this is a new one: " +
               sentence(lastCause_)
             : config_.name + "'s driver reports: " + sentence(lastCause_) + " " + sentence(lastFix_);
+        const bool current = !e->turn || (*e->turn == open && open != 0);
+        const bool accountLimit = e->code == ErrorCode::UsageLimit;
+        const bool modelLimit = e->code == ErrorCode::ModelLimit;
+        // An in-flight turn finishes on its original payer after a selection changes. A cap
+        // reported by that turn hands the unfinished work to the payer already selected.
+        const bool replacementSelected = !config_.account.empty() && config_.account != driverAccount_;
+        const bool checkpoint = current && phase_ == Phase::Working && !driverAccount_.empty() &&
+            !config_.account.empty() && (modelLimit || (accountLimit && (config_.autoAccount || replacementSelected)));
+        if (checkpoint) {
+            flush();
+        }
         if (!e->turn) {
             effect(Effect::What::Notice, std::move(text));
         } else if (*e->turn == open && open != 0) {
             effect(Effect::What::Error, std::move(text), open);
         }
         // an error of a turn not open (the one a driver writes as it refuses a line) is dropped: it exits next
-        if (e->code == ErrorCode::UsageLimit) {
+        if (checkpoint) {
+            state_.continuationPrompt = openPrompt_;
+            if (std::find(state_.exhaustedAccounts.begin(), state_.exhaustedAccounts.end(), driverAccount_) ==
+                state_.exhaustedAccounts.end()) {
+                state_.exhaustedAccounts.push_back(driverAccount_);
+            }
+            state_.modelLimitPending = modelLimit && !replacementSelected;
+            state_.openTurn = 0;
+            openPrompt_.clear();
+            out_.durable = true;
+            retiring_ = true;
+            endQuietly(now);    // no further done or output from this provider can dispatch the waiting work
+        }
+        if (accountLimit && current && phase_ != Phase::Stopping) {
             out_.account = driverAccount_;
             out_.usageLimit = true;
         }
@@ -383,6 +496,8 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
                 endQuietly(now);
             }
         }
+    } else if (const auto* agents = std::get_if<ChildAgents>(&message)) {
+        childAgents_ = agents->count;
     } else if (std::holds_alternative<Unknown>(message) || std::holds_alternative<AskSecret>(message)) {
         // a kind this version does not know: skipped; an ask for a secret is the server's (Drivers), not the turn's
     } else if (open == 0 || turnOf(message) != open) {
@@ -435,6 +550,7 @@ Output Supervisor::closed(const std::string& what, Millis now) {
 }
 
 Output Supervisor::exited(const std::string& how, Millis now) {
+    childAgents_ = 0;
     if (phase_ == Phase::None) {
         return finish();
     }
@@ -539,6 +655,7 @@ void Supervisor::cutOpen() {
         "it again if you still want an answer.", state_.openTurn);
     state_.openTurn = 0;
     openPrompt_.clear();
+    clearContinuation();
     out_.durable = true;
 }
 
@@ -570,6 +687,7 @@ void Supervisor::endQuietly(Millis now) {
 void Supervisor::close(Millis now) {
     state_.openTurn = 0;
     openPrompt_.clear();
+    clearContinuation();
     out_.durable = true;
     phase_ = Phase::Idle;
     deadline_.reset();
@@ -581,26 +699,43 @@ void Supervisor::close(Millis now) {
 }
 
 void Supervisor::startDriver(Millis now) {
-    if (phase_ != Phase::None || state_.waiting.empty() || held_ || down_ || !config_.here || !config_.present) {
+    if (phase_ != Phase::None || (state_.waiting.empty() && state_.continuationPrompt.empty()) || held_ || down_ || !config_.here || !config_.present) {
         return;
     }
-    // The harness keeps its sessions by directory: one made in another directory (the session's instance moved) is
-    // dropped, and the driver starts afresh; when the conversation has turns, its first send carries a summary of them.
-    // A session from before its directory was kept (none recorded) is resumed.
-    if (!state_.session.empty() && !state_.sessionDir.empty() && state_.sessionDir != config_.cwd) {
+    childAgents_ = 0;
+    // A harness resume ID belongs to the account that reported it. A legacy ID with no recorded owner
+    // cannot be attributed after an earlier account switch. Seed a fresh session from the Nexus transcript.
+    const bool accountChanged = state_.sessionAccount != config_.account;
+    const bool dirChanged = !state_.sessionDir.empty() && state_.sessionDir != config_.cwd;
+    if (!state_.session.empty() && (accountChanged || dirChanged)) {
         const bool turns = state_.nextTurn > 1;
         if (turns) {
-            effect(Effect::What::Notice, config_.name + " now works in " + config_.cwd + ", and the conversation "
-                "so far was held in " + state_.sessionDir + ", where it cannot be resumed from here: " + config_.name +
+            std::string reason;
+            if (accountChanged) {
+                reason = state_.sessionAccount ? "The previous harness session belongs to a different account. " :
+                    "The previous harness session has no recorded account. ";
+            } else {
+                reason = config_.name + " now works in " + config_.cwd + ", and the conversation so far was held in " +
+                    state_.sessionDir + ", where it cannot be resumed from here: ";
+            }
+            effect(Effect::What::Notice, reason + config_.name +
                 " starts afresh, given a summary of it with the next prompt.");
         }
         state_.session.clear();
         state_.sessionDir.clear();
+        state_.sessionAccount.reset();
         state_.summary = state_.summary || turns;
         out_.durable = true;
     }
     std::vector<std::string> argv = config_.command;
     if (!argv.empty()) {        // none configured: the start fails, as no program is configured
+        // A queued prompt can start as settings are applied. Bind the argument from the same account we record
+        // as the owner of this process, even if the previous resolved command named a different account.
+        for (std::size_t i = 1; i + 1 < argv.size(); ++i) {
+            if (argv[i] == "--account") {
+                argv[++i] = config_.account;
+            }
+        }
         argv.insert(argv.end(), {"--cwd", config_.cwd});
         if (!state_.session.empty()) {
             argv.insert(argv.end(), {"--resume", state_.session});
@@ -623,7 +758,9 @@ void Supervisor::startDriver(Millis now) {
     lastCause_.clear();
     lastFix_.clear();
     driverAccount_ = config_.account;
+    driverEmail_ = expectedEmail(config_.command);
     driverCwd_ = config_.cwd;
+    sandboxChanged_ = false;
     driverLimited_ = config_.limited;
     driverKeepsOut_ = config_.limited ? config_.keepsOut : std::vector<std::string>{};
     driverModel_.clear();
@@ -633,7 +770,7 @@ void Supervisor::startDriver(Millis now) {
 
 // The oldest waiting prompt, to an idle driver, as the next turn: durable before the line is written.
 void Supervisor::writeNext() {
-    if (phase_ != Phase::Idle || state_.waiting.empty()) {
+    if (phase_ != Phase::Idle || (state_.waiting.empty() && state_.continuationPrompt.empty())) {
         return;
     }
     const std::uint64_t turn = state_.nextTurn;
@@ -649,15 +786,25 @@ void Supervisor::writeNext() {
     }
     // prompt() refused any prompt that does not encode, and a turn number's digits cannot push a prompt within the
     // hub's text limit past the line limit, so this line is always whole.
-    // After a move to another directory, the first send carries the summary before the prompt.
-    const std::string summary = state_.summary && config_.summarize ? config_.summarize(state_.waiting.front()) :
-        std::string();
-    if (state_.summary) {
-        state_.summary = false;     // durable with the turn, below
+    // After dropping a harness session, the first send carries the summary before the prompt.
+    std::string prefix;
+    if (!state_.continuationPrompt.empty()) {
+        if (config_.continuationContext) {
+            prefix = config_.continuationContext();
+        }
+        prefix += "[nexus: Continue the unfinished request below from the point where the provider stopped. "
+            "Use the recorded replies and tool activity as progress. Check the current workspace or external state "
+            "before repeating any operation whose outcome is uncertain. Do not repeat completed work.]\n\n";
+        openPrompt_ = state_.continuationPrompt;
+    } else {
+        if (state_.summary && config_.summarize) {
+            prefix = config_.summarize(state_.waiting.front());
+        }
+        openPrompt_ = std::move(state_.waiting.front());
+        state_.waiting.erase(state_.waiting.begin());
     }
-    command(Command::Kind::Write, {}, encode(sendOf(turn, summary + state_.waiting.front())).line);
-    openPrompt_ = std::move(state_.waiting.front());
-    state_.waiting.erase(state_.waiting.begin());
+    state_.summary = false;
+    command(Command::Kind::Write, {}, encode(sendOf(turn, prefix + openPrompt_)).line);
     state_.nextTurn = turn + 1;
     state_.openTurn = turn;
     out_.durable = true;
@@ -693,9 +840,13 @@ void Supervisor::take() {
 // the harness's default, which a settings line cannot say: the next one starts on the defaults. So is any while the
 // friend is not in friends.json. A turn open runs to its end first.
 void Supervisor::retire(Millis now) {
+    const bool changedIdentity = driverEmail_ != expectedEmail(config_.command);
+    if (changedIdentity && driverAccount_ == config_.account && phase_ == Phase::Working) {
+        stopOpen(now);
+    }
     const bool cleared = (!driverModel_.empty() && config_.model.empty()) ||
         (!driverEffort_.empty() && config_.effort.empty());
-    if (phase_ == Phase::Idle && (driverAccount_ != config_.account || driverCwd_ != config_.cwd || !config_.here ||
+    if (phase_ == Phase::Idle && (sandboxChanged_ || changedIdentity || driverAccount_ != config_.account || driverCwd_ != config_.cwd || !config_.here ||
                                   driverLimited_ != config_.limited ||
                                   (driverLimited_ && driverKeepsOut_ != config_.keepsOut) || !config_.present ||
                                   cleared)) {
@@ -712,7 +863,13 @@ driver::Send Supervisor::sendOf(std::uint64_t turn, const std::string& prompt) c
 // What follows every event: the oldest queued prompt taken at a turn's end, a driver under an old account ended, a
 // driver started for a waiting prompt, or the prompt written to an idle one.
 void Supervisor::advance(Millis now) {
-    take();
+    if (state_.modelLimitPending || awaitingRotation() ||
+        (!state_.continuationPrompt.empty() && config_.command.empty())) {
+        return;
+    }
+    if (state_.continuationPrompt.empty()) {
+        take();
+    }
     retire(now);
     startDriver(now);
     writeNext();

@@ -57,9 +57,11 @@
 #include "link/bootstrap.h"
 #include "no_core.h"
 #include "server/builds.h"
+#include "server/bus_listener.h"
 #include "server/handover.h"
 #include "server/home.h"
 #include "server/server.h"
+#include "server/service_process.h"
 #include "server/supervision.h"
 #include "sync/formats.h"
 
@@ -71,6 +73,7 @@ int usage() {
                          "       nexus-server builds <verb> ... [--dir DIR]   (`nexus-server builds help`)\n"
                          "       nexus-server handover [<hash>|resume|status|help] [--dir DIR]\n"
                          "       nexus-server supervise [--start|status|unit ...|help] [--dir DIR]\n"
+                         "       nexus-server services check|reload|status [--dir DIR]\n"
                          "       nexus-server config path|check|reload|history [--dir DIR]\n"
                          "       nexus-server config restore <commit> | remote [<url>|--clear] [--dir DIR]\n"
                          "       nexus-server config sign-in <account> [--dir DIR]\n"
@@ -128,6 +131,9 @@ int main(int argc, char** argv) {
     if (argc < 2)
         return usage();
     const std::string command = argv[1];
+    if (command == "bus-deliver") return argc == 3 ? nexus::server::busDeliver(argv[2]) : usage();
+    if (command == "service-child")
+        return nexus::server::runServiceChild(argc, argv);
     std::string dir;
     nexus::server::Client client;
     bool haveNext = false;
@@ -144,7 +150,7 @@ int main(int argc, char** argv) {
             if (end == argv[i] || *end != 0 || client.next == 0)
                 return usage();
         } else if (command == "config" || command == "store" || command == "builds" || command == "handover" ||
-                   command == "supervise") {
+                   command == "supervise" || command == "services" || command == "history-page") {
             configArgs.push_back(argv[i]);
         } else {
             return usage();
@@ -158,6 +164,9 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return 1;
     }
+    if (command == "history-page") return nexus::server::historyCommand(paths, configArgs);
+    if (command == "services")
+        return nexus::server::servicesCommand(paths, configArgs);
     if (command == "new") {
         // The state format the window reads, which it states in the environment (sync/formats.h); unset or not a
         // number from 1, the window states none and reads format 1.

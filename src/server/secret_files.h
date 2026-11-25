@@ -33,6 +33,8 @@ public:
     // and that directory synced. Each line of the report says what was removed, or why it was not; an account
     // directory that is not private is reported and left as it is.
     std::vector<std::string> sweep();
+    // Remove both Claude login formats for precisely this account. Other files, including the lock, survive.
+    std::string forgetClaude(const std::string& account);
 
 private:
     store::Fs& fs_;

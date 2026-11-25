@@ -10,20 +10,27 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "pr/font_set.h"
+#include "pr/text_font.h"
 #include "pr/kit.h"
 #include "pr/kit_choice.h"
 #include "pr/kit_theme.h"
 #include "pr/layout_tree.h"
 #include "pr/ui.h"
 
+#include "account_picker.h"
+#include "chat_markdown.h"
+#include "chat_selection.h"
 #include "cursor.h"
 #include "hitch.h"
 #include "model.h"
+#include "window_app.h"
+#include "native_tabs.h"
 
 namespace nexus {
 
@@ -31,11 +38,18 @@ namespace nexus {
 struct Look {
     bool overlay = false;           // the window background and tab strip are see-through (style::kOverlayOpacity)
     int textSteps = 0;              // the text scale it is drawn at, in steps from 1 (style::textScale)
+    TabStyle tabs{};
+    PromptStyle prompt{};
+    MessageCardStyle messageCard{};
+    TranscriptStyle transcriptStyle{};
+    float overlayOpacity = style::kOverlayOpacity;
 };
 
 // The kit theme the window is drawn in: Studio's dark theme with the window's colours and type sizes (style.h) at the
 // text scale `steps` steps from 1.
-PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps = 0);
+PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps = 0, float opacity = style::kOverlayOpacity,
+                       const MessageCardStyle& card = {}, const TranscriptStyle& transcript = {}, const TabStyle& tabs = {},
+                       const PromptStyle& prompt = {});
 
 // The shells of the terminal tabs, by Tab::id. Our own seam (Prax's terminal cannot run without a process), so that the
 // tab logic runs in tests without one; terminals.h is the one over Prax's terminal (pr/terminal.h).
@@ -45,6 +59,7 @@ struct Terminals {
     virtual void close(std::size_t id) = 0;     // ends its shell and frees it
     // Declares the one that shows this round under `parent`, filling the room the parent's other children leave, and
     // gives it focus.
+    virtual void startPending(PrVec2) {}
     virtual void show(std::size_t id, PrLayoutNode parent) = 0;
     virtual void update(std::size_t id) = 0;    // services one that does not show this round
     virtual bool ended(std::size_t id) = 0;     // its shell exited and all of its output was read
@@ -71,6 +86,9 @@ struct Board {
     // The sprint tab was chosen, by its Command key or a click on its tab, whether or not it showed already: a page
     // that has left the board goes back to it.
     virtual void home() = 0;
+    virtual void prepare(PrVec2) { home(); }
+    virtual void cancelPreparation() {}
+    virtual bool prepared() { return true; }
 };
 
 // The request a secret dialog shows (docs/secrets.md): never a value.
@@ -105,6 +123,7 @@ using KitTabs = std::unique_ptr<PrKitTabs, KitTabsFree>;
 // round costs the same with fifty entries or fifty thousand. An item is an entry, or a run of tool lines, which stand
 // together. Each item's height is the one it took at its last layout, or until then an estimate from its text.
 struct TranscriptItems {
+    std::uint64_t generation = 0;
     std::size_t entries = 0;                    // the transcript's entries grouped into items so far
     std::vector<std::uint32_t> first;           // each item's first entry
     std::vector<std::uint32_t> lines;           // its lines (line feeds and one, summed over a run of tool lines)
@@ -118,11 +137,57 @@ struct TranscriptItems {
 };
 
 struct View {
+    std::function<void(const Chirp&)> playChirp;
+    struct GlyphTrail {
+        struct Range { size_t start, end; double birth; };
+        size_t tab = SIZE_MAX, entry = SIZE_MAX;
+        uint64_t generation = 0;
+        size_t bytes = 0;
+        std::vector<Range> ranges;
+    };
+    GlyphTrail replyTrail;
+    struct SentFlash {
+        std::size_t tab, first;
+        uint64_t generation;
+        std::string text;
+        double since;
+    };
+    std::vector<SentFlash> sentFlashes;
+    struct OutgoingBubble { size_t tab; uint64_t action; std::string text; };
+    std::vector<OutgoingBubble> outgoing;
+    std::map<std::pair<size_t, std::string>, std::string> attachmentLabels;
+    bool dialogVisible = false, savingPower = false;
+    double lastInput = -100;
+    std::function<void(bool)> setQuiet;
+    ChatMarkdownCache markdown;
+    std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> inlineFont{nullptr, prTextFontRelease};
+    std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> promptFont{nullptr, prTextFontRelease};
+    ChatSelection selection;
+    bool promptPointerDown = false;
+    std::optional<uint32_t> marginAnchor;
+    std::function<bool(const std::string&)> copy;
+    std::function<void(const std::string&)> openLink;
     Model* model = nullptr;
     Look* look = nullptr;
     Terminals* terminals = nullptr;             // the terminal tabs' shells; unset, Command-T adds none
     Board* board = nullptr;                     // the sprint tab's page; unset, the tab says it has none
     PrVec2 extent{};                            // the window's extent in px, which the host sets before each frame
+    std::shared_ptr<policy::Host> application = std::make_shared<policy::Host>("client");
+    WindowApplication windowApp;
+    NativeTabs nativeTabs;
+    std::map<std::string, KitTabs> groupStrips;
+    struct TabWidth { std::string title; float advance = 0; };
+    PrTextShaper* windowShaper = nullptr; // borrowed from the window for measuring tab titles
+    std::vector<TabWidth> tabWidths;
+    std::vector<PrLayoutNode> tabNodes;
+    PrLayoutNode accountAnchor = kPrLayoutNodeNone;
+    PrLayoutNode accountMenu = kPrLayoutNodeNone;
+    std::vector<PrLayoutNode> accountRows;
+    std::string lastHighlightedAccount;
+    uint64_t tabGroupGeneration = 0;
+    uint64_t draggingTab = 0;
+    std::function<std::string(const std::string& service, const std::string& text)> requestService;
+    std::string extensionProblem;
     int askedTextSteps = 0;                     // the text scale the keys asked for, applied at the next frame's start
     std::string notice;                         // shown in place of the transcript when there are no tabs
     std::function<void()> hide;                 // Escape: hides the overlay (overlay.h escape); unset when
@@ -134,13 +199,41 @@ struct View {
     std::function<const std::string*(std::size_t id)> growing;
     // With a server: the state cursor of a friend's tab (by Tab::id), under its last text (cursor.h). Unset: none.
     std::function<CursorState(std::size_t id)> cursor;
+    std::function<unsigned(std::size_t)> activeAgents;
+    std::string choiceKind, choiceValue;
+    std::size_t choiceTab = SIZE_MAX;
+    unsigned scannerCount = 1;
+    bool scannerBusy = false;
+    double scannerChanged = 0, scannerStarted = 0;
     double time = 0;                            // the frame's time in seconds, for the busy cursor's breathe
+    size_t scannerTab = SIZE_MAX, energyTab = SIZE_MAX;
+    std::string energyAccount;
+    double scannerTime = 0, tabEnergyTime = -100, accountEnergyTime = -100;
+    float scannerSpread = 0;
+    bool energyAnimating = false;
+    unsigned pendingDashStep = 0;
     bool breathing = false;                     // the last round drew a busy cursor: frames go on while it shows
     std::string problem;                        // why the last prompt was not sent, until one is: a dim line at the
                                                 // end of the transcript, never beside the prompt
     // With a server (main.cpp --server): Enter and Command-Enter on a friend's tab call this with the tab's position
     // and whether it queues, in place of the model's send and queue; the server's state comes back into the model.
     std::function<void(std::size_t tab, bool queue)> submit;
+    std::function<void(std::size_t tabId)> clearOpen;
+    std::function<bool()> signOut; // true when the selected account accepted the explicit composer command
+    std::function<LimitOffer()> limitOffer;
+    std::function<void(const LimitOffer&, const std::string&)> resolveLimit;
+    LimitOffer displayedLimit;
+    std::optional<AccountPicker> accountPicker;
+    std::optional<std::pair<std::size_t, std::string>> dismissedSignIn;
+    std::function<std::optional<AccountPicker>(int)> previewAccounts;
+    std::function<void(const std::string&)> accountAction;
+    std::function<void(const std::string&)> pickerCommand;
+    std::function<void(const std::string&)> chooseAccount;
+    std::function<void(const std::string&)> accountCommand;
+    std::function<std::string()> accountCaption;
+    std::function<void(std::string&, std::string&, std::string&)> sessionCapabilities;
+    std::function<SignInAccount()> signInAccount; // selected account while its sign-in is available
+    std::function<bool()> activateSignIn;        // true when sign-in consumed Enter or a card click
     // Command-V in the prompt: reads the clipboard, whose text comes back as a Paste event through the host, which cuts
     // it to the room the prompt has left (frame_host.h); unset, the text area pastes on its own, uncut.
     std::function<void()> paste;
@@ -157,19 +250,18 @@ struct View {
     bool promptOpen = true;                     // false: no prompt on a friend's tab (before the server is reached)
     std::string status;                         // one plain line where the prompt stands (the link's state); empty,
                                                 // none
+    std::function<void(const Tab&)> dismissFriend; // local close; the server still owns the friend and session
+    std::function<void()> restoreTabLayout;      // after the effective group policy is installed
     std::function<void()> moved;                // after a drag moved a tab: saves the order (tab_order.h)
     std::function<void()> selected;             // after a round that changed the selected tab (by Tab::id), the
                                                 // first round included: saves the selection (tab_order.h)
+    std::optional<std::size_t> pendingBoardId;
     std::size_t selectedId = ~std::size_t(0);   // the Tab::id selected at the end of the last round
     std::function<void()> scaled;               // after a frame's start applied a new text scale (look->textSteps),
                                                 // the first one included: saves it (tab_order.h)
     Secrets* secrets = nullptr;                 // the secret dialog's requests and field; unset, none ever shows
     std::uint64_t secretShown = 0;              // the request the dialog showed last round (0: none)
     PrLayoutNode secretField = kPrLayoutNodeNone;   // its field, as the last round built it
-    // The kit's tabs of the two strips: the sprint tab's, and the others'. The model owns the order and the selection;
-    // each round copies them into these, and a move the kit applies is mirrored into the model (buildWindow).
-    KitTabs pinnedTabs{prKitTabsCreate()};
-    KitTabs movableTabs{prKitTabsCreate()};
     // Each friend's transcript scroll from the top in px, by Tab::id, kept while another shows; kAtEnd while it showed
     // its newest entry, where it follows what arrives.
     static constexpr float kAtEnd = -1;
@@ -180,6 +272,7 @@ struct View {
     uint32_t promptRows = 1;                    // lines of text the prompt showed at the last layout
     PrLayoutNode prompt = kPrLayoutNodeNone;    // the prompt's text area, as the last round built it
     PrLayoutNode promptBox = kPrLayoutNodeNone; // the rounded box that holds the plus and the text area
+    PrLayoutNode conversation = kPrLayoutNodeNone;
     PrLayoutNode transcript = kPrLayoutNodeNone; // the transcript's scroller, as the last round built it
     PrLayoutNode boardBox = kPrLayoutNodeNone;  // the box that holds the sprint tab's page, as the last round built it
     HitchDetector* hitch = nullptr;             // names each terminal tab's update and show as a phase; null, none
@@ -220,6 +313,7 @@ bool windowWantsFrame(const View& view);
 // first in a strip of its own, which nothing is dragged into or out of, and shows its page (or the line that says why
 // there is none) with no prompt. A terminal tab shows its terminal in place of the transcript and the prompt; terminals
 // that do not show are serviced, and one whose shell ended closes.
+bool routePromptPointer(View& view, PrUi* ui, const PrAppEvent& event);
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent);
 
 } // namespace nexus

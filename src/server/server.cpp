@@ -26,6 +26,7 @@
 #include "link/bootstrap.h"
 #include "link/mosh_link.h"
 #include "server/builds.h"
+#include "server/bus_inbox.h"
 #include "server/config_repo.h"
 #include "server/drain.h"
 #include "server/driver_table.h"
@@ -38,6 +39,8 @@
 #include "server/login_life.h"
 #include "server/secret_files.h"
 #include "server/secret_lines.h"
+#include "server/service_manifest.h"
+#include "server/service_process.h"
 #include "server/signin_runner.h"
 #include "server/start_order.h"
 #include "server/supervise_state.h"
@@ -371,6 +374,7 @@ private:
         std::vector<pollfd> fds;
         std::vector<std::size_t> owner;
         std::size_t linkFds = 0;
+        bool busRosterRefreshed = false;
     };
     Pass pass_;
 
@@ -400,7 +404,12 @@ private:
     bool endDrivers();
     std::size_t shutDownLinks();
     void configApply(int fd, const std::string& request);
+    bool reloadServices();
     Paths paths_;
+    std::unique_ptr<ServiceProcesses> services_;
+    std::string serviceProblem_;
+    std::string verifiedHelper_;
+    std::string authClaude_;
     std::unique_ptr<store::Fs> fs_;
     std::unique_ptr<store::Fs> secretFs_;
     std::unique_ptr<AccountFiles> secretFiles_;
@@ -418,6 +427,8 @@ private:
     DurableStore store_;
     std::unique_ptr<Drivers> drivers_;
     std::unique_ptr<sync::Hub> hub_;
+    std::unique_ptr<BusInbox> bus_;
+    Millis nextBusRefresh_ = 0;
     std::unique_ptr<ConfigRepo> config_;
     // In-app sign-in's processes (server/signin_runner.h): `claude setup-token` per flow a window claims.
     std::unique_ptr<SignInRunner> signIns_;
@@ -481,11 +492,18 @@ bool Server::restoreAll(std::string* why) {
         std::fprintf(stderr, "nexus-server: this machine has no name (gethostname failed, and the config sets no "
             "machine), so no friend's instance runs here; set `machine <name>` in %s\n", paths_.config.c_str());
     }
+    if (!paths_.self.empty()) verifiedHelper_ = store::dir_of(paths_.self) + "/nexus-claude-auth";
+    const char* path = std::getenv("PATH");
+    authClaude_ = settings_.claude.empty() ? claudeOnPath(path ? path : "/usr/bin:/bin") : settings_.claude;
     drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs,
                                                                   machine, host, true,
-                                                                  [this] { return dirNow("drivers"); }});
-    hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
+                                                                  [this] { return dirNow("drivers"); }, nullptr, {}, false,
+                                                                  verifiedHelper_, authClaude_});
+    hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get(),
+        [this] { return dirNow("policy.bundle.json"); });
     drivers_->attach(*hub_);
+    bus_ = std::make_unique<BusInbox>(paths_.home, paths_.self, machine, host, dirFd_);
+    bus_->listeners.setLauncher(settings_.busLauncher);
     // The secret dialog (docs/secrets.md): a value goes to its account's file, durable before the asker hears
     // "stored" (server/secret_files.h); a request is offered to every window whose link reads requests.
     secretFs_ = store::make_posix_fs();
@@ -501,10 +519,26 @@ bool Server::restoreAll(std::string* why) {
     // The accounts and friends: what the config repository's HEAD holds (server/config_repo.h). The sessions are
     // settled against them before any driver starts.
     config_ = std::make_unique<ConfigRepo>([this] { return dirNow("nexus-config"); });
+    hub_->signOutWith([this](const accounts::Account& account) -> std::string {
+        if (signIns_ && signIns_->running(account.name))
+            return "Finish the browser sign-in for this account, then retry /logout.";
+        // Make the command's sequence number durable before unlinking either login file.
+        std::string why;
+        if (!store_.flush(&why)) return "Could not persist the sign-out command: " + why;
+        store_.beginBatch();
+        auto error = drivers_->retireForSignOut(account.name);
+        if (!error.empty()) return error;
+        if (account.provider == "claude") return secretFiles_->forgetClaude(account.name);
+        return forgetEnrollment(paths_.home, account.provider, account.name);
+    });
     // An account is taken as signed in from the start when its login is there, usable, and not past its end, until
     // its driver says otherwise (a no-credential or authentication error): for a claude account, its oauth-token,
     // where the driver reads it (server/home.h accountsDir, under HOME whatever --dir says; server/login_life.h).
-    hub_->probeSignInWith([logins = paths_.accounts](const accounts::Account& a) {
+    hub_->probeSignInWith([logins = paths_.accounts, home = paths_.home](const accounts::Account& a) {
+        if (a.requiresVerifiedEmail()) return hasVerifiedClaude(logins + "/" + a.name, a.email);
+        if (sync::usesLocalSignInPage(a.provider)) {
+            return hasEnrollment(home, a.provider, a.name);
+        }
         const std::string file = sync::loginFile(a.provider);
         return !file.empty() &&
             loginLive(a.provider, inspectLogin(logins + "/" + a.name + "/" + file),
@@ -512,6 +546,7 @@ bool Server::restoreAll(std::string* why) {
     });
     // A login lost: ask in the window only when a paste can fix it, saying why (server/login_life.h loginAsk).
     hub_->loginsWith([logins = paths_.accounts](const accounts::Account& a) {
+        if (a.requiresVerifiedEmail()) return sync::Hub::LoginAsk{false, "Sign in to " + a.email + " in Nexus to verify this account."};
         return loginAsk(a.name, a.provider, inspectLogin(logins + "/" + a.name + "/" + sync::loginFile(a.provider)),
                         static_cast<std::uint64_t>(wallMs()));
     });
@@ -586,10 +621,34 @@ bool Server::restoreAll(std::string* why) {
     }
     // In-app sign-in, once the accounts are held: each claude account with no login is offered for a browser sign-in.
     openSignIn(host);
+    if (std::ifstream in{dirNow("drivers")}) {
+        std::ostringstream text;
+        text << in.rdbuf();
+        const auto table = parseDriverTable(text.str(), paths_.home);
+        if (table.primary && table.errors.empty() && table.primaryDrivers.contains(table.primary->harness)) {
+            const auto& binding = *table.primary;
+            std::string problem;
+            if (!hub_->ensurePrimary({kPrimaryChat, binding.harness, binding.account, {}, {}, binding.instance()}, &problem))
+                std::fprintf(stderr, "nexus-server: primary chat: %s\n", problem.c_str());
+        }
+    }
     if (!drivers_->start(nowMs())) {
         *why = "the store failed while the friends' drivers were restored; restart the server";
         return false;
     }
+    services_ = std::make_unique<ServiceProcesses>(paths_.self, [this] { return dirNow("service-leases"); });
+    reloadServices();
+    return true;
+}
+
+bool Server::reloadServices() {
+    std::vector<ManagedService> next;
+    if (!readServiceManifest(dirNow("services.json"), next, serviceProblem_)) {
+        std::fprintf(stderr, "nexus-server: services: %s\n", serviceProblem_.c_str());
+        return false;
+    }
+    services_->configure(next, nowMs());
+    serviceProblem_.clear();
     return true;
 }
 
@@ -670,6 +729,9 @@ void Server::openSignIn(const std::string& host) {
     e.printed = [this](const std::string& account, const sync::SecretValue& token) {
         hub_->signInPrinted(account, token);
     };
+    e.enrolled = [this](const std::string& account, const std::string& provider, std::uint64_t id) {
+        hub_->signInEnrolled(account, provider, id);
+    };
     e.exited = [this](const std::string& account, std::uint64_t id, const std::string& why) {
         hub_->signInExited(account, id, why);
     };
@@ -683,7 +745,39 @@ void Server::openSignIn(const std::string& host) {
         return;
     }
     sync::SignInHooks hooks;
-    hooks.start = [this](std::uint64_t id, const std::string& account) { signIns_->start(id, account); };
+    hooks.start = [this](std::uint64_t id, const std::string& account) {
+        const auto* registry = hub_->accounts();
+        const auto* a = registry ? registry->account(account) : nullptr;
+        if (!a) {
+            hub_->signInExited(account, id, "this account was removed");
+            return;
+        }
+        if (a->requiresVerifiedEmail()) {
+            if (authClaude_.empty() || verifiedHelper_.empty() || access(verifiedHelper_.c_str(), X_OK) != 0) {
+                hub_->signInExited(account, id, "install nexus-claude-auth beside nexus-server and configure the Claude executable");
+                return;
+            }
+            signIns_->start(id, account, a->provider, {verifiedHelper_, "enroll", "--account-dir",
+                paths_.accounts + "/" + account, "--email", a->email, "--claude", authClaude_});
+            return;
+        }
+        if (a->provider == "claude") {
+            signIns_->start(id, account);
+            return;
+        }
+        std::ifstream in(dirNow("drivers"));
+        std::ostringstream text;
+        text << in.rdbuf();
+        auto table = parseDriverTable(text.str(), paths_.home);
+        auto cmd = table.signins.find(a->provider);
+        if (cmd == table.signins.end()) {
+            hub_->signInExited(account, id, "configure a signin command for " + a->provider +
+                                            " in the server's drivers file");
+            return;
+        }
+        cmd->second.insert(cmd->second.end(), {"--account", account});
+        signIns_->start(id, account, a->provider, std::move(cmd->second));
+    };
     hooks.stop = [this](const std::string& account) { signIns_->stop(account); };
     hooks.replay = [this](std::uint64_t id, const std::string& account, const sync::SignInTarget& target,
                           const sync::SecretValue& query) { signIns_->replay(id, account, target, query); };
@@ -703,7 +797,7 @@ void Server::signInRequest(int fd, const std::string& account) {
     const bool ok = hub_->requestSignIn(account, &said);
     writeAll(fd, (ok ? "OK " : "ERROR ") + said + "\n");
     for (Link& s : links_) {
-        s.link->setState(hub_->stateFor(s.signIn));
+        s.link->setState(hub_->stateFor(s.signIn, s.client));
     }
 }
 
@@ -765,6 +859,15 @@ void Server::control(int fd) {
         writeAll(fd, "ERROR no request within 2 s\n");
         return;
     }
+    if (request.starts_with("history-page ")) {
+        std::istringstream fields(request.substr(13));
+        std::uint64_t id, epoch, first;
+        std::string extra;
+        if (!(fields >> id >> epoch >> first) || fields >> extra) return;
+        auto page = hub_->historyPage(id, epoch, first);
+        if (page.find(id)) writeAll(fd, page.init_diff());
+        return;
+    }
     if (request == "stop") {
         supervision::noteIntentionalStopAt(dirNow(supervision::kSuperviseDir));
         writeAll(fd, "OK\n");
@@ -786,6 +889,38 @@ void Server::control(int fd) {
                          statusBuildLine(paths_.build, drain_.draining()) + "\n");
         return;
     }
+    constexpr std::string_view workspaceRequest = "primary-workspace ";
+    if (request.starts_with(workspaceRequest)) {
+        const auto primary = hub_->primarySession();
+        const auto* session = primary ? store_.find(*primary) : nullptr;
+        const auto* registry = hub_->accounts();
+        const auto* account = registry && session ? registry->account(session->info.account) : nullptr;
+        if (session && account && account->billing == accounts::Billing::Subscription &&
+                account->provider == session->info.harness && request.substr(workspaceRequest.size()) == session->info.instance) {
+            std::ifstream in(dirNow("drivers"));
+            std::ostringstream content;
+            content << in.rdbuf();
+            const auto table = parseDriverTable(content.str(), paths_.home);
+            if (table.primary && table.primary->matches(session->info)) {
+                writeAll(fd, "OK " + table.primary->cwd + "\n");
+                return;
+            }
+        }
+        writeAll(fd, "ERROR the selected primary workspace is no longer active; reconnect and try again\n");
+        return;
+    }
+    if (request == "services reload" || request == "services status") {
+        if (request == "services reload" && drain_.draining()) {
+            writeAll(fd, "ERROR server is draining; reload services on its replacement\n");
+            return;
+        }
+        if (request == "services reload")
+            reloadServices();
+        else
+            writeAll(fd, services_->status());
+        writeAll(fd, serviceProblem_.empty() ? "OK\n" : "ERROR " + serviceProblem_ + "\n");
+        return;
+    }
     if (request == "config reload" || request.rfind("config restore ", 0) == 0) {
         configApply(fd, request);
         return;
@@ -799,7 +934,7 @@ void Server::control(int fd) {
         // The reply's start is what a `new` that states a format reads as a server from before formats: keep it.
         writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>`, either with "
             "` format <n>` and then ` hello <hello>`, `status`, `drain`, `stop`, `config reload`, "
-            "`config restore <commit>` and `config sign-in <account>`\n");
+            "`config restore <commit>`, `config sign-in <account>`, `services reload` and `services status`\n");
         return;
     }
     // The window's Hello against the server's (sync/formats.h): a window below the server's min_peer, or a server
@@ -856,7 +991,7 @@ void Server::control(int fd) {
         // A window from before sign-ins, and none newer: the accounts waiting on a sign-in are asked for by a paste.
         hub_->signInWindowsChanged();
         for (Link& l : links_) {
-            l.link->setState(hub_->stateFor(l.signIn));
+            l.link->setState(hub_->stateFor(l.signIn, l.client));
         }
     } catch (const std::exception& e) {
         writeAll(fd, std::string("ERROR ") + e.what() + "\n");
@@ -886,12 +1021,13 @@ void Server::configApply(int fd, const std::string& request) {
         const bool reload = request == "config reload";
         config_->applying(reload);   // only a reload commits over the working files: they are what it applies
         ok = hub_->applyAccounts(next, message, &lines);
+        nextBusRefresh_ = 0;
         config_->applying(false);
         for (const std::string& n : config_->notes()) {
             lines.push_back(n);
         }
         for (Link& s : links_) {
-            s.link->setState(hub_->stateFor(s.signIn));
+            s.link->setState(hub_->stateFor(s.signIn, s.client));
         }
     }
     if (ok && lines.empty()) {
@@ -983,6 +1119,7 @@ void Server::checkLogins() {
     }
     std::vector<LoginWatch::Login> logins;
     for (const accounts::Account& a : registry->accounts) {
+        if (a.requiresVerifiedEmail()) continue;
         const std::string file = sync::loginFile(a.provider);
         if (file.empty()) {
             continue;
@@ -1002,6 +1139,7 @@ void Server::checkLogins() {
 }
 
 void Server::tick() {
+    services_->tick(nowMs());
     link::freezeClock();
     std::string why;
     for (Link& s : links_) {
@@ -1026,7 +1164,7 @@ void Server::tick() {
     if (linksEnded) {
         hub_->signInWindowsChanged();   // only older windows left: a paste instead of a sign-in
         for (Link& s : links_) {
-            s.link->setState(hub_->stateFor(s.signIn));
+            s.link->setState(hub_->stateFor(s.signIn, s.client));
         }
     }
 }
@@ -1040,9 +1178,16 @@ PassOrder::Outcome Server::wait(std::string* why) {
             std::fprintf(stderr, "nexus-server: config push: %s\n", pushWhy.c_str());
         }
     }
+    const auto now = nowMs();
+    pass_.busRosterRefreshed = !drain_.draining() && now >= nextBusRefresh_;
+    if (pass_.busRosterRefreshed) {
+        bus_->refresh(dirNow("drivers"), hub_->accounts(), now);
+        nextBusRefresh_ = now + kResolveMs;
+    }
     pass_.fds = {pollfd{listen_, POLLIN, 0}};
     pass_.owner = {0};
     int waitMs = std::min(kMaxWaitMs, drivers_->waitMs(nowMs()));
+    waitMs = std::min(waitMs, services_->waitMs(nowMs()));
     if (const std::optional<std::uint64_t> due = drain_.untilDeadline(static_cast<std::uint64_t>(nowMs()))) {
         waitMs = std::min(waitMs, static_cast<int>(std::min<std::uint64_t>(*due, static_cast<std::uint64_t>(kMaxWaitMs))));
     }
@@ -1071,6 +1216,11 @@ PassOrder::Outcome Server::wait(std::string* why) {
     pass_.linkFds = pass_.fds.size();
     for (const pollfd& p : drivers_->fds())
         pass_.fds.push_back(p);
+    if (!drain_.draining()) {
+        for (const auto& p : bus_->listeners.fds()) pass_.fds.push_back(p);
+        const int busWait = bus_->listeners.waitMs();
+        if (busWait >= 0) waitMs = std::min(waitMs, busWait);
+    }
     if (config_) {
         for (int fd : config_->pushFds()) {
             pass_.fds.push_back(pollfd{fd, POLLIN, 0});
@@ -1109,11 +1259,16 @@ PassOrder::Outcome Server::hold(bool holdDrivers, std::string* why) {
 }
 
 PassOrder::Outcome Server::apply(std::string* why) {
-    bool changed = false;
-    if (!drivers_->serve(nowMs(), &changed)) {
+    bool changed = pass_.busRosterRefreshed && hub_->setBusSenders(bus_->knownSenders());
+    if ((pass_.busRosterRefreshed && !drivers_->refreshSandbox(bus_->unsandboxed())) ||
+        !drivers_->serve(nowMs(), &changed)) {
         *why = "the store failed; stopping without acknowledging the actions since";
         return PassOrder::Outcome::Failed;
     }
+    if (!drain_.draining() && !stopping_ && bus_->listeners.serve([this](const std::string& recipient,
+                                                                         const BusMessage& message) {
+        return bus_->receive(*hub_, recipient, message);
+    })) changed = true;
     // A secret request past its deadline is refused (timeout), and a held value whose time has come is written again
     // (docs/secrets.md: a value that arrived is never dropped while the server runs), in this pass's batch like any
     // step. nexus's own ask whose paste was refused malformed is asked again.
@@ -1217,12 +1372,13 @@ PassOrder::Outcome Server::flush(std::string* why) {
 }
 
 void Server::release() {
+    bus_->listeners.flushed();
     drivers_->release(nowMs());
 }
 
 void Server::state() {
     for (Link& s : links_) {
-        s.link->setState(hub_->stateFor(s.signIn));
+        s.link->setState(hub_->stateFor(s.signIn, s.client));
     }
 }
 
@@ -1383,6 +1539,7 @@ int Server::run() {
             "the server next starts\n");
         status = 1;
     }
+    services_->stop();
     // On a clean stop or drain, each window is told the session ended (mosh's shutdown), so it makes a session with
     // the next server at once rather than after kQuietMs of silence (sync/redial.h). Skipped when the store failed: a
     // failed pass broke out before ticking its links so unflushed actions stay unacknowledged. Bounded: a window that
@@ -1442,6 +1599,31 @@ bool askOnce(const Paths& p, const std::string& request, std::string* reply, std
         return false;
     }
     return true;
+}
+
+// A service status response lists the children before the terminal OK or ERROR.
+int printControlReport(const Paths& p, const std::string& request) {
+    const int fd = connectControl(p.socket);
+    if (fd < 0) {
+        std::fprintf(stderr, "nexus-server: %s; start the server before requesting %s\n",
+            errnoText("no server answers on " + p.socket).c_str(), request.c_str());
+        return 1;
+    }
+    std::string line;
+    bool complete = false;
+    if (writeAll(fd, request + "\n")) {
+        while (readLine(fd, &line, 30000)) {
+            if (line == "OK" || line.starts_with("ERROR")) {
+                complete = true;
+                break;
+            }
+            std::puts(line.c_str());
+        }
+    }
+    close(fd);
+    if (complete && line == "OK") return 0;
+    std::fprintf(stderr, "nexus-server: %s\n", complete ? line.c_str() : "the server did not finish its reply");
+    return 1;
 }
 
 // The request's reply line from the running server, starting one (`self` serve) when none answers: for `new`. It waits
@@ -1544,6 +1726,25 @@ int serve(const Paths& p) {
     sigaction(SIGINT, &sa, nullptr);
     Server server(p);
     return server.run();
+}
+
+int servicesCommand(const Paths& p, const std::vector<std::string>& args) {
+    if (args.size() == 1 && args[0] == "check") {
+        std::vector<ManagedService> rows;
+        std::string why;
+        if (!readServiceManifest(p.dir + "/services.json", rows, why)) {
+            std::fprintf(stderr, "nexus-server: services: %s\n", why.c_str());
+            return 1;
+        }
+        std::printf("%zu managed service%s\n", rows.size(), rows.size() == 1 ? "" : "s");
+        return 0;
+    }
+    if (args.size() == 1 && (args[0] == "status" || args[0] == "reload")) {
+        signal(SIGPIPE, SIG_IGN);
+        return printControlReport(p, "services " + args[0]);
+    }
+    std::fprintf(stderr, "usage: nexus-server services check|reload|status [--dir DIR]\n");
+    return 2;
 }
 
 bool validClientId(const std::string& id) {
@@ -1691,6 +1892,24 @@ int config(const Paths& p, const std::vector<std::string>& args) {
                          "The accounts and friends are DIR/nexus-config/accounts.json and friends.json\n"
                          "(docs/accounts.md)\n");
     return 2;
+}
+
+int historyCommand(const Paths& p, const std::vector<std::string>& args) {
+    if (args.size() != 3 || std::any_of(args.begin(), args.end(), [](const auto& arg) {
+            return arg.empty() || arg.size() > 20 || arg.find_first_not_of("0123456789") != arg.npos;
+        })) return 1;
+    const int fd = connectControl(p.socket);
+    if (fd < 0) return 1;
+    bool ok = writeAll(fd, "history-page " + args[0] + " " + args[1] + " " + args[2] + "\n");
+    char buf[8192];
+    ssize_t n = 0;
+    std::size_t bytes = 0;
+    while (ok && (n = read(fd, buf, sizeof buf)) > 0) {
+        bytes += static_cast<std::size_t>(n);
+        ok = bytes <= 1024 * 1024 && std::fwrite(buf, 1, static_cast<std::size_t>(n), stdout) == static_cast<std::size_t>(n);
+    }
+    close(fd);
+    return ok && n == 0 && bytes ? 0 : 1;
 }
 
 int storeCommand(const Paths& p, const std::vector<std::string>& args) {

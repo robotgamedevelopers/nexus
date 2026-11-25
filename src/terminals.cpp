@@ -26,6 +26,7 @@ const PrFontFamily kMono{.name = {}, .generic = PrFontGeneric_Monospace};
 // How often the start thread reads each shell's foreground process, and the frame thread each terminal's directory.
 constexpr std::chrono::milliseconds kWatchEvery{250};
 constexpr double kDirectoriesEvery = 1.0;
+constexpr std::size_t kSpareShell = ~std::size_t(0);
 
 uint8_t channel(float v) {
     return uint8_t(std::lround(std::fmin(std::fmax(v, 0.0f), 1.0f) * 255));
@@ -37,10 +38,8 @@ PrStringView view(const std::string& s) {
 
 } // namespace
 
-PraxTerminals::PraxTerminals(PrKit* kit, PrFontSet* fonts, PrApp* app, PrAppWindow* window, bool overlay)
+PraxTerminals::PraxTerminals(PrKit* kit, PrFontSet* fonts, PrApp* app, PrAppWindow* window)
     : kit_(kit), fonts_(fonts), app_(app), window_(window),
-      background_{channel(style::kBackground.r), channel(style::kBackground.g), channel(style::kBackground.b),
-          channel(overlay ? style::kOverlayOpacity : 1.0f)},
       launcher_(prProcessLauncherCreate(PrProcessBackend_Default)), thread_([this] { run(); }) {}
 
 PraxTerminals::~PraxTerminals() {
@@ -65,6 +64,9 @@ void PraxTerminals::closeAll() {
         for (auto& [id, terminal] : terminals_) {
             ends_.push_back(terminal);
         }
+        if (spare_ && spare_->terminal) ends_.push_back(spare_->terminal);
+        spare_.reset();
+        spareRequested_ = false;
         shells_.clear();
         watch_.clear();
         recheck_ = false;
@@ -76,6 +78,7 @@ void PraxTerminals::closeAll() {
     seen_.clear();
     titles_.clear();
     asked_.clear();
+    awaitingSize_.clear();
     failed_.clear();
     problems_.clear();
     dirs_.clear();
@@ -100,7 +103,7 @@ void PraxTerminals::run() {
             prTerminalDestroy(terminal);
         }
         for (const Start& s : starts) {
-            Started done = ending ? Started{s.id, nullptr, -1, s.scale, s.dir, {}} : start(s);
+            Started done = ending ? Started{s.id, nullptr, s.scale, s.dir, {}} : start(s);
             lock.lock();
             started_.push_back(std::move(done));
             lock.unlock();
@@ -156,7 +159,7 @@ void PraxTerminals::run() {
 }
 
 PraxTerminals::Started PraxTerminals::start(const Start& s) {
-    Started done{s.id, nullptr, -1, s.scale, s.dir, {}};
+    Started done{s.id, nullptr, s.scale, s.dir, {}};
     std::string where = s.dir;
     if (kShellHost == ShellHost::Wsl2 && s.program.empty()) {
         // WSL2 is there, and the saved directory still a directory inside it (terminal_launch.h).
@@ -199,25 +202,38 @@ PraxTerminals::Started PraxTerminals::start(const Start& s) {
     desc.argumentCount = uint32_t(arguments.size());
     desc.directory = launch.directory.empty() ? prRawStringView(&home) : view(launch.directory);
     desc.scrollback = kPrTerminalScrollbackDefault;
-    desc.notificationTag = s.id + 1;
-    // The shell is the child that prTerminalCreate starts (foreground.h): it returns once the shell has started. Only
-    // this thread starts and ends shells, so no other child comes or goes meanwhile.
-    const std::vector<int> before = childProcesses();
-    PrStatus status = prTerminalCreate(&desc, &done.terminal);
+    desc.notificationTag = ++notificationTag_;
+    done.terminal = prTerminalCreate(&desc);
+    if (done.terminal) {
+        // Prax launches the PTY on its first measured frame. Give it the real tab size
+        // here on the worker, then transfer the terminal to the visible kit.
+        auto* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
+        PrLayoutTreeDesc treeDesc{.shaper = shaper, .targetPixelRatio = s.ratio};
+        auto* tree = prLayoutTreeCreate(&treeDesc);
+        auto* ui = prUiCreate(tree);
+        auto theme = prKitThemeStudio(PrKitThemeVariant_Dark, fonts_);
+        theme.palette = s.palette;
+        auto* kit = prKitCreate(ui, &theme);
+        struct LaunchFrame { PrKit* kit; PrTerminal* terminal; } frame{kit, done.terminal};
+        PrUiFrameDesc frameDesc{.extent = s.extent, .maxRounds = 4, .display = prAppDisplayDefault()};
+        frameDesc.display.pixelRatio = s.ratio;
+        prUiFrame(ui, &frameDesc, [](void* data, PrUi*, const PrUiRound*) {
+            auto& f = *static_cast<LaunchFrame*>(data);
+            const auto root = prKitBox(f.kit, kPrLayoutNodeNone, {}, {.place = {
+                .width = prKitPercent(100), .height = prKitPercent(100)}});
+            prTerminalFrame(f.terminal, f.kit, root, PrTerminalBackground_Parent);
+        }, &frame);
+        prKitDestroy(kit);
+        prUiDestroy(ui);
+        prLayoutTreeDestroy(tree);
+        prTextShaperDestroy(shaper);
+        if (!prTerminalLaunched(done.terminal)) {
+            prTerminalDestroy(done.terminal);
+            done.terminal = nullptr;
+            done.problem = "Could not measure the terminal to start its shell. Close the tab and open it again.";
+        }
+    }
     prRawStringReset(&home);
-    if (status != PrStatus_Ok || done.terminal == nullptr) {
-        std::fprintf(stderr, "nexus: could not start %s for a terminal tab (status %d): %s\n",
-            launch.program.empty() ? "the login shell" : launch.program.c_str(), int(status),
-            kShellHost == ShellHost::Wsl2 ? "check that wsl.exe runs in PowerShell" : "check that SHELL names a shell "
-            "that runs");
-        done.terminal = nullptr;
-        return done;
-    }
-    done.shell = startedShell(before, childProcesses());
-    if (done.shell <= 0) {
-        std::fprintf(stderr, "nexus: could not find the shell of a new terminal tab among nexus's child processes; the "
-            "tab keeps its title while ssh runs in it\n");
-    }
     return done;
 }
 
@@ -231,12 +247,9 @@ void PraxTerminals::take() {
         started.swap(started_);
         watched_ = machines;
         for (const Started& s : started) {
-            const bool wanted = asked_.count(s.id) != 0 && s.terminal != nullptr;
+            const bool wanted = s.id == kSpareShell || asked_.count(s.id) != 0;
             if (!wanted && s.terminal != nullptr) {
                 ends_.push_back(s.terminal);     // its tab closed while it started
-            } else if (wanted && s.shell > 0) {
-                shells_[s.id] = s.shell;
-                watch_[s.id] = ForegroundSeen{};
             }
         }
         for (const auto& [id, shared] : watch_) {
@@ -245,35 +258,50 @@ void PraxTerminals::take() {
     }
     bool ends = false;
     for (const Started& s : started) {
+        if (s.id == kSpareShell) {
+            spare_ = s;
+            continue;
+        }
         if (asked_.erase(s.id) == 0) {
             ends = ends || s.terminal != nullptr;
             continue;
         }
-        if (s.terminal == nullptr) {
-            if (!s.problem.empty()) {
-                problems_[s.id] = s.problem;    // the tab stays, showing the line
-            } else {
-                failed_.insert(s.id);
-            }
-            held_.erase(s.id);
-            continue;
-        }
-        terminals_[s.id] = s.terminal;
-        labels_[s.id] = TabLabel();
-        if (s.shell > 0) {
-            pids_[s.id] = s.shell;
-        }
-        dirs_[s.id] = s.dir;
-        scales_[s.id] = s.scale;
-        applyBackground(s.terminal);
-        prTerminalFocus(s.terminal);
+        attach(s);
     }
     if (ends) {
         wake_.notify_one();
     }
 }
 
+void PraxTerminals::attach(const Started& s) {
+    if (s.terminal == nullptr) {
+        if (!s.problem.empty()) {
+            problems_[s.id] = s.problem;    // the tab stays, showing the line
+        } else {
+            failed_.insert(s.id);
+        }
+        held_.erase(s.id);
+        return;
+    }
+    if (prTerminalLaunchStatus(s.terminal) != PrStatus_Ok) failed_.insert(s.id);
+    terminals_[s.id] = s.terminal;
+    labels_[s.id] = TabLabel();
+    dirs_[s.id] = s.dir;
+    scales_[s.id] = s.scale;
+    if (const auto pid = static_cast<int>(prTerminalProcessId(s.terminal)); pid > 0) {
+        pids_[s.id] = pid;
+        std::lock_guard lock(mutex_);
+        shells_[s.id] = pid;
+        watch_[s.id] = ForegroundSeen{};
+    }
+    // Consume any pending title or shell events before the strip and console draw together.
+    prTerminalService(s.terminal, window_);
+    applyBackground(s.terminal);
+    prTerminalFocus(s.terminal);
+}
+
 void PraxTerminals::observe(double time) {
+    // Publish launcher results once at frame start so all UI rounds see the same terminals.
     take();
     struct Observed {
         std::size_t id;
@@ -366,7 +394,7 @@ bool PraxTerminals::hold(std::size_t id, const PrAppEvent& e) {
     if (queued == held_.end() || queued->second.empty()) {
         PrTerminal* terminal = find(id);
         const bool starting = asked_.count(id) != 0;
-        if (!starting && (terminal == nullptr || prTerminalHasFocus(terminal))) {
+        if (!starting && (terminal == nullptr || (prTerminalLaunched(terminal) && prTerminalHasFocus(terminal)))) {
             return false;
         }
     }
@@ -378,7 +406,7 @@ bool PraxTerminals::hold(std::size_t id, const PrAppEvent& e) {
 void PraxTerminals::deliver(PrUi* ui) {
     for (auto it = held_.begin(); it != held_.end();) {
         PrTerminal* terminal = find(it->first);
-        if (terminal == nullptr || !prTerminalHasFocus(terminal)) {
+        if (terminal == nullptr || !prTerminalLaunched(terminal) || !prTerminalHasFocus(terminal)) {
             ++it;
             continue;
         }
@@ -417,6 +445,22 @@ PrTextFontDesc PraxTerminals::font(float scale) const {
 }
 
 bool PraxTerminals::open(std::size_t id) {
+    if (spare_) {
+        auto ready = std::move(*spare_);
+        spare_.reset();
+        spareRequested_ = false;
+        if (ready.terminal) {
+            if (program.empty() && ready.dir == directory && prTerminalLaunchStatus(ready.terminal) == PrStatus_Ok &&
+                    !prTerminalProcessState(ready.terminal).exited) {
+                ready.id = id;
+                attach(ready);
+                return true;
+            }
+            std::lock_guard lock(mutex_);
+            ends_.push_back(ready.terminal);
+            wake_.notify_one();
+        }
+    }
     return openIn(id, directory);
 }
 
@@ -426,15 +470,12 @@ bool PraxTerminals::openIn(std::size_t id, const std::string& dir) {
         return false;
     }
     asked_[id] = dir;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        starts_.push_back(Start{id, program, dir, scale_});
-    }
-    wake_.notify_one();
+    awaitingSize_.insert_or_assign(id, Start{id, program, dir, scale_});
     return true;
 }
 
 void PraxTerminals::close(std::size_t id) {
+    awaitingSize_.erase(id);
     asked_.erase(id);
     failed_.erase(id);
     problems_.erase(id);
@@ -462,19 +503,42 @@ void PraxTerminals::close(std::size_t id) {
 // Sets the screen's background colour to the window's if it is not, under the screen's lock. Returns true if it was
 // not: Prax set it from the kit's theme (the terminal's first frame, or a palette change).
 bool PraxTerminals::applyBackground(PrTerminal* terminal) const {
+    const auto canvas = kit_->theme.palette.bg0;
+    const PrColor8 background{channel(canvas.r), channel(canvas.g), channel(canvas.b), channel(canvas.a)};
     PrVterm* vterm = prTerminalVtermLock(terminal);
     PrColor8 now = prVtermRoleColor(vterm, PrVtermColorRole_Background);
-    bool changed = now.r != background_.r || now.g != background_.g || now.b != background_.b ||
-        now.a != background_.a;
+    bool changed = now.r != background.r || now.g != background.g || now.b != background.b ||
+        now.a != background.a;
     if (changed) {
-        prVtermRoleSetColor(vterm, PrVtermColorRole_Background, background_);
+        prVtermRoleSetColor(vterm, PrVtermColorRole_Background, background);
     }
     prTerminalVtermUnlock(terminal);
     return changed;
 }
 
+void PraxTerminals::startPending(PrVec2 extent) {
+    if (extent.x <= 0 || extent.y <= 0) return;
+    if (keepShellReady && !spareRequested_ && program.empty() && launcher_) {
+        awaitingSize_.emplace(kSpareShell, Start{kSpareShell, {}, directory, scale_});
+        spareRequested_ = true;
+    }
+    if (awaitingSize_.empty()) return;
+    {
+        std::lock_guard lock(mutex_);
+        for (auto& entry : awaitingSize_) {
+            auto& pending = entry.second;
+            pending.extent = extent;
+            pending.palette = kit_->theme.palette;
+            pending.scale = scale_;
+            pending.ratio = prLayoutTreeTargetPixelRatio(kit_->tree);
+            starts_.push_back(std::move(pending));
+        }
+        awaitingSize_.clear();
+    }
+    wake_.notify_one();
+}
+
 void PraxTerminals::show(std::size_t id, PrLayoutNode parent) {
-    take();
     PrTerminal* terminal = find(id);
     if (terminal == nullptr) {
         return;     // starting: the tab shows the window's background until its shell is there; what is typed meanwhile
@@ -506,7 +570,6 @@ void PraxTerminals::update(std::size_t id) {
 }
 
 bool PraxTerminals::ended(std::size_t id) {
-    take();
     if (failed_.count(id) != 0) {
         return true;
     }
@@ -514,12 +577,11 @@ bool PraxTerminals::ended(std::size_t id) {
     if (terminal == nullptr) {
         return false;
     }
-    PrProcessInfo info = prTerminalProcessInfo(terminal);
+    PrProcessState info = prTerminalProcessState(terminal);
     return info.exited && info.outputEnded;
 }
 
 std::string PraxTerminals::problem(std::size_t id) {
-    take();
     auto it = problems_.find(id);
     return it != problems_.end() ? it->second : std::string();
 }

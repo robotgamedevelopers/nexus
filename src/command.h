@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace nexus {
@@ -43,5 +44,7 @@ std::string commandProblem(const Command& command, const CommandResult& r, int t
 
 // Runs a command as a child process (Prax's lib/process), with this process's environment.
 CommandResult runCommand(const Command& command, int timeoutSeconds);
+
+CommandResult runCommandWithInput(const Command& command, int timeoutSeconds, std::string_view input);
 
 } // namespace nexus

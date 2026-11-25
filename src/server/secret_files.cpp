@@ -1,7 +1,15 @@
 #include "server/secret_files.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
+#include <cstring>
+#include <dirent.h>
+#include <fcntl.h>
+#include <memory>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <span>
 
 namespace nexus::server {
@@ -9,6 +17,50 @@ namespace nexus::server {
 namespace {
 
 const char* const kTempSuffix = ".new";
+
+struct ScopedFd {
+    explicit ScopedFd(int fd) : value(fd) {}
+    ~ScopedFd() { if (value >= 0) ::close(value); }
+    ScopedFd(const ScopedFd&) = delete;
+    ScopedFd& operator=(const ScopedFd&) = delete;
+    int value;
+};
+
+// The vendor can leave nested state or symbolic links in a renewal attempt. Anchor each
+// removal to the parent we opened, and never descend through a link or onto another device.
+std::string removeRenewalAt(int parent, const char* name, dev_t device) {
+    struct stat st{};
+    if (::fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) != 0)
+        return errno == ENOENT ? std::string{} : std::strerror(errno);
+    if (S_ISDIR(st.st_mode)) {
+        ScopedFd dir(::openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+        if (dir.value < 0 || ::fstat(dir.value, &st) != 0) return std::strerror(errno);
+        if (st.st_uid != ::geteuid() || st.st_dev != device)
+            return "the credential renewal directory has a different owner or filesystem.";
+        const int copy = ::dup(dir.value);
+        if (copy < 0) return std::strerror(errno);
+        std::unique_ptr<DIR, decltype(&::closedir)> entries(::fdopendir(copy), &::closedir);
+        if (!entries) {
+            const int error = errno;
+            ::close(copy);
+            return std::strerror(error);
+        }
+        for (;;) {
+            errno = 0;
+            const auto* entry = ::readdir(entries.get());
+            if (!entry) {
+                if (errno) return std::strerror(errno);
+                break;
+            }
+            if (!std::strcmp(entry->d_name, ".") || !std::strcmp(entry->d_name, "..")) continue;
+            auto error = removeRenewalAt(dir.value, entry->d_name, device);
+            if (!error.empty()) return error;
+        }
+    }
+    if (::unlinkat(parent, name, S_ISDIR(st.st_mode) ? AT_REMOVEDIR : 0) != 0 && errno != ENOENT)
+        return std::strerror(errno);
+    return {};
+}
 
 bool endsWith(const std::string& s, const std::string& end) {
     return s.size() >= end.size() && s.compare(s.size() - end.size(), end.size(), end) == 0;
@@ -44,6 +96,15 @@ sync::Kept AccountFiles::keep(const std::string& account, const std::string& wha
     if (!s.is_ok()) {
         return fail(s.message());
     }
+    // A case-insensitive filesystem can open another account when the requested spelling is absent.
+    std::vector<std::string> names;
+    s = fs_.list(accounts_, names);
+    if (!s.is_ok()) {
+        return fail(s.message());
+    }
+    if (std::find(names.begin(), names.end(), account) == names.end()) {
+        return fail(dir + " does not match the spelling of the account directory; check the account name's capitalization");
+    }
     // A temporary file left by a write a crash cut short holds nothing anyone reads: it goes first.
     s = fs_.remove(temp);
     if (!s.is_ok() && s.code() != store::Status::Code::NotFound) {
@@ -74,6 +135,49 @@ sync::Kept AccountFiles::keep(const std::string& account, const std::string& wha
         return sync::Kept::Unconfirmed;
     }
     return sync::Kept::Durable;
+}
+
+std::string AccountFiles::forgetClaude(const std::string& account) {
+    if (!isPathPart(account)) return "Invalid account name.";
+    const auto failed = [&account](const std::string& reason) {
+        return "Could not sign out of " + account + ": " + reason;
+    };
+    const std::string path = accounts_ + "/" + account;
+    ScopedFd dir(::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+    if (dir.value < 0) return errno == ENOENT ? std::string{} : failed(std::strerror(errno));
+    struct stat st{};
+    if (::fstat(dir.value, &st) != 0) return failed(std::strerror(errno));
+    if (st.st_uid != ::geteuid() || (st.st_mode & 0077))
+        return failed("the account directory must be private and owned by the server user.");
+    const auto device = st.st_dev;
+    std::vector<std::string> names;
+    const auto status = fs_.list(accounts_, names);
+    if (!status.is_ok()) return failed(status.message());
+    if (std::find(names.begin(), names.end(), account) == names.end())
+        return failed("the account directory spelling does not match.");
+
+    ScopedFd lock(::openat(dir.value, "verified-claude.lock", O_CREAT | O_RDWR | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC, 0600));
+    if (lock.value < 0 || ::fstat(lock.value, &st) != 0) return failed(std::strerror(errno));
+    if (!S_ISREG(st.st_mode) || st.st_uid != ::geteuid() || (st.st_mode & 0077) || st.st_nlink != 1)
+        return failed("the login lock must be a private regular file owned by the server user.");
+    if (::flock(lock.value, LOCK_EX | LOCK_NB) != 0)
+        return failed("the login lock is unavailable. Retry /logout.");
+
+    const char* const files[] = {"oauth-token.new", ".verified-claude.write", "oauth-token", "verified-claude.json"};
+    for (const char* file : files) {
+        if (::fstatat(dir.value, file, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+            if (errno == ENOENT) continue;
+            return failed(std::strerror(errno));
+        }
+        if (!S_ISREG(st.st_mode) || st.st_uid != ::geteuid())
+            return failed("the login file must be a regular file owned by the server user.");
+    }
+    auto error = removeRenewalAt(dir.value, ".verified-claude-renew", device);
+    if (!error.empty()) return failed(error);
+    for (const char* file : files) {
+        if (::unlinkat(dir.value, file, 0) != 0 && errno != ENOENT) return failed(std::strerror(errno));
+    }
+    return ::fsync(dir.value) == 0 ? std::string{} : failed(std::strerror(errno));
 }
 
 std::vector<std::string> AccountFiles::sweep() {

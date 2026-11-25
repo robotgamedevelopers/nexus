@@ -16,7 +16,7 @@
 | The fleet's machine list from the server, as the friends are: the server sends the machines it knows in its state, and the window stops reading nova-config for the terminal tabs' machine labels, its last outside tool | ❌ |
 | 6. Sprint: see and deal cards without leaving the window | ❌ |
 | 7. Panels: friends add UI elements when asked; a panel is data (what to show, which tool's output feeds it, what each button sends) rendered by nexus, never code loaded into it | ❌ |
-| Later: one app, nexus-server, starts at boot on the always-on machine and runs every tool and every friend as its own child process, so permissions are granted once to that app and nothing else runs as a separate app or daemon | ❌ |
+| One install: nexus-server on macOS, Linux or Windows (WSL2) starts and supervises the configured nova-tools and nova-sprint services as child processes, including Redis, message bus listeners, Sprint scheduling and workers. The host starts nexus-server at boot. Closing a client leaves the services running. iPad and iPhone connect as clients. | ❌ |
 | Writer thread: the store's write and flush run off the server loop's thread, and the loop keeps sending state to the windows while a flush runs, holding back only the acknowledgement until it is durable. mosh cannot hold that back: unmodified, it sends as ack_num the newest remote state it has received, on any tick, so the acknowledgement is bound to received state, and modifying mosh is out (AGENTS.md). So the acknowledgement moves up into nexus: the server's state carries each window's durable applied counter (the number the store has flushed), and the window trims its held actions by that counter, not by mosh's ack, and sends them again after a reconnect as it does now; the state shown is the durable state, or marks what is not yet durable. Changes the Link model (the window's held list, ExactlyOnce across a crash), the Applier, the window's trimming, and their trace binding | ❌ |
 | Server loop bound to a model: a spec of one pass of nexus-server's loop (the batch applied with the drivers held, its one flush, the drivers released, the state set, the links' ticks at the next pass, and a crash anywhere in it), and the real loop's trace (hold, flush, release, tick, with the fs seam's crashes) checked against it in CI, with reversed witnesses for a release, a state or a tick before the flush | ✅ |
 | iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend (later) | ❌ |
@@ -52,6 +52,8 @@
 
 | feature | done |
 |---|:---:|
+| Let a friend see a display or window the human chooses with Screen Recording permission (later) | ❌ |
+| Let a friend click and type in other apps with separate Accessibility permission and a human stop control (later) | ❌ |
 | Terminal tabs: a shell per tab, after the friends; added with Cmd-T, closed with Cmd-W | ✅ |
 | Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; the page opaque, as nova-sprint serves it | ❌ |
 | The plus button uploads a picked file to the server, into the selected AI's incoming/ directory; an image is also posted to the chat (needs layers 2 and 3) (later) | ❌ |
@@ -60,7 +62,7 @@
 | HDR and wide gamut: the window asks Prax for its HDR swap chain (half floats, extended sRGB, EDR, gamut-mapped to the display) once Prax's display pass keeps alpha for a see-through window, and once nexus draws colours past sRGB or brighter than SDR white (later) | ❌ |
 | Windows: the native overlay window reaches nexus-server inside WSL2 over a local socket, with a functional test across that boundary in CI (wsl2-functional on captain drives the native window through WSL interop); its terminal tabs are WSL2 shells in the WSL2 home directory, never cmd or PowerShell. Waits on Prax: the window needs Prax's Win32 lib/app to compile, and nexus-server in WSL2 needs Prax's lib/process to link on Linux (later) | ❌ |
 | The window reconnects by itself when its server stops or is replaced, and after a crash, with no message and the state cursor grey meanwhile; it names itself (--client) and resends from its first unacknowledged action (--next) | ✅ |
-| complete | 25% |
+| complete | 20% |
 
 [Source data](roadmap.sexp)
 
@@ -72,6 +74,7 @@
 
 | feature | done |
 |---|:---:|
+| Fork-owned configuration and Starlark in the client and server. Both native hosts run editable rules with shared modules and preview/apply. The window and conversation applications now implement keyboard routing, panel composition, tab registration, message plans and session defaults (docs/policy.md, docs/plugins.md). Continue moving application behavior behind the native host primitives | ❌ |
 | Client config as data: ~/.nexus/client becomes documented, versioned, human-editable JSON in git, with the same verbs and apply report as the server's (docs/accounts.md); a person's AI changes it through the server, which relays the change to the client that asked and never stores, caches or syncs it: each machine's config is its own. Tab layout is client config too: a tab per friend or a tab per instance of a friend (the server sends every session's friend and instance names, and keeps no tabs of its own) | ❌ |
 | A client-config template on the server, kept up to date: any change to the template becomes a pending update that each client applies at its next connect; config stays local to each machine, with no live sync. Open question: how a machine's local edits survive an update (proposal: an update replaces only the fields the template change touched) | ❌ |
 | Promote one machine's client config to the template, with a pending update for every other machine (later) | ❌ |
@@ -93,7 +96,7 @@
 
 | feature | done |
 |---|:---:|
-| Tab kinds are pluggable, described as data that nexus renders with Prax: friend, terminal, sprint board, editor, files, chat, mail, social and more; which tabs a machine shows is set in its client config (and the server's client template), by talking with your AI | ❌ |
+| Fork-defined registrations, groups and shortcuts support compiled Prax renderers and Starlark panels (docs/plugins.md). Further tab kinds: friend, terminal, sprint board, editor, files, chat, mail, social and more; which tabs a machine shows is set in its client config (and the server's client template), by talking with your AI | ❌ |
 | The tab strip is made of tab groups, generalizing today's fixed zones (sprint, then friends, then terminals): a dashboards group (the sprint board is one dashboard), a friends group (a tab per friend or per instance, as configured) and a terminals group; later groups for editor, files, chat, mail and social. Which groups exist, their order and their contents are client config, set by talking with your AI; the default order is dashboards, friends, terminals. Each group's definition carries its behaviour: whether Cmd-W closes its tabs (a group is not closable unless its config says so; terminals are closable by default), how a new tab is made (Cmd-T for terminals), and dragging moves a tab within its group only | ❌ |
 | Editor tab, modelled on Sublime Text 3: fast open, a command palette, multiple cursors, Goto Anything; keyboard-first and the same on every OS, with nexus's own look; Prax's highest text layers first. After the friends layer (later) | ❌ |
 | File explorer tab. Open: whose files (this machine's, the server's, a fleet machine's) (later) | ❌ |

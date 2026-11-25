@@ -14,7 +14,10 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <filesystem>
 #else
+#include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -123,6 +126,35 @@ bool makeClientHome(const std::string& dir, std::string* why) {
 #endif
 }
 
+bool claimClientHome(const std::string& dir, std::string* why) {
+    // Keep the handle open until the OS tears down the process, including static destructors.
+    why->clear();
+#if defined(_WIN32)
+    const auto path = std::filesystem::u8path(dir) / L"client.lock";
+    HANDLE lock = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (lock != INVALID_HANDLE_VALUE) return true;
+    DWORD error = GetLastError();
+    if (error != ERROR_SHARING_VIOLATION)
+        *why = "cannot lock the client home: Windows error " + std::to_string(error);
+#else
+    int fd = open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd >= 0) {
+        int result;
+        do {
+            result = flock(fd, LOCK_EX | LOCK_NB);
+        } while (result < 0 && errno == EINTR);
+        if (result == 0) return true;
+        int error = errno;
+        close(fd);
+        if (error == EWOULDBLOCK) return false;
+        errno = error;
+    }
+    *why = std::string("cannot lock the client home: ") + std::strerror(errno);
+#endif
+    return false;
+}
+
 ClientConfig clientConfigFrom(std::string_view text, const std::string& path) {
     const Config c = parseConfig(text, path, kClientConfigKeys);
     ClientConfig out;
@@ -135,7 +167,13 @@ ClientConfig clientConfigFrom(std::string_view text, const std::string& path) {
     if (at != c.values.end()) {
         out.sprintUrl = at->second;
     }
+    if (const auto entry = c.values.find("server"); entry != c.values.end())
+        out.serverHost = entry->second;
     out.problems = c.errors;
+    if (const auto entry = c.values.find("sprint"); entry != c.values.end()) {
+        if (entry->second == "off") out.sprintEnabled = false;
+        else if (entry->second != "on") out.problems.push_back(path + ": sprint must be on or off");
+    }
     out.problems.insert(out.problems.end(), c.warnings.begin(), c.warnings.end());
     return out;
 }
@@ -148,16 +186,17 @@ ClientConfig readClientConfig(const std::string& dir) {
         none.path = path;
         return none;
     }
-    PrByteView bytes{};
-    if (!prFileMap(pr(path), &bytes)) {
+    PrBlob* blob = prFileOpen(pr(path));
+    if (!blob) {
         ClientConfig none;
         none.path = path;
         none.problems.push_back(path + " cannot be read, so its settings are not used; make it readable by you, or "
             "remove it");
         return none;
     }
+    const auto bytes = prBlobBytes(blob);
     const std::string text(reinterpret_cast<const char*>(bytes.data), bytes.size);
-    prFileUnmap(&bytes);
+    prBlobRelease(blob);
     return clientConfigFrom(text, path);
 }
 

@@ -77,6 +77,7 @@ jobs:
             echo "CCACHE_MAXSIZE=4G"
             echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
             echo "JOBS=$(sh .github/job-cores.sh)"
+            echo "CARGO_BUILD_JOBS=$(sh .github/job-cores.sh)"
             echo "TEST_JOBS=$(sysctl -n hw.ncpu)"
           } >> "$GITHUB_ENV"
       - name: Configure (Release)
@@ -103,6 +104,16 @@ jobs:
         run: cmake --build build --parallel "$JOBS"
       - name: Unit tests
         run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
+      # Record real FrameHost callbacks and outbound SetAccount actions with the frame target already built here.
+      - name: Account picker model traces
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TLA2TOOLS_JAR="$HOME/sdk/tla/tla2tools.jar"
+          test "$(shasum -a 256 "$TLA2TOOLS_JAR" | cut -d' ' -f1)" = "$(cut -d' ' -f1 .github/tla2tools.sha256)"
+          export JAVA="$HOME/sdk/bin/java"
+          if ! "$JAVA" -version >/dev/null 2>&1; then export JAVA=/opt/homebrew/opt/openjdk/bin/java; fi
+          ctest --test-dir build -L '^model$' -R '^tlc_window_account_picker_trace' -j "$TEST_JOBS" --output-on-failure --no-tests=error
       # The headless window (system fonts), real child processes and a real file, and the link end to end (nexus-server
       # over ssh to this machine, mosh's transport over real UDP): not unit tests.
       # The frame budget (docs/frame-budget.md) times the frame thread on the real clock, so it runs after the others,
@@ -141,6 +152,20 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, fleet, macOS, ARM64]
     timeout-minutes: 2
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: units
+            targets: >-
+              model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
+              store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
+              nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
+          - part: walks
+            targets: >-
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+              migration_walk takeover_walk
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -165,6 +190,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if command -v ninja >/dev/null && [ ! -f build/CMakeCache.txt ]; then
+            export CMAKE_GENERATOR=Ninja
+          fi
           launcher=()
           if command -v ccache >/dev/null; then
             launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
@@ -174,16 +202,10 @@ jobs:
             "${launcher[@]}" \
             "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all" \
             "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      - name: Build the unit and walk programs
-        run: >-
-          cmake --build build --parallel "$JOBS" --target
-          model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
-          store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
-          nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
-          overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
-          journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-          migration_walk takeover_walk
-      - name: Unit tests and trace walks under the sanitizers
+      - name: Build the programs for this shard
+        run: cmake --build build --parallel "$JOBS" --target ${{ matrix.targets }}
+      - name: Unit tests under the sanitizers
+        if: matrix.part == 'units'
         shell: bash
         run: |
           set -euo pipefail
@@ -206,6 +228,11 @@ jobs:
           build/tests/server/takeover_test
           build/tests/wire/wire_test
           build/tests/wire/nexus_versions_test
+      - name: Trace walks under the sanitizers
+        if: matrix.part == 'walks'
+        shell: bash
+        run: |
+          set -euo pipefail
           # Bash 3.2-compatible parallel walk runner (macOS /bin/bash has no `wait -n`, and `set -u` rejects empty
           # `${arr[@]}`): runs up to TEST_JOBS walks concurrently in isolated directories under $RUNNER_TEMP/nexus-walks
           # (outside $GITHUB_WORKSPACE, so a SIGKILLed 0555 build directory never breaks the next checkout), checking
@@ -362,6 +389,25 @@ jobs:
   # process (ctest -L claude_driver). Node comes from the runner's machine (the fleet's sdk/bin on the runner's PATH),
   # never installed here; npm ci takes the pinned packages from package-lock.json, without the optional per-platform
   # Claude executable the tests never run. The live test (npm run test:live) spends a subscription and never runs here.
+  server-policy:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, fleet, Linux, X64]
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Exercise the installed Starlark host and driver launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime=$(mktemp -d "$RUNNER_TEMP/nexus-policy.XXXXXX")
+          trap 'rm -rf "$runtime"' EXIT
+          python3 -m venv "$runtime"
+          "$runtime/bin/python" -I -m pip --disable-pip-version-check install ./policy ./drivers/rpc
+          "$runtime/bin/python" -m unittest discover -s policy -v
+          "$runtime/bin/python" -m unittest discover -s drivers/rpc -v
+
   claude-driver:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, fleet, macOS, ARM64]
@@ -464,7 +510,8 @@ jobs:
         run: [whole-wall, without-the-hook, "limited,limited-nohook"]
         include:
           - where: ubuntu
-            labels: [self-hosted, fleet, Linux, X64, tlc]
+            # The native Ubuntu pool has the Android SDK. TLC alone also selects WSL2.
+            labels: [self-hosted, fleet, Linux, X64, tlc, android]
           - where: wsl2
             labels: [self-hosted, fleet, Linux, X64, wsl2]
     runs-on: ${{ matrix.labels }}
@@ -547,7 +594,9 @@ jobs:
           else
             echo "no login to hulk from $(hostname -s) as $(id -un): the ssh-out probe is skipped"
           fi
-          npm run test:functional
+          # Separate runner workspaces still share /tmp/.mcp.json during SDK setup.
+          # Serialize just this test on each Linux host, including across workflow runs.
+          flock "$HOME/.cache/nexus-ci/claude-wall.lock" npm run test:functional
 
   # Linux: everything but the window, which Prax cannot run here yet (no lib/app backend for Linux, no system fonts in
   # lib/font; CMakeLists.txt NEXUS_WINDOW), and the window's logic, which starts processes through Prax's lib/process,
@@ -587,6 +636,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if command -v ninja >/dev/null && [ ! -f build/CMakeCache.txt ]; then
+            export CMAKE_GENERATOR=Ninja
+          fi
           launcher=()
           if command -v ccache >/dev/null; then
             launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
@@ -1125,6 +1177,9 @@ jobs:
           # One pass of nexus-server's loop (models/LoopPass.tla): its temporal instance in loop-pass-spec (no walk
           # build), and its two-window instance, eleven reversed witnesses, five seeded code walks and five faulty
           # walks in loop-pass-rest.
+          - shard: bus-delivery
+            run: '^tlc_bus_delivery_'
+            build: bus_delivery_trace
           - shard: loop-pass-spec
             run: '^tlc_loop_pass_spec$'
           - shard: loop-pass-rest
@@ -1135,8 +1190,8 @@ jobs:
           # new family adds its prefix there.
           - shard: window
             run: ''
-            build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass)'
+            build: trace_walk service_process_functional
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass|bus_delivery)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang
@@ -1427,12 +1482,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - name: Select the Rust toolchain for the embedded Starlark host
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: 1.98.1
       # Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one by itself.
       - name: Build directory and caches outside the workspace
         run: |
           $ErrorActionPreference = 'Stop'
-          $pin = [regex]::Match((Get-Content -Raw CMakeLists.txt), 'pdoane/prax\.git\s+GIT_TAG\s+([0-9a-f]{40})').Groups[1].Value
-          if (-not $pin) { throw "no Prax pin found in CMakeLists.txt (FetchContent_Declare(prax ... GIT_TAG <sha>))" }
+          $pin = [regex]::Match((Get-Content -Raw CMakeLists.txt), 'codeload\.github\.com/pdoane/prax/tar\.gz/([0-9a-f]{40})').Groups[1].Value
+          if (-not $pin) { throw "no Prax pin found in CMakeLists.txt (the Prax archive URL)" }
           $caches = Join-Path $env:LOCALAPPDATA "nexus-ci\$env:RUNNER_NAME"
           $build = "$caches\build-x64"
           New-Item -ItemType Directory -Force -Path $caches | Out-Null
@@ -1516,11 +1575,11 @@ jobs:
           # Prax's Slang compiler, into Prax's download cache the same way (downloaded beside, checked, then renamed):
           # Prax's own configure writes it straight to its final path, and a download the 2 minutes cut short would
           # start again from nothing on the next run.
-          $deps = Get-Content -Raw "$prax\cmake\dependencies.cmake"
+          $deps = Get-Content -Raw "$prax\cmake\slang.cmake"
           $asset = 'windows-x86_64.zip'
-          $hash = [regex]::Match($deps, 'PR_SLANG_ASSET ' + [regex]::Escape($asset) + '\)\s+set\(PR_SLANG_HASH ([0-9a-f]{64})').Groups[1].Value
-          $url = [regex]::Match($deps, 'URL (https://github.com/shader-slang/\S+)\$\{PR_SLANG_ASSET\}').Groups[1].Value
-          if (-not $hash -or -not $url) { throw "Prax's cmake/dependencies.cmake no longer names Slang's $asset as this step reads it" }
+          $hash = [regex]::Match($deps, '_pr_slang_asset ' + [regex]::Escape($asset) + '\)\s+set\(_pr_slang_hash ([0-9a-f]{64})').Groups[1].Value
+          $url = [regex]::Match($deps, 'URL (https://github.com/shader-slang/\S+)\$\{_pr_slang_asset\}').Groups[1].Value
+          if (-not $hash -or -not $url) { throw "Prax's cmake/slang.cmake no longer names Slang's $asset as this step reads it" }
           $file = ($url -split '/')[-1] + $asset
           $slang = "$env:PR_DOWNLOAD_DIR\slang"
           New-Item -ItemType Directory -Force -Path $slang | Out-Null

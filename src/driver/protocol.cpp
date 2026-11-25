@@ -216,6 +216,7 @@ struct DriverEncoder {
     void operator()(const Session& m) { w.str("kind", "session").str("id", m.id); }
     void operator()(const Text& m) { w.str("kind", "text").turn(m.turn).str("delta", m.delta); }
     void operator()(const TextEnd& m) { w.str("kind", "text-end").turn(m.turn); }
+    void operator()(const ChildAgents& m) { w.str("kind", "child-agents").num("count", m.count); }
     void operator()(const Tool& m) { w.str("kind", "tool").turn(m.turn).str("name", m.name).str("summary", m.summary); }
     void operator()(const Done& m) {
         w.str("kind", "done").turn(m.turn).str("outcome", outcomeName(m.outcome));
@@ -460,6 +461,7 @@ std::string_view errorCodeName(ErrorCode code) {
         case ErrorCode::SessionNotFound: return "session-not-found";
         case ErrorCode::Harness: return "harness";
         case ErrorCode::UsageLimit: return "usage-limit";
+        case ErrorCode::ModelLimit: return "model-limit";
         case ErrorCode::Other: break;
     }
     return "other";
@@ -577,6 +579,8 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
     }
     if (kind == "text-end")
         return result<DriverMessage>(TextEnd{f.turn()}, f);
+    if (kind == "child-agents")
+        return result<DriverMessage>(ChildAgents{static_cast<std::uint32_t>(f.integer("count", true, 0, UINT32_MAX - 1).value_or(0))}, f);
     if (kind == "tool") {
         Tool m;
         m.turn = f.turn();
@@ -618,7 +622,7 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
             m.turn = turn;
         const std::string code = f.str("code", false);
         for (ErrorCode c : {ErrorCode::Protocol, ErrorCode::NoCredential, ErrorCode::SessionNotFound,
-                 ErrorCode::Harness, ErrorCode::UsageLimit})
+                 ErrorCode::Harness, ErrorCode::UsageLimit, ErrorCode::ModelLimit})
             if (code == errorCodeName(c))
                 m.code = c;
         return result<DriverMessage>(std::move(m), f);

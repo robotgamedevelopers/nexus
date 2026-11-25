@@ -57,7 +57,7 @@ export type Decoded = { message: ServerMessage } | { error: string; turn?: numbe
 
 export type Billing = 'subscription' | 'api-key' | 'none';
 export type Outcome = 'ok' | 'stopped' | 'error';
-export type ErrorCode = 'protocol' | 'no-credential' | 'session-not-found' | 'harness' | 'other';
+export type ErrorCode = 'protocol' | 'no-credential' | 'session-not-found' | 'harness' | 'usage-limit' | 'model-limit' | 'other';
 
 export interface Usage {
     input_tokens?: number;
@@ -71,6 +71,7 @@ export type DriverMessage =
     | { kind: 'credential'; billing: Billing; plan?: string }
     | { kind: 'session'; id: string }
     | { kind: 'text'; turn: number; delta: string }
+    | { kind: 'child-agents'; count: number }
     | { kind: 'text-end'; turn: number }
     | { kind: 'tool'; turn: number; name: string; summary: string }
     | { kind: 'done'; turn: number; outcome: Outcome; session_cost_usd?: number; usage?: Usage }

@@ -385,6 +385,39 @@ SecretEffects SecretDesk::satisfied(const std::string& account, const std::strin
     return out;
 }
 
+SecretEffects SecretDesk::retireLogin(const std::string& account, const std::string& what) {
+    SecretEffects out;
+    auto matches = [&](const SecretRequest& r) { return r.account == account && r.what == what; };
+    auto refuse = [&](const SecretRequest& r, const SecretAsker& asker, bool answered) {
+        if (!answered) out.replies.push_back({r.id, asker, false, reason::kCancelled, account, what});
+        out.log.push_back({r.id, account, reason::kCancelled, "this account now requires verified sign-in"});
+    };
+    for (std::size_t i = 0; i < open_.size();) {
+        const SecretRequest r = open_[i];
+        if (matches(r)) {
+            refuse(r, askers_.at(r.id), false);
+            end(i, SecretState::Refused, out);
+        } else {
+            ++i;
+        }
+    }
+    for (auto it = held_.begin(); it != held_.end();) {
+        const auto& h = it->second;
+        if (matches(h.request)) {
+            refuse(h.request, h.asker, h.answered);
+            remember(h.request, SecretState::Refused, h.asker);
+            captured_.erase(it->first);
+            it = held_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto& [id, e] : ended_) {
+        if (e.state == SecretState::Expired && matches(e.request)) e.state = SecretState::Refused;
+    }
+    return out;
+}
+
 SecretEffects SecretDesk::drop() {
     SecretEffects out;
     while (!open_.empty()) {

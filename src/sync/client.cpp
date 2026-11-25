@@ -41,6 +41,7 @@ CursorState cursorOf(LinkPhase phase, std::uint64_t heardMsAgo, const Mirror& mi
         return CursorState::Lost;
     }
     switch (*activity) {
+        case Activity::Working: return CursorState::Working;
         case Activity::Busy:
             return CursorState::Busy;
         case Activity::Down:
@@ -78,7 +79,7 @@ SessionId sessionOf(const Model& model, std::size_t i, const Mirror& mirror) {
 std::vector<std::string> friendsToEnsure(const Model& model) {
     std::vector<std::string> out;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
-        if (model.tab(i).kind == TabKind::Friend) {
+        if (model.tab(i).kind == TabKind::Friend && !model.tab(i).primaryChat()) {
             out.push_back(model.tab(i).name);
         }
     }
@@ -125,6 +126,7 @@ std::vector<FriendInfo> friendsOf(const Sessions& state, std::vector<std::string
         return done();
     }
     for (const SessionRef& s : state.sessions()) {
+        if (s->info.friendName == kPrimaryChat) continue;
         take(s->info.friendName, s->info.model);
     }
     return done();
@@ -139,7 +141,7 @@ FriendChanges applyFriends(Model& model, const std::vector<FriendInfo>& friends,
     }
     if (exact) {
         changes.removed = model.remove_friends([&](const Tab& tab) {
-            if (listed.count(tab.name) != 0) {
+            if (tab.primaryChat() || listed.count(tab.name) != 0) {
                 return false;
             }
             // What the person typed to the friend stays, for when the friend is back.

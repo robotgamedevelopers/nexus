@@ -1,11 +1,13 @@
 #include "tab_order.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <set>
 #include <thread>
 
 #if !defined(_WIN32)
@@ -16,6 +18,7 @@
 #endif
 
 #include "pr/file.h"
+#include "pr/json.h"
 
 #include "accounts/registry.h"
 #include "client_home.h"
@@ -99,13 +102,14 @@ TabOrderStore fileTabOrderStore(std::string path) {
         PrFileInfo info{};
         if (!prFileInfo(pr(path), &info))
             return false;           // nothing saved yet
-        PrByteView bytes{};
-        if (!prFileMap(pr(path), &bytes)) {
+        PrBlob* blob = prFileOpen(pr(path));
+        if (!blob) {
             *error = "it cannot be read";
             return false;
         }
+        const auto bytes = prBlobBytes(blob);
         text->assign(reinterpret_cast<const char*>(bytes.data), bytes.size);
-        prFileUnmap(&bytes);
+        prBlobRelease(blob);
         return true;
     };
     store.write = [path](const std::string& text, std::string* error) {
@@ -177,6 +181,177 @@ TabOrderStore fileTabOrderStore() {
     return fileStoreNamed("tab-order.txt");
 }
 
+TabOrderStore fileLayoutStore() {
+    return fileStoreNamed("tab-layout.json");
+}
+
+std::string formatLayout(const SavedLayout& layout) {
+    std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);
+    prJsonWriterBeginObject(w.get());
+    prJsonWriterKey(w.get(), pr("version"));
+    prJsonWriterNumber(w.get(), 1);
+    prJsonWriterKey(w.get(), pr("selected"));
+    prJsonWriterString(w.get(), pr(layout.selected));
+    prJsonWriterKey(w.get(), pr("tabs"));
+    prJsonWriterBeginArray(w.get());
+    for (const auto& row : layout.tabs) {
+        prJsonWriterBeginArray(w.get());
+        for (const auto* field : {&row.key, &row.group, &row.detail})
+            prJsonWriterString(w.get(), pr(*field));
+        prJsonWriterEndArray(w.get());
+    }
+    prJsonWriterEndArray(w.get());
+    prJsonWriterEndObject(w.get());
+    const auto text = prJsonWriterText(w.get());
+    return std::string(text.data, text.size) + "\n";
+}
+
+bool parseLayout(std::string_view text, SavedLayout* layout) {
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    auto* d = doc.get();
+    if (!prJsonParse(d, pr(text), nullptr) || prJsonNumber(d, prJsonMember(d, 0, pr("version")), 0) != 1)
+        return false;
+    auto stringAt = [&](PrJsonValueIndex index, std::string& out) {
+        if (prJsonKind(d, index) != PrJsonKind_String) return false;
+        const auto value = prJsonString(d, index);
+        out.assign(value.data ? value.data : "", value.size);
+        return out.find('\0') == out.npos;
+    };
+    SavedLayout result;
+    const auto tabs = prJsonMember(d, 0, pr("tabs"));
+    if (prJsonKind(d, tabs) != PrJsonKind_Array || !stringAt(prJsonMember(d, 0, pr("selected")), result.selected))
+        return false;
+    std::set<std::string> seen;
+    for (auto i = prJsonFirst(d, tabs); i != kPrJsonMissing; i = prJsonAfter(d, tabs, i)) {
+        LayoutTab row;
+        if (prJsonKind(d, i) != PrJsonKind_Array || prJsonCount(d, i) != 3 ||
+            !stringAt(prJsonElement(d, i, 0), row.key) || !stringAt(prJsonElement(d, i, 1), row.group) ||
+            !stringAt(prJsonElement(d, i, 2), row.detail) || !seen.insert(row.key).second)
+            return false;
+        const std::string_view key(row.key);
+        if (key.starts_with("terminal:") || key.starts_with("extension:")) {
+            auto number = key.substr(key.find(':') + 1);
+            if (number.empty() || number.size() > 20 || number.front() == '0' ||
+                number.find_first_not_of("0123456789") != number.npos ||
+                (key.starts_with("extension:") && row.detail.empty()))
+                return false;
+        } else if (!(key == "sprint" || key == "primary" ||
+                     (key.starts_with("friend:") && accounts::isName(key.substr(7)))) ||
+                   !row.detail.empty()) {
+            return false;
+        }
+        result.tabs.push_back(std::move(row));
+    }
+    if (!result.selected.empty() && !seen.contains(result.selected)) return false;
+    *layout = std::move(result);
+    return true;
+}
+
+TabLayout::TabLayout(SavedLayout saved) : saved_(std::move(saved)), pending_(saved_.selected) {}
+
+std::string TabLayout::keyOf(const Tab& tab) {
+    if (tab.kind == TabKind::Sprint) return "sprint";
+    if (tab.primaryChat()) return "primary";
+    if (tab.kind == TabKind::Friend) return "friend:" + tab.name;
+    auto& key = localKeys_[tab.id];
+    if (key.empty()) {
+        const std::string prefix = tab.kind == TabKind::Terminal ? "terminal:" : "extension:";
+        do {
+            key = prefix + std::to_string(++serial_);
+        } while (std::any_of(saved_.tabs.begin(), saved_.tabs.end(), [&](const auto& row) { return row.key == key; }));
+    }
+    return key;
+}
+
+std::vector<std::pair<std::size_t, std::string>> TabLayout::reopenTerminals(Model& model) {
+    std::vector<std::pair<std::size_t, std::string>> out;
+    for (const auto& row : saved_.tabs) {
+        if (!row.key.starts_with("terminal:") || out.size() >= kMaxSavedTerminals) continue;
+        const auto id = model.add_terminal();
+        localKeys_[id] = row.key;
+        out.emplace_back(id, row.detail);
+    }
+    return out;
+}
+
+void TabLayout::restore(Model& model, const std::function<bool(const std::string&, std::string*, std::string*)>& type,
+                        bool friendsKnown) {
+    if (saved_.tabs.empty()) return;
+    std::map<std::string, std::size_t> ids;
+    const auto activeId = model.tab_count() ? model.tab(model.active()).id : ~std::size_t{};
+    for (std::size_t i = 0; i < model.tab_count(); ++i) ids[keyOf(model.tab(i))] = model.tab(i).id;
+    std::set<std::string> opened;
+    for (const auto& [id, key] : localKeys_) opened.insert(key);
+    std::vector<std::pair<std::size_t, std::string>> order;
+    for (const auto& row : saved_.tabs) {
+        if (!opened.contains(row.key) && row.key.starts_with("extension:")) {
+            std::string group, title;
+            if (type(row.detail, &group, &title)) {
+                const auto id = model.open_extension(row.detail, std::move(group), std::move(title));
+                localKeys_[id] = row.key;
+                ids[row.key] = id;
+            }
+        }
+        if (auto found = ids.find(row.key); found != ids.end()) order.emplace_back(found->second, row.group);
+    }
+    model.restore_tab_layout(order);
+    auto selected = ids.find(pending_);
+    const auto wanted = selected != ids.end() ? selected->second : activeId;
+    for (std::size_t i = 0; i < model.tab_count(); ++i) {
+        if (model.tab(i).id == wanted && model.active() != i) model.select_tab(i);
+    }
+    if (selected != ids.end() || pending_.starts_with("terminal:") || (friendsKnown && pending_.starts_with("friend:")))
+        pending_.clear();
+}
+
+void TabLayout::capture(const Model& model, const std::vector<std::string>& directories, bool friendsKnown) {
+    SavedLayout next;
+    std::set<std::string> live;
+    std::size_t terminal = 0;
+    for (std::size_t i = 0; i < model.tab_count(); ++i) {
+        const auto& tab = model.tab(i);
+        std::string key = keyOf(tab);
+        live.insert(key);
+        if (i == model.active()) next.selected = key;
+        std::string detail = tab.type;
+        if (tab.kind == TabKind::Terminal) {
+            detail = terminal < directories.size() ? directories[terminal] : "";
+            ++terminal;
+        } else if (tab.kind != TabKind::Extension) {
+            detail.clear();
+        }
+        next.tabs.push_back({std::move(key), tab.group, std::move(detail)});
+    }
+    // Keep offline friends and extensions whose registrations have not loaded yet at the same neighboring tab.
+    // A local instance seen in this run and now absent was closed by the person.
+    std::set<std::string> opened;
+    for (const auto& [id, key] : localKeys_) opened.insert(key);
+    std::map<std::string, std::vector<LayoutTab>> preceding;
+    std::vector<LayoutTab> waiting;
+    for (const auto& old : saved_.tabs) {
+        if (live.contains(old.key)) {
+            if (!waiting.empty()) preceding[old.key].swap(waiting);
+        } else if ((old.key == "primary" && (!friendsKnown || pending_ == old.key)) ||
+                   (!friendsKnown && old.key.starts_with("friend:")) ||
+                   (!opened.contains(old.key) && old.key.starts_with("extension:"))) {
+            waiting.push_back(old);
+        }
+    }
+    if (!preceding.empty()) {
+        std::vector<LayoutTab> merged;
+        for (auto& row : next.tabs) {
+            if (const auto before = preceding.find(row.key); before != preceding.end())
+                merged.insert(merged.end(), before->second.begin(), before->second.end());
+            merged.push_back(std::move(row));
+        }
+        next.tabs = std::move(merged);
+    }
+    next.tabs.insert(next.tabs.end(), waiting.begin(), waiting.end());
+    std::erase_if(localKeys_, [&](const auto& entry) { return !live.contains(entry.second); });
+    if (!pending_.empty()) next.selected = pending_;
+    saved_ = std::move(next);
+}
+
 TabOrderStore fileSelectedTabStore() {
     return fileStoreNamed("selected-tab.txt");
 }
@@ -225,7 +400,7 @@ std::string formatSelectedTab(const Model& model) {
     std::string text(kSelectedHeader);
     text += '\n';
     const Tab* tab = model.tab_count() != 0 ? &model.tab(model.active()) : nullptr;
-    if (tab == nullptr || tab->kind == TabKind::Sprint) {
+    if (tab == nullptr || tab->kind == TabKind::Sprint || tab->kind == TabKind::Extension) {
         text += "sprint";
     } else if (tab->kind == TabKind::Terminal) {
         std::size_t place = 0;
@@ -294,18 +469,21 @@ bool parseSelectedTab(std::string_view text, SavedTab* saved, std::string* error
 
 std::size_t savedTabPosition(const Model& model, const SavedTab& saved) {
     std::size_t terminals = 0;
+    std::size_t sprint = 0;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
         const Tab& tab = model.tab(i);
+        if (tab.kind == TabKind::Sprint) sprint = i;
         if (saved.kind == TabKind::Friend && tab.kind == TabKind::Friend && tab.name == saved.name)
             return i;
         if (saved.kind == TabKind::Terminal && tab.kind == TabKind::Terminal && ++terminals == saved.terminal)
             return i;
     }
-    return 0;
+    return sprint;
 }
 
-SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning) {
+SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning, bool* loaded) {
     warning->clear();
+    if (loaded) *loaded = false;
     std::string text;
     std::string error;
     SavedTab saved;
@@ -321,6 +499,7 @@ SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning) {
             "; deleting it resets the selection to the first tab";
         return SavedTab{};
     }
+    if (loaded) *loaded = true;
     return saved;
 }
 

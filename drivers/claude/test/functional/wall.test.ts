@@ -250,6 +250,8 @@ const kRoutes: Probe[] = [
  * show the token wall still stands beside the limit.
  */
 const kLimitedRoutes: Probe[] = [
+    { route: 'limited: the shell writes and reads its extra directory', tool: 'Bash', expect: 'cache-ready',
+        input: { command: 'echo cache-ready > "$HOME/cache/object" && cat "$HOME/cache/object"' } },
     { route: 'limited: the shell works', tool: 'Bash', expect: 'shell-works', input: { command: 'echo shell-works' } },
     { route: 'limited: the shell reads a file outside', tool: 'Bash', never: kOutsideWord,
         input: { command: `cat "$HOME/${kOutside}" 2>&1; true` } },
@@ -489,6 +491,8 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
     roots.push(runRoot);
     const home = join(runRoot, 'h');
     const work = join(home, 'work');
+    const cache = join(home, 'cache');
+    mkdirSync(cache, { recursive: true });
     // A repository made before the session (Claude's sandbox never lets a command write a .git/config: init and clone
     // are the person's), for the AI's own git work.
     execFileSync('git', ['init', '-q', join(work, 'repo')]);
@@ -610,7 +614,7 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
             // The wall from the environment the driver hands it (main.ts: the server's, scrubbed), which names the
             // sandbox's tools (NEXUS_SANDBOX_BIN) as programs to protect.
             ...wallOptions(account, home, cwd, (d) => { stderr += d; }, egressPort,
-                { ...base, ...(kSandboxBin === '' ? {} : { [kSandboxBinVariable]: kSandboxBin }) }, { hook }, limited, [vol]),
+                { ...base, ...(kSandboxBin === '' ? {} : { [kSandboxBinVariable]: kSandboxBin }) }, { hook }, limited, [vol], limited ? [cache] : []),
         },
     });
     let replies = '';

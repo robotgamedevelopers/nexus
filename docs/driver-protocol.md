@@ -17,6 +17,11 @@ The server starts the driver with these arguments:
 | `--limit cwd` | the friend is limited to its directory (`docs/accounts.md`, "limit"): the AI reads and writes only in `--cwd` (and what its harness needs to run); absent for a friend not limited. A driver that supports it lists `"limit"` in its hello's `features`; the server never relies on an unknown argument being refused, and ends a driver that does not list it. A driver that lists it but cannot enforce it here refuses to start with an `error` (code `other`), never runs unlimited |
 | `--keep-out <dir>` | with `--limit cwd` only, once per directory of friends.json's `"limit_keeps_out"` (`docs/accounts.md`, "limit"): one more absolute directory the limited AI is kept out of, on top of the ones the driver always keeps out. It only adds. A driver refuses it without `--limit cwd`, and refuses a directory that is not absolute or is `/`; an older driver refuses the argument it does not know, so it never runs weaker |
 
+When started through the [friend launcher](policy.md#friend-identity-at-startup), the driver also receives
+`--startup-context-fd N`. It reads the UTF-8 standing instructions from this inherited descriptor, closes it,
+and supplies them to every harness creation, including resume and recovery from a missing session ID.
+A driver that cannot apply the context must refuse startup. The person's protocol messages retain their original text.
+
 The account the harness uses is chosen by the environment the server starts the driver with, never by the protocol.
 The driver's standard error is free text for logs; the server shows none of it as conversation.
 
@@ -106,7 +111,8 @@ An error's `code` is one of these; an absent code, or one this version does not 
 | `no-credential` | the harness has no credential it can use; the driver ends the open turn, if any, with this error (with the turn) and `done` outcome `error`, then exits |
 | `session-not-found` | the harness does not know the `--resume` id, at start or once the first turn begins; a notice, after which the driver carries on in a new session (sequence rule 10) |
 | `harness` | the harness itself failed |
-| `usage-limit` | the account reached its usage limit; nexus-server moves the session to its friend's next signed-in account (docs/accounts.md), or tells it there is none |
+| `usage-limit` | the account exhausted its included subscription usage. The server applies the session’s account-selection policy. |
+| `model-limit` | Claude reported a Fable-specific limit on this turn. The server can offer the person a choice of account or model. |
 | `other` | anything else |
 
 Every message that belongs to a turn carries that turn's number, so the server can drop messages from a turn it no
@@ -200,3 +206,5 @@ A turn the harness fails, with its cause first:
 < {"kind":"error","cause":"the harness lost its connection","fix":"send the prompt again","turn":3,"code":"harness"}
 < {"kind":"done","turn":3,"outcome":"error"}
 ```
+
+A driver can emit `{"kind":"child-agents","count":2}` after hello to publish its current number of active child agents. This process-scoped snapshot excludes the parent. Send zero when the last child ends. The supervisor resets the count on driver exit.

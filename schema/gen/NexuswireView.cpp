@@ -35,12 +35,15 @@ const UnitViewInfo * UnitView()
         { 17, "SignInClaim", 0x7439c20e4947e3b5ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 18, "SignInOpened", 0xa65506e3bb15f846ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 19, "SignInCallback", 0x5c16b9e2e6fb5e04ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 20, "SignOut", 0x5cdb26887b48e1e8ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 21, "ResolveLimit", 0x0610706c3ede743eull, NULL, NULL, NULL, TableDocNone, 0, NULL },
     };
     static const ViewVariant Activity_view_variants[] = {
         { 0, "None", 0, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 1, "Idle", 0xc92905d14a9421f3ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 2, "Busy", 0x2a02d2a7e41d6700ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 3, "Down", 0x032c13736048bf35ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 4, "Working", 0x2e0c68be1fa79ae8ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
     };
     static const ViewVariant EntryKind_view_variants[] = {
         { 0, "None", 0, NULL, NULL, NULL, TableDocNone, 0, NULL },
@@ -48,6 +51,7 @@ const UnitViewInfo * UnitView()
         { 2, "Friend", 0x9f57a2661b8a7e2dull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 3, "Notice", 0x9117fb5195e75151ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 4, "Tool", 0x5a71f1fb3a12c6a7ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 5, "Bus", 0x166a3d19b1137d79ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
     };
     static const TableFieldInfo Change_view_arm_fields[] = {
     { "enqueue", "enqueue", "string", 0x0c88bce25446069dull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( Change, enqueue ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
@@ -61,14 +65,15 @@ const UnitViewInfo * UnitView()
         { 5, "set_info", 0x5d21aec9380ade68ull, "SessionInfo", SessionInfoTableType(), NULL, TableDocNone, 0, NULL },
     };
     static const ViewVocabulary enums[] = {
-        { "ActionKind", "Nexus.schema", 19, 8, 20, ActionKind_view_variants, TableDocNone, 0, NULL },
-        { "Activity", "Nexus.schema", 3, 8, 4, Activity_view_variants, TableDocNone, 0, NULL },
-        { "EntryKind", "Nexus.schema", 4, 8, 5, EntryKind_view_variants, TableDocNone, 0, NULL },
+        { "ActionKind", "Nexus.schema", 21, 8, 22, ActionKind_view_variants, TableDocNone, 0, NULL },
+        { "Activity", "Nexus.schema", 4, 8, 5, Activity_view_variants, TableDocNone, 0, NULL },
+        { "EntryKind", "Nexus.schema", 5, 8, 6, EntryKind_view_variants, TableDocNone, 0, NULL },
     };
     static const ViewVocabulary unions[] = {
         { "Change", "Nexus.schema", 5, 8, 6, Change_view_variants, TableDocNone, 0, NULL },
     };
     static const ViewType tables[] = {
+        { "AccountChoice", "Nexus.schema", true, AccountChoiceTableType(), TableDocNone, 0, NULL },
         { "Action", "Nexus.schema", true, ActionTableType(), TableDocNone, 0, NULL },
         { "ActionsDiff", "Nexus.schema", true, ActionsDiffTableType(), TableDocNone, 0, NULL },
         { "ClientCounter", "Nexus.schema", true, ClientCounterTableType(), TableDocNone, 0, NULL },
@@ -88,7 +93,7 @@ const UnitViewInfo * UnitView()
     };
     static const UnitViewInfo info = { "nexuswire", 0xcb24df40c7376c7dull,
         0, NULL,
-        16, tables,
+        17, tables,
         3, enums,
         0, NULL,
         1, unions,

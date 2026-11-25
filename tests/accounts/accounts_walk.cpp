@@ -178,11 +178,11 @@ struct Walk {
             const sync::StoredSession* s = store.find(id);
             o << (id == 1 ? "" : ", ");
             if (s == nullptr) {
-                o << "[made |-> FALSE, friend |-> \"none\", inst |-> \"none\", acct |-> \"none\", harness |-> \"none\"]";
+                o << "[made |-> FALSE, friend |-> \"none\", inst |-> \"none\", acct |-> \"none\", harness |-> \"none\", automatic |-> FALSE]";
             } else {
                 o << "[made |-> TRUE, friend |-> " << q(s->info.friendName) << ", inst |-> " <<
                     q(orNone(s->info.instance)) << ", acct |-> " << q(orNone(s->info.account)) << ", harness |-> " <<
-                    q(s->info.harness) << "]";
+                    q(s->info.harness) << ", automatic |-> " << (s->info.autoAccount ? "TRUE" : "FALSE") << "]";
             }
         }
         o << ">>, nextSes |-> " << store.nextId() << ", lim |-> (";
@@ -213,7 +213,11 @@ struct Walk {
 
 } // namespace
 
+int creditHandoffTrace(const std::string& mode, const std::string& path);
+
 int main(int argc, char** argv) {
+    if (argc == 4 && std::strcmp(argv[1], "--credit-handoff") == 0)
+        return creditHandoffTrace(argv[2], argv[3]);
     std::string faulty;
     std::vector<std::string> args;
     for (int i = 1; i < argc; ++i) {

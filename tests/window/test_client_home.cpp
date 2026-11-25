@@ -52,6 +52,11 @@ void config() {
     // None: the defaults (nova-config from the PATH, the board from the sprint's record).
     c = clientConfigFrom("", "/c");
     CHECK(c.novaConfig.empty() && c.sprintUrl.empty() && c.problems.empty());
+    CHECK(c.sprintEnabled);
+    CHECK(c.serverHost == "localhost");
+    CHECK(clientConfigFrom("server studio\n", "/c").serverHost == "studio");
+    CHECK(!clientConfigFrom("sprint off\n", "/c").sprintEnabled);
+    CHECK(!clientConfigFrom("sprint maybe\n", "/c").problems.empty());
     // An unknown key is a warning and the rest is used; a malformed line is an error, and its key stays unset. Errors
     // come before warnings.
     c = clientConfigFrom("theme dark\nsprint-url\nnova-config /n\n", "/c");

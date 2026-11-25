@@ -59,6 +59,7 @@
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
 #   CAP         optional: the cap on the TLC run in seconds, 60 unless given
 #   SPLIT       optional: rest:<name>, every property of the cfg but one, or as:<name>=<part>, a part of it alone (below)
+#   TEMPORALCFG optional: append this cfg fragment, relative to MODELS, to an as:<name>=<part> check
 #
 # The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at CAP seconds.
 
@@ -98,11 +99,12 @@ get_filename_component(cfg_name "${CFG}" NAME)
 # SPLIT rest:<name>: check the instance with every property of its cfg but <name>. SPLIT as:<name>=<part>: check it with
 # <part> in place of <name> and no other property. Every invariant either way. tlc_test's SPLIT declares the rest and
 # one test per part, and the spec defines the parts so that their conjunction is the property (Supervisor.tla,
-# SettlesOdd and SettlesEven), so between them the tests check every property of the cfg on the same states, and the
-# cfg stays the one place the instance is written. A large instance's time is in its temporal property, not its states
-# or action properties (MCSupervisorSwitch.cfg on four cores of a loaded 16-thread host, 2026-11-15: invariants and its
-# 20 action properties 7.8 s, the temporal property Settles alone 67.9 s, all of them 122 s), and in each part less than
-# half of it (one prompt's Settles 38.7 s, both 94.2 s), so the parts run side by side in CI shards of their own.
+# SettlesOdd and SettlesEven), so between them the tests check every property of the cfg. A temporal part may supply
+# a TEMPORALCFG that omits state unobserved by the property and the fair transition relation. A large instance's
+# time is in its temporal property, not its states or action properties (MCSupervisorSwitch.cfg on four cores of a
+# loaded 16-thread host, 2026-11-15: invariants and its 20 action properties 7.8 s, the temporal property Settles alone
+# 67.9 s, all of them 122 s), and in each part less than half of it (one prompt's Settles 38.7 s, both 94.2 s),
+# so the parts run side by side in CI shards of their own.
 if(DEFINED SPLIT AND NOT "${SPLIT}" STREQUAL "")
     set(split_part "")
     if(SPLIT MATCHES "^rest:([A-Za-z_][A-Za-z0-9_]*)$")
@@ -161,6 +163,13 @@ if(DEFINED SPLIT AND NOT "${SPLIT}" STREQUAL "")
     string(REPLACE ";" " " kept_text "${kept}")
     message("${cfg_name}, SPLIT ${SPLIT}: every invariant, and properties ${kept_text}")
     set(cfg_name "${split_mode}${split_part}-${cfg_name}")
+    if(DEFINED TEMPORALCFG AND NOT "${TEMPORALCFG}" STREQUAL "")
+        if(NOT split_mode STREQUAL "only")
+            message(FATAL_ERROR "TEMPORALCFG is only valid on temporal-property shards")
+        endif()
+        file(READ "${MODELS}/${TEMPORALCFG}" extra)
+        string(APPEND cfg_out "\n${extra}\n")
+    endif()
     file(WRITE "${WORK}/${cfg_name}" "${cfg_out}")
 endif()
 
@@ -219,6 +228,12 @@ elseif(DEFINED TSWALK AND NOT "${TSWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "the Tailscale lifecycle's walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED CREDITWALK)
+    execute_process(COMMAND "${CREDITWALK}" --credit-handoff "${CREDITMODE}" "${WORK}/CreditHandoffData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "accounts_walk credit handoff failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED ACCWALK AND NOT "${ACCWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
@@ -376,6 +391,33 @@ elseif(DEFINED WATCHWALK AND NOT "${WATCHWALK}" STREQUAL "")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "watch_walk failed (${walk_rc}): ${walk_out}")
     endif()
+elseif(DEFINED BUSDELIVERYWALK)
+    if(BUSPEERTRACE)
+        set(bus_args --peer-roster "${WORK}/BusPeerFilterData.tla")
+    else()
+        set(bus_args "${WORK}/BusDeliveryData.tla")
+    endif()
+    execute_process(COMMAND "${BUSDELIVERYWALK}" ${bus_args}
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "bus_delivery_trace failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED SERVICEWALK)
+    execute_process(COMMAND "${SERVICEWALK}" --trace "${WORK}/ManagedServiceTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "managed service trace failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED PICKERWALK)
+    set(walk_args "${WORK}/AccountPickerTraceData.tla")
+    if(FAULTY STREQUAL "cancel")
+        list(APPEND walk_args --faulty-cancel)
+    endif()
+    execute_process(COMMAND "${PICKERWALK}" ${walk_args}
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "account_picker_trace failed (${walk_rc}): ${walk_out}")
+    endif()
 elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}" "${FRIENDS}")
     if(FAULTY STREQUAL "send")
@@ -414,6 +456,9 @@ elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
     endif()
     if(NOT DEFINED DATA OR "${DATA}" STREQUAL "")
         set(DATA WindowTraceData)
+    endif()
+    if(PLUGINTRACE)
+        set(walk_args --plugin-tabs)
     endif()
     execute_process(COMMAND "${WALK}" ${walk_args} "${WORK}/${DATA}.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)

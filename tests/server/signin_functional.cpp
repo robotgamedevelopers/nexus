@@ -13,6 +13,8 @@
 //                  first, each answered "not found", the program untouched), the runner replays it to the program,
 //                  which listens on 127.0.0.1 alone (the replay tries [::1] first, then 127.0.0.1)
 //   forwarded_v6   the same, the program listening on [::1] alone
+//   enrollment     the external providers hand over a loopback page and complete for the right account and flow
+//   enrollment_failure  a failed or cancelled external command cannot complete the flow or supply a Claude token
 //   quick_exit     the program exits the moment its token is printed: the runner reads its terminal before closing it
 //   group          the program leaves a process of its own running: stopped, or exiting, its whole group is ended
 //   declined       the person declines on the page: the program exits 1, and its end is reported
@@ -34,6 +36,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -72,6 +75,7 @@ int failures = 0;
         }                                                                                 \
     } while (0)
 
+std::string selfProgram;
 std::string fakeProgram;
 std::string helperProgram;
 
@@ -138,6 +142,11 @@ struct Run {
     std::unique_ptr<server::SignInRunner> runner;
     bool gotUrl = false;
     std::uint64_t urlId = 0;
+    std::string urlAccount;
+    std::string enrolledAccount;
+    std::string enrolledProvider;
+    std::uint64_t enrolledId = 0;
+    int enrollmentCount = 0;
     sync::SecretValue url;
     bool gotToken = false;
     sync::SecretValue token;
@@ -169,10 +178,17 @@ void setUp(Run& r, const std::string& mode) {
         o.replayPort = static_cast<std::uint16_t>(std::atoi(mode.c_str() + mode.find('-') + 1));
     }
     server::SignInRunner::Events e;
-    e.url = [&r](const std::string&, std::uint64_t id, const sync::SecretValue& url) {
+    e.url = [&r](const std::string& account, std::uint64_t id, const sync::SecretValue& url) {
         r.gotUrl = true;
+        r.urlAccount = account;
         r.urlId = id;
         r.url = url;
+    };
+    e.enrolled = [&r](const std::string& account, const std::string& provider, std::uint64_t id) {
+        ++r.enrollmentCount;
+        r.enrolledAccount = account;
+        r.enrolledProvider = provider;
+        r.enrolledId = id;
     };
     e.printed = [&r](const std::string&, const sync::SecretValue& token) {
         r.gotToken = true;
@@ -620,6 +636,129 @@ void caseCrashed() {
     checkClean(r);
 }
 
+// Each test process has its own directory. The marker stands in for the person finishing on the page, so the
+// parent can stop the child at exactly the same point at which another run succeeds or fails.
+const std::string enrollmentPath = "/nexus-signin/" + std::string(64, 'a');
+
+int fakeEnrollment(const std::string& mode, const std::string& marker, const std::string& account) {
+    if (std::filesystem::path(marker).filename() != account || std::getenv("ANTHROPIC_API_KEY") ||
+        std::getenv("CLAUDE_CODE_OAUTH_TOKEN") || std::getenv("OPENAI_API_KEY")) {
+        return 3;
+    }
+    // A cancel races an otherwise clean exit. Even that exit must never enroll the account.
+    if (mode == "cancel" && std::signal(SIGTERM, [](int) { _exit(0); }) == SIG_ERR) {
+        return 9;
+    }
+    const char* socketPath = std::getenv("NEXUS_SIGNIN_SOCKET");
+    const char* flow = std::getenv("NEXUS_SIGNIN_FLOW");
+    sockaddr_un addr{};
+    if (!socketPath || !flow || std::strlen(socketPath) >= sizeof addr.sun_path) {
+        return 4;
+    }
+    addr.sun_family = AF_UNIX;
+    std::memcpy(addr.sun_path, socketPath, std::strlen(socketPath) + 1);
+    const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0 || connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) != 0) {
+        return 5;
+    }
+    // A Claude-shaped fixture on the private pty must never enroll an external account.
+    std::puts(fake_claude::kToken);
+    std::fflush(stdout);
+    const std::string line = std::string(flow) + " http://127.0.0.1:" + std::to_string(freePort()) +
+        enrollmentPath + "\n";
+    if (write(fd, line.data(), line.size()) != static_cast<ssize_t>(line.size())) {
+        return 6;
+    }
+    close(fd);
+    const auto deadline = nowMs() + 10000;
+    while (!std::filesystem::exists(marker)) {
+        if (nowMs() >= deadline) {
+            return 7;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return mode == "failure" ? 8 : 0;
+}
+
+void enrollment(const std::string& provider, const std::string& mode) {
+    Run r;
+    setUp(r, "silent");
+    const std::string account = provider + "-test";
+    const std::filesystem::path marker = std::filesystem::absolute(account);
+    std::filesystem::remove(marker);
+    const std::uint64_t id = 23;
+    r.runner->start(id, account, provider, {selfProgram, "--fake-enrollment", mode, marker.string(),
+                                            "--account", account});
+    CHECK(pump(r, [&] { return r.gotUrl || r.exited; }));
+    CHECK(r.gotUrl && r.urlId == id && r.urlAccount == account);
+    const auto& url = r.url.bytes();
+    const std::string prefix = "http://127.0.0.1:";
+    const auto pathAt = url.find('/', prefix.size());
+    CHECK(url.substr(0, prefix.size()) == prefix && pathAt != std::string::npos && url.substr(pathAt) == enrollmentPath);
+    CHECK(r.enrollmentCount == 0);
+    if (mode == "cancel") {
+        r.runner->stop(account);
+    } else {
+        CHECK(std::filesystem::create_directory(marker));
+    }
+    CHECK(pump(r, [&] { return !r.runner->running(account); }));
+    CHECK(!r.gotToken);
+    if (mode == "success") {
+        CHECK(r.enrollmentCount == 1 && r.enrolledId == id && r.enrolledProvider == provider &&
+              r.enrolledAccount == account && !r.exited);
+    } else {
+        CHECK(r.enrollmentCount == 0);
+        CHECK(r.exited == (mode == "failure"));
+        if (r.exited) {
+            CHECK(r.why == "it exited 8");
+        }
+    }
+    const test::LeakScan pageKey(std::string(64, 'a'));
+    for (const auto& line : r.log) {
+        CHECK(!pageKey.in(line) && line.find(prefix) == std::string::npos);
+    }
+    CHECK(!std::filesystem::exists(std::filesystem::path(r.accounts) / account / ".signin"));
+    checkClean(r);
+    std::filesystem::remove(marker);
+}
+
+void caseEnrollment() {
+    for (const auto* provider : {"codex", "antigravity", "grok", "muse"}) {
+        enrollment(provider, "success");
+    }
+}
+
+void caseAccountSpelling() {
+    Run r;
+    setUp(r, "helper");
+    const std::filesystem::path account = std::filesystem::path(r.accounts) / "CaseExample";
+    const auto sentinel = account / ".signin" / "original";
+    std::filesystem::create_directories(sentinel);
+    if (std::filesystem::exists(std::filesystem::path(r.accounts) / "caseexample")) {
+        r.runner->start(1, "caseexample");
+        CHECK(r.exited && r.why.find("spelling") != std::string::npos);
+        CHECK(!r.runner->running("caseexample") && std::filesystem::exists(sentinel));
+    }
+    std::filesystem::remove_all(account);
+}
+
+void caseEnrollmentFailure() {
+    // A verified Claude helper can print a setup-token-shaped line but only its verified completion counts.
+    for (int code : {0, 11, 12, 13}) {
+        Run r;
+        setUp(r, "silent");
+        r.runner->start(7, "personal", "claude", {"/bin/sh", "-c", "echo " + std::string(fake_claude::kToken) +
+                        "; exit " + std::to_string(code)});
+        CHECK(pump(r, [&] { return !r.runner->running("personal"); }));
+        CHECK(!r.gotToken && r.enrollmentCount == (code == 0 ? 1 : 0) && r.exited == (code != 0));
+        if (code == 11) CHECK(r.why.find("email differs") != std::string::npos);
+        if (code == 12) CHECK(r.why.find("confirm the email") != std::string::npos);
+        checkClean(r);
+    }
+    enrollment("grok", "failure");
+    enrollment("muse", "cancel");
+}
+
 struct Case {
     const char* name;
     void (*run)();
@@ -630,19 +769,25 @@ const Case kCases[] = {
     {"declined", caseDeclined},        {"api_key", caseApiKey},         {"stopped", caseStopped},
     {"unguarded", caseUnguarded},      {"gate_in_use", caseGateInUse},  {"late", caseLate},
     {"gate_v6_in_use", caseGateV6InUse}, {"crashed", caseCrashed}, {"forwarded_v6", caseForwardedV6},
+    {"account_spelling", caseAccountSpelling}, {"enrollment", caseEnrollment},    {"enrollment_failure", caseEnrollmentFailure},
     {"quick_exit", caseQuickExit},     {"group", caseGroup},
 };
 
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 6 && std::strcmp(argv[1], "--fake-enrollment") == 0 && std::strcmp(argv[4], "--account") == 0) {
+        return fakeEnrollment(argv[2], argv[3], argv[5]);
+    }
     if (argc != 4) {
         std::fprintf(stderr, "usage: signin_functional <fake claude> <helper> <case>\n");
         return 2;
     }
+    selfProgram = std::filesystem::absolute(argv[0]).string();
     fakeProgram = argv[1];
     helperProgram = argv[2];
     // Made-up key variables in this process's environment: the runner must pass none of them to the program.
+    setenv("OPENAI_API_KEY", "FAKEnotAnOpenAIKeyForTheChild", 1);
     setenv("ANTHROPIC_API_KEY", "FAKEnotAKeyForTheChild", 1);
     setenv("CLAUDE_CODE_OAUTH_TOKEN", "FAKEnotATokenForTheChild", 1);
     for (const Case& c : kCases) {

@@ -15,6 +15,7 @@
 
 #ifndef _WIN32
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -915,6 +916,12 @@ void files_disk() {
     std::string why;
     CHECK(f.keep("a1", kToken, sync::SecretValue(kValue), &why) == sync::Kept::Durable);
     CHECK(f.keep("a1", kToken, sync::SecretValue(kOther), &why) == sync::Kept::Durable);
+    if (std::filesystem::exists(dir / "accounts" / "A1")) {
+        CHECK(f.keep("A1", kToken, sync::SecretValue(kValue), &why) == sync::Kept::Failed);
+        CHECK(holds(why, "spelling") && readFile(*fs, f.path("a1", kToken)) == kOther);
+        const auto seen = server::inspectLogin(f.path("A1", kToken));
+        CHECK(seen.file == server::LoginSeen::File::Unusable && holds(seen.problem, "spelling"));
+    }
     struct stat file{};
     struct stat parent{};
     CHECK(::stat(f.path("a1", kToken).c_str(), &file) == 0 && (file.st_mode & 0777) == 0600);
@@ -973,6 +980,28 @@ void files_disk() {
     CHECK(readFile(*fs, target.string()) == "untouched");
     CHECK(readFile(*fs, f.path("a1", kToken)) == kValue);
     CHECK(names(*fs, (dir / "accounts" / "a1").string()) == std::vector<std::string>{"oauth-token"});
+    // Sign-out uses precisely the selected directory and the same lock as credential refresh.
+    CHECK(f.keep("a1", "verified-claude.json", sync::SecretValue(kOther), &why) == sync::Kept::Durable);
+    CHECK(f.keep("a1", "other-secret", sync::SecretValue(kOther), &why) == sync::Kept::Durable);
+    CHECK(f.keep("a2", kToken, sync::SecretValue(kOther), &why) == sync::Kept::Durable);
+    const int lock = ::open(f.path("a1", "verified-claude.lock").c_str(), O_CREAT | O_RDWR, 0600);
+    CHECK(lock >= 0 && ::flock(lock, LOCK_EX | LOCK_NB) == 0);
+    CHECK(!f.forgetClaude("a1").empty() && readFile(*fs, f.path("a1", kToken)) == kValue);
+    ::close(lock);
+    CHECK(!f.forgetClaude("../a1").empty() && !f.forgetClaude("linked").empty() && !f.forgetClaude("wide").empty());
+    if (std::filesystem::exists(dir / "accounts" / "A1")) CHECK(!f.forgetClaude("A1").empty());
+    CHECK(f.keep("a1", ".verified-claude.write", sync::SecretValue(kValue), &why) == sync::Kept::Durable);
+    const auto renewal = dir / "accounts" / "a1" / ".verified-claude-renew";
+    std::filesystem::create_directories(renewal / "config");
+    std::filesystem::create_directory_symlink(dir / "accounts" / "a2", renewal / "config" / "linked");
+    CHECK(f.forgetClaude("a1").empty() && f.forgetClaude("a1").empty());
+    CHECK(!std::filesystem::exists(renewal) && !std::filesystem::exists(f.path("a1", ".verified-claude.write")));
+    CHECK(!std::filesystem::exists(f.path("a1", "verified-claude.json")));
+    CHECK(!std::filesystem::exists(f.path("a1", kToken)));
+    CHECK(readFile(*fs, f.path("a1", "other-secret")) == kOther && readFile(*fs, f.path("a2", kToken)) == kOther);
+    CHECK(std::filesystem::exists(f.path("a1", "verified-claude.lock")));
+    std::filesystem::create_symlink(f.path("a1", "other-secret"), f.path("a2", "verified-claude.json"));
+    CHECK(!f.forgetClaude("a2").empty() && readFile(*fs, f.path("a2", kToken)) == kOther);
     std::filesystem::remove_all(dir);
 }
 #endif
@@ -1066,12 +1095,101 @@ void logins() {
 }
 
 #ifndef _WIN32
+// Synthetic enrollment receipts under a private HOME. Exercise name, account, ancestor and marker boundaries
+// through the same lookup the server uses on startup.
+void enrollment_files(const std::filesystem::path& home) {
+    namespace fs = std::filesystem;
+    const std::string account = "A.test_1-2";
+    const auto harness = home / ".nexus/server/harness";
+    fs::create_directories(harness);
+    for (const char* provider : {"codex", "antigravity", "grok", "muse"}) {
+        const auto dir = harness / provider / account;
+        fs::create_directories(dir);
+        CHECK(::chmod(dir.c_str(), 0700) == 0);
+        const auto receipt = dir / ".nexus-enrolled";
+        const auto enrolled = [&] { return server::hasEnrollment(home.string(), provider, account); };
+        const auto write = [&](const std::string& value) {
+            const int fd = ::open(receipt.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
+            CHECK(fd >= 0 && ::write(fd, value.data(), value.size()) == static_cast<ssize_t>(value.size()));
+            CHECK(::close(fd) == 0);
+        };
+        CHECK(!enrolled());
+        write(std::string(provider) + "\n");
+        CHECK(enrolled());
+        CHECK(!server::hasEnrollment(home.string(), provider, "a.test_1-2"));
+        CHECK(!server::hasEnrollment(home.string(), provider, "../" + account));
+        CHECK(!server::hasEnrollment(home.string(), std::string(provider) + "/.", account));
+        CHECK(::chmod(receipt.c_str(), 0640) == 0 && !enrolled());
+        CHECK(::chmod(receipt.c_str(), 0600) == 0);
+        CHECK(::chmod(dir.c_str(), 0750) == 0 && !enrolled());
+        CHECK(::chmod(dir.c_str(), 0700) == 0);
+        CHECK(::chmod(harness.c_str(), 0775) == 0 && !enrolled());
+        CHECK(::chmod(harness.c_str(), 0755) == 0);
+        CHECK(enrolled());
+        fs::create_hard_link(receipt, dir / "other-name");
+        CHECK(!enrolled());
+        fs::remove(dir / "other-name");
+        fs::rename(receipt, dir / ".NEXUS-ENROLLED");
+        CHECK(!enrolled());
+        fs::rename(dir / ".NEXUS-ENROLLED", receipt);
+        fs::create_directory_symlink(dir, dir.parent_path() / "alias");
+        CHECK(!server::hasEnrollment(home.string(), provider, "alias"));
+        fs::rename(dir, dir.parent_path() / "_account");
+        CHECK(server::hasEnrollment(home.string(), provider, "_account"));
+        fs::rename(dir.parent_path() / "_account", dir);
+        fs::rename(receipt, dir / "elsewhere");
+        fs::create_symlink(dir / "elsewhere", receipt);
+        CHECK(!enrolled());
+        fs::remove(receipt);
+        CHECK(::mkfifo(receipt.c_str(), 0600) == 0 && !enrolled());
+        fs::remove(receipt);
+        for (const std::string& bad : {std::string(), std::string(provider), std::string("another\n"),
+                                       std::string(provider) + "\nextra", std::string(provider) + "\n\n"}) {
+            write(bad);
+            CHECK(!enrolled());
+        }
+        const fs::path vendor = std::string(provider) == "codex" ? ".codex/auth.json" :
+            std::string(provider) == "grok" ? ".grok/auth.json" :
+            std::string(provider) == "muse" ? ".config/muse/auth.json" : ".gemini/antigravity-cli/antigravity-oauth-token";
+        fs::create_directories((dir / vendor).parent_path());
+        fs::copy_file(receipt, dir / vendor);
+        fs::copy_file(receipt, dir / ".nexus-enrollment-pending");
+        CHECK(!server::forgetEnrollment(home.string(), provider, "alias").empty());
+        CHECK(fs::exists(dir / vendor));
+        CHECK(server::forgetEnrollment(home.string(), provider, account).empty());
+        CHECK(!fs::exists(receipt) && !fs::exists(dir / vendor) && !fs::exists(dir / ".nexus-enrollment-pending"));
+        CHECK(fs::exists(dir / "elsewhere"));
+    }
+}
+
 // Functional: real files. A login file as it lies, without its value ever in what is said of it.
 void login_files() {
     using server::LoginSeen;
     const std::filesystem::path dir = std::filesystem::current_path() / "logins_disk";
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
+    enrollment_files(dir);
+    const auto claude = dir / "Personal";
+    std::filesystem::create_directory(claude);
+    CHECK(::chmod(claude.c_str(), 0700) == 0);
+    const auto receipt = claude / "verified-claude.json";
+    const auto verified = [&](const std::string& email) { return server::hasVerifiedClaude(claude.string(), email); };
+    CHECK(!verified("user@example.test"));
+    auto writeReceipt = [&](std::string_view body) {
+        int fd = ::open(receipt.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
+        CHECK(fd >= 0 && ::write(fd, body.data(), body.size()) == static_cast<ssize_t>(body.size()));
+        CHECK(::close(fd) == 0);
+    };
+    writeReceipt(R"({"version":1,"email":"user@example.test"})");
+    CHECK(!verified("user@example.test"));
+    writeReceipt(R"({"version":1,"email":"User@example.test","credential":{"accessToken":"fixture","refreshToken":"fixture","expiresAt":1}})");
+    CHECK(verified("user@EXAMPLE.test"));
+    CHECK(!verified("user+tag@example.test") && !verified("older@example.test"));
+    CHECK(!server::hasVerifiedClaude((dir / "personal").string(), "user@example.test"));
+    CHECK(::chmod(receipt.c_str(), 0644) == 0 && !verified("user@example.test"));
+    CHECK(::chmod(receipt.c_str(), 0600) == 0);
+    std::filesystem::create_hard_link(receipt, claude / "alias");
+    CHECK(!verified("user@example.test"));
     const std::string path = (dir / "oauth-token").string();
     CHECK(server::inspectLogin(path).file == LoginSeen::File::Missing);
     auto write = [&](const std::string& text, mode_t mode) {

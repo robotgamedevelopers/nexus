@@ -44,6 +44,17 @@ void test('start: hello first, then the credential and the session, before any p
     assert.equal(host.exitCode, undefined);
 });
 
+void test('child agent counts follow starts and finishes independently of ordinary tools', async () => {
+    const { host } = await started();
+    const base = {type: 'system', uuid: '00000000-0000-0000-0000-000000000000', session_id: S} as const;
+    const start = { ...base, subtype: 'task_started', task_type: 'local_agent', task_id: 'first', description: '' } as const;
+    host.harness.emit(start, start, {...start, task_id: 'second'}, {...start, task_id: 'shell', task_type: 'local_bash'},
+        {...base, subtype: 'task_notification', task_id: 'first', status: 'completed', output_file: '', summary: ''} as const,
+        {...base, subtype: 'task_notification', task_id: 'second', status: 'failed', output_file: '', summary: ''} as const);
+    await settle();
+    assert.deepEqual(host.take(), [1, 2, 1, 0].map(count => ({kind: 'child-agents', count})));
+});
+
 void test('a turn: streamed text, a tool, more text, done with the session cost and usage', async () => {
     const { host, driver } = await started();
     driver.feed(line({ kind: 'send', turn: 7, prompt: 'What is in src?' }));
@@ -237,6 +248,36 @@ void test('--resume resumes that session and reports it', async () => {
     ]);
 });
 
+void test('fresh and resumed harnesses receive their standing instructions and optional friend setup guide', async () => {
+    for (const resume of [undefined, 'existing']) {
+        for (const startupContext of ['', 'standing instructions']) {
+            const host = new TestHost();
+            const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [],
+                startupContext, ...(resume === undefined ? {} : { resume }) });
+            driver.start();
+            await settle();
+            const context = host.harness.start.startupContext ?? '';
+            assert.ok(context.startsWith(startupContext));
+            assert.match(context, /If they choose Nova Seed/);
+            assert.match(context, /https:\/\/github\.com\/mas-bandwidth\/nova and its docs\/SEED-CORE\.md/);
+        }
+    }
+});
+
+void test('fresh and resumed primary sessions use only the initial session context', async () => {
+    for (const resume of [undefined, 'existing']) {
+        const args = parseArguments(['--account', 'main', '--cwd', '/work', '--primary-context-fd', '3']);
+        assert.ok(!('error' in args));
+        assert.equal(args.startupContextFd, 3);
+        const host = new TestHost();
+        const context = 'Help with the current workspace.';
+        const driver = new Driver(host, { ...args, startupContext: context, ...(resume ? { resume } : {}) });
+        driver.start();
+        await settle();
+        assert.equal(host.harness.start.startupContext, context);
+    }
+});
+
 void test('a --resume id Claude does not know: a notice, a new session, and the turn goes on', async () => {
     const host = new TestHost();
     host.prepare = (h) => {
@@ -392,12 +433,38 @@ void test('the usage limit fails the turn with its cause; the driver goes on', a
     const out = host.take();
     assert.deepEqual(out.map((m) => m.kind), ['error', 'done']);
     const e = errorOf(out);
-    assert.equal(e.code, 'harness');
+    assert.equal(e.code, 'usage-limit');
     assert.equal(e.turn, 1);
     assert.ok(e.cause.includes(said));
     assert.deepEqual(out[1], { kind: 'done', turn: 1, outcome: 'error',
         usage: { input_tokens: 100, output_tokens: 20, cache_read_tokens: 5, cache_write_tokens: 0 } });
     assert.equal(host.exitCode, undefined);
+});
+
+void test('a reported Fable cap is a model choice; a transient throttle stays an ordinary error', async () => {
+    for (const [message, code] of [['Fable limit reached', 'model-limit'], ['Too many requests', 'harness']] as const) {
+        const { host, driver } = await started();
+        driver.feed(line({ kind: 'send', turn: 1, prompt: 'continue' }));
+        await settle();
+        host.harness.emit(init(S), assistant(S, 'm1', [{ type: 'text', text: message }], 'rate_limit'),
+            result(S, { isError: true, result: message, cost: 0 }));
+        await settle();
+        assert.equal(errorOf(host.take()).code, code);
+    }
+});
+
+void test('the rejected subscription window scopes a failed turn, even when it follows the assistant error', async () => {
+    for (const [window, code] of [['five_hour', 'usage-limit'], ['seven_day_fable', 'model-limit'],
+        ['seven_day_opus', 'harness']] as const) {
+        const { host, driver } = await started();
+        driver.feed(line({ kind: 'send', turn: 1, prompt: 'continue' }));
+        await settle();
+        host.harness.emit(init(S), assistant(S, 'm1', [{ type: 'text', text: 'Too many requests' }], 'rate_limit'),
+            rateLimit(S, { status: 'rejected', rateLimitType: window }),
+            result(S, { isError: true, result: 'Too many requests', cost: 0 }));
+        await settle();
+        assert.equal(errorOf(host.take()).code, code);
+    }
 });
 
 void test('a login that fails ends the turn and the driver with no-credential', async () => {
@@ -688,6 +755,11 @@ void test('a --resume id lost while settings are applied: the prompt waits for t
 
 void test('parseArguments', () => {
     assert.deepEqual(parseArguments(['--account', 'a', '--cwd', '/w']), { account: 'a', cwd: '/w', settingSources: [] });
+    for (const first of ['--startup-context-fd', '--primary-context-fd']) {
+        for (const second of ['--startup-context-fd', '--primary-context-fd']) {
+            assert.ok('error' in parseArguments(['--account', 'a', '--cwd', '/w', first, '3', second, '4']));
+        }
+    }
     assert.deepEqual(parseArguments(['--cwd', '/w', '--account', 'a', '--resume', 'abc', '--effort', 'max', '--setting-sources', 'user,local']),
         { account: 'a', cwd: '/w', resume: 'abc', effort: 'max', settingSources: ['user', 'local'] });
     // The server's --limit cwd: the one limit there is.

@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -54,8 +55,8 @@ public:
     // list from the server that does not name it ends the wait too, the selection left as it is.
     StripTake take(Model& model, const Sessions& state);
 
-    // The person chose a tab: the saved one no longer waits.
-    void personSelected() { pending_ = false; }
+    // The person's selection takes precedence over both saved and default startup selections.
+    void personSelected() { pending_ = false; preferPrimary_ = false; }
 
     // The saved tab waits for its friend.
     bool pending() const { return pending_; }
@@ -64,14 +65,17 @@ public:
     bool taken() const { return taken_; }
     // The strip holds a friend's tab.
     bool hasFriends() const { return friendTabs_ != 0; }
+    void dismiss(const Tab& tab);
     const KeptDrafts& kept() const { return kept_; }
 
 private:
     std::vector<std::string> savedOrder_;
     std::string savedFriend_;
     bool pending_ = false;
+    bool preferPrimary_ = true;
     bool taken_ = false;
     KeptDrafts kept_;
+    std::set<std::string> dismissed_;
     std::size_t friendTabs_ = 0;
     // What was last taken: nothing yet, a list (held, so that its pointer is never another list's), or the sessions'.
     bool any_ = false;
@@ -79,6 +83,7 @@ private:
     std::shared_ptr<const std::vector<ServerFriend>> list_;
     std::size_t sessionCount_ = 0;
     SessionId newest_ = 0;
+    SessionId primary_ = 0;
 };
 
 // The friends of `state` into the window, as the window's frame (FrameHost::takeFriends) and the link's functional

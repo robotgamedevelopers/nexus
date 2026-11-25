@@ -77,7 +77,7 @@ struct Config {
     std::string model;                  // the session's model and effort, written with each send (empty: the
     std::string effort;                 // harness's default)
     std::string account;                // the session's account: a driver runs under the one it was started with
-    // What goes before the prompt of the first send after the session moved to another directory, where its harness
+    // What goes before the prompt of the first send after the session changed account or directory, where its harness
     // session cannot be resumed: a summary of the conversation so far (Drivers gives it from the transcript). Called
     // only then, with the prompt it goes before (already the transcript's, which the summary leaves out); unset,
     // nothing goes before it.
@@ -95,6 +95,8 @@ struct Config {
     int maxFailedStarts = kMaxFailedStarts;
     std::size_t maxWaiting = 8;             // prompts waiting, at most (the hub's queue limits)
     std::size_t maxWaitingBytes = 32 * 1024;
+    bool autoAccount = false;
+    std::function<std::string()> continuationContext{};
     std::size_t maxEntryBytes = 32 * 1024;  // the hub's text limit: longer text is split into several entries
 };
 
@@ -159,6 +161,9 @@ public:
     // it lifts the hold on starting drivers, without a restart, so what waits goes on (models/Supervisor.tla SignIn).
     // Nothing when starting is not held back.
     Output signedIn(Millis now);
+    Output resetContext(bool compact, Millis now);
+    Output refreshSandbox(bool tightened, Millis now);
+    Output retireIdleLogin(Millis now);
     // The person stopped the friend's work: a stop for the open turn, if one is open and no stop is out; while the
     // driver starts, the turn about to begin is cancelled. Otherwise nothing: no stop is kept for a later turn.
     Output stop(Millis now);
@@ -186,14 +191,18 @@ public:
     Output setOptions(std::string model, std::string effort, Millis now);
     // The person set the session's account. A driver started under another is ended quietly once no turn is open (an
     // open turn runs to its end first), never counted as a failed start; the next starts under this account.
-    Output setAccount(std::string account, Millis now);
+    Output setAccount(std::string account, Millis now, bool automatic = false,
+                      const std::vector<std::string>* command = nullptr);
+    // A model-limit choice was committed to the store together with its new account or model.
+    void acceptModelChoice(const sync::DriverState& durable);
+    bool awaitingRotation() const;
+    Output rotationExhausted();
     // The session's instance changed (sync::Hub settles it, or a reload moved it): its directory is `cwd`, and `here`
     // says whether it is on this server's machine. A driver started in another directory, or any driver once the
     // instance is elsewhere, is ended quietly once no turn is open, like an account change; the next starts in `cwd`.
-    // The harness keeps its sessions by directory (the state's sessionDir): in the same directory the next driver
-    // resumes the harness session; in another it is dropped, and the next driver starts afresh, its first send
-    // carrying a summary of the conversation so far (Config::summarize), with a notice. While not here, no queued
-    // prompt is taken, no driver is started, and the friend shows down unless a turn runs on.
+    // The harness keeps its sessions by directory and account. When either changes, the next driver starts afresh,
+    // its first send carrying a summary of the conversation so far (Config::summarize), with a notice. While not here,
+    // no queued prompt is taken, no driver is started, and the friend shows down unless a turn runs on.
     Output setPlace(std::string cwd, bool here, Millis now);
     // The session's limit changed (its friend's "limit", accounts::limitedFor): a driver started under the other one is
     // ended quietly once no turn is open, like a change of place (an open turn runs to its end first); the next starts
@@ -247,6 +256,7 @@ public:
     // said hello since, unless the server is stopping; otherwise Idle, which is only ever with
     // nothing running, nothing waiting and nothing queued that will be taken: the friend is waiting for the person.
     sync::Activity activity() const;
+    std::uint32_t activeAgents() const { return childAgents_ + (state_.openTurn != 0); }
 
 private:
     void effect(Effect::What what, std::string text, std::uint64_t turn = 0);
@@ -254,6 +264,7 @@ private:
     void receive(const driver::DriverMessage& message, Millis now);
     void flush();
     void cutOpen();
+    void clearContinuation();
     void abandon(const std::string& why);
     void end(const std::string& why, Millis now);
     void endQuietly(Millis now);
@@ -278,6 +289,7 @@ private:
     std::optional<Millis> deadline_;
     std::string openPrompt_;            // the open turn's prompt
     std::string gathered_;              // the open turn's text not yet in the session
+    std::uint32_t childAgents_ = 0;
     bool finished_ = false;
     int failed_ = 0;
     bool held_ = false;
@@ -287,12 +299,14 @@ private:
     std::string lastFailure_;           // why the last driver ended, for the notice that holds starts back
     std::string lastCause_;             // the cause the driver gave with its last error, if any
     std::string lastFix_;               // and its fix
+    std::string driverEmail_;           // registry email verified by the alive driver
     std::string driverAccount_;         // the account the driver alive was started under
     std::string driverCwd_;             // the directory it was started in
     bool driverLimited_ = false;        // whether it was started limited
     std::vector<std::string> driverKeepsOut_;   // and, limited, the directories it was told to keep out
     std::string driverModel_;           // the model and effort it was told (empty: the harness's default)
     std::string driverEffort_;
+    bool sandboxChanged_ = false;
     bool retiring_ = false;             // it is being ended for a change of account or place (or a setting put back)
     Output out_;                        // the output of the event in progress
 };

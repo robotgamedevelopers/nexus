@@ -272,6 +272,14 @@ void test_signin() {
     CHECK(skipped.unknown == 2);    // the skipped field counts once for each flow it holds (measured: 1 for one flow)
     CHECK(skipped.sessions == 1 && skipped.friendName == "rowan" && (skipped.kinds == Names{"Person"}));
     CHECK((skipped.requests == Ids{3}));
+    // An older reader which predates the roster still loads the transcript and requests when
+    // the new server includes nested named account choices, labels and configured email.
+    Sessions withRoster = server;
+    withRoster.setFriends({{"rowan", {{"work", "Writing", true, "writing@example.test"}, {"home", ""}}}});
+    const auto earlier = wiretest::prevReadSessions(bytes(withRoster.init_diff()));
+    CHECK(earlier.loaded && !earlier.damaged && !earlier.refused);
+    CHECK(earlier.sessions == skipped.sessions && earlier.friendName == skipped.friendName);
+    CHECK(earlier.requests == skipped.requests && earlier.kinds == skipped.kinds);
     // What this server sends on the link of 4: no flows at all, so nothing unknown; the requests as before.
     Sessions onLink = server;
     onLink.setFormat(link);
@@ -342,6 +350,62 @@ void test_signin() {
     CHECK(newer.unknown() == 0 && newer.offers().empty() && newer.sessions().size() == 1 && newer.requests().size() == 1);
 }
 
+void test_bus() {
+    const std::string payload = "bo\nfirst line\nsecond line";
+    const Sessions complete({session(7, "ada", Activity::Idle, {entry(nexus::EntryKind::Bus, payload)})});
+    // A wire diff can carry only the suffix of an entry already held. Its kind and sender survive
+    // when that suffix contains more lines of the body.
+    const Sessions partial({session(7, "ada", Activity::Idle, {entry(nexus::EntryKind::Bus, "bo\nfirst", false)})});
+    Sessions receiver;
+    receiver.apply_string(partial.init_diff());
+    receiver.apply_string(complete.diff_from(partial));
+    CHECK(receiver == complete);
+
+    const auto snapshot = bytes(complete.init_diff());
+    const std::vector<std::string> texts{payload};
+    const auto previous = wiretest::prevReadSessions(snapshot);
+    CHECK(previous.loaded && !previous.damaged && !previous.refused && previous.unknown == 1);
+    CHECK(previous.kinds == std::vector<std::string>{"None"} && previous.texts == texts);
+    const auto next = wiretest::nextReadSessions(snapshot);
+    CHECK(next.loaded && !next.damaged && !next.refused && next.unknown == 0);
+    CHECK(next.kinds == std::vector<std::string>{"Bus"} && next.texts == texts);
+
+    auto withSenders = [&](std::vector<std::string> senders) {
+        auto view = std::make_shared<SessionView>(*complete.sessions().front());
+        view->busSenders = std::move(senders);
+        return Sessions({view});
+    };
+    const std::vector<std::string> senders{"bo", "cy"};
+    const Sessions known = withSenders(senders);
+    const Sessions none = withSenders({});
+    CHECK(receiver.find(7) && !receiver.find(7)->busSenders);
+    receiver.apply_string(known.diff_from(complete));
+    CHECK(receiver.find(7) && receiver.find(7)->busSenders == senders);
+    receiver.apply_string(none.diff_from(known));
+    CHECK(receiver.find(7) && receiver.find(7)->busSenders && receiver.find(7)->busSenders->empty());
+    receiver.apply_string(complete.diff_from(none));
+    CHECK(receiver.find(7) && !receiver.find(7)->busSenders);
+    const auto earlier = wiretest::prevReadSessions(bytes(known.init_diff()));
+    CHECK(earlier.loaded && !earlier.damaged && !earlier.refused);
+    CHECK(earlier.unknown > previous.unknown && earlier.kinds == previous.kinds && earlier.texts == texts);
+
+    for (std::uint32_t format : {1u, 2u, 3u}) {
+        Sessions server = known;
+        server.setFormat(format);
+        Sessions withoutSenders = complete;
+        withoutSenders.setFormat(format);
+        CHECK(server.init_diff() == withoutSenders.init_diff());
+        Sessions window;
+        window.setFormat(format);
+        window.apply_string(server.init_diff());
+        const auto* visible = window.find(7);
+        CHECK(visible && !visible->busSenders && visible->entries.size() == 1);
+        if (visible && visible->entries.size() == 1) {
+            CHECK(visible->entries[0]->kind == nexus::EntryKind::Notice && visible->entries[0]->text == payload);
+        }
+    }
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -349,6 +413,7 @@ struct Group {
 
 const Group groups[] = {
     {"sessions", test_sessions},
+    {"bus", test_bus},
     {"actions", test_actions},
     {"hello", test_hello},
     {"signin", test_signin},

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 160" role="img" aria-labelledby="title">
+  <title id="title">nexus</title>
+  <rect width="900" height="160" rx="18" fill="#1d1d1d"/>
+  <text x="42" y="111" font-family="Helvetica Neue,Helvetica,Arial,sans-serif" font-size="94" font-weight="700" letter-spacing="-4" fill="#fafafa">nexus</text>
+  <g fill="#86c5ff">
+    <rect x="641" y="62" width="22" height="36" rx="6" opacity=".17"/>
+    <rect x="672" y="62" width="22" height="36" rx="6" opacity=".29"/>
+    <rect x="703" y="62" width="22" height="36" rx="6" opacity=".46"/>
+    <rect x="734" y="62" width="22" height="36" rx="6" opacity=".72"/>
+    <rect x="765" y="62" width="22" height="36" rx="6"/>
+    <rect x="796" y="62" width="22" height="36" rx="6" opacity=".48"/>
+    <rect x="827" y="62" width="22" height="36" rx="6" opacity=".20"/>
+  </g>
+</svg>

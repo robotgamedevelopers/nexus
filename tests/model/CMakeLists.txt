@@ -21,6 +21,12 @@ add_custom_target(model_checks DEPENDS model_test overlay_test)
 # The walks whose traces TLC checks, which run on Linux and macOS only: a native Windows build has no TLC tests
 # (tlc_test below) and so no walks (NEXUS_SERVER_PARTS in CMakeLists.txt).
 if(NEXUS_SERVER_PARTS)
+    # BusGrants uses an injected registry runner in this headless walk, including on the model-only CI build.
+    add_executable(bus_delivery_trace bus_delivery_trace.cpp bus_peer_trace.cpp ${PROJECT_SOURCE_DIR}/src/server/bus_grants.cpp)
+    target_link_libraries(bus_delivery_trace PRIVATE nexus_durable)
+    target_compile_options(bus_delivery_trace PRIVATE ${warnings})
+    add_dependencies(model_checks bus_delivery_trace)
+
     add_executable(trace_walk trace_walk.cpp)
     target_link_libraries(trace_walk PRIVATE nexus_model)
     target_compile_options(trace_walk PRIVATE ${warnings})
@@ -101,13 +107,13 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
-        SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK)
+    set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
+        SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
     cmake_parse_arguments(T "${options}"
-        "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE" "" ${ARGN})
+        "CREDITMODE;PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
     # place, each with every invariant (tlc.cmake, SPLIT); the spec defines A /\ B as P, so between them every property
-    # of the cfg is checked.
+    # of the cfg is checked. TEMPORALCFG optionally appends model configuration to just the temporal parts.
     if(T_SPLIT)
         if(NOT T_SPLIT MATCHES "^([A-Za-z_][A-Za-z0-9_]*)=([A-Za-z_][A-Za-z0-9_+]*)$")
             message(FATAL_ERROR "tlc_test(${name}): SPLIT is ${T_SPLIT}, not <property>=<part>+<part>")
@@ -154,11 +160,25 @@ function(tlc_test name module cfg expect)
     if(T_PROPERTY)
         list(APPEND defs -DPROPERTY=${T_PROPERTY})
     endif()
+    if(T_TEMPORALCFG AND T_SPLITMODE MATCHES "^as:")
+        list(APPEND defs -DTEMPORALCFG=${T_TEMPORALCFG})
+    endif()
     if(T_SPLITMODE)
         list(APPEND defs -DSPLIT=${T_SPLITMODE})
     endif()
     set(driver_dist "${PROJECT_SOURCE_DIR}/drivers/claude/dist/test")
-    if(T_DRIVERWALK)
+    if(T_BUSPEERTRACE)
+        list(APPEND defs -DBUSDELIVERYWALK=$<TARGET_FILE:bus_delivery_trace> -DBUSPEERTRACE=ON)
+    elseif(T_BUSDELIVERYTRACE)
+        list(APPEND defs -DBUSDELIVERYWALK=$<TARGET_FILE:bus_delivery_trace>)
+    endif()
+    if(T_SERVICETRACE)
+        list(APPEND defs -DSERVICEWALK=$<TARGET_FILE:service_process_functional>)
+    elseif(T_PICKERTRACE)
+        list(APPEND defs -DPICKERWALK=$<TARGET_FILE:account_picker_trace>)
+    elseif(T_PLUGINTRACE)
+        list(APPEND defs -DWALK=$<TARGET_FILE:trace_walk> -DPLUGINTRACE=ON -DDATA=PluginTabTraceData)
+    elseif(T_DRIVERWALK)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERWALK=${driver_dist}/walk.js -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_DRIVERTESTS)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERTESTS=${driver_dist}/unit/driver.test.js)
@@ -171,6 +191,8 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DRECONNECTWALK=$<TARGET_FILE:reconnect_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_SECWALK)
         list(APPEND defs -DSECWALK=$<TARGET_FILE:secrets_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DFORMAT=${T_FORMAT})
+    elseif(T_CREDITMODE)
+        list(APPEND defs -DCREDITWALK=$<TARGET_FILE:accounts_walk> -DCREDITMODE=${T_CREDITMODE})
     elseif(T_ACCWALK)
         list(APPEND defs -DACCWALK=$<TARGET_FILE:accounts_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_SUPWALK)
@@ -209,6 +231,19 @@ function(tlc_test name module cfg expect)
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${tlc_script})
     set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
 endfunction()
+
+tlc_test(tlc_bus_delivery_spec BusDelivery BusDelivery.cfg pass)
+tlc_test(tlc_bus_delivery_early_reply BusDelivery witnesses/WBusEarlyReply.cfg invariant PROPERTY AckOnlyDurable)
+tlc_test(tlc_bus_delivery_cleared_bubble BusDelivery witnesses/WBusDedupFromBubble.cfg invariant PROPERTY AdmittedOnce)
+tlc_test(tlc_bus_delivery_global_receipt BusDelivery witnesses/WBusGlobalReceipt.cfg invariant PROPERTY AckOnlyDurable)
+tlc_test(tlc_bus_delivery_trace BusDeliveryTrace BusDeliveryTrace.cfg pass BUSDELIVERYTRACE)
+tlc_test(tlc_bus_delivery_peer_spec BusPeerFilter BusPeerFilter.cfg pass)
+foreach(fault Cached Outage Stall Forget)
+    string(TOLOWER "${fault}" name)
+    tlc_test(tlc_bus_delivery_peer_witness_${name} BusPeerFilter witnesses/WBusPeer${fault}.cfg invariant
+             PROPERTY DecisionMatchesEvidence)
+endforeach()
+tlc_test(tlc_bus_delivery_peer_trace BusPeerFilterTrace BusPeerFilterTrace.cfg pass BUSPEERTRACE)
 
 # The spec, every property, no error. The instances with tens of thousands of states get eight workers: TLC's time on
 # them falls nearly in proportion (MCWindow3.cfg 28 s on two workers, 8 s on eight, on the studio at full speed).
@@ -406,6 +441,9 @@ tlc_test(tlc_glide_trace_faulty_keyup_rejected GlideTrace GlideTrace.cfg deadloc
          FAULTY keyup)
 
 # The overlay (Overlay.tla): the whole state space, a witness per property, code traces, and faulty traces rejected.
+tlc_test(tlc_window_plugin_groups_trace PluginTabTrace PluginTabTrace.cfg pass PLUGINTRACE)
+tlc_test(tlc_window_plugin_groups PluginTabs PluginTabs.cfg pass)
+tlc_test(tlc_window_plugin_groups_cross_rejected PluginTabs PluginTabsCrossGroup.cfg invariant PROPERTY Grouped)
 tlc_test(tlc_overlay_spec Overlay Overlay.cfg pass)
 tlc_test(tlc_overlay_witness_act_name          WOverlayActName          WOverlayActName.cfg          invariant
          PROPERTY TypeOK)
@@ -564,3 +602,15 @@ tlc_test(tlc_signin_witness_no_timeout WSignInNoTimeout WSignInNoTimeout.cfg liv
 tlc_test(tlc_signin_witness_need_twice WSignInNeedTwice WSignInNeedTwice.cfg invariant PROPERTY OneFlowPerAccount)
 tlc_test(tlc_signin_witness_expired_keeps WSignInExpiredKeeps WSignInExpiredKeeps.cfg invariant
          PROPERTY ProcessHasItsFlow)
+
+# The local account selection preview. FrameHost's real callbacks and emitted link actions are checked on macOS.
+tlc_test(tlc_window_account_picker_spec AccountPicker AccountPicker.cfg pass)
+tlc_test(tlc_window_account_picker_preview_rejected AccountPicker witnesses/WPickerPreviewSends.cfg invariant PROPERTY OnlyConfirmationSends)
+tlc_test(tlc_window_account_picker_stale_rejected AccountPicker witnesses/WPickerStaleSession.cfg invariant PROPERTY LiveBinding)
+
+# The supervised service name is shared by an old server's draining group and its replacement.
+tlc_test(tlc_managed_service_spec ManagedService ManagedService.cfg pass)
+tlc_test(tlc_managed_service_overlap_rejected ManagedService witnesses/WManagedServiceOverlap.cfg invariant PROPERTY OneProcessGroup)
+tlc_test(tlc_managed_service_early_rejected ManagedService witnesses/WManagedServiceEarly.cfg action PROPERTY OnlyWhenDue)
+tlc_test(tlc_managed_service_lost_schedule_rejected ManagedService witnesses/WManagedServiceForget.cfg invariant PROPERTY OneRunPerInterval)
+tlc_test(tlc_managed_service_trace ManagedServiceTrace ManagedServiceTrace.cfg pass SERVICETRACE)

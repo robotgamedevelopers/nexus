@@ -143,6 +143,7 @@ void testStart() {
     // A known session id is the start's --resume.
     sync::DriverState known;
     known.session = "s-1";
+    known.sessionAccount = "";
     Supervisor r = make(known);
     o = r.prompt("x", kStart);
     CHECK((o.commands[0].argv == std::vector<std::string>{"drv", "--x", "--cwd", "/w", "--resume", "s-1"}));
@@ -554,6 +555,10 @@ void testActivity() {
     CHECK(s.phase() == Phase::Starting && s.activity() == Activity::Busy);
     s.message(Hello{1, "h"}, kStart + 1);
     CHECK(s.phase() == Phase::Working && s.activity() == Activity::Busy);
+    s.message(ChildAgents{2}, kStart + 1);
+    CHECK(s.activeAgents() == 3 && s.activity() == Activity::Working);
+    s.message(ChildAgents{0}, kStart + 2);
+    CHECK(s.activeAgents() == 1);
     s.stop(kStart + 2);
     CHECK(s.phase() == Phase::Stopping && s.activity() == Activity::Busy);
     s.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 3);
@@ -689,23 +694,44 @@ void testAccount() {
     Supervisor t = working("first");
     o = t.setAccount("home", kStart + 2);
     CHECK(o.commands.empty() && o.effects.empty() && t.phase() == Phase::Working);
+    // A late ID while that turn finishes still belongs to the running process, even though the user switched.
+    t.message(Session{"from-previous"}, kStart + 2);
+    CHECK(t.state().sessionAccount == "");
     t.queued("later", kStart + 3);
     o = t.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 4);
     CHECK(o.taken == 1 && ended(t, o) && t.state().waiting == std::vector<std::string>{"later"});
     CHECK(written(o).empty());     // never written to the driver under the old account
     o = t.exited("exited with status 0", kStart + 5);
     CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && t.driverAccount() == "home" && t.failedStarts() == 0);
+    CHECK(!hasArgs(o, {"--resume"}) && t.state().summary);
     o = t.message(Hello{1, "h"}, kStart + 6);
     CHECK((written(o) == std::vector<ServerMessage>{Send{2, "later"}}));
 
     // Starting: the driver says hello under the old account, so it is ended before it is given the prompt.
-    Supervisor u = make();
-    u.prompt("p", kStart);
+    Config c = config();
+    c.command = {"driver", "--account", "placeholder"};
+    c.account = "initial";
+    Supervisor u(c, {}, kStart, &o);
+    o = u.prompt("p", kStart);
+    CHECK(hasArgs(o, {"--account", "initial"}));
     u.setAccount("other", kStart + 1);
     o = u.message(Hello{1, "h"}, kStart + 2);
     CHECK(ended(u, o) && written(o).empty() && u.state().waiting.size() == 1);
     o = u.exited("exited with status 0", kStart + 3);
     CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && u.driverAccount() == "other" && u.failedStarts() == 0);
+    CHECK(hasArgs(o, {"--account", "other"}));
+
+    // A reload of the same named account starts queued work only with its new identity check.
+    auto changed = c.command;
+    changed.insert(changed.end(), {"--account-email", "new@example.test"});
+    u.message(Hello{1, "h"}, kStart + 4);
+    o = u.setAccount("other", kStart + 5, false, &changed);
+    CHECK(u.phase() == Phase::Stopping && !written(o).empty());
+    u.queued("next", kStart + 6);
+    o = u.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 7);
+    CHECK(ended(u, o) && written(o).empty());
+    o = u.exited("exited with status 0", kStart + 8);
+    CHECK(hasArgs(o, {"--account-email", "new@example.test"}) && hasArgs(o, {"--account", "other"}));
 }
 
 bool resumes(const Output& o) {
@@ -753,14 +779,14 @@ void testPlace() {
     CHECK(s.state().sessionDir == "/v");
     s.message(Done{2, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 10);
 
-    // A restart in the same directory (here, for an account) resumes, with no summary.
+    // A switch of account in the same directory also starts fresh and carries the transcript once.
     o = s.setAccount("work", kStart + 11);
     CHECK(ended(s, o));
     s.exited("exited with status 0", kStart + 12);
     o = s.prompt("three", kStart + 13);
-    CHECK(hasArgs(o, {"--cwd", "/v", "--resume", "s-2"}) && o.effects.size() == 1);
+    CHECK(!resumes(o) && o.effects.size() == 2 && s.state().summary);
     o = s.message(Hello{1, "h"}, kStart + 14);
-    CHECK((written(o) == std::vector<ServerMessage>{Send{3, "three"}}) && summaries == 1);
+    CHECK((written(o) == std::vector<ServerMessage>{Send{3, "SUM three"}}) && summaries == 2);
 
     // Working: a move waits for the turn's end; the driver is then ended, never given another prompt in /v.
     o = s.setPlace("/u", true, kStart + 15);
@@ -783,14 +809,13 @@ void testPlace() {
     o = u.setPlace("/w", true, kStart + 6);
     CHECK(o.taken == 1 && kinds(o) == std::vector<Kind>{Kind::Start});
 
-    // A harness session from before its directory was kept (none recorded) is resumed; with no turns yet, a move
-    // gives no summary and no notice.
+    // An older harness ID with no recorded owner starts fresh. No summary or notice is needed without prior turns.
     sync::DriverState old;
     old.nextTurn = 3;
     old.session = "old";
     Supervisor v = make(old);
     o = v.prompt("p", kStart);
-    CHECK(hasArgs(o, {"--resume", "old"}));
+    CHECK(!resumes(o) && v.state().summary);
     Supervisor w = make();
     w.setPlace("/v", true, kStart);
     o = w.prompt("p", kStart + 1);
@@ -828,6 +853,16 @@ void testLimit() {
     s.exited("exited with status 0", kStart + 10);
     o = s.prompt("three", kStart + 11);
     CHECK(hasArgs(o, {"--limit", "cwd"}) && s.driverLimited() && s.failedStarts() == 0);
+
+    for (bool tighten : {false, true}) {
+        Supervisor running = make();
+        running.prompt("one", kStart);
+        running.message(Hello{1, "h"}, kStart + 1);
+        running.refreshSandbox(tighten, kStart + 2);
+        CHECK(running.phase() == (tighten ? Phase::Stopping : Phase::Working));
+        auto done = running.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 3);
+        CHECK(ended(running, done) && running.retiring());
+    }
 
     // A Config is limited unless the server says otherwise.
     CHECK(Config{}.limited);
@@ -1456,6 +1491,124 @@ void testRestart() {
     CHECK(sends(o, 3, "w1"));
 }
 
+// A reported quota is a known turn boundary. Only that boundary licenses a fresh continuation.
+void testContinuation() {
+    Config c = config();
+    c.account = "first";
+    c.autoAccount = true;
+    Output o;
+    Supervisor s(c, {}, kStart, &o);
+    s.prompt("original task", kStart);
+    s.message(Hello{1, "h"}, kStart);
+    s.prompt("later task", kStart);
+    s.message(Text{1, "partial"}, kStart);
+    auto limit = Error{"out of credits", "wait", 1, ErrorCode::UsageLimit};
+    auto stale = limit;
+    stale.turn = 42;
+    CHECK(!s.message(stale, kStart).usageLimit);
+    CHECK(s.state().openTurn == 1 && s.state().continuationPrompt.empty());
+    auto other = limit;
+    other.code = ErrorCode::Harness;
+    CHECK(!s.message(other, kStart).usageLimit && s.state().continuationPrompt.empty());
+    o = s.message(limit, kStart);
+    CHECK(o.usageLimit && o.durable && ended(s, o));
+    CHECK((whats(o) == std::vector<What>{What::Reply, What::Error}));
+    CHECK(s.state().openTurn == 0 && s.state().continuationPrompt == "original task" && s.awaitingRotation());
+
+    // A named pin committed while auto is handing off must consume the same pending request as
+    // recovery from that selection. Later work stays queued behind it in both cases.
+    for (const bool restartAfterPin : {false, true}) {
+        Config pinned = c;
+        if (restartAfterPin) {
+            pinned.autoAccount = false;
+            pinned.account = "second";
+        }
+        Supervisor switched(pinned, s.state(), kStart, &o);
+        if (!restartAfterPin) {
+            CHECK(o.commands.empty());
+            o = switched.setAccount("second", kStart, false);
+        }
+        CHECK(kinds(o) == std::vector<Kind>{Kind::Start});
+        o = switched.message(Hello{1, "h"}, kStart);
+        const auto lines = written(o);
+        CHECK(lines.size() == 1 && std::holds_alternative<Send>(lines.front()) &&
+              std::get<Send>(lines.front()).turn == 2 &&
+              std::get<Send>(lines.front()).prompt.ends_with("original task"));
+        CHECK(switched.state().waiting == std::vector<std::string>{"later task"});
+    }
+    // The same selection may arrive just before the old payer reports its cap. Its report
+    // is valid for the open turn even though the session already records the new payer.
+    for (const auto cap : {ErrorCode::UsageLimit, ErrorCode::ModelLimit}) {
+        Supervisor finishing(c, {}, kStart, &o);
+        finishing.prompt("finish this", kStart);
+        finishing.message(Hello{1, "h"}, kStart);
+        finishing.setAccount("second", kStart, false);
+        CHECK(finishing.state().openTurn == 1);
+        const auto oldPayerLimit = Error{"out of credits", "wait", 1, cap};
+        o = finishing.message(oldPayerLimit, kStart);
+        CHECK(o.durable && ended(finishing, o));
+        CHECK(!finishing.state().modelLimitPending && !finishing.awaitingRotation());
+        CHECK(finishing.state().continuationPrompt == "finish this");
+        CHECK(kinds(finishing.exited("finished", kStart)) == std::vector<Kind>{Kind::Start});
+        const auto lines = written(finishing.message(Hello{1, "h"}, kStart));
+        CHECK(lines.size() == 1 && std::holds_alternative<Send>(lines.front()) &&
+              std::get<Send>(lines.front()).turn == 2 &&
+              std::get<Send>(lines.front()).prompt.ends_with("finish this"));
+    }
+    Supervisor unchanged(c, s.state(), kStart, &o);
+    CHECK(unchanged.setAccount("first", kStart, false).commands.empty() && unchanged.awaitingRotation());
+    o = unchanged.rotationExhausted();
+    CHECK(o.durable && whats(o) == std::vector<What>{What::Notice} && unchanged.held());
+    CHECK(unchanged.state().waiting == std::vector<std::string>{"later task"});
+
+    // The checkpoint before a move survives a restart. No work goes back to an exhausted payer.
+    Supervisor recovered(c, s.state(), kStart, &o);
+    CHECK(o.commands.empty() && recovered.awaitingRotation());
+    o = recovered.setAccount("second", kStart, true);
+    CHECK(kinds(o) == std::vector<Kind>{Kind::Start});
+    o = recovered.message(Hello{1, "h"}, kStart);
+    const auto writes = written(o);
+    CHECK(writes.size() == 1 && std::holds_alternative<Send>(writes.front()));
+    if (writes.size() == 1 && std::holds_alternative<Send>(writes.front())) {
+        const auto& send = std::get<Send>(writes.front());
+        CHECK(send.turn == 2 && send.prompt.ends_with("original task") && !contains(send.prompt, "later task"));
+    }
+    CHECK(recovered.state().waiting == std::vector<std::string>{"later task"});
+    // If a sent continuation crashes at an ambiguous point, it is cut, never replayed.
+    c.account = "second";
+    Supervisor ambiguous(c, recovered.state(), kStart, &o);
+    CHECK(whats(o) == std::vector<What>{What::Cut} && ambiguous.state().continuationPrompt.empty());
+    limit.turn = 2;
+    recovered.message(limit, kStart);
+    CHECK(recovered.state().exhaustedAccounts == std::vector<std::string>({"first", "second"}));
+    Supervisor all(c, recovered.state(), kStart, &o);
+    CHECK(all.awaitingRotation() && all.rotationExhausted().durable && all.held());
+    CHECK(!all.awaitingRotation() && all.state().waiting == std::vector<std::string>{"later task"});
+
+    Supervisor stopped(c, recovered.state(), kStart, &o);
+    CHECK(stopped.stop(kStart).durable && stopped.state().continuationPrompt.empty());
+    CHECK(stopped.state().waiting == std::vector<std::string>{"later task"});
+
+    // A model-specific limit waits for a choice even on a pinned subscription. Fallback keeps that payer.
+    c.autoAccount = false;
+    Supervisor choice(c, {}, kStart, &o);
+    choice.prompt("choose the artwork", kStart);
+    choice.message(Hello{1, "h"}, kStart);
+    limit.turn = 1;
+    limit.code = ErrorCode::ModelLimit;
+    CHECK(!choice.message(limit, kStart).usageLimit);
+    CHECK(choice.state().modelLimitPending && !choice.awaitingRotation());
+    auto selected = choice.state();
+    selected.modelLimitPending = false;
+    selected.exhaustedAccounts.clear();
+    Supervisor restored(c, choice.state(), kStart, &o);
+    CHECK(o.commands.empty());
+    restored.acceptModelChoice(selected);
+    restored.setOptions("fallback", "", kStart);
+    CHECK(kinds(restored.setAccount("second", kStart)) == std::vector<Kind>{Kind::Start});
+    CHECK(written(restored.message(Hello{1, "h"}, kStart)).size() == 2);
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -1477,6 +1630,7 @@ const Group kGroups[] = {
     {"queue", testQueue},
     {"shutdown", testShutdown},
     {"restart", testRestart},
+    {"continuation", testContinuation},
     {"settings", testSettings},
     {"account", testAccount},
     {"place", testPlace},

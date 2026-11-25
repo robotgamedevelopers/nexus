@@ -1,16 +1,25 @@
-// The account the driver runs Claude on: one directory per login under nexus-server's home,
-// ~/.nexus/server/accounts/<name>/, named by the drivers file's --account <name>. Its token is the file oauth-token
-// there (one line, from `claude setup-token`, mode 0600), which Claude gets on a descriptor (wall.ts), never in an
-// environment. Claude's own state is kept apart, in ~/.nexus/server/harness/claude/<name>/ as CLAUDE_CONFIG_DIR, so
-// that the logins' directory holds secrets only and no tool reaches it. Nothing else is a credential: not the
-// Keychain, not the server's environment, not ~/.claude. The token is never logged, written to the server or put in an
-// argument.
+// The server selects one account under ~/.nexus/server/accounts/<name>/. For an account with a configured
+// email, the credential broker supplies the verified access token. Legacy accounts read their oauth-token file.
+// Claude receives only the access token, on a descriptor (wall.ts). Its state lives separately under
+// ~/.nexus/server/harness/claude/<name>/, outside the private credentials directory.
 
 import {
-    closeSync, constants, existsSync, fstatSync, futimesSync, lstatSync, mkdirSync, openSync, readFileSync,
+    closeSync, constants, existsSync, fstatSync, futimesSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync,
     renameSync, rmSync, writeFileSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
+
+/** A case-insensitive filesystem may have resolved a differently spelled account name. */
+function spellingProblem(dir: string): string | undefined {
+    try {
+        if (readdirSync(dirname(dir)).includes(basename(dir))) {
+            return undefined;
+        }
+    } catch {
+        return `cannot read the parent of ${dir} to verify the account directory's spelling`;
+    }
+    return `${dir} does not match the spelling of the account directory; check the account name's capitalization`;
+}
 
 /** An account the driver can start Claude on. */
 export interface Account {
@@ -68,7 +77,7 @@ function uid(): number | undefined {
  * 0600), holding one line. Otherwise why not, and how to fix it; the token never appears in
  * either.
  */
-export function readAccount(home: string | undefined, name: string): Account | AccountRefusal {
+export function readAccount(home: string | undefined, name: string, verified = false): Account | AccountRefusal {
     if (home === undefined || home === '') {
         return { cause: 'HOME is not set, so the driver cannot find its account under ~/.nexus/server/accounts',
             fix: 'start nexus-server with HOME set to your home directory' };
@@ -78,22 +87,28 @@ export function readAccount(home: string | undefined, name: string): Account | A
             fix: 'fix the driver\'s --account in nexus-server\'s drivers file' };
     }
     const dir = `${accountsDir(home)}/${name}`;
+    const loginFix = verified ? `sign in to ${name} in Nexus with its configured email` : makeToken(dir);
     let dirStat;
     try {
         dirStat = lstatSync(dir);
     } catch {
         return { cause: `the account ${name} has no directory: ${dir} is missing`,
-            fix: `make it (\`mkdir -p -m 700 ${dir}\`), then ${makeToken(dir)}` };
+            fix: `make it (\`mkdir -p -m 700 ${dir}\`), then ${loginFix}` };
+    }
+    const spelling = spellingProblem(dir);
+    if (spelling !== undefined) {
+        return { cause: spelling, fix: 'use the exact account name recorded on disk' };
     }
     // The directory itself, never a link to one elsewhere, this user's, and no one else's to change.
     if (!dirStat.isDirectory() || (uid() !== undefined && dirStat.uid !== uid())) {
         return { cause: `the account ${name}'s ${dir} is not a directory of this user's (a link, a file or another user's)`,
-            fix: `move it aside and make it again (\`mkdir -p -m 700 ${dir}\`), then ${makeToken(dir)}` };
+            fix: `move it aside and make it again (\`mkdir -p -m 700 ${dir}\`), then ${loginFix}` };
     }
     if ((dirStat.mode & 0o077) !== 0) {
         return { cause: `the account ${name}'s ${dir} has mode 0${(dirStat.mode & 0o777).toString(8)}, so others can reach its login`,
             fix: `run \`chmod 700 ${dir}\`` };
     }
+    if (verified) return { name, dir, configDir: configDirOf(home, name), token: '' };
     const path = `${dir}/${kTokenFile}`;
     // Opened without following a link, then checked and read through the same descriptor: what is checked is what is read.
     let fd: number;
@@ -217,20 +232,20 @@ function stateFile(path: string, token: string): { text: Buffer; atime: Date; mt
  * refuses one it will not copy, with why); the copy is made once, and the login's directory is left as it was.
  * Undefined, or why not.
  */
-export function openConfigDir(account: Pick<Account, 'dir' | 'configDir' | 'token'>): string | undefined {
+export function openConfigDir(account: Pick<Account, 'dir' | 'configDir' | 'token'>, migrateSettings = true): string | undefined {
     if (existsSync(account.configDir)) {
         const st = lstatSync(account.configDir);
         if (!st.isDirectory() || (uid() !== undefined && st.uid !== uid())) {
             return `${account.configDir} is not a directory of this user's; move it aside, and the driver makes it again`;
         }
-        return undefined;
+        return spellingProblem(account.configDir);
     }
     const partial = `${account.configDir}.partial-${process.pid}`;
     try {
         mkdirSync(dirname(account.configDir), { recursive: true, mode: 0o700 });
         rmSync(partial, { recursive: true, force: true });
         mkdirSync(partial, { mode: 0o700 });
-        for (const name of kClaudeStateFiles) {
+        for (const name of migrateSettings ? kClaudeStateFiles : []) {
             const got = stateFile(`${account.dir}/${name}`, account.token);
             if (typeof got === 'string') {
                 rmSync(partial, { recursive: true, force: true });
@@ -252,12 +267,12 @@ export function openConfigDir(account: Pick<Account, 'dir' | 'configDir' | 'toke
     } catch (e) {
         rmSync(partial, { recursive: true, force: true });
         if (existsSync(account.configDir)) {
-            return undefined;   // Another driver of the account made it first.
+            return spellingProblem(account.configDir);   // Another driver may have made it first.
         }
         const code = codeOf(e);
         return `cannot make ${account.configDir}${code === '' ? '' : ` (${code})`}; make it with \`mkdir -p -m 700 ${account.configDir}\``;
     }
-    return undefined;
+    return spellingProblem(account.configDir);
 }
 
 /** Whether `a` is an account rather than a refusal. */

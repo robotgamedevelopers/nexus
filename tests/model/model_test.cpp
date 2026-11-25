@@ -865,12 +865,39 @@ void cursor_colours() {
     CHECK(lost.c == 0 && lost.l < idle.l && lost.l < dim.l);
 }
 
+void fork_restore_accepts_only_reachable_groups() {
+    std::vector<nexus::TabGroup> groups{{"A", {"friend"}, false, {"B"}}, {"B", {"left"}, false, {"A"}},
+                                        {"C", {"right"}, false, {"B"}}};
+    Model m({{"first", ""}});
+    m.set_tab_groups(groups);
+    const auto b = m.open_extension("left", "B", "Left");
+    const auto c = m.open_extension("right", "C", "Right");
+    m.select_tab(0);
+    CHECK(!m.move_to_group(0, "C", 1));  // interactive moves require a direct edge
+    CHECK(m.move_to_group(0, "B", 0));
+    CHECK(m.move_to_group(0, "C", 1));
+    CHECK(m.tab(m.active()).id == 0 && m.tab(m.active()).group == "C");
+    Model restored({{"first", ""}});
+    restored.set_tab_groups(groups);
+    restored.open_extension("left", "B", "Left");
+    restored.open_extension("right", "C", "Right");
+    restored.restore_tab_layout({{b, "B"}, {c, "C"}, {0, "C"}});
+    CHECK(restored.tab(2).id == 0 && restored.tab(2).group == "C");
+    groups[2].acceptsFrom.clear();
+    restored.set_tab_groups(groups);
+    CHECK(restored.tab(0).id == 0 && restored.tab(0).group == "A");
+    CHECK(restored.tab(restored.active()).id == c);
+    restored.restore_tab_layout({{b, "B"}, {c, "C"}, {0, "C"}});
+    CHECK(restored.tab(0).id == 0 && restored.tab(0).group == "A");
+}
+
 struct Case {
     const char* name;
     void (*fn)();
 };
 
 const Case kCases[] = {
+    {"fork_restore_accepts_only_reachable_groups", fork_restore_accepts_only_reachable_groups},
     {"construct_one_tab_per_friend_in_order", construct_one_tab_per_friend_in_order},
     {"empty_friend_list_refuses_everything", empty_friend_list_refuses_everything},
     {"select_in_range_changes_only_active", select_in_range_changes_only_active},

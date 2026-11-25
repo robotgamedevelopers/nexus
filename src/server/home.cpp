@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 
 #include "accounts/registry.h"
 #include "config.h"
@@ -46,6 +47,15 @@ bool readServerConfig(const std::string& text, const std::string& path, ServerSe
             out->claude = claude->second;
         } else {
             errors.push_back(path + ": claude " + claude->second + " is not an absolute path to the claude program");
+        }
+    }
+    if (const auto launcher = c.values.find("bus-launcher"); launcher != c.values.end()) {
+        const auto& name = launcher->second;
+        const std::filesystem::path program(name);
+        if (accounts::isDir(name) && program.has_filename() && program.lexically_normal().native() == name) {
+            out->busLauncher = name;
+        } else {
+            errors.push_back(path + ": bus-launcher requires a normalized absolute executable path");
         }
     }
     for (const std::string& e : errors) {

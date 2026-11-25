@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <string>
 #include <thread>
@@ -67,7 +68,7 @@ struct Harness {
         ui = prUiCreate(tree);
         PrKitTheme theme = windowTheme(fonts, false);
         kit = prKitCreate(ui, &theme);
-        terminals = new PraxTerminals(kit, fonts, nullptr, nullptr, false);
+        terminals = new PraxTerminals(kit, fonts, nullptr, nullptr);
         view.model = &model;
         view.look = &look;
         view.terminals = terminals;
@@ -88,6 +89,7 @@ struct Harness {
     // As the app's frame: each terminal's foreground process is read at the frame's start (main.cpp beginFrame).
     void frame() {
         terminals->observe(time);
+        terminals->deliver(ui);
         beginWindowFrame(view, kit, fonts);
         time += 1.0 / 60;
         PrUiFrameDesc desc{.time = time, .delta = 1.0 / 60, .extent = PrVec2{1000, 780}, .maxRounds = 8,
@@ -100,7 +102,9 @@ struct Harness {
 
     void push(PrAppEvent e) {
         e.time = time;
-        prUiPushEvent(ui, kPrUiViewportMain, &e);
+        const auto& active = model.tab(model.active());
+        if (active.kind != TabKind::Terminal || !terminals->hold(active.id, e))
+            prUiPushEvent(ui, kPrUiViewportMain, &e);
     }
 
     void key(PrAppKey k, PrAppKeyCode code, PrAppModifierFlags modifiers = 0) {
@@ -172,6 +176,39 @@ void aShellRunsAndItsTabClosesWhenItExits() {
     CHECK(h.terminals->text(id).empty());   // destroyed
 }
 
+#ifndef _WIN32
+void aPreparedPromptIsVisibleOnTheOpenFrame() {
+    const auto dir = std::filesystem::absolute("terminal-warm");
+    std::filesystem::create_directories(dir);
+    const auto shell = dir / "test-shell";
+    const auto marker = dir / "ready";
+    std::filesystem::remove(marker);
+    std::ofstream(shell) << "#!/bin/sh\nprintf 'ready-%s> ' $$\necho $$ > ready\nexec /bin/cat\n";
+    std::filesystem::permissions(shell, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
+    const char* original = std::getenv("SHELL");
+    const std::optional<std::string> previous = original ? std::optional<std::string>(original) : std::nullopt;
+    setenv("SHELL", shell.c_str(), 1);
+    {
+        Harness h;
+        h.terminals->directory = dir.string();
+        h.terminals->keepShellReady = true;
+        for (int tab = 0; tab < 2; ++tab) {
+            std::string pid;
+            CHECK(h.until([&] { return bool(std::ifstream(marker) >> pid); }));
+            std::filesystem::remove(marker);
+            h.key(PrAppKey('T'), PrAppKeyCode_KeyT, style::kCommand);
+            const auto id = h.model.tab(h.model.active()).id;
+            const auto screen = h.terminals->text(id);
+            if (screen.find("ready-" + pid + ">") == std::string::npos)
+                std::fprintf(stderr, "Open %d, tab %zu, expected shell %s, screen %.200s\n", tab, id, pid.c_str(), screen.c_str());
+            CHECK(!pid.empty() && screen.find("ready-" + pid + ">") != std::string::npos);
+        }
+    }
+    if (previous) setenv("SHELL", previous->c_str(), 1);
+    else unsetenv("SHELL");
+}
+#endif
+
 // A relaunch's round trip: a shell changes directory, its terminal is saved with the directory it is in (to a real file
 // under the test's working directory), and a new terminal opened from that file starts there. A saved directory that
 // is gone starts the shell in the home directory.
@@ -188,7 +225,9 @@ void aTerminalComesBackInItsDirectory() {
         CHECK(h.terminals->openIn(id, dir.string()));
         CHECK(h.until([&] { return h.terminals->text(id).find('$') != std::string::npos; }));
         h.typeLine("cd sub && echo moved-$((40+2))");
-        CHECK(h.until([&] { return h.terminals->text(id).find("moved-42") != std::string::npos; }));
+        const bool moved = h.until([&] { return h.terminals->text(id).find("moved-42") != std::string::npos; });
+        if (!moved) std::fprintf(stderr, "  screen after cd: %s\n", h.terminals->text(id).c_str());
+        CHECK(moved);
         const std::string sub = std::filesystem::canonical(dir / "sub").string();
         const bool there = h.until([&] {
             const std::string now = h.terminals->workingDirectory(id);
@@ -212,7 +251,13 @@ void aTerminalComesBackInItsDirectory() {
     const std::size_t first = h.model.add_terminal();
     const std::size_t second = h.model.add_terminal();
     CHECK(h.terminals->openIn(first, saved[0]) && h.terminals->openIn(second, saved[1]));
-    CHECK(h.until([&] { return h.terminals->text(second).find('$') != std::string::npos; }));
+    CHECK(h.model.select_tab(0));
+    CHECK(h.until([&] {
+        return !h.terminals->title(first).empty() && !h.terminals->title(second).empty() &&
+            h.terminals->text(first).find('$') != std::string::npos &&
+            h.terminals->text(second).find('$') != std::string::npos;
+    }));
+    CHECK(h.model.select_tab(2));
     PrRawString home = prFileUserDirectory(PrFileUserDirectory_Home);
     PrStringView hv = prRawStringView(&home);
     const std::string homeName = std::filesystem::path(std::string(hv.data, hv.size)).filename().string();
@@ -316,6 +361,9 @@ int main(int argc, char** argv) {
     _putenv_s("PATH", (std::string(argv[1]) + ";" + (path != nullptr ? path : "")).c_str());
 #else
     setenv("PATH", (std::string(argv[1]) + ":" + (path != nullptr ? path : "/usr/bin:/bin")).c_str(), 1);
+#endif
+#ifndef _WIN32
+    aPreparedPromptIsVisibleOnTheOpenFrame();
 #endif
     aShellRunsAndItsTabClosesWhenItExits();
     aTerminalComesBackInItsDirectory();

@@ -99,6 +99,8 @@ public:
         Host* host = nullptr;           // null: PosixHost
         std::function<bool(std::string* text, std::string* problem)> readTable{};
         bool quiet = false;
+        std::string verifiedHelper{};
+        std::string authClaude{};
     };
 
     // Over the sessions in `store`; attach() the hub that commits to it before anything else.
@@ -116,11 +118,16 @@ public:
     // sync::Responder: a send, a queue (Command-Enter) and a stop (Command-Escape) of the person's, each committed by
     // the hub with the window's action before anything is written to a driver.
     std::vector<sync::SessionChange> send(sync::SessionId id, const std::string& prompt) override;
+    std::vector<sync::SessionChange> prepareBus(sync::SessionId id, const std::string& prompt, std::string& why) override;
     std::vector<sync::SessionChange> queue(sync::SessionId id, const std::string& prompt) override;
+    std::vector<sync::SessionChange> resetContext(sync::SessionId, const sync::DriverState&, bool compact) override;
+    std::string friendInfo(const std::string&) const override;
+    std::string catalog(const sync::SessionInfo&) const override;
     std::vector<sync::SessionChange> stop(sync::SessionId id) override;
     void sent(sync::SessionId id, bool committed) override;
     // sync::Responder: what a new session with a friend is (its harness; no default account, model or effort yet), and
     // a session's settings, changed: from its next turn on.
+    std::optional<sync::AccountRoutes> accountRoutes() const override;
     sync::SessionInfo defaults(const std::string& friendName) const override;
     void configured(sync::SessionId id, const sync::SessionInfo& info) override;
     // sync::Responder: a session just made shows down when its friend has no driver configured.
@@ -128,6 +135,8 @@ public:
     // sync::Responder: the login of `account` arrived (the secret dialog stored it): each session on it whose starting
     // is held back goes on (Supervisor::signedIn), without a restart.
     void signedIn(const std::string& account) override;
+    bool refreshSandbox(const std::set<std::string>& unsandboxed);
+    std::string retireForSignOut(const std::string& account);
     // sync::Responder: the session's friend was taken out of friends.json, or put back (Supervisor::setPresent): taken
     // out, its open turn gets the person's stop and its driver is ended; while out, no driver starts for it, a prompt
     // sent is refused with a notice, and what is queued stays queued; put back, what waits goes on.
@@ -194,11 +203,13 @@ private:
     const accounts::Instance* instanceOf(const sync::SessionInfo& info) const;
     bool limitedOf(const sync::SessionInfo& info) const;
     std::vector<std::string> keepsOut() const;
+    DriverTable readDriverTable(std::string& problem) const;
     ResolvedDriver resolveFriend(const std::string& friendName, DriverTable* table = nullptr) const;
     Config config(sync::SessionId id, const ResolvedDriver& driver) const;
     Output syncSlot(sync::SessionId id, Supervisor& sup, Millis now);
     bool run(sync::SessionId id, Output out, Millis now, bool committed, bool* changed = nullptr);
     Supervisor& pending(sync::SessionId id, const ResolvedDriver& driver, Millis now);
+    std::vector<sync::SessionChange> preparePrompt(sync::SessionId id, const std::string& prompt, std::string* busRefusal);
     std::vector<sync::SessionChange> changes(const Output& out, const Supervisor& sup) const;
     bool showOpen(sync::SessionId id, const Slot& t);
     bool showResolved(sync::SessionId id, const ResolvedDriver& driver);
@@ -210,10 +221,16 @@ private:
     void collect(sync::SessionId id, Slot& t, Output& out, Millis now);
     void log(sync::SessionId id, const std::string& what) const;
 
+    struct CatalogCache {
+        Millis nextRead = 0;
+        std::string json;
+    };
+    mutable std::map<std::string, CatalogCache> catalogs_;
     const sync::SessionStore& store_;
     Options options_;
     Host* host_ = nullptr;
     sync::Hub* hub_ = nullptr;
+    std::set<std::string> unsandboxed_;
     std::map<sync::SessionId, Slot> slots_;
     // A send between send() and sent().
     std::optional<Supervisor> pendingSup_;

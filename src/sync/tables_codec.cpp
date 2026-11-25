@@ -26,6 +26,7 @@ wire::EntryKind kindOut(EntryKind k) {
         case EntryKind::Friend: return wire::EntryKind::Friend;
         case EntryKind::Notice: return wire::EntryKind::Notice;
         case EntryKind::Tool: return wire::EntryKind::Tool;
+        case EntryKind::Bus: return wire::EntryKind::Bus;
     }
     return wire::EntryKind::Notice;
 }
@@ -38,6 +39,7 @@ EntryKind kindIn(wire::EntryKind k) {
         case wire::EntryKind::Friend: return EntryKind::Friend;
         case wire::EntryKind::Notice: return EntryKind::Notice;
         case wire::EntryKind::Tool: return EntryKind::Tool;
+        case wire::EntryKind::Bus: return EntryKind::Bus;
         default: return EntryKind::Notice;
     }
 }
@@ -45,6 +47,7 @@ EntryKind kindIn(wire::EntryKind k) {
 wire::Activity activityOut(Activity a) {
     switch (a) {
         case Activity::Idle: return wire::Activity::Idle;
+        case Activity::Working: return wire::Activity::Working;
         case Activity::Busy: return wire::Activity::Busy;
         case Activity::Down: return wire::Activity::Down;
     }
@@ -56,6 +59,7 @@ wire::Activity activityOut(Activity a) {
 Activity activityIn(wire::Activity a) {
     switch (a) {
         case wire::Activity::Idle: return Activity::Idle;
+        case wire::Activity::Working: return Activity::Working;
         case wire::Activity::Down: return Activity::Down;
         default: return Activity::Busy;
     }
@@ -115,7 +119,29 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         putText(b.main, x->info.model, s.info.model, scratch);
         putText(b.main, x->info.effort, s.info.effort, scratch);
         putText(b.main, x->info.instance, s.info.instance, scratch);
+        x->info.limit_request = s.info.limitRequest;
+        putText(b.main, x->info.limit_account, s.info.limitAccount, scratch);
+        x->info.context_epoch = s.info.contextEpoch;
+        putText(b.main, x->info.catalog, s.info.catalog, scratch);
+        putText(b.main, x->info.limit_model, s.info.limitModel, scratch);
+        x->info.auto_account = s.info.autoAccount;
+        if (s.info.primaryAccount) {
+            auto* choice = added(wire::AccountChoiceEmplace(b.main, x->primary_account));
+            const auto& account = *s.info.primaryAccount;
+            putText(b.main, choice->name, account.name, scratch);
+            putText(b.main, choice->label, account.label, scratch);
+            choice->needs_sign_in = account.needsSignIn;
+            putText(b.main, choice->email, account.email, scratch);
+        }
         x->activity = activityOut(s.activity);
+        x->active_agents = s.activeAgents;
+        if (s.busSenders) {
+            x->bus_senders_known = true;
+            for (const auto& name : *s.busSenders) {
+                auto* sender = added(wire::SessionChangeBusSendersAdd(b.main, x->bus_senders));
+                putText(b.main, sender->value, name, scratch);
+            }
+        }
         x->first = s.first;
         x->keep_from = s.keepFrom;
         for (const EntryChange& e : s.entries) {
@@ -123,6 +149,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
             y->kind = kindOut(e.kind);
             y->closed = e.closed;
             y->offset = e.offset;
+            y->account_email_end = e.accountEmailEnd;
             putText(b.main, y->tail, e.tail, scratch);
         }
         x->queue_changed = s.queueChanged;
@@ -149,9 +176,18 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         for (const ServerFriend& f : change.friends) {
             wire::Friend* w = added(wire::SessionsDiffFriendsAdd(b.main, d->friends));
             putText(b.main, w->name, f.name, scratch);
+            w->can_auto_account = f.canAutoAccount;
+            for (const AccountChoice& account : f.accounts) {
+                auto* choice = added(wire::FriendAccountsAdd(b.main, w->accounts));
+                putText(b.main, choice->name, account.name, scratch);
+                putText(b.main, choice->label, account.label, scratch);
+                choice->needs_sign_in = account.needsSignIn;
+                putText(b.main, choice->email, account.email, scratch);
+            }
         }
     }
     if (signIns) {
+        d->next_action = change.nextAction;
         for (const SignInOffer& o : change.offers) {
             wire::SignInOffer* x = added(wire::SessionsDiffSigninsAdd(b.main, d->signins));
             x->id = o.id;
@@ -165,6 +201,19 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
     return saved(b, [](const wire::SessionsDiffBuilder& x) { return wire::SessionsDiffMeasure(x); },
         [](const wire::SessionsDiffBuilder& x, std::uint8_t* out, int64_t n) { return wire::SessionsDiffSave(x, out, n); },
         "sessions diff");
+}
+
+bool rosterFits(std::vector<ServerFriend> friends) {
+    SessionsChange state;
+    state.friendsSent = true;
+    state.friendsKnown = true;
+    state.friends = std::move(friends);
+    const std::string bytes = writeTables(state, kStateFormat);
+    if (bytes.size() > kRosterWireBytes) {
+        return false;
+    }
+    const auto need = wire::SessionsDiffLoadMeasure(reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+    return need > 0 && static_cast<std::size_t>(need) <= kRosterReadBytes;
 }
 
 SessionsChange readTables(const std::string& diff, int* unknown) {
@@ -184,6 +233,7 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
     }
     *unknown = report.unknown;
     SessionsChange out;
+    out.nextAction = d->next_action;
     out.sessions.reserve(static_cast<std::size_t>(d->sessions.size()));
     for (const wire::SessionChange& x : d->sessions) {
         SessionChange s;
@@ -196,12 +246,33 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
             s.info.model = textOf(x.info.model);
             s.info.effort = textOf(x.info.effort);
             s.info.instance = textOf(x.info.instance);
+            s.info.limitRequest = x.info.limit_request;
+            s.info.limitAccount = textOf(x.info.limit_account);
+            s.info.contextEpoch = x.info.context_epoch;
+            s.info.catalog = textOf(x.info.catalog);
+            s.info.limitModel = textOf(x.info.limit_model);
+            s.info.autoAccount = x.info.auto_account;
+            if (const auto* choice = wire::AccountChoiceAt(x.primary_account))
+                s.info.primaryAccount = AccountChoice{textOf(choice->name), textOf(choice->label), choice->needs_sign_in,
+                                                      textOf(choice->email)};
             s.activity = activityIn(x.activity);
+            s.activeAgents = x.active_agents;
+            if (x.bus_senders_known) {
+                auto& names = s.busSenders.emplace();
+                names.reserve(static_cast<std::size_t>(x.bus_senders.size()));
+                for (const auto& sender : x.bus_senders) {
+                    auto name = textOf(sender.value);
+                    if (name.empty() || (!names.empty() && name <= names.back())) {
+                        throw BadDiff("sessions diff has an empty, repeated or out-of-order bus sender");
+                    }
+                    names.push_back(std::move(name));
+                }
+            }
             s.first = x.first;
             s.keepFrom = x.keep_from;
             s.entries.reserve(static_cast<std::size_t>(x.entries.size()));
             for (const wire::EntryChange& y : x.entries) {
-                s.entries.push_back(EntryChange{kindIn(y.kind), y.closed, y.offset, textOf(y.tail)});
+                s.entries.push_back(EntryChange{kindIn(y.kind), y.closed, y.offset, textOf(y.tail), y.account_email_end});
             }
             s.queueChanged = x.queue_changed;
             for (const wire::SessionChangeQueueText& q : x.queue) {
@@ -227,7 +298,14 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
         out.friendsKnown = d->friends_known;
         out.friends.reserve(static_cast<std::size_t>(d->friends.size()));
         for (const wire::Friend& f : d->friends) {
-            out.friends.push_back(ServerFriend{textOf(f.name)});
+            ServerFriend friendState{textOf(f.name)};
+            friendState.canAutoAccount = f.can_auto_account;
+            friendState.accounts.reserve(static_cast<std::size_t>(f.accounts.size()));
+            for (const wire::AccountChoice& choice : f.accounts) {
+                friendState.accounts.push_back(
+                    {textOf(choice.name), textOf(choice.label), choice.needs_sign_in, textOf(choice.email)});
+            }
+            out.friends.push_back(std::move(friendState));
         }
     }
     for (const wire::SignInOffer& x : d->signins) {

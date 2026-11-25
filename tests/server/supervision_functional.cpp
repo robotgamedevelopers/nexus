@@ -277,10 +277,12 @@ void writeInterruptedHandoverState(const fs::path& sdir, const std::string& targ
     const fs::path hdir = sdir / handover::kHandoverDir;
     fs::create_directories(hdir);
     fs::permissions(hdir, fs::perms(0700));
-    std::ofstream out(hdir / handover::kStateFile, std::ios::binary);
+    const auto scratch = hdir / "fixture-state.tmp";
+    std::ofstream out(scratch, std::ios::binary);
     out << handover::formatState(handover::StateRecord{target, previous, stage});
     out.close();
     CHECK(static_cast<bool>(out));
+    fs::rename(scratch, hdir / handover::kStateFile);
 }
 
 struct ChildProc {
@@ -527,9 +529,9 @@ void casePostStartRollback(const std::string& fakeBin, const fs::path& work) {
     const fs::path sdir = work / "srv";
     ensurePrivateServerDir(home, sdir);
 
-    // b1 is healthy; bLate reaches SERVING (so Layer 3 handover succeeds!), then crashes 150 ms later!
+    // The test requests crashes over the control socket after observing each serving generation.
     const std::string b1 = placeFakeBuild(work, sdir, fakeBin, "good", "1");
-    const std::string bLate = placeFakeBuild(work, sdir, fakeBin, "crash-after-serve", "2");
+    const std::string bLate = placeFakeBuild(work, sdir, fakeBin, "good", "2");
     {
         builds::Builds b(sdir.string(), {});
         builds::Result br;
@@ -548,14 +550,29 @@ void casePostStartRollback(const std::string& fakeBin, const fs::path& work) {
     handover::Result hr;
     CHECK(handover::command(sdir.string(), {bLate}, {}, hr) == handover::kExitOk);
 
-    // Plant an interrupted `handover/state` (`stage starting`, `target = bLate`, `previous = b1`) so `Step::Rollback`
-    // exercises `PosixHandoverGate::resumeIfNeeded(true)` while holding `<dir>/handover`'s exclusive flock (`rbHold`),
-    // verifying zero self-lock contention, full `handover/state` cleanup, rollback to `b1`, and zero zombies.
+    // Wait for the supervisor to adopt the handed-over build before crashing it. Then wait for
+    // its replacement before planting interrupted state: rollback must resume it under its own lock.
+    auto disk = nexus::store::make_posix_fs();
+    const auto superviseDir = (sdir / kSuperviseDir).string();
+    auto waitForCrashes = [&](std::uint32_t count) {
+        const auto deadline = nowMs() + 15000;
+        while (nowMs() < deadline) {
+            SuperviseState state;
+            if (loadEffectiveState(*disk, superviseDir, &state).is_ok() &&
+                state.build == bLate && state.picked.empty() && state.crashes == count)
+                return true;
+            sleepMs(20);
+        }
+        return false;
+    };
+    std::string reply;
+    CHECK(waitForCrashes(0));
+    CHECK(askSocket(sock, "crash", &reply) && reply == "OK");
+    CHECK(waitForCrashes(1));
+    CHECK(waitForServingBuild(sock, bLate, 15000));
     writeInterruptedHandoverState(sdir, bLate, b1, handover::Stage::Starting);
+    CHECK(askSocket(sock, "crash", &reply) && reply == "OK");
 
-    // bLate then crashes post-start; supervisor retries once, sees second post-start crash, acquires handover lock,
-    // resumes/clears `handover/state` under `rbHold`, shuns bLate, switches builds/active back to b1, and brings b1 to
-    // SERVING!
     const std::uint64_t deadline = nowMs() + 25000;
     bool rolledBackAndServing = false;
     while (nowMs() < deadline) {

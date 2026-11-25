@@ -31,17 +31,22 @@ bool clientHome(std::string* dir, std::string* why);
 // Makes `dir` and the directory above it (~/.nexus), each mode 0700 on POSIX, if missing. False, with why.
 bool makeClientHome(const std::string& dir, std::string* why);
 
+// Claim this client home until process exit. A duplicate returns false with an empty error.
+bool claimClientHome(const std::string& dir, std::string* why);
+
 // The window's settings, read from its config file.
 struct ClientConfig {
     std::string path;               // the file read, for messages; empty when there is no home
     std::string novaConfig;         // `nova-config <path>`: the full path of nova-config, for the fleet's machine list
                                     // (remote.h); empty: found on the PATH
+    std::string serverHost = "localhost";
+    bool sprintEnabled = true;
     std::string sprintUrl;          // `sprint-url <url>`: the sprint board's address; empty: from the sprint's record
     std::vector<std::string> problems;  // one line each: the errors, then the warnings
 };
 
 // The keys the window's config takes.
-inline const std::vector<std::string> kClientConfigKeys{"nova-config", "sprint-url"};
+inline const std::vector<std::string> kClientConfigKeys{"nova-config", "sprint-url", "sprint", "server"};
 
 // The settings in `text`, the file at `path`. Pure.
 ClientConfig clientConfigFrom(std::string_view text, const std::string& path);

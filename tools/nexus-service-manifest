@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Project explicitly retired host services from a saved nova-config inventory onto stdout."""
+import argparse
+import json
+import posixpath
+import re
+import sys
+
+NOVA_TOOLS = {"nova-bus", "nova-cairn", "nova-config", "nova-sandbox", "nova-secrets",
+              "nova-reserve", "nova-fleet", "nova-roadmap"}
+ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}")
+
+
+def distinct(pairs):
+    obj = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError("duplicate JSON field in the inventory")
+        obj[key] = value
+    return obj
+
+
+def literal(value):
+    # nova-config inventory uses Ansible's literal wrapper for every argv/env/log string.
+    if isinstance(value, dict) and set(value) == {"__ansible_unsafe"}:
+        value = value["__ansible_unsafe"]
+    if not isinstance(value, str) or "\0" in value or len(value.encode()) > 32768:
+        raise ValueError("expected a literal string of at most 32768 bytes without NUL")
+    return value
+
+
+def absolute(value):
+    value = literal(value)
+    if not posixpath.isabs(value):
+        raise ValueError("expected an absolute target-host path")
+    return value
+
+
+def project(row, opts, system):
+    name = row["name"]
+    if row.get("enabled") is not False:
+        raise ValueError(f"{name} still has a host owner; retire its host service and export its disabled row")
+    every = row.get("every", 0)
+    if type(every) is not int or not 0 <= every <= 4294967295 or row.get("keepalive", every == 0) is not (every == 0):
+        raise ValueError(f"{name} needs a keepalive or an interval in whole seconds")
+    if not isinstance(row.get("argv"), list) or not row["argv"] or len(row["argv"]) > 256:
+        raise ValueError(f"{name} needs a nonempty argv array of up to 256 words")
+    argv = [literal(word) for word in row["argv"]]
+    if not argv[0] or ("/" in argv[0] and not posixpath.isabs(argv[0])):
+        raise ValueError(f"{name} needs an absolute executable path or a program name")
+    bindir = absolute(opts.bin_dir or posixpath.join(opts.home, ".local/bin"))
+    sprint = posixpath.basename(argv[0]) == "nova-sprint" or name in opts.sprint_service
+    if argv[0] in NOVA_TOOLS:
+        argv[0] = posixpath.join(bindir, argv[0])
+
+    env = {"HOME": opts.home, "PATH": opts.path or bindir + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"}
+    row_env = row.get("env", {})
+    if not isinstance(row_env, dict) or any(not ENV_NAME.fullmatch(key) for key in row_env):
+        raise ValueError(f"{name} needs an env object with environment variable names")
+    env.update({key: literal(value) for key, value in row_env.items()})
+    absolute(env["HOME"])
+    if any(not posixpath.isabs(directory) for directory in env["PATH"].split(":")):
+        raise ValueError(f"{name} needs absolute directories in PATH")
+    log = literal(row.get("log", f"~/.local/state/nova/services/{name}.log"))
+    if log.startswith("~/"):
+        log = posixpath.join(opts.home, log[2:])
+    absolute(log)
+
+    keys = row.get("keys", [])
+    if not isinstance(keys, list) or any(not isinstance(k, str) or not ENV_NAME.fullmatch(k) for k in keys):
+        raise ValueError(f"{name} needs a list of secret key names")
+    if keys:
+        if set(keys).intersection(env):
+            raise ValueError(f"{name} carries a secret key in plain env; remove the value before migration")
+        seat = row.get("seat")
+        if not isinstance(seat, str) or not NAME.fullmatch(seat):
+            raise ValueError(f"{name} needs a valid secret seat name")
+        store = absolute(opts.store or posixpath.join(opts.home, ".local/share/nova/secrets"))
+        keydir = absolute(opts.key_dir or posixpath.join(opts.home, ".config/nova-secrets"))
+        if not opts.sops and system not in ("darwin", "linux"):
+            raise ValueError(f"{name} needs --sops because the target operating system is unspecified")
+        sops = absolute(opts.sops or ("/opt/homebrew/bin/sops" if system == "darwin" else posixpath.join(bindir, "sops")))
+        argv = [posixpath.join(bindir, "nova-secrets"), "exec", "--store", store, "--as", seat,
+                "--key", posixpath.join(keydir, seat + ".key"), "--sops", sops, "--only", ",".join(keys), "--"] + argv
+    if len(argv) > 256 or len(env) > 256:
+        raise ValueError(f"{name} exceeds the server limit of 256 arguments or environment variables")
+    return {**({"feature": "sprint"} if sprint else {}),
+            "name": name, "owner": "nexus-server", "enabled": True, "every": every,
+            "argv": argv, "cwd": opts.home, "log": log, "env": env}
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--host", required=True, help="inventory host name")
+    p.add_argument("--home", required=True, help="target service login's absolute home")
+    p.add_argument("--take", action="append", required=True, help="exact name of a retired host service; repeat for each")
+    p.add_argument("--sprint-service", action="append", default=[], help="tag a selected Sprint service launched by a wrapper")
+    p.add_argument("--bin-dir", help="target nova_bin_dir")
+    p.add_argument("--path", help="target nova_service_path")
+    p.add_argument("--store", help="target nova_secrets_store")
+    p.add_argument("--key-dir", help="target nova_secrets_key_dir")
+    p.add_argument("--sops", help="target nova_sops")
+    opts = p.parse_args()
+    try:
+        absolute(opts.home)
+        if set(opts.sprint_service) - set(opts.take):
+            raise ValueError("each --sprint-service must also be selected with --take")
+        if len(opts.take) > 256 or len(set(opts.take)) != len(opts.take) or any(not NAME.fullmatch(n) for n in opts.take):
+            raise ValueError("select up to 256 distinct service names")
+        inventory = json.load(sys.stdin, object_pairs_hook=distinct)
+        host = inventory["_meta"]["hostvars"][opts.host]
+        rows = host["nova_services"]
+        if not isinstance(rows, list):
+            raise ValueError("host needs nova_services from nova-config inventory --list")
+        selected = {}
+        for row in rows:
+            name = row["name"]
+            if name in opts.take:
+                if name in selected:
+                    raise ValueError(f"duplicate service {name} for the selected host")
+                selected[name] = project(row, opts, host.get("nova_os", "").lower())
+        missing = [name for name in opts.take if name not in selected]
+        if missing:
+            raise ValueError("service absent from the selected host: " + ", ".join(missing))
+        result = json.dumps({"version": 1, "services": [selected[name] for name in opts.take]}, indent=2)
+        if len(result) + 1 > 1024 * 1024:
+            raise ValueError("projected services.json exceeds 1 MiB")
+    except (KeyError, TypeError, AttributeError, ValueError) as error:
+        if isinstance(error, (KeyError, TypeError, AttributeError)):
+            p.exit(1, "invalid or missing host/service field; use the full nova-config inventory --list JSON\n")
+        p.exit(1, str(error) + "\n")
+    print(result)
+
+
+if __name__ == "__main__":
+    main()

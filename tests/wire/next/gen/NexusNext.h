@@ -14,7 +14,7 @@ namespace nexuswirenext {
 // sides at the same id speak identical bits; there is no other versioning.
 inline constexpr uint64_t ProtocolId = 0x2f2450356481543cull;
 
-// enum EntryKind — None = 0 implicit, variants dense from 1, wire range [0, 5] (SPEC §4.2)
+// enum EntryKind — None = 0 implicit, variants dense from 1, wire range [0, 6] (SPEC §4.2)
 enum class EntryKind : uint8_t
 {
     None = 0,
@@ -22,8 +22,9 @@ enum class EntryKind : uint8_t
     Friend = 2,
     Notice = 3,
     Tool = 4,
-    Image = 5,
-    Max = 5, // the exported extent (SPEC §4.2)
+    Bus = 5,
+    Image = 6,
+    Max = 6, // the exported extent (SPEC §4.2)
 };
 
 // EnumName: debug/log name for any EntryKind value, out-of-set included
@@ -36,20 +37,22 @@ inline const char * EnumName( EntryKind value )
         case EntryKind::Friend: return "Friend";
         case EntryKind::Notice: return "Notice";
         case EntryKind::Tool: return "Tool";
+        case EntryKind::Bus: return "Bus";
         case EntryKind::Image: return "Image";
         default: return "???";
     }
 }
 
-// enum Activity — None = 0 implicit, variants dense from 1, wire range [0, 4] (SPEC §4.2)
+// enum Activity — None = 0 implicit, variants dense from 1, wire range [0, 5] (SPEC §4.2)
 enum class Activity : uint8_t
 {
     None = 0,
     Idle = 1,
     Busy = 2,
     Down = 3,
-    Waiting = 4,
-    Max = 4, // the exported extent (SPEC §4.2)
+    Working = 4,
+    Waiting = 5,
+    Max = 5, // the exported extent (SPEC §4.2)
 };
 
 // EnumName: debug/log name for any Activity value, out-of-set included
@@ -61,12 +64,13 @@ inline const char * EnumName( Activity value )
         case Activity::Idle: return "Idle";
         case Activity::Busy: return "Busy";
         case Activity::Down: return "Down";
+        case Activity::Working: return "Working";
         case Activity::Waiting: return "Waiting";
         default: return "???";
     }
 }
 
-// enum ActionKind — None = 0 implicit, variants dense from 1, wire range [0, 20] (SPEC §4.2)
+// enum ActionKind — None = 0 implicit, variants dense from 1, wire range [0, 22] (SPEC §4.2)
 enum class ActionKind : uint8_t
 {
     None = 0,
@@ -89,8 +93,10 @@ enum class ActionKind : uint8_t
     SignInClaim = 17,
     SignInOpened = 18,
     SignInCallback = 19,
-    Rename = 20,
-    Max = 20, // the exported extent (SPEC §4.2)
+    SignOut = 20,
+    ResolveLimit = 21,
+    Rename = 22,
+    Max = 22, // the exported extent (SPEC §4.2)
 };
 
 // EnumName: debug/log name for any ActionKind value, out-of-set included
@@ -118,6 +124,8 @@ inline const char * EnumName( ActionKind value )
         case ActionKind::SignInClaim: return "SignInClaim";
         case ActionKind::SignInOpened: return "SignInOpened";
         case ActionKind::SignInCallback: return "SignInCallback";
+        case ActionKind::SignOut: return "SignOut";
+        case ActionKind::ResolveLimit: return "ResolveLimit";
         case ActionKind::Rename: return "Rename";
         default: return "???";
     }

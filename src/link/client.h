@@ -46,6 +46,7 @@ public:
         sync::Sessions sessions;            // the server's latest state
         std::uint64_t sent = 0;             // actions handed to the link
         bool acknowledged = true;           // the server has acknowledged every one
+        bool loopback = false;              // the numeric address this session dials is on loopback
         std::uint64_t reconnects = 0;       // sessions made after the first (the bootstrap run again)
     };
 
@@ -55,7 +56,7 @@ public:
     ClientLink& operator=(const ClientLink&) = delete;
 
     // Any thread: an action for the server, sent once the session is up, in the order given.
-    void send(sync::Action action);     // its num ignored: the link numbers it
+    std::uint64_t send(sync::Action action);     // its num ignored: the link numbers it
     // The latest snapshot; true if it changed since the last call that returned true.
     bool poll(Snapshot* out);
 

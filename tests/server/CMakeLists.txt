@@ -46,8 +46,36 @@ add_executable(driver_table_test driver_table_test.cpp)
 target_link_libraries(driver_table_test PRIVATE nexus_supervisor)
 target_compile_options(driver_table_test PRIVATE ${warnings})
 
+add_executable(service_manifest_test service_manifest_test.cpp)
+target_link_libraries(service_manifest_test PRIVATE nexus_services)
+target_compile_options(service_manifest_test PRIVATE ${warnings})
+add_test(NAME service_manifest_test COMMAND service_manifest_test)
+set_tests_properties(service_manifest_test PROPERTIES LABELS unit TIMEOUT 30)
+
+add_executable(service_process_functional service_process_functional.cpp)
+target_link_libraries(service_process_functional PRIVATE nexus_services)
+target_compile_options(service_process_functional PRIVATE ${warnings})
+add_test(NAME service_process_functional COMMAND service_process_functional)
+set_tests_properties(service_process_functional PROPERTIES LABELS functional TIMEOUT 30)
+add_dependencies(model_checks service_process_functional)
+
 # The friends layer's real processes: POSIX, like nexus-server (not built natively on Windows, where nexus-server runs inside WSL2: CMakeLists.txt NEXUS_LINK).
 if(NOT WIN32)
+    find_package(Python3 3.9 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME service_manifest_projection COMMAND ${Python3_EXECUTABLE} -I
+            ${CMAKE_CURRENT_SOURCE_DIR}/service_projection.py ${PROJECT_SOURCE_DIR}/tools/nexus-service-manifest)
+        set_tests_properties(service_manifest_projection PROPERTIES LABELS functional TIMEOUT 30)
+        add_test(NAME claude_auth_verified COMMAND ${Python3_EXECUTABLE} -I
+                 ${CMAKE_CURRENT_SOURCE_DIR}/claude_auth_helper_test.py ${CMAKE_BINARY_DIR}/nexus-claude-auth)
+        set_tests_properties(claude_auth_verified PROPERTIES LABELS functional TIMEOUT 120)
+        if(NEXUS_LINK)
+            add_test(NAME managed_services_functional COMMAND ${Python3_EXECUTABLE} -I
+                ${CMAKE_CURRENT_SOURCE_DIR}/managed_services_functional.py $<TARGET_FILE:nexus-server>)
+            set_tests_properties(managed_services_functional PROPERTIES LABELS functional TIMEOUT 45)
+        endif()
+    endif()
+
     add_executable(drivers_functional drivers_functional.cpp)
     target_link_libraries(drivers_functional PRIVATE nexus_drivers nexus_durable)
     target_compile_options(drivers_functional PRIVATE ${warnings})
@@ -58,7 +86,7 @@ endif()
 add_dependencies(model_checks supervisor_walk supervisor_test secrets_test signin_test server_pass_test pass_walk)
 
 foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered friend_removed
-              hub_friend_removed queue shutdown restart settings account place limit activity signin)
+              hub_friend_removed queue shutdown restart continuation settings account place limit activity signin)
     add_test(NAME supervisor_unit_${group} COMMAND supervisor_test ${group})
     set_tests_properties(supervisor_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
@@ -112,7 +140,7 @@ if(NOT WIN32)
     target_include_directories(signin_functional PRIVATE ${CMAKE_SOURCE_DIR}/tests)
     add_dependencies(signin_functional nexus_fake_claude nexus-signin-open)
     foreach(case same_machine printed_url forwarded declined api_key stopped unguarded gate_in_use gate_v6_in_use late crashed
-                 forwarded_v6 quick_exit group)
+                 forwarded_v6 quick_exit group enrollment enrollment_failure account_spelling)
         file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/signin-${case})
         add_test(NAME signin_functional_${case}
                  COMMAND signin_functional $<TARGET_FILE:nexus_fake_claude> $<TARGET_FILE:nexus-signin-open> ${case}
@@ -121,11 +149,30 @@ if(NOT WIN32)
     endforeach()
 endif()
 
+if(NEXUS_LINK)
+    foreach(test bus_attachment_functional bus_listener_functional bus_grants_functional)
+        add_executable(${test} ${test}.cpp)
+        target_compile_options(${test} PRIVATE ${NEXUS_WARNINGS})
+        target_link_libraries(${test} PRIVATE nexus_bus)
+        add_test(NAME ${test} COMMAND ${test})
+        set_tests_properties(${test} PROPERTIES LABELS functional TIMEOUT 30)
+    endforeach()
+    if(Python3_Interpreter_FOUND)
+        add_executable(bus_chat_probe bus_chat_probe.cpp)
+        target_compile_options(bus_chat_probe PRIVATE ${NEXUS_WARNINGS})
+        target_link_libraries(bus_chat_probe PRIVATE nexus_link)
+        add_test(NAME bus_chat_functional COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/bus_chat_functional.py $<TARGET_FILE:nexus-server>
+            $<TARGET_FILE:nexus_fake_driver> $<TARGET_FILE:bus_chat_probe>)
+        set_tests_properties(bus_chat_functional PROPERTIES LABELS functional TIMEOUT 60)
+    endif()
+endif()
+
 # Each case in a directory of its own under the build tree.
 if(NOT WIN32)
-    foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
+    foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume primary_route restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
-                 stop_hammered account window unconfigured sign_in no_credential usage_limit limit_unsupported no_account
+                 stop_hammered account window unconfigured bus_admission bus_default_instance sign_in no_credential usage_limit continuation bus_continuation fable_switch_account fable_switch_model limit_unsupported no_account
                  friend_removed friend_back_limited friend_removed_starting friend_back_before_stop
                  friend_back_limited_queue friend_back_moved friend_back_account no_registry no_registry_listed
                  instance_dir instance_elsewhere instance_moved
@@ -150,12 +197,15 @@ endif()
 # halves it costs less than half (Settles of one prompt 38.7 s, of both 94.2 s). So <name>_temporal_1 and _2 check
 # SettlesOdd and SettlesEven (Supervisor.tla: together, Settles) in shards of their own, and <name>_rest every
 # invariant and the other properties, a few seconds each, in the supervisor-rest shard. Between them every property is
-# checked on the same instance.
+# checked for the same inputs and bounds. The slower Place and Switch temporal shards omit the write-only effects, sends and stops logs.
+# Every guard, successor on the remaining fields, fair action and Settles observation is independent of those logs.
+# The _rest shard checks safety with full histories, including NoSendOnOldAccount and ResumesItsAccount. Other
+# instances retain full output in both halves (for example Friend checks AbsentRunsNothing, which reads stops).
 tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 8 SHARD SPLIT Settles=SettlesOdd+SettlesEven)
 tlc_test(tlc_supervisor_switch MCSupervisor MCSupervisorSwitch.cfg pass WORKERS 4 SHARD
-    SPLIT Settles=SettlesOdd+SettlesEven)
+    SPLIT Settles=SettlesOdd+SettlesEven TEMPORALCFG SupervisorSettles.cfg)
 tlc_test(tlc_supervisor_place MCSupervisor MCSupervisorPlace.cfg pass WORKERS 8 SHARD
-    SPLIT Settles=SettlesOdd+SettlesEven)
+    SPLIT Settles=SettlesOdd+SettlesEven TEMPORALCFG SupervisorSettles.cfg)
 tlc_test(tlc_supervisor_signin MCSupervisor MCSupervisorSignIn.cfg pass WORKERS 8 SHARD
     SPLIT Settles=SettlesOdd+SettlesEven)
 # The limit's per-commit instance runs in the supervisor-rest shard on two workers, like the witnesses beside it:
@@ -216,6 +266,8 @@ tlc_test(tlc_supervisor_witness_account_cuts WSupAccountCuts WSupAccountCuts.cfg
 tlc_test(tlc_supervisor_witness_place_ignored WSupPlaceIgnored WSupPlaceIgnored.cfg action PROPERTY NoSendInOldPlace)
 tlc_test(tlc_supervisor_witness_resume_elsewhere WSupResumeElsewhere WSupResumeElsewhere.cfg action
          PROPERTY ResumesItsDir)
+tlc_test(tlc_supervisor_witness_resume_other_account WSupResumeElsewhere WSupResumeOtherAccount.cfg action
+         PROPERTY ResumesItsAccount)
 tlc_test(tlc_supervisor_witness_summary_lost WSupSummaryLost WSupSummaryLost.cfg action PROPERTY SummaryOwed)
 # The limit: a driver started without it is never kept for a limited session, and tightening stops an open turn.
 tlc_test(tlc_supervisor_witness_limit_not_retired WSupLimitNotRetired WSupLimitNotRetired.cfg invariant

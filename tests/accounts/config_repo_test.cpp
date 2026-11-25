@@ -371,8 +371,23 @@ int main(int argc, char** argv) {
         CHECK(runGit(dir, {"checkout", "--", "friends.json"}).status == 0);
     }
 
+    // A separate private config retains account metadata through commits, a fresh read, and a later friend edit.
+    {
+        ConfigRepo labeled(work + "/labeled-config");
+        Registry expected = sample();
+        expected.accounts[0].label = "work";
+        expected.accounts[0].email = "dev+work@example.test";
+        expected.accounts[0].signInOnUse = true;
+        CHECK(labeled.open(&why) && labeled.keep(expected, "account options", &why));
+        CHECK(labeled.committed(&held, &report) && held == expected);
+        held.friends[0].preferred = "cx";
+        CHECK(labeled.keep(held, "switch preferred account", &why));
+        Registry restored;
+        CHECK(labeled.committed(&restored, &report) && restored == held);
+    }
+
     // A version newer than this server reads, committed by hand: refused, and the file left as it was.
-    const std::string newer = "{\n  \"version\": 3,\n  \"accounts\": []\n}\n";
+    const std::string newer = "{\n  \"version\": 4,\n  \"accounts\": []\n}\n";
     spit(repo.accountsPath(), newer);
     CHECK(runGit(dir, {"commit", "-q", "-am", "a newer nexus-server's files"}).status == 0);
     report.clear();

@@ -16,6 +16,7 @@ std::string named(SessionId id) {
 // to a window of format 1 as the friend's text, as servers before format 2 sent it. A kind this build does not know (a
 // later server's) is read as a notice, which the window draws as a plain dim line.
 std::uint8_t kindOnWire(EntryKind k, std::uint32_t format) {
+    if (k == EntryKind::Bus) return static_cast<std::uint8_t>(EntryKind::Notice);
     if (format < 2 && k == EntryKind::Tool) {
         return static_cast<std::uint8_t>(EntryKind::Friend);
     }
@@ -204,7 +205,8 @@ bool isSecret(ActionKind kind) {
 // The sign-in's kinds (format 5 on, sync/signin.h), which these formats never carry: a window sends one only for a
 // flow it received, which a server sends only on a link of 5 or later.
 bool isSignIn(ActionKind kind) {
-    return kind == ActionKind::SignInClaim || kind == ActionKind::SignInOpened || kind == ActionKind::SignInCallback;
+    return kind == ActionKind::SignOut || kind == ActionKind::SignInClaim ||
+        kind == ActionKind::SignInOpened || kind == ActionKind::SignInCallback;
 }
 
 // One action in format 3: its kind, then its fields framed by their length (its session, friend, text, account,
@@ -241,7 +243,7 @@ void encodeFramed(Writer& w, const Action& a) {
 // stop naming session 0, which every server refuses and counts, so that the numbers stay unbroken and the value never
 // leaves.
 void encodeUnframed(Writer& w, const Action& a) {
-    if (isSecret(a.kind) || isSignIn(a.kind)) {
+    if (isSecret(a.kind) || isSignIn(a.kind) || a.kind == ActionKind::ResolveLimit) {
         w.byte(static_cast<std::uint8_t>(ActionKind::Stop));
         w.u64(0);
         w.str(std::string());

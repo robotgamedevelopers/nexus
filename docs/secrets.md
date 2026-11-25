@@ -109,7 +109,7 @@ is not written to, with the fix in the log, and the value is held until the dire
 a directory it did not make. The temporary file is created new (`O_CREAT|O_EXCL|O_NOFOLLOW`, 0600), and the value is
 written and synced through that one descriptor, never reopened by its path, so a link planted at its name stops the
 write rather than redirecting it. When the stored file is the account's login
-(`oauth-token` for a claude account), the account counts as signed in at once, and each session held for want of a
+(`oauth-token` for a Claude account without a configured email), the account counts as signed in at once, and each session held for want of a
 credential starts its driver for the prompt waiting, without a restart (`Supervisor.tla` `SignIn`).
 
 ## The dialog
@@ -199,7 +199,7 @@ for any line the server refuses. A `why` may hold no control character (C0, DEL 
 as U+202E, which would reverse the dialog's text) and no zero-width or line-separator character; the refusal names
 neither the account nor the file when they are not names, so a forged line never reaches the log. The documented files
 are in `src/sync/secrets.cpp` `secretFiles`:
-`oauth-token` for a claude account, none yet for any other provider. An answer for an `ask` the driver no longer waits
+`oauth-token` for a Claude account without a configured email. A Claude account with a configured email requires verified browser enrollment. An answer for an `ask` the driver no longer waits
 for (its turn stopped) is skipped. A request outlives its asker: when the asker's turn is stopped or its driver exits,
 the request stays open until it is answered or its deadline passes, and its `secret` line, with nowhere to go, is
 dropped. A secret the person pasted is still stored.
@@ -207,14 +207,56 @@ dropped. A secret the person pasted is still stored.
 The deadline is 10 minutes from the ask. That number is a guess, not a measurement: long enough to find a key in a
 provider's console, short enough that a forgotten request does not hold an asker's turn open for long.
 
+## Browser sign-in for Codex, Antigravity, Grok and Muse
+
+Each account has a separate directory under `~/.nexus/server/harness/<provider>/<account>/`.
+The server reads the provider's `signin` command from its drivers file and supplies
+the selected account name. The window connected to that server over loopback opens
+the helper's one-time local page in the user's browser. The provider's device link,
+code or pasted response stays in that browser flow. The window claims a flow and
+opens its page through the existing sign-in protocol.
+
+The server accepts a successful helper exit for the current flow only after it
+verifies the account's owner-only enrollment receipt. That receipt contains the
+provider name. Each adapter separately checks subscription access before sending
+a prompt. The account ID selects the credential directory. Its short label and
+email are descriptive configuration that can change independently of that ID.
+See [the driver configuration](../drivers/rpc/README.md) for the launch contract.
+
 ## Sign-in: a claude account, in the browser
 
-The owner's rulings: nexus runs on Claude subscriptions; a claude account is signed in from inside
-nexus with one browser sign-in, with no paste, no terminal and no file to save; the sign-in runs in the client and its
-result goes to the server; the login is stored per account under `~/.nexus/server/accounts/<name>/` (0600) behind the
-one-chance store; and it is signed in once, ever: asking again is a bug, but for a login that really ended or was
-refused. No AI ever sees the sign-in URL, the code the browser carries back or the token: none is in a transcript, a
-log line, a driver's input, a state file or a test's output.
+The sign-in card names the selected account and shows its configured email. Enter or a click opens the browser.
+Nexus keeps the account's login in its private server directory. The browser URL, callback code and credential
+stay outside the conversation, logs and fork configuration.
+
+### Verified Claude sign-in
+
+When a Claude account has an `email`, the server starts its trusted `nexus-claude-auth` helper for that account.
+The helper invokes `claude auth login --claudeai --email <expected>` in a fresh home and config directory.
+On macOS the sandbox blocks shared Keychain services. During enrollment and renewal, a private
+`security` command reports an empty, read-only Keychain so Claude can use its account-private file store.
+Passing the email to the browser flow
+requests an identity. To verify who actually signed in, the helper runs `claude auth status --json` in the
+same isolated directory and checks the completed first-party Claude login. It requires a matching email
+(ASCII case-insensitive) and a usable subscription grant from that flow. A mismatch or a missing identity
+leaves the existing stored grant intact. The person can select the correct browser account and try again.
+
+On a match, the helper writes the confirmed email and the grant together in the account's private
+`verified-claude.json`. The trusted driver obtains an access token through the helper before submitting a
+prompt. The helper checks the stored email against the configured email and uses the Claude CLI to renew
+an expiring access token from that grant. A slot with a configured email cannot be authorized by pasting
+a token or using a legacy `oauth-token` file. Use a window with browser sign-in support to enroll it.
+
+For Codex, Grok, Muse and Antigravity, `/logout` removes the named harness login and enrollment receipt.
+A local `/logout` on a Claude account removes its verified grant, legacy token and renewal files
+and retires idle drivers using that login. The command requires the account's active work and sign-in to
+finish or be cancelled. It leaves other slots and the browser's Claude session independent.
+See [account selection and sign-in](accounts.md#signing-in-to-the-right-claude-account).
+
+### Legacy Claude sign-in without a configured email
+
+For a slot without an email, the server accepts the long-lived token printed by Claude's
+`setup-token` flow. The steps below describe that flow.
 
 The state machine is `models/SignIn.tla`, bound to the code by `tests/sync/signin_walk` and `models/SignInTrace.tla`
 (`models/README.md`). The code: `src/sync/signin.h` (the server's `SignInDesk`, the window's `SignInOpener` and
@@ -343,7 +385,7 @@ descriptor, never in an environment, and keeps every tool its AI has out of the 
 below). The sign-in's own `CLAUDE_CONFIG_DIR`, `.signin`, is inside that directory, so it is behind the wall too while
 it exists, and the driver copies nothing from it into Claude's state (`drivers/claude` unit test, below).
 
-**Not built here.** Accounts of other providers sign in by a paste. Whether `claude setup-token` under WSL2 calls the
+**Platform coverage.** Whether `claude setup-token` under WSL2 calls the
 helper or opens a browser by its own path is not measured; the terminal's URL is the fallback either way.
 
 ## Versions
@@ -357,7 +399,7 @@ when the secret cannot be asked for.
 | older server, newer window | The server sends no requests, so the window never shows a dialog or sends a secret action. |
 | newer server, older driver | The driver skips the `server` line and never asks. |
 | older server, newer driver | No `server` line arrives before the first `send`, so the driver knows the server takes no secrets, and its tool answers its AI `refused: no-client` without writing `ask-secret`. |
-| sign-in: newer server, older window | Sign-ins are state format 5 (`docs/formats.md`), and the server reads which windows act on them from the link's format, set by each window's Hello and nothing else. A link of format 4 carries none (a window of 4 would read through the flows, the field skipped and counted, but never claim one), nor does one of 1 to 3. While windows that take a paste are linked but none is of format 5, a claude account with no login is asked for by a paste, as before sign-ins: a needed flow ends dropped (one a window holds already goes on) and nexus asks for its `oauth-token` in the dialog, saying the window is too old to sign in in the browser. A newer window that links later shows that paste dialog too. An AI's `config sign-in` answers that the person pastes the login. |
+| sign-in: newer server, older window | Sign-ins are state format 5 (`docs/formats.md`), and the server reads which windows act on them from the link's format, set by each window's Hello and nothing else. A link of format 4 carries none (a window of 4 would read through the flows, the field skipped and counted, but never claim one), nor does one of 1 to 3. When only older windows that take a paste are linked, a Claude account with a configured email requires an updated window. A Claude account without an email is asked for by a paste, as before sign-ins: a needed flow ends dropped (one a window holds already goes on) and nexus asks for its `oauth-token` in the dialog, saying the window is too old to sign in in the browser. A newer window that links later shows that paste dialog too. An AI's `config sign-in` answers that the person pastes the login. |
 | sign-in: older server, newer window | The link is of the server's format, 4 or older: the server sends no flows, so the window never claims, opens or binds anything, and never sends the three sign-in actions (`SignInClaim`, `SignInOpened`, `SignInCallback`). Should one be written on such a link it goes as a stop naming session 0 and nothing else, which every server refuses; a format 4 server reading the kinds themselves reads them as unknown and refuses each alone. The server asks for a paste, which the window shows. |
 | sign-in: no helper | A server with no `nexus-signin-open` beside it (or whose helper socket cannot be made) says so once on its standard error, and its claude accounts are asked for by a paste, as before. |
 

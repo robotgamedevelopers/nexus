@@ -68,7 +68,7 @@ Step(r) ==
       [] r.op = "ask"             -> D!S(D!AskSent)
       [] r.op = "ask-refused"     -> D!S(D!AskRefused)
       [] r.op = "assistant-error" -> D!S(D!AssistantError(r.code))
-      [] r.op = "result"          -> D!S(D!Result(r.kind))
+      [] r.op = "result"          -> D!S(D!ResultWindow(r.kind, r.rejectedLimit, D!Refuse, D!NotFound))
       [] r.op = "refused"         -> D!S(D!Refuse)
       [] r.op = "failed"          -> D!S(D!Fail)
       [] r.op = "lost"            -> D!S(D!NotFound)

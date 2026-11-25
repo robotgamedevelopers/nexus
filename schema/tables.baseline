@@ -7,12 +7,23 @@ table 2537019088dd9582.b11e8b146c5a21d8
 table 678cbc61d1a17693.b11e8b146c5a21d8
     field value id=0x7ce4fd9430e80cea kind=12
 
+table 678cbc61d1a17693.cb68e7f0012df3cc
+    field value id=0x7ce4fd9430e80cea kind=12
+
+table AccountChoice
+    field name id=0xc4bcadba8e631b86 kind=17 type=string
+    field label id=0x39f7fcec8fcb623d kind=17 type=string
+    field needs_sign_in id=0x6ac9ccb3345d3744 kind=1
+    field email id=0x123467b419acbc07 kind=17 type=string
+
 table Action
     field kind id=0xef9c96d721673243 kind=7 enum=ActionKind
     field session id=0x3ca2c49553a457d7 kind=9
     field friend_name id=0x2bcee2fac7bb6eb5 kind=17 type=string
     field text id=0xfa04f4ef1995407e kind=17 type=string
     field account id=0xa23fd2965dc429bc kind=17 type=string
+    field request id=0x6f4743b8bc5b4eb2 kind=9
+    field secret id=0xab23f0eec020c951 kind=17 type=bytes
 
 table ActionsDiff
     field start id=0xee5d97ad45ad251f kind=9
@@ -27,12 +38,20 @@ table Driver
     field open_turn id=0xb0c9e7244d27f5b1 kind=9
     field session id=0x3ca2c49553a457d7 kind=17 type=string
     field waiting id=0xeac9afef1a00b5e8 kind=14 elem=12 type=DriverWaitingText array=unbounded
+    field summary id=0xa3c2813bcd780513 kind=1
+    field session_dir id=0x1b1474b0ca9c0b4f kind=17 type=string
 
 table EntryChange
     field kind id=0xef9c96d721673243 kind=7 enum=EntryKind
     field closed id=0x85530f5090e836c5 kind=1
     field offset id=0x0268b0f8129435ca kind=9
     field tail id=0xd94c56ef0798d723 kind=17 type=string
+    field account_email_end id=0xb2ac393f2277c4d1 kind=8
+
+table Friend
+    field name id=0xc4bcadba8e631b86 kind=17 type=string
+    field accounts id=0x769ca48154530abd kind=14 elem=13 type=AccountChoice array=unbounded
+    field can_auto_account id=0xbb15df0a66f3b845 kind=1
 
 table Hello
     field proto id=0xf94687246d893231 kind=8
@@ -44,6 +63,14 @@ table Record
     field client id=0xc47ea73e7986f3de kind=17 type=string
     field applied id=0x8bf75481a1d237ca kind=9
 
+table SecretRequest
+    field id id=0x08b72e07b55c3ac0 kind=9
+    field account id=0xa23fd2965dc429bc kind=17 type=string
+    field what id=0x9be8c5f64f26c30f kind=17 type=string
+    field asker id=0xfb0aacbc4db97225 kind=9
+    field asker_name id=0x8333fca36e80cc6d kind=17 type=string
+    field why id=0x5ec5ea1948914a79 kind=17 type=string
+
 table SessionChange
     field id id=0x08b72e07b55c3ac0 kind=9
     field changed id=0xdf38879af614707b kind=1
@@ -54,6 +81,10 @@ table SessionChange
     field entries id=0xc5b2a72c0845a253 kind=14 elem=13 type=EntryChange array=unbounded
     field queue_changed id=0x1e51c98fb1beabbb kind=1
     field queue id=0xb11e8b146c5a21d8 kind=14 elem=12 type=SessionChangeQueueText array=unbounded
+    field active_agents id=0xbfeb08aad574e406 kind=8
+    field bus_senders_known id=0x3cd29b5c25941ab8 kind=1
+    field bus_senders id=0xcb68e7f0012df3cc kind=14 elem=12 type=SessionChangeBusSendersText array=unbounded
+    field primary_account id=0x8fd6d804ece1e65d kind=17 type=AccountChoice
 
 table SessionInfo
     field friend_name id=0x2bcee2fac7bb6eb5 kind=17 type=string
@@ -62,9 +93,29 @@ table SessionInfo
     field model id=0x9de543933e6e703a kind=17 type=string
     field effort id=0x0083c43b32948f2f kind=17 type=string
     field instance id=0x414a134c24ef8152 kind=17 type=string
+    field auto_account id=0xbf329c2c6c784fde kind=1
+    field limit_request id=0xec5a07037be2a186 kind=9
+    field limit_account id=0xaac947ef35b48e90 kind=17 type=string
+    field limit_model id=0xe1e90ce0b9ed7706 kind=17 type=string
+    field context_epoch id=0xa811c78198b72d52 kind=9
+    field catalog id=0xf9928605e9a2ddd8 kind=17 type=string
 
 table SessionsDiff
     field sessions id=0xacebadbd2040ebac kind=14 elem=13 type=SessionChange array=unbounded
+    field requests id=0x7166d3e80f26d1f3 kind=14 elem=13 type=SecretRequest array=unbounded
+    field friends_known id=0xab40b3dce112851e kind=1
+    field friends id=0x82a6b14733b2685a kind=14 elem=13 type=Friend array=unbounded
+    field friends_sent id=0x6b65e9dac83a16e9 kind=1
+    field signins id=0x5fbecccd50c74838 kind=14 elem=13 type=SignInOffer array=unbounded
+    field next_action id=0xd6bdffc29f42fe4f kind=9
+
+table SignInOffer
+    field id id=0x08b72e07b55c3ac0 kind=9
+    field account id=0xa23fd2965dc429bc kind=17 type=string
+    field provider id=0xd02b4c8c65fb54dc kind=17 type=string
+    field opener id=0x8a28804a0a9ba5e2 kind=17 type=string
+    field host id=0x4077f8cc7eaf4d6f kind=17 type=string
+    field url id=0x4c4e8b193dc8be7e kind=17 type=bytes
 
 table Snapshot
     field next_session id=0x17b96c48ba4cbde7 kind=9
@@ -75,6 +126,7 @@ table StoreEntry
     field kind id=0xef9c96d721673243 kind=7 enum=EntryKind
     field closed id=0x85530f5090e836c5 kind=1
     field text id=0xfa04f4ef1995407e kind=17 type=string
+    field account_email_end id=0xb2ac393f2277c4d1 kind=8
 
 table StoreSession
     field id id=0x08b72e07b55c3ac0 kind=9
@@ -101,17 +153,26 @@ enum ActionKind
     variant LinkAccount id=0xff7b88c2ff4bff78
     variant UnlinkAccount id=0xdea837e630d4d73d
     variant SetDefault id=0xd9292b9837d05494
+    variant SecretAnswer id=0xb4e56199e0ae32c3
+    variant SecretCancel id=0x9f781e34e9b7c12f
+    variant SignInClaim id=0x7439c20e4947e3b5
+    variant SignInOpened id=0xa65506e3bb15f846
+    variant SignInCallback id=0x5c16b9e2e6fb5e04
+    variant SignOut id=0x5cdb26887b48e1e8
+    variant ResolveLimit id=0x0610706c3ede743e
 
 enum Activity
     variant Idle id=0xc92905d14a9421f3
     variant Busy id=0x2a02d2a7e41d6700
     variant Down id=0x032c13736048bf35
+    variant Working id=0x2e0c68be1fa79ae8
 
 enum EntryKind
     variant Person id=0x40d76f1f51639ec0
     variant Friend id=0x9f57a2661b8a7e2d
     variant Notice id=0x9117fb5195e75151
     variant Tool id=0x5a71f1fb3a12c6a7
+    variant Bus id=0x166a3d19b1137d79
 
 union Change
     arm append id=0x3e7fe942f71f1e61 payload=StoreEntry
@@ -123,3 +184,33 @@ union Change
 ## history
 ### 2026-11-14 (UTC) — first baseline: nexus step 1, the formats mirrored from docs/formats.md
 - baseline created over 16 tables — data written BEFORE this point is not covered by it
+
+### 2026-11-21 (UTC) — Include account choices in the friend state
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-21 (UTC) — Record server-authoritative sign-in availability with each account choice
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-21 (UTC) — Record the action acknowledged by each window state
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-21 (UTC) — Include the configured sign-in email on linked account choices
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-21 (UTC) — Record automatic subscription selection on sessions and friends
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-21 (UTC) — Preserve the email span in an account switch notice
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-21 (UTC) — Record paused model choices and local sign-out actions
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-24 (UTC) — Synchronize context resets and harness capabilities
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-24 (UTC) — Publish the allowed bus senders for a session
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-24 (UTC) — Expose the primary chat's bound account to windows
+- no compatibility-affecting edits; the wire absorbs the rest

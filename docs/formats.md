@@ -29,7 +29,13 @@ cannot read what the current one writes is refused as current: `docs/builds.md`,
 | 2 | Each session and each entry framed by its length (`Writer::str`); the session's activity after its effort; entry kind Tool 3. Anything after the sessions, and after the known fields of a frame, is skipped. Appended since, at the end of the session's frame: its instance (`str`). |
 | 3 | Format 2, then the open secret requests after the sessions (`docs/secrets.md`): a count, then each request framed by its length (its id, account, what is asked, the asker's session, the asker's friend, the asker's reason). The list is always written (count 0 for none), so a diff cut short before it is refused. Anything after a request's known fields, and after the list, is skipped. The actions up are framed from 3, with the secret dialog's answer (15) and cancel (16). A window of 2 receives no requests, and the server counts it as unable to take one; a secret action, which 2 cannot carry, is written as a stop naming session 0, refused by every server. |
 | 4 | schema's variable tables (`schema/Nexus.schema`): the state is a `SessionsDiff` and the actions an `ActionsDiff`, written and read by the generated code. Every field, enum value and union arm rides under the hash of its name, so rules 1 to 3 hold by construction: a field a reader does not know is skipped, an enum value it does not know reads None, and both are counted (`TableReport.unknown`), which the window logs when the count changes, for the state it receives. The server logs no such count: mosh hands it the actions re-encoded from those it kept, where an unknown field is already gone, and it refuses an unknown action kind with its reason instead. None reads as the plainest thing known: an entry kind as a Notice, an activity as Busy, an action kind as unknown (which the server refuses alone, never the link). It says the same as format 3. |
-| 5 | Format 4's tables with the in-app sign-in added (`docs/secrets.md` "Sign-in"): `SessionsDiff.signins`, the live sign-in flows as each window sees them (`SignInOffer`: its id, account, provider, the claim token of the window holding it or `*` to every other window, the server's host name, and its URL, set only in the holder's state), and the action kinds `SignInClaim`, `SignInOpened` and `SignInCallback`. A format 4 reader reads through all of it (rule 1: the field skipped and counted, the kinds read as unknown and refused alone), but a format 4 window would never act on a flow, so the server must know which windows do: that is why this is a new number rather than an added field. The server reads it from the window's Hello (the link's format, the older of the two protos) and nothing else: it writes `signins` only on a link of 5 or later, takes the three kinds only from one, and while no linked window is of 5 or later it asks for a claude account's login by a paste instead (`docs/secrets.md` "Versions"). The hand-written codecs of 1 to 3 carry no sign-in. |
+| 5 | Format 4's tables with the in-app sign-in added (`docs/secrets.md` "Sign-in"): `SessionsDiff.signins`, the live sign-in flows as each window sees them (`SignInOffer`: its id, account, provider, the claim token of the window holding it or `*` to every other window, the server's host name, and its URL, set only in the holder's state), and the action kinds `SignInClaim`, `SignInOpened` and `SignInCallback`. A format 4 reader reads through all of it (rule 1: the field skipped and counted, the kinds read as unknown and refused alone), but a format 4 window would never act on a flow, so the server must know which windows do: that is why this is a new number rather than an added field. The server reads it from the window's Hello (the link's format, the older of the two protos) and nothing else: it writes `signins` only on a link of 5 or later, takes the three kinds only from one, and while no linked window is of 5 or later it asks for a claude account's login by a paste instead (`docs/secrets.md` "Versions"). The typed `SignOut` action adds an account name and session check on links of format 5 or later. Earlier servers on format 5 count the unfamiliar action as unknown. The hand-written codecs of 1 to 3 carry no sign-in. |
+
+An account switch is a durable Notice whose text includes the destination address and label as they were when
+the switch succeeded. `EntryChange.account_email_end` and `StoreEntry.account_email_end` mark the byte just
+after the email in `Switched to <email> (<label>)`. When no email is configured, the notice reads `Switched to <label>`
+and the offset equals the prefix length. A zero or absent offset means an ordinary notice. Earlier readers show
+the complete notice in their usual text color.
 
 Fields appended to a format's frames do not change its number: a reader from before them skips them (rule 1), and
 nothing about them makes an older reader wrong. They are listed in the table in the order they were appended, and a
@@ -41,17 +47,50 @@ later field goes after them.
   claims nothing about who wrote it.
 - Unknown activity: **Busy** (the pulsing light blue). Something a later server knows is going on; busy says work
   may be under way without claiming the friend is waiting (idle) or broken (down). A stop is always allowed.
+- A server records an incoming bus message as framed store entry kind 5 and sends it as `EntryKind.Bus` on a
+  table link. Its text starts with the bus sender’s name and one newline, followed by the display body. Newlines
+  in the body are preserved. Windows use the entry kind to identify bus traffic. An older table reader renders
+  the text as a Notice. On links of formats 1 to 3 the server sends the text as a Notice directly.
+  A bus entry's store frame can append the original driver prompt as a length-prefixed string. The server uses it
+  when rebuilding context to retain a peer's attachment path and to exclude prompts still waiting for their turn.
+  It stays in the store. An older frame with no tail still provides the sender and display body.
+  Before encoding the tail, the server checks each stored bus sender against the recipient's current
+  Nova profile. An unregistered sender's position carries a closed Bus entry with empty text, including
+  when an older codec writes that position as a Notice. This preserves transcript indices across roster
+  changes. A table link also carries `SessionChange.bus_senders_known` and `bus_senders`, the sorted
+  registered names that have spoken in this session's stored Bus entries. An explicit empty list hides
+  every bus row. A missing field identifies an older writer. A current window uses these names to update
+  bubbles it has already displayed, including entries preceding the bounded tail. A reconnecting window
+  can recover message bodies from the current tail, plus any earlier history the window already received.
 - A format 1 link carries a Tool entry as a Friend entry (the line's text unchanged) and no activity.
 - Absent secret requests (a link of format 2 or older): **none**. A window with none shows no dialog and sends no secret
   action; the server, which knows the link's format, never offers that window a request.
 - Absent sign-in flows (a link of format 4 or older): **none**. The window claims, opens and binds nothing; the server,
   which knows the link's format, asks for a paste while no linked window reads flows.
+- A pending model-limit choice adds `limit_request`, `limit_account`, and `limit_model` to the session info table.
+  An absent or zero request means no choice. An empty target makes that option unavailable. The `ResolveLimit` action
+  binds the session, interrupted request, current payer, choice kind, and offered target. An earlier table reader
+  skips the fields and refuses the unknown action. The legacy codecs never offer this choice.
 - Absent instance (a server from before instances, or a format 1 link): **none**, empty. The window groups the session
   by its friend alone; the server, which holds the friend's instances, settles an empty instance to the friend's
   default instance (its first) and says so in a notice, so an empty one never decides where a driver runs.
 - Absent list of friends (a server from before it, or a link of format 3 or older): **not known**. Format 4's
   `SessionsDiff` carries `friends_sent` (bool, default false), `friends_known` (bool, default false) and `friends` (a
-  list of `Friend`, each its `name`; default empty), the friends the server's `friends.json` holds, in its order. A
+  list of `Friend` records with a `name` and linked `accounts`; default empty), the friends the server's `friends.json` holds, in its order. A
+  friend's accounts are ordered `AccountChoice` records with the stable `name` used for SetAccount and an optional
+  display `label`. The optional `email` is the address from the account’s server registry entry. It reads as
+  empty for older servers. Older windows skip it and retain the account name, label and sign-in status.
+  The optional `needs_sign_in` flag defaults to false. The server sets it for a linked account
+  when its browser sign-in is available and the server has no active login for it. A window can send a
+  `SignInClaim` naming the session and account the person selected, its claim token and an existing flow ID,
+  or zero to request the first flow. The server verifies the session still uses that linked account before
+  claiming its flow. With a named client, `SessionsDiff.next_action` is the first number from that client
+  the server had yet to apply when it built this snapshot. Zero means unavailable. The window waits for a
+  snapshot past its account-selection action before it can submit the draft or start a sign-in for that session.
+  A window with advertised choices can send SetAccount text prefixed with `+` to invoke a named
+  account command in the server profile. Every account ID excludes `+`. The server resolves the command against
+  the current session and validates its resulting ID before applying the ordinary SetAccount operation. Older
+  servers omit the choices, which read as an empty list, and the window sends them no account commands. A
   diff carries the friends, with `friends_sent` true, only when they differ from the state the diff is from (the one
   the reader holds); without `friends_sent` the reader keeps the friends it holds, so an unchanged list costs no bytes.
   A first diff, from the empty state, carries them whenever the server has a list. A diff from a server before these
@@ -111,15 +150,18 @@ server's state is.
 | --- | --- | --- | --- |
 | record | 1 | | a friend tab's, by name: migrated at open |
 | record | 2 | | by session, unframed, entry kinds 0 to 2 |
-| record | 3 | 3 | by session; each change framed by its length, each entry framed in it; trailing fields skipped. Appended since: an info's frame ends with the instance (`str`), a driver's with the summary flag (`u8`) and its session's directory (`str`) |
+| record | 3 | 3 | by session; each change framed by its length, each entry framed in it; trailing fields skipped. Appended since: an info's frame carries the instance (`str`) and optional Auto marker (`0xA2`), a driver's with the summary flag (`u8`) and its session's directory (`str`), followed by the optional session account (`0xA1`, `str`) |
 | snapshot | 1, 2 | | friend tabs (1 before drivers): migrated at open |
 | snapshot | 3 | | by session, unframed, entry kinds 0 to 2 |
-| snapshot | 4 | 4 | by session; each session framed, each entry framed in it; trailing fields skipped. Appended since, after the driver: the summary flag, its session's directory, then the instance |
+| snapshot | 4 | 4 | by session; each session framed, each entry framed in it; trailing fields skipped. Appended since, after the driver: the summary flag, its session's directory, then the instance, then the optional session account (`0xA1`, `str`) and optional Auto marker (`0xA2`) |
 
+- The Auto marker records automatic subscription selection. Its absence preserves the stored named selection.
 - Absent instance: **the friend's default instance**, settled at the server's start with a notice, as above.
-- Absent summary flag: **none owed**. Absent session directory: **not known**, and the next driver resumes the
-  harness session as before the field existed. Resuming claims least: it is what a server from before did, and a
-  harness that has no such session in the directory starts a new one.
+- An interrupted request may append a continuation to the driver record or session snapshot. Tag `0xA3` introduces the original prompt (`str`), the exhausted account names (`u32` count, then each `str`), and a model-limit decision pending (`u8`). No tag means no outstanding continuation. Its transcript effects and turn boundary commit together. An open turn on recovery may already have executed, so the server cuts it. A checkpoint between turns can safely continue.
+- Absent summary flag: **none owed**. An absent session account means the owner of the harness ID is unknown.
+  The server starts a new harness session and provides recent transcript entries on its first send. An explicitly
+  empty account identifies the accountless harness. A known account may resume in the same working directory,
+  or when an earlier format left the directory unknown.
 - An older server that rewrites the store (a compaction) drops the appended fields; a newer one then reads their
   defaults.
 
@@ -316,3 +358,10 @@ one): a typical frame's diff (one open entry grown by 120 bytes, 404 bytes) 0.02
 decode; a first state of sixteen sessions of sixteen 1 KiB entries (267 KB) 0.18 ms and 0.26 ms; eight 200-byte sends
 up 0.023 ms and 0.003 ms. Format 3 is faster per message (0.001 ms for the typical diff), and every one is far inside
 a 120 Hz frame's 8.3 ms.
+
+
+A session may advertise a `catalog` containing the model and effort choices reported by its
+harness. An empty catalog means discovery has supplied no choices. `context_epoch` advances
+on a server-side clear, so windows discard entries from the previous context even after a
+reconnect. The durable journal records this boundary as framed entry kind 4. Snapshots preserve
+boundaries. The active transcript and context handoff use entries after the last boundary.

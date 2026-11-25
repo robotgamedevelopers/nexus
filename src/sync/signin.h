@@ -55,8 +55,10 @@ constexpr std::size_t kSignInTokenBytes = 64;
 // Not a claim token (isClaimToken), so no window's token is ever equal to it, and no window learns another's token.
 constexpr const char* kSignInHeldBy = "*";
 
-// Whether accounts of `provider` sign in in the app: claude (`claude setup-token`).
+// Whether Nexus can start an interactive sign-in for this provider.
 bool hasSignIn(const std::string& provider);
+// These harnesses conduct their login on a private page on the server's loopback interface.
+bool usesLocalSignInPage(std::string_view provider);
 
 // Where a sign-in URL sends the browser back: its redirect_uri, which must be http on localhost or 127.0.0.1, with a
 // port; and the state the URL carries, which the callback must carry back.
@@ -73,8 +75,8 @@ bool signInHostAllowed(std::string_view provider, std::string_view host);
 // An https URL's authority: the bytes between "https://" and the first '/', '?' or '#' (userinfo and port included, so
 // that a URL with either is on no list); empty for any other URL.
 std::string_view urlHost(std::string_view url);
-// The URL's redirect and state; false when it is not an https URL to one of `provider`'s sign-in hosts with both, or
-// holds a space or a control byte (the process's URL is then refused and its flow fails; a window opens nothing).
+// Accept a provider authorization URL with its redirect and state, or the exact local broker URL for a provider
+// using a private page. The latter clears the target because the browser never needs a callback relay.
 bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarget* out);
 // Whether `a` and `b` hold the same bytes, in a time that depends on their lengths alone: for a state and a nonce.
 bool sameBytes(std::string_view a, std::string_view b);
@@ -186,7 +188,7 @@ public:
     // for a paste instead: every needed flow (no process, no window holding it), and every running flow no window
     // holds (its window went away), ends, dropped, its process ended, and its account is returned. models/SignIn.tla
     // FallBack.
-    std::vector<std::string> fallBack(SignInEffects* out);
+    std::vector<std::string> fallBack(SignInEffects* out, const std::set<std::string>& browserOnly = {});
     // The server is ending: every live flow is dropped and every process ended.
     SignInEffects drop();
 
@@ -239,7 +241,8 @@ public:
 
     void received(const std::vector<SignInOffer>& offers);
     void lost();
-    void shown() { armed_ = true; }
+    void shown() { armed_ = true; wantedAccount_.clear(); }
+    void showAccount(const std::string& account) { armed_ = !account.empty(); wantedAccount_ = account; }
     void hidden() { armed_ = false; }
     bool armed() const { return armed_; }
 
@@ -254,7 +257,8 @@ public:
     };
     // The next thing to do, one at a time: claim (an action up), or open (the gate, then the browser, then an
     // action up). `same` says whether an offer's server is on this machine (sameMachine).
-    Step next(bool (*same)(const SignInOffer&, const void*), const void* context);
+    Step next(bool (*same)(const SignInOffer&, const void*), const void* context,
+              const std::string* activeAccount = nullptr);
     // The flow the gate is bound for (0: none): it closes when that flow leaves the state or the link is lost.
     std::uint64_t gate() const { return gate_; }
     void gateClosed() { gate_ = 0; }
@@ -269,6 +273,7 @@ private:
     std::set<std::uint64_t> opened_;
     std::uint64_t gate_ = 0;
     bool armed_ = false;
+    std::string wantedAccount_;
 };
 
 // The window's one-shot gate, as pure logic over one connection's bytes: a GET on the target's path whose state

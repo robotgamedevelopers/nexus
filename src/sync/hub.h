@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "accounts/registry.h"
+#include "policy/host.h"
 #include "sync/actions.h"
 #include "sync/secrets.h"
 #include "sync/sessions.h"
@@ -52,6 +53,11 @@ struct DriverState {
     std::vector<std::string> waiting;
     bool summary = false;       // the next send carries a summary of the conversation (server/supervisor.h setPlace)
     std::string sessionDir{};   // the directory the harness session was made in: resumed only there (empty: not known)
+    std::optional<std::string> sessionAccount{};  // absent in older stores; empty means the accountless harness
+    // The original request for a quota-interrupted turn. A fresh provider session continues it before queued work.
+    std::string continuationPrompt{};
+    std::vector<std::string> exhaustedAccounts{};
+    bool modelLimitPending = false;
     bool operator==(const DriverState&) const = default;
 };
 
@@ -61,6 +67,8 @@ struct StoredSession {
     std::vector<EntryRef> transcript;
     std::vector<std::string> queue;
     DriverState driver;
+    // Original driver envelope for each bus entry, indexed by its position in transcript. Server-only.
+    std::map<std::size_t, std::string> busPrompts{};
 };
 
 // One change to a session: an entry at the end of its transcript; or (entry null) a prompt at the end of its queue;
@@ -69,10 +77,11 @@ struct StoredSession {
 // hold it and its id is the store's next.
 struct SessionChange {
     EntryRef entry;
-    std::string prompt;
+    std::string prompt; // queued text, or the original driver envelope when appending a Bus entry
     std::optional<DriverState> driver = std::nullopt;
     bool take = false;
     std::optional<SessionInfo> info = std::nullopt;
+    bool clearTranscript = false;
 };
 
 // The take change: the oldest queued prompt leaves the queue.
@@ -102,6 +111,9 @@ public:
 // next id is `next`: refused with why otherwise. Both stores apply this one rule.
 bool stepFits(SessionId id, const StoredSession* had, SessionId next, const std::vector<SessionChange>& changes,
               std::string* why);
+
+// Apply a validated, committed change to either store's in-memory session.
+void applyStoredChange(StoredSession& session, const SessionChange& change);
 
 class MemoryStore : public SessionStore {
 public:
@@ -140,20 +152,38 @@ extern const char* const kReceived;         // the placeholder reply: "(received
 extern const char* const kDefaultHarness;   // the harness of a session made with no Responder: "claude"
 
 // What a send, a queue, a stop and a change of a session's settings do once they are within the hub's limits.
+using AccountRoutes = std::map<std::string, std::string>; // friend to installed account-capable provider
+
 class Responder {
 public:
     virtual ~Responder() = default;
     // What a session made with `friendName` is when it copies from no other: its harness, and the friend's default
     // account, model and effort.
     virtual SessionInfo defaults(const std::string& friendName) const = 0;
+    // A responder with fixed per-friend drivers advertises them. Others can accept any linked provider.
+    virtual std::optional<AccountRoutes> accountRoutes() const { return std::nullopt; }
     // The changes a send of `prompt` makes to session `id` (the person's entry and anything after it, or a notice that
     // refuses it), which the hub commits in one step with the client's counter.
     virtual std::vector<SessionChange> send(SessionId id, const std::string& prompt) = 0;
+    // Prepare a literal prompt from the bus. On acceptance, return the driver's state changes without a person's
+    // transcript entry. On refusal, set why. The hub finishes either outcome through sent().
+    virtual std::vector<SessionChange> prepareBus(SessionId, const std::string&, std::string& why) {
+        why = "The session has no message bus responder.";
+        return {};
+    }
     // The changes a queue of `prompt` makes: the prompt at the end of the queue first, then anything that follows (the
     // oldest taken at once, when the friend is free), committed the same way.
     virtual std::vector<SessionChange> queue(SessionId id, const std::string& prompt) = 0;
     // The changes a stop of the friend's work in session `id` makes (a start cancelled: its prompt no longer waiting,
     // and a notice; none for an open turn or nothing running), committed the same way.
+    virtual std::vector<SessionChange> resetContext(SessionId, const DriverState& state, bool compact) {
+        DriverState fresh;
+        fresh.nextTurn = state.nextTurn;
+        fresh.summary = compact;
+        return {{nullptr, {}, fresh}};
+    }
+    virtual std::string friendInfo(const std::string&) const { return {}; }
+    virtual std::string catalog(const SessionInfo&) const { return {}; }
     virtual std::vector<SessionChange> stop(SessionId id) = 0;
     // Whether the store took the step of the send, queue or stop just given. Only once it did may the responder act
     // on it.
@@ -211,10 +241,17 @@ public:
     virtual bool keep(const accounts::Registry& registry, const std::string& message, std::string* why) = 0;
 };
 
+// Empty when all account choices fit a window snapshot. Also checked when reading committed or edited config.
+std::string accountRosterProblem(const accounts::Registry& registry);
+
 class Hub {
 public:
     // The state starts as every session the store already holds. Actions go to `responder` when one is given.
-    explicit Hub(SessionStore& store, Limits limits = {}, Responder* responder = nullptr);
+    explicit Hub(SessionStore& store, Limits limits = {}, Responder* responder = nullptr,
+        std::function<std::string()> bundlePath = [] { return std::string(); });
+
+    // The enabled bus senders in each recipient's Nova profile. Returns true when a displayed roster changed.
+    bool setBusSenders(const std::map<std::string, std::set<std::string>>& names);
 
     // Applies one action (each once: the link's Applier sees to that), deciding against the sessions the store holds.
     // A send gives the responder's changes, or without one the prompt and then the placeholder reply; a queue puts the
@@ -231,6 +268,16 @@ public:
     // false when refused, or when the store did not take the step (failed() then says whether it can take any more).
     bool apply(const Action& action, std::string* why = nullptr, const std::string& client = std::string());
 
+    // Admit this bus envelope once into the recipient's first session on its default instance. Its transcript
+    // entry, pending turn and receipt commit together. The caller acknowledges the bus only after the batch flush.
+    bool receiveBus(const std::string& recipient, const std::string& id, const std::string& sender,
+                    const std::string& displayBody, const std::string& promptBody, std::string* why = nullptr);
+    // Includes receipts admitted in the current batch. The bus acknowledgement still waits for its flush.
+    // Record an authoritative non-friend delivery as handled; it creates no session, transcript or driver turn.
+    bool ignoreBus(const std::string& recipient, const std::string& id, std::string* why, const std::string& source);
+    bool hasIgnoredBusReceipt(const std::string& recipient, const std::string& id, const std::string& source) const;
+    bool hasBusReceipt(const std::string& recipient, const std::string& id) const;
+
     // Changes that come from the server rather than a client (a friend's reply), in one step of the store, to a session
     // it holds. False, with why, when the store did not take it.
     bool commit(SessionId id, const std::vector<SessionChange>& changes, std::string* why = nullptr);
@@ -242,10 +289,11 @@ public:
 
     // What the friend of session `id` is doing now (sync/sessions.h Activity), as its Responder works it out: in memory
     // only, Idle until set. A session the store does not hold has none (false). Returns true when the state changed.
-    bool setActivity(SessionId id, Activity activity);
+    bool setActivity(SessionId id, Activity activity, std::uint32_t agents = 0);
 
     // The state every window receives: the sessions, the open secret requests and, once the hub holds a registry
     // (useAccounts(), applyAccounts()), its friends in order (Sessions::friends); with no registry, none known.
+    Sessions historyPage(SessionId id, std::uint64_t epoch, std::uint64_t first) const;
     const Sessions& state() const { return state_; }
     const Limits& limits() const { return limits_; }
     bool failed() const { return store_.failed(); }
@@ -276,6 +324,14 @@ public:
     // the registry as they start.
     void keepWith(AccountsKeeper* keeper) { keeper_ = keeper; }
     const accounts::Registry* accounts() const { return accounts_ ? &*accounts_ : nullptr; }
+
+    // Called by the server with its validated installer route. The workspace key in instance is the
+    // 32-character lowercase hexadecimal fingerprint of that route's workspace. The conversation has no roster row.
+    bool ensurePrimary(const SessionInfo& binding, std::string* why);
+    bool clearPrimary();
+    std::optional<SessionId> primarySession() const { return primary_; }
+    bool isPrimary(SessionId id) const { return primary_ && *primary_ == id; }
+    std::optional<AccountChoice> primaryChoice() const;
 
     // After accounts.json was first made from the drivers file (the accounts its lines passed with --account): each
     // session on no account whose friend now has a default takes it, told, so that it runs on the account it ran on
@@ -317,12 +373,19 @@ public:
     // What says, before any driver reports, whether an account is signed in (the server: its credential file is
     // there). Asked of each account when it first appears in the registry (at useAccounts() for every one), before the
     // sessions are settled; a driver's report afterwards overrides it. Set before useAccounts().
+    // The server retires any idle driver holding this exact login and forgets its grants under the account lock.
+    void signOutWith(std::function<std::string(const accounts::Account&)> hook) { signOut_ = std::move(hook); }
     void probeSignInWith(std::function<bool(const accounts::Account&)> probe) { probe_ = std::move(probe); }
 
-    // Where a usage limit on session `id`'s account is reported: the session moves to its friend's next signed-in
-    // linked account, in link order, with a notice; with none, the notice says so and the session stays. False, with
-    // why, when the session is not held, the hub holds no accounts, or there was none to move to.
-    bool rotate(SessionId id, std::string* why = nullptr);
+    // Pure request handlers. The server commits the returned text with the request's acknowledgement.
+    using NativeService = std::function<std::string(const std::string&)>;
+    void registerService(std::string name, NativeService handler) { services_[std::move(name)] = std::move(handler); }
+    // Preview the policy's next signed-in subscription, skipping payers already tried on this turn.
+    std::string nextSubscription(SessionId id, const std::vector<std::string>& exhausted, std::string& reason,
+                                 const std::string& provider = {}) const;
+    // Commit an automatic move. noEligible distinguishes a settled refusal from a failed store write.
+    bool rotate(SessionId id, std::string* why = nullptr, const std::vector<std::string>& exhausted = {},
+                bool* noEligible = nullptr);
 
     // The secret dialog (sync/secrets.h, docs/secrets.md, models/Secrets.tla). Until secretsWith() the hub takes no
     // asks and every secret answer or cancel is counted and dropped. `keeper` writes a value to its account's file,
@@ -373,6 +436,7 @@ public:
     // The account's process handed over its URL; printed its token; ended with no token (`why`, one line).
     void signInUrl(const std::string& account, std::uint64_t id, const SecretValue& url);
     void signInPrinted(const std::string& account, const SecretValue& token);
+    void signInEnrolled(const std::string& account, const std::string& provider, std::uint64_t id);
     void signInExited(const std::string& account, std::uint64_t id, const std::string& why);
     // A window's link ended: the flows it held (by its claim token) are let go of.
     void signInWindowGone(const std::string& opener);
@@ -387,7 +451,7 @@ public:
     void dropSignIns();
     // The state for the link of the window whose claim token is `opener`: state() with the URL of each flow that
     // window holds. state() itself carries no URL.
-    Sessions stateFor(const std::string& opener) const;
+    Sessions stateFor(const std::string& opener, const std::string& client = {}) const;
     const SignInDesk& signIns() const { return signIns_; }
     // The walk's faulty runs alone: SignInDesk's seams.
     void injectSignInClaimFault() { signIns_.injectClaimFault(); }
@@ -405,8 +469,10 @@ private:
     bool signInAction(const Action& action, std::string* why, const std::string& client);
     void secretEffects(const SecretEffects& effects);
     bool secretAction(const Action& action, std::string* why, const std::string& client);
+    bool createSession(const Action& action, std::string* why, const std::string& client, bool requireDefault = false);
     bool make(const Action& action, const SessionInfo& info, std::string* why, const std::string& client);
-    bool set(const Action& action, std::string* why, const std::string& client);
+    bool applyMessage(const Action& input, const StoredSession& session, std::string* why, const std::string& client);
+    bool set(const Action& action, std::string* why, const std::string& client, bool announce = false, const std::optional<std::string>& effort = {});
     bool accountAction(const Action& action, std::string* why, const std::string& client);
     bool count(const Action& action, std::string* why, const std::string& client);
     bool counted(const Action& action, const std::string& refused, std::string* why, const std::string& client);
@@ -420,19 +486,40 @@ private:
                  std::vector<std::string>* report);
     void take(accounts::Registry next);
     void stateFriends();    // the registry's friends into the state (Sessions::setFriends), when they changed
+    EntryRef switchNotice(const std::string& account) const;
     bool moveTo(SessionId id, const SessionInfo& info, const std::string& notice);
+    std::vector<std::string> subscriptionsFor(const std::string& friendName) const;
+    std::string firstAutoAccount(const std::vector<std::string>& subscriptions) const;
     std::string harnessOf(const std::string& account, const std::string& otherwise) const;
+    void offerLimitChoice(SessionId id, const DriverState& driver, SessionInfo& info);
+    bool resolveLimit(const Action& action, std::string* why, const std::string& client);
     void refresh(SessionId id);
+    void publishSessions(std::vector<SessionRef> sessions);
     SessionStore& store_;
     Limits limits_;
     Responder* responder_;
+    struct BusHistory {
+        std::uint64_t contextEpoch = 0;
+        std::size_t indexed = 0;
+        std::set<std::string> senders; // speakers represented by a typed Bus entry in this context
+        std::vector<std::string> allowed; // their sorted intersection with the current Nova roster
+    };
+    std::map<SessionId, BusHistory> busHistory_;
+    std::map<std::string, std::set<std::string>> busSenders_;
     std::map<SessionId, EntryRef> open_;     // each session's open entry, if it has one
-    std::map<SessionId, Activity> activity_; // each session's activity, if not Idle
+    std::map<SessionId, std::pair<Activity, std::uint32_t>> activity_; // each session's activity, if not Idle
     Sessions state_;
+    std::optional<SessionId> primary_;
     std::optional<accounts::Registry> accounts_;
     AccountsKeeper* keeper_ = nullptr;
+    std::map<std::string, NativeService> services_;
+    mutable policy::Host application_{"server"};
+    std::function<std::string()> bundlePath_;
+    bool needsVerifiedLogin(const accounts::Account& account);
     std::set<std::string> signedIn_;
     std::function<bool(const accounts::Account&)> probe_;
+    std::function<std::string(const accounts::Account&)> signOut_;
+    bool signOutAction(const Action& action, std::string* why, const std::string& client);
     SecretDesk desk_;
     SecretKeeper* secretKeeper_ = nullptr;
     SecretEvents* secretEvents_ = nullptr;

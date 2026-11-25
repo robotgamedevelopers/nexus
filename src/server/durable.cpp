@@ -3,29 +3,33 @@
 namespace nexus::server {
 
 namespace {
+constexpr std::uint8_t kContextBoundary = 4;
 
 // The store keeps an entry's kind as it was written; a kind this build does not know (a later server's) is shown as a
 // notice, a plain dim line, and never handed on as a kind the window cannot draw.
 sync::EntryRef toRef(const store::Entry& e) {
-    const EntryKind kind = e.kind <= static_cast<std::uint8_t>(EntryKind::Tool) ? static_cast<EntryKind>(e.kind) :
-        EntryKind::Notice;
-    return std::make_shared<const sync::SessionEntry>(sync::SessionEntry{kind, e.text, e.closed});
+    const bool known = e.kind <= static_cast<std::uint8_t>(EntryKind::Tool) ||
+        e.kind == static_cast<std::uint8_t>(EntryKind::Bus);
+    const EntryKind kind = known ? static_cast<EntryKind>(e.kind) : EntryKind::Notice;
+    return std::make_shared<const sync::SessionEntry>(sync::SessionEntry{kind, e.text, e.closed, e.account_email_end});
 }
 
 sync::DriverState toState(const store::Driver& d) {
-    return sync::DriverState{d.next_turn, d.open_turn, d.session, d.waiting, d.summary, d.session_dir};
+    return sync::DriverState{d.next_turn, d.open_turn, d.session, d.waiting, d.summary, d.session_dir, d.session_account,
+        d.continuation_prompt, d.exhausted_accounts, d.model_limit_pending};
 }
 
 store::Driver toDriver(const sync::DriverState& d) {
-    return store::Driver{d.nextTurn, d.openTurn, d.session, d.waiting, d.summary, d.sessionDir};
+    return store::Driver{d.nextTurn, d.openTurn, d.session, d.waiting, d.summary, d.sessionDir, d.sessionAccount,
+        d.continuationPrompt, d.exhaustedAccounts, d.modelLimitPending};
 }
 
 sync::SessionInfo toInfo(const store::Info& i) {
-    return sync::SessionInfo{i.friend_name, i.harness, i.account, i.model, i.effort, i.instance};
+    return sync::SessionInfo{i.friend_name, i.harness, i.account, i.model, i.effort, i.instance, i.auto_account};
 }
 
 store::Info toStored(const sync::SessionInfo& i) {
-    return store::Info{i.friendName, i.harness, i.account, i.model, i.effort, i.instance};
+    return store::Info{i.friendName, i.harness, i.account, i.model, i.effort, i.instance, i.autoAccount};
 }
 
 } // namespace
@@ -48,6 +52,13 @@ bool DurableStore::open(store::Fs& fs, const std::string& dir, std::string* why,
         sync::StoredSession& t = sessions_[id];
         t.info = toInfo(session.info);
         for (const store::Entry& e : session.transcript) {
+            if (e.kind == kContextBoundary) {
+                ++t.info.contextEpoch;
+                t.transcript.clear();
+                t.busPrompts.clear();
+                continue;
+            }
+            if (!e.bus_prompt.empty()) t.busPrompts.emplace(t.transcript.size(), e.bus_prompt);
             t.transcript.push_back(toRef(e));
         }
         t.queue = session.queue;
@@ -81,7 +92,10 @@ bool DurableStore::commit(sync::SessionId id, const std::vector<sync::SessionCha
     out.reserve(changes.size());
     for (const sync::SessionChange& c : changes) {
         store::Change sc;
-        if (c.take) {
+        if (c.clearTranscript) {
+            sc.kind = store::Change::Kind::Append;
+            sc.entry = store::Entry{kContextBoundary, "Context cleared.", true, 0};
+        } else if (c.take) {
             sc.kind = store::Change::Kind::Dequeue;
         } else if (c.info) {
             sc.kind = store::Change::Kind::SetInfo;
@@ -91,7 +105,8 @@ bool DurableStore::commit(sync::SessionId id, const std::vector<sync::SessionCha
             sc.driver = toDriver(*c.driver);
         } else if (c.entry) {
             sc.kind = store::Change::Kind::Append;
-            sc.entry = store::Entry{static_cast<std::uint8_t>(c.entry->kind), c.entry->text, c.entry->closed};
+            sc.entry = store::Entry{static_cast<std::uint8_t>(c.entry->kind), c.entry->text, c.entry->closed,
+                                    c.entry->accountEmailEnd, c.entry->kind == EntryKind::Bus ? c.prompt : std::string{}};
         } else {
             sc.kind = store::Change::Kind::Enqueue;
             sc.prompt = c.prompt;
@@ -108,17 +123,7 @@ bool DurableStore::commit(sync::SessionId id, const std::vector<sync::SessionCha
     if (!changes.empty()) {
         sync::StoredSession& t = sessions_[id];     // the store refused the step had it not held or made the session
         for (const sync::SessionChange& c : changes) {
-            if (c.take) {
-                t.queue.erase(t.queue.begin());     // the store refused the step had the queue nothing left
-            } else if (c.info) {
-                t.info = *c.info;
-            } else if (c.driver) {
-                t.driver = *c.driver;
-            } else if (c.entry) {
-                t.transcript.push_back(c.entry);
-            } else {
-                t.queue.push_back(c.prompt);
-            }
+            sync::applyStoredChange(t, c);
         }
     }
     return true;

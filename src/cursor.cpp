@@ -29,6 +29,7 @@ int breathLevel(double seconds) {
 
 Oklch cursorColor(CursorState state, int level) {
     switch (state) {
+        case CursorState::Working: return Oklch{0.760f, 0.160f, 62.0f};
         case CursorState::Busy: {
             const float f = static_cast<float>(std::clamp(level, 0, kBreathLevels - 1)) / (kBreathLevels - 1);
             return Oklch{kBusyDim.l + (kBusyBright.l - kBusyDim.l) * f, kBusyDim.c, kBusyDim.h};

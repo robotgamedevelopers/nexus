@@ -695,8 +695,15 @@ void codecs() {
     up.add(claim);
     up.add(opened);
     up.add(cb);
+    sync::Action signOut;
+    signOut.kind = sync::ActionKind::SignOut;
+    signOut.session = 17;
+    signOut.account = "logout-profile";
+    up.add(signOut);
     const std::vector<sync::Action> got = sync::Actions::parse(up.init_diff(), sync::kSignInFormat);
-    CHECK(got.size() == 3 && got[0].kind == sync::ActionKind::SignInClaim && got[0].request == 4 &&
+    CHECK(got.size() == 4 && got[3].kind == sync::ActionKind::SignOut && got[3].session == 17 &&
+          got[3].account == "logout-profile");
+    CHECK(got[0].kind == sync::ActionKind::SignInClaim && got[0].request == 4 &&
           got[0].text == "w1");
     CHECK(got[1].kind == sync::ActionKind::SignInOpened && got[2].kind == sync::ActionKind::SignInCallback &&
           got[2].secret.bytes() == kCallback);
@@ -708,16 +715,17 @@ void codecs() {
         older.setFormat(format);
         older.add(cb);
         older.add(claim);
+        older.add(signOut);
         const std::string wire = older.init_diff();
-        CHECK(!leaks(wire) && !holds(wire, "w1"));
+        CHECK(!leaks(wire) && !holds(wire, "w1") && !holds(wire, "logout-profile"));
         const std::vector<sync::Action> back = sync::Actions::parse(wire, format);
-        CHECK(back.size() == 2 && back[0].kind == sync::ActionKind::Stop && back[0].session == 0 &&
+        CHECK(back.size() == 3 && back[2].kind == sync::ActionKind::Stop && back[2].session == 0 && back[0].kind == sync::ActionKind::Stop && back[0].session == 0 &&
               back[1].kind == sync::ActionKind::Stop && back[1].session == 0 && back[0].secret.empty() &&
               back[1].text.empty());
     }
     // A server reading a link of 4 takes none of them even if they come: unknown, nothing of them kept.
     const std::vector<sync::Action> asFour = sync::Actions::parse(up.init_diff(), sync::kTablesFormat);
-    CHECK(asFour.size() == 3);
+    CHECK(asFour.size() == 4);
     for (const sync::Action& a : asFour) {
         CHECK(a.kind == sync::ActionKind::Unknown && a.text.empty() && a.request == 0 && a.secret.empty());
     }
@@ -890,6 +898,50 @@ struct Server {
     }
 };
 
+void signOut() {
+    store::MemFs fs;
+    Keeper k;
+    Server s(fs, k);
+    std::vector<std::string> removed;
+    std::string error;
+    s.hub->signOutWith([&](const accounts::Account& account) {
+        if (error.empty()) removed.push_back(account.name);
+        return error;
+    });
+    sync::Action a;
+    a.session = 1;
+    a.kind = sync::ActionKind::SignOut;
+    a.account = "a2";
+    std::string why;
+    auto logout = [&] {
+        a.num = ++s.num;
+        return s.hub->apply(a, &why, "c1");
+    };
+    CHECK(!logout() && removed.empty() && holds(why, "selection changed"));
+    a.account = "a1";
+    CHECK(s.act(sync::ActionKind::SignInClaim, 1, "window"));
+    CHECK(!logout() && removed.empty() && holds(why, "open sign-in"));
+    s.hub->reportSignedIn("a1", true);
+    error = "Login lock is busy.";
+    CHECK(!logout() && s.hub->signedIn().count("a1") && holds(s.transcript(1), error));
+    error.clear();
+    CHECK(logout() && s.store.applied("c1") == a.num);
+    CHECK(removed == std::vector<std::string>{"a1"} && !s.hub->signedIn().count("a1") && s.hub->signedIn().count("a2"));
+    CHECK(s.hub->state().friends().front().accounts.front().needsSignIn);
+    CHECK(holds(s.transcript(1), "Signed out of a1"));
+    sync::Action select;
+    select.kind = sync::ActionKind::SetAccount;
+    select.session = 1;
+    select.text = sync::kAutoAccountTarget;
+    CHECK(s.hub->apply(select));
+    a.account = s.store.find(1)->info.account;
+    CHECK(logout() && removed.size() == 2 && removed.back() == a.account);
+    select.text = "a3";
+    CHECK(s.hub->apply(select));
+    a.account = "a3";
+    CHECK(!logout() && holds(why, "provider") && removed.size() == 2);
+}
+
 void hub() {
     store::MemFs fs;
     Keeper k;
@@ -1039,6 +1091,104 @@ void hub() {
         h.reportSignedIn("a1", false);
         CHECK(h.state().requests().size() == 1 && h.state().offers().empty());
     }
+}
+
+// A provider confirms an account through its own durable receipt. A returned process or another account's
+// completed enrollment cannot sign it in. Choosing an on-use account starts the first flow.
+void hub_enrolled() {
+    store::MemFs fs;
+    Keeper keeper;
+    Server s(fs, keeper);
+    auto registry = *s.hub->accounts();
+    accounts::Account extra{"alternate", "codex"};
+    extra.signInOnUse = true;
+    registry.accounts.push_back(extra);
+    registry.friends.push_back(accounts::Friend{"reviewer", {extra.name}, extra.name});
+    s.hub->useAccounts(registry, nullptr);
+    CHECK(!s.hub->signIns().live(extra.name));
+    CHECK(s.hub->state().friends().back().accounts.front().needsSignIn);
+    sync::Action ensure;
+    ensure.kind = sync::ActionKind::Ensure;
+    ensure.friendName = "reviewer";
+    std::string why;
+    CHECK(s.hub->apply(ensure, &why));
+    CHECK(!s.hub->signIns().live(extra.name));
+    sync::Action claim;
+    claim.kind = sync::ActionKind::SignInClaim;
+    claim.text = "w1";
+    claim.session = 1; // another open session, still on its own account
+    claim.account = extra.name;
+    CHECK(!s.hub->apply(claim, &why) && !s.hub->signIns().live(extra.name));
+    claim.session = 2;
+    claim.num = 1;
+    CHECK(s.hub->apply(claim, &why, "picker"));
+    sync::Sessions updated;
+    updated.apply_string(s.hub->stateFor("w1", "picker").init_diff());
+    CHECK(updated.nextAction() == 2 && updated.find(2) && updated.find(2)->info.account == extra.name);
+    CHECK(s.hub->stateFor("w2", "another").nextAction() == 1);
+    CHECK(s.hub->apply(claim, &why) && s.runner.started.size() == 1);
+    const auto flow = s.hub->signIns().flowOf(extra.name);
+    CHECK(flow.has_value());
+    if (!flow) return;
+    s.hub->signInEnrolled(extra.name, "grok", flow->first);
+    s.hub->signInEnrolled(extra.name, extra.provider, flow->first + 1);
+    s.hub->signInPrinted(extra.name, secret(kToken));
+    CHECK(s.hub->signIns().stateOf(flow->first) == sync::SignInState::Started);
+    CHECK(s.hub->signedIn().count(extra.name) == 0 && keeper.files.empty());
+    s.hub->signInEnrolled(extra.name, extra.provider, flow->first);
+    CHECK(s.hub->signIns().stateOf(flow->first) == sync::SignInState::Failed);
+    const auto again = s.hub->signIns().flowOf(extra.name);
+    CHECK(again.has_value());
+    if (!again) return;
+    CHECK(s.act(sync::ActionKind::SignInClaim, again->first, "w1"));
+    s.hub->probeSignInWith([&](const accounts::Account& a) { return a.name == extra.name; });
+    s.hub->signInEnrolled(extra.name, extra.provider, again->first);
+    CHECK(s.hub->signedIn().count(extra.name) == 1 && !s.hub->signIns().live(extra.name));
+    CHECK(s.responder.logins == std::vector<std::string>{extra.name});
+    CHECK(!s.hub->state().friends().back().accounts.front().needsSignIn);
+    // A configured Claude email requires a fresh provider grant on reload, even when the account already worked.
+    auto& named = registry.accounts[1];
+    named.email = "personal@example.test";
+    s.hub->probeSignInWith([](const accounts::Account&) { return false; });
+    s.hub->useAccounts(registry, nullptr);
+    CHECK(!s.hub->signedIn().contains(named.name));
+    const auto waiting = s.hub->signIns().flowOf(named.name);
+    CHECK(waiting);
+    if (!waiting) return;
+    s.hub->reportSignedIn(named.name, true);
+    s.hub->signInPrinted(named.name, secret(kToken));
+    CHECK(!s.hub->askSecret({}, named.name, "oauth-token", "Paste login", &why));
+    CHECK(keeper.files.empty() && !s.hub->signedIn().contains(named.name));
+    CHECK(s.act(sync::ActionKind::SignInClaim, waiting->first, "w1"));
+    named.email = "new@example.test";
+    s.hub->useAccounts(registry, nullptr);
+    CHECK(s.hub->signIns().stateOf(waiting->first) == sync::SignInState::Dropped);
+    const auto replacement = s.hub->signIns().flowOf(named.name);
+    CHECK(replacement && replacement->first != waiting->first);
+    if (!replacement) return;
+    s.hub->probeSignInWith([](const accounts::Account& a) { return a.email == "new@example.test"; });
+    s.hub->signInEnrolled(named.name, "claude", waiting->first);
+    CHECK(!s.hub->signedIn().contains(named.name));
+    CHECK(s.act(sync::ActionKind::SignInClaim, replacement->first, "w1"));
+    s.hub->signInEnrolled(named.name, "claude", replacement->first);
+    CHECK(s.hub->signedIn().contains(named.name) && s.responder.logins.back() == named.name);
+    sync::Action move;
+    move.kind = sync::ActionKind::SetAccount;
+    move.session = 1;
+    move.text = named.name;
+    CHECK(s.hub->apply(move, &why));
+    sync::Action prompt;
+    prompt.kind = sync::ActionKind::Send;
+    prompt.session = 1;
+    prompt.text = "fixture";
+    s.hub->probeSignInWith([](const accounts::Account&) { return false; });
+    CHECK(!s.hub->apply(prompt, &why) && why.find(named.email) != std::string::npos);
+    CHECK(!s.hub->signedIn().contains(named.name));
+
+    registry.accounts.back().provider = "grok";
+    s.hub->probeSignInWith([](const accounts::Account&) { return false; });
+    s.hub->useAccounts(registry, nullptr);
+    CHECK(s.hub->signedIn().count(extra.name) == 0);
 }
 
 // A login printed late: the deadline passes while the browser is sent back (the callback forwarded, the process told
@@ -1268,7 +1418,7 @@ struct Group {
 
 const Group kGroups[] = {
     {"urls", urls}, {"desk", desk}, {"opener", opener}, {"gate", gate}, {"scanner", scanner},
-    {"codecs", codecs}, {"hub", hub}, {"hub_late", hub_late}, {"hub_older", hub_older}, {"leak", leak}, {"leak_scan", leak_scan},
+    {"codecs", codecs}, {"hub", [] { hub(); hub_enrolled(); signOut(); }}, {"hub_late", hub_late}, {"hub_older", hub_older}, {"leak", leak}, {"leak_scan", leak_scan},
 };
 
 } // namespace

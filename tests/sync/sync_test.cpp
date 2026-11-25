@@ -728,6 +728,115 @@ void hub_send_and_queue() {
     CHECK(t->queue == std::vector<std::string>{"later"});
     CHECK(t->info == infoOf("ada"));
     CHECK(hub.state().find(sid("bo")) == nullptr);
+    const auto epoch = t->info.contextEpoch;
+    for (unsigned i = 0; i < 300; ++i)
+        CHECK(hub.apply(Action{i + 3, ActionKind::Send, sid("ada"), "", std::to_string(i), {}}));
+    std::uint64_t offset = 0;
+    while (offset < hub.state().find(sid("ada"))->total()) {
+        Sessions decoded;
+        decoded.apply_string(hub.historyPage(sid("ada"), epoch, offset).init_diff());
+        const auto* page = decoded.find(sid("ada"));
+        CHECK(page && page->first == offset && !page->entries.empty() && page->entries.size() <= 256);
+        if (!page || page->entries.empty()) break;
+        for (const auto& entry : page->entries) CHECK(*entry == *store.find(sid("ada"))->transcript[offset++]);
+    }
+    CHECK(hub.historyPage(sid("ada"), epoch + 1, 0).sessions().empty());
+}
+
+void hub_primary_requires_an_installer_binding() {
+    MemoryStore store;
+    Hub hub(store);
+    std::string why;
+    const SessionInfo binding{"@primary", "claude", "work", {}, {}, std::string(32, 'a')};
+    CHECK(!hub.ensurePrimary(binding, &why));  // no authoritative registry yet
+
+    accounts::Registry registry;
+    registry.accounts = {{"work", "claude"}, {"metered", "claude", accounts::Billing::Api}};
+    CHECK(hub.useAccounts(registry, nullptr).empty());
+    CHECK(!hub.apply(create(1, "@primary", 0), &why, "window"));
+    CHECK(!hub.apply(ensure(2, "@primary"), &why, "window"));
+    CHECK(store.applied("window") == 2);
+    const std::vector<SessionInfo> invalid = {
+        {"named", "claude", "work", {}, {}, binding.instance},
+        {"@primary", "claude", "missing", {}, {}, binding.instance},
+        {"@primary", "codex", "work", {}, {}, binding.instance},
+        {"@primary", "claude", "metered", {}, {}, binding.instance},
+        {"@primary", "claude", "work", {}, {}, "invalid-key"},
+    };
+    for (const auto& rejected : invalid) {
+        why.clear();
+        CHECK(!hub.ensurePrimary(rejected, &why));
+        CHECK(!why.empty());
+    }
+    CHECK(!hub.primarySession() && store.size() == 0);
+    CHECK(hub.state().friendsKnown() && hub.state().friends().empty());
+}
+
+void hub_primary_session() {
+    MemoryStore store;
+    accounts::Registry registry;
+    registry.accounts = {{"work", "claude"}, {"other", "claude"}};
+    const SessionInfo work{"@primary", "claude", "work", {}, {}, std::string(32, 'a')};
+    std::string why;
+    SessionId original = 0;
+    {
+        Hub hub(store);
+        CHECK(hub.useAccounts(registry, nullptr).empty());
+        CHECK(!hub.signedIn().contains("work"));
+        CHECK(hub.ensurePrimary(work, &why)); // opening the chat does not require a completed sign-in
+        original = hub.primarySession().value_or(0);
+        CHECK(original != 0 && hub.isPrimary(original));
+        CHECK(hub.ensurePrimary(work, &why));
+        CHECK(store.size() == 1 && hub.primarySession() == original);
+        CHECK(hub.state().friendsKnown() && hub.state().friends().empty());
+        hub.reportSignedIn("work", true);
+        CHECK(hub.apply(numbered(1, act(ActionKind::Send, original, "before restart")), &why, "window"));
+    }
+
+    Hub restarted(store);
+    restarted.useAccounts(registry, nullptr);
+    CHECK(!restarted.primarySession() && !restarted.isPrimary(original));
+    CHECK(!restarted.state().find(original));
+    CHECK(!restarted.apply(numbered(2, act(ActionKind::Send, original, "still dormant")), &why, "window"));
+    CHECK(restarted.ensurePrimary(work, &why) && restarted.primarySession() == original);
+    const auto* restored = store.find(original);
+    CHECK(restored && restored->info.account == "work" && restored->info.instance == work.instance);
+    CHECK(restored && !restored->transcript.empty() && restored->transcript.front()->text == "before restart");
+    if (!restored) return;
+    const auto transcript = restored->transcript;
+
+    auto other = work;
+    other.account = "other";
+    CHECK(restarted.ensurePrimary(other, &why));
+    const auto second = restarted.primarySession().value_or(0);
+    CHECK(second != 0 && second != original && restarted.isPrimary(second));
+    CHECK(!restarted.isPrimary(original) && !restarted.state().find(original));
+    CHECK(!restarted.apply(numbered(3, act(ActionKind::Send, original, "wrong account")), &why, "window"));
+    CHECK(store.find(original)->transcript == transcript);
+    CHECK(store.find(second) && store.find(second)->transcript.empty());
+    CHECK(restarted.state().friends().empty());
+
+    other.instance = std::string(32, 'b');
+    CHECK(restarted.ensurePrimary(other, &why));
+    const auto third = restarted.primarySession().value_or(0);
+    CHECK(third != 0 && third != second && !restarted.state().find(second));
+    restarted.clearPrimary();
+    CHECK(!restarted.primarySession() && !restarted.isPrimary(third) && !restarted.state().find(third));
+    CHECK(!restarted.apply(numbered(4, act(ActionKind::Queue, third, "cleared")), &why, "window"));
+    CHECK(store.find(third) && store.find(third)->queue.empty());
+
+    CHECK(restarted.ensurePrimary(work, &why) && restarted.primarySession() == original);
+    CHECK(store.size() == 3 && store.find(original)->transcript == transcript);
+
+    std::vector<std::string> report;
+    registry.accounts.front().label = "Renamed subscription";
+    CHECK(restarted.applyAccounts(registry, "account label changed", &report));
+    CHECK(restarted.primarySession() == original && store.find(original)->info.account == "work");
+    registry.accounts.erase(registry.accounts.begin());
+    CHECK(restarted.applyAccounts(registry, "subscription removed", &report));
+    CHECK(!restarted.isPrimary(original) && !restarted.state().find(original));
+    CHECK(!restarted.apply(numbered(5, act(ActionKind::Send, original, "removed account")), &why, "window"));
+    CHECK(store.find(original)->transcript == transcript);
 }
 
 void hub_limits() {
@@ -839,6 +948,35 @@ public:
     std::vector<std::string> sentTo;
     std::vector<std::pair<SessionId, SessionInfo>> configuredTo;
 };
+
+void conversation_commands() {
+    class CatalogResponder : public RecordingResponder {
+        std::string catalog(const SessionInfo&) const override {
+            return R"({"default":"m0","models":{"m0":["low"],"m1":["high"]}})";
+        }
+    } responder;
+    MemoryStore store;
+    Hub hub(store, Limits{}, &responder);
+    withSessions(hub, {"ada", "bea"});
+    const auto send = [&](const char* command) { return hub.apply(act(ActionKind::Send, 1, command)); };
+    CHECK(send("/model"));
+    CHECK(store.find(1)->transcript.back()->text.find("m0 (current)") != std::string::npos);
+    CHECK(send("/model m1 low") && store.find(1)->info.model != "m1");
+    CHECK(send("/model m1 high") && store.find(1)->info.model == "m1" && store.find(1)->info.effort == "high");
+    CHECK(send("/info") && store.find(1)->transcript.back()->text.find("Friend: ada") != std::string::npos);
+    CHECK(store.find(1)->transcript.back()->text.find("Pronouns:") == std::string::npos);
+    CHECK(send("/model m1") && store.find(1)->info.model == "m1");
+    CHECK(send("/effort high") && store.find(1)->info.effort == "high");
+    CHECK(send("/effort low") && store.find(1)->info.effort == "high");
+    CHECK(send("remember me"));
+    CHECK(send("/compact") && store.find(1)->driver.summary);
+    CHECK(send("/clear"));
+    CHECK(store.find(1)->transcript.empty());
+    CHECK(hub.state().find(1)->entries.empty());
+    CHECK(store.find(1)->info.contextEpoch == 1 && !store.find(1)->driver.summary);
+    CHECK(store.find(1)->info.model == "m1" && store.find(1)->info.effort == "high");
+    CHECK(store.find(2)->info.contextEpoch == 0 && store.find(2)->transcript.empty());
+}
 
 void actions_stop_kind() {
     Actions a;
@@ -988,6 +1126,82 @@ void hub_settings() {
     CHECK(hub.apply(numbered(6, act(ActionKind::SetAccount, 1, "")), &why, "w"));      // back to the default
     CHECK(store.find(1)->info.account.empty() && r.configuredTo.size() == 2);
     CHECK(store.applied("w") == 6);
+}
+
+// A pending model-specific limit survives a reconnect. A stale or duplicate choice
+// must never charge another subscription or launch the interrupted work twice.
+void hub_model_limit_choice() {
+    for (const bool changeAccount : {true, false}) {
+        MemoryStore store;
+        DriverState paused;
+        paused.nextTurn = 4;
+        paused.modelLimitPending = true;
+        paused.continuationPrompt = "continue my work";
+        paused.exhaustedAccounts = {"one"};
+        CHECK(store.commit(1, {infoChange({"ada", "claude", "one", "fable", ""}),
+            SessionChange{nullptr, {}, paused}}, {}, 0, nullptr));
+
+        Hub hub(store);
+        accounts::Registry registry;
+        registry.accounts = {{"one", "claude"}, {"other", "codex"}, {"two", "claude"}};
+        registry.friends = {{"ada", {"one", "other", "two"}, "one"}};
+        hub.useAccounts(registry, nullptr);
+        hub.reportSignedIn("one", true);
+        hub.reportSignedIn("other", true);
+        hub.reportSignedIn("two", true);
+
+        Sessions mirror;
+        mirror.apply_string(hub.state().init_diff());
+        const auto& offer = mirror.find(1)->info;
+        CHECK(offer.limitRequest == 4 && offer.limitAccount == "two" && offer.limitModel == "opus");
+
+        auto select = act(ActionKind::ResolveLimit, 1, changeAccount ? "account" : "model",
+            changeAccount ? offer.limitAccount : offer.limitModel);
+        select.account = offer.account;
+        select.request = offer.limitRequest;
+        Actions actions(1);
+        actions.add(select);
+        select = Actions::parse(actions.init_diff()).at(0);
+        for (const auto kind : {ActionKind::SetAccount, ActionKind::SetModel}) {
+            std::string why;
+            CHECK(!hub.apply(act(kind, 1, "other"), &why));
+            CHECK(why.find("pending model-limit choice") != std::string::npos);
+        }
+        auto stale = select;
+        stale.request--;
+        CHECK(!hub.apply(stale));
+        stale = select;
+        stale.friendName = "arbitrary";
+        CHECK(!hub.apply(stale));
+        CHECK(store.find(1)->driver == paused);
+
+        if (changeAccount) {
+            stale = select;
+            stale.friendName = "other";  // a different provider cannot serve this model
+            CHECK(!hub.apply(stale));
+            hub.reportSignedIn("one", false);
+            hub.reportSignedIn("two", false);
+            CHECK(hub.state().find(1)->info.limitRequest == 4);
+            CHECK(hub.state().find(1)->info.limitAccount.empty() && hub.state().find(1)->info.limitModel.empty());
+            CHECK(!hub.apply(select));
+            CHECK(store.find(1)->driver == paused);
+            hub.reportSignedIn("one", true);
+            hub.reportSignedIn("two", true);
+        }
+
+        CHECK(hub.apply(select, nullptr, "w"));
+        const auto* result = store.find(1);
+        CHECK(result->info.harness == "claude");
+        CHECK(result->info.model == (changeAccount ? "fable" : "opus"));
+        CHECK(result->info.account == (changeAccount ? "two" : "one"));
+        CHECK(result->driver.continuationPrompt == paused.continuationPrompt);
+        CHECK(result->driver.exhaustedAccounts.empty() == !changeAccount);
+        CHECK(!result->driver.modelLimitPending && !hub.state().find(1)->info.limitRequest);
+        CHECK(store.applied("w") == select.num);
+        Hub restarted(store);
+        CHECK(!restarted.apply(select));
+        CHECK(store.find(1)->transcript.size() == 1);
+    }
 }
 
 void hub_stop_reaches_the_responder_once() {
@@ -1904,6 +2118,106 @@ void mirror_marks_entries_not_received() {
     CHECK(tr[0].kind == EntryKind::Notice && tr[0].text == notShownNotice(7));
     CHECK(tr[1].text == "7" && tr[3].text == "9");
     CHECK(notShownNotice(1) == "1 earlier entry not shown");
+    CHECK(mirror.apply(m, stateOf("bo", t, {})));
+    CHECK(!mirror.missingHistory(m.tab(1).id) && tr.size() == 10);
+    for (unsigned i = 0; i < 10; ++i) CHECK(tr[i].text == std::to_string(i));
+}
+
+void mirror_bus_grants_reconcile_cached_history() {
+    Model m(friends2());
+    Mirror mirror;
+    const auto id = m.tab(0).id;
+    auto inbox = tailFor("ada", {}, {}, {});
+    CHECK(!visibleBus("ada\nbroadcast", inbox));
+    CHECK(visibleBus("peer\nbroadcast", inbox));
+    inbox.busSenders = std::vector<std::string>{"ada", "peer"};
+    CHECK(!visibleBus("ada\nbroadcast", inbox));
+    CHECK(visibleBus("peer\nbroadcast", inbox));
+    const auto hidden = entry(EntryKind::Bus, "");
+    const auto old = entry(EntryKind::Bus, "old\noutside the newest tail");
+    const auto first = entry(EntryKind::Bus, "peer\nfirst");
+    const auto second = entry(EntryKind::Bus, "peer\nsecond");
+    const auto tool = entry(EntryKind::Tool, "work");
+    const auto open = entry(EntryKind::Friend, "stream", false);
+    SessionView v = tailFor("ada", {}, {}, {});
+    auto apply = [&] { return mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)})); };
+    auto texts = [&] {
+        std::vector<std::string> result;
+        for (const auto& row : m.tab(0).transcript) result.push_back(row.text);
+        return result;
+    };
+    v.first = 2;
+    v.entries = {old, entry(EntryKind::Person, "old\nlookalike"), entry(EntryKind::Friend, "reply"), first, second};
+    CHECK(apply());  // legacy server, no roster
+    m.append(0, Entry{EntryKind::Notice, "local"});
+    m.set_draft(0, "held");
+    m.hold_draft(0);
+    m.set_draft(0, "typing");
+    CHECK(mirror.apply(m, Sessions{}));  // disconnect
+
+    v.first = 5;
+    v.entries = {hidden, hidden, tool, open};
+    v.busSenders = std::vector<std::string>{};
+    v.queue = {"queued"};
+    CHECK(apply());
+    const std::vector<std::string> ordinary{notShownNotice(2), "old\nlookalike", "reply", "local", "work"};
+    CHECK(texts() == ordinary);
+    CHECK(m.tab(0).transcript.size() == ordinary.size() && m.tab(0).transcript[1].kind == EntryKind::Person &&
+          m.tab(0).transcript.back().kind == EntryKind::Tool);
+    CHECK(m.tab(0).held == "held" && m.tab(0).draft == "typing" && m.tab(0).queue == v.queue);
+    CHECK(mirror.seen(id).next == 8 && mirror.open(id) == open.get());
+    const auto generation = m.tab(0).transcriptGeneration;
+    CHECK(!apply() && m.tab(0).transcriptGeneration == generation);
+
+    v.busSenders = std::vector<std::string>{"old", "peer"};
+    v.entries = {first, second, tool, open};
+    CHECK(apply());  // a restored roster also recovers the previously displayed row outside this tail
+    const std::vector<std::string> restored{notShownNotice(2), old->text, "old\nlookalike", "reply", first->text,
+        second->text, "local", "work"};
+    CHECK(texts() == restored);
+    CHECK(m.tab(0).transcriptGeneration == generation + 1);
+    CHECK(mirror.seen(id).next == 8 && mirror.open(id) == open.get());
+    CHECK(!apply());
+    v.first = 2;
+    v.entries = {old, entry(EntryKind::Person, "old\nlookalike"), entry(EntryKind::Friend, "reply"),
+        first, second, tool, open};
+    CHECK(!apply());  // receiving the older entry again does not duplicate it
+    CHECK(texts() == restored);
+    CHECK(mirror.seen(id).next == 8 && mirror.open(id) == open.get());
+}
+
+void mirror_skips_masked_bus_slots_and_respects_clear() {
+    Model m(friends2());
+    Mirror mirror;
+    const auto id = m.tab(0).id;
+    SessionView v = tailFor("ada", {}, {}, {});
+    auto apply = [&] { return mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)})); };
+    const auto peer = entry(EntryKind::Bus, "peer\nbody");
+    const auto closed = entry(EntryKind::Friend, "closed");
+    v.busSenders = std::vector<std::string>{};
+    v.entries = {entry(EntryKind::Bus, ""), closed};
+    CHECK(apply());
+    CHECK(m.tab(0).transcript.size() == 1 && m.tab(0).transcript[0].text == closed->text);
+    CHECK(mirror.seen(id).next == 2);
+    v.first = 1;
+    v.entries = {closed};
+    v.busSenders = std::vector<std::string>{"peer"};
+    CHECK(!apply());  // no body was ever received for the masked slot
+    CHECK(m.tab(0).transcript.size() == 1);
+    v.first = 0;
+    v.entries = {peer, closed};
+    CHECK(apply());  // an expanded tail now supplies its body
+    CHECK(m.tab(0).transcript.size() == 2 && m.tab(0).transcript[0].text == peer->text);
+    m.clear_transcript(0);
+    mirror.clearOpen(id);
+    v.busSenders.reset();  // another roster transition after the local clear
+    v.entries = {peer, closed, peer};
+    CHECK(apply());
+    CHECK(m.tab(0).transcript.size() == 1 && m.tab(0).transcript[0].text == peer->text);
+    CHECK(mirror.seen(id).next == 3);
+    v.busSenders = std::vector<std::string>{};
+    CHECK(apply());  // the roster governs even a nonempty bus row
+    CHECK(m.tab(0).transcript.empty() && mirror.seen(id).next == 3);
 }
 
 void mirror_waits_for_open_entry() {
@@ -2072,11 +2386,18 @@ std::vector<FriendInfo> listOf(std::initializer_list<const char*> names) {
 void friends_cross_the_wire() {
     Sessions empty;
     Sessions two({std::make_shared<const SessionView>(tailOf(1, infoOf("ada"), {}, {}, Tail{}))});
-    two.setFriends({ServerFriend{"ada"}, ServerFriend{"bo"}});
+    const std::vector<ServerFriend> choices = {
+        {"ada", {{"work", "Work", true, "dev+work@example.test"}, {"home"}}}, {"bo"}};
+    // The generated format-5 writer at ef5e86c carried the name, label and sign-in state.
+    Sessions previous;
+    previous.apply_string(fixture("account-choice-before-email.init"));
+    const std::vector<ServerFriend> previousChoices = {{"ada", {{"work", "Work", true}}}};
+    CHECK(previous.friends() == previousChoices && previous.unknown() == 0);
+    two.setFriends(choices);
     Sessions read;
     read.apply_string(two.diff_from(empty));
     CHECK(read == two && read.friendsKnown() && read.unknown() == 0);
-    CHECK((read.friends() == std::vector<ServerFriend>{{"ada"}, {"bo"}}));
+    CHECK(read.friends() == choices);
     Sessions one = two;
     one.setFriends({ServerFriend{"bo"}});
     CHECK(!one.diff_from(two).empty());
@@ -2389,6 +2710,114 @@ void strip_takes_only_a_change() {
     CHECK(!strip.take(m, grown).ran);
 }
 
+void primary_chat_follows_its_session() {
+    Model model({});
+    FriendStrip strip;
+    Mirror mirror;
+    std::vector<Action> sent;
+    Sessions received;
+    const auto deliver = [&](const Sessions& server) {
+        received.apply_string(server.diff_from(received));
+        takeFriends(strip, model, mirror, received, [&](Action a) { sent.push_back(std::move(a)); });
+        mirror.apply(model, received);
+    };
+    const Sessions empty = listState({});
+    deliver(empty);
+    const auto roster = received.friendsList();
+    CHECK(model.tab_count() == 0 && sent.empty());
+
+    const std::string primary(kPrimaryChat);
+    const auto hostSession = std::make_shared<const SessionView>(
+        tailOf(7, infoOf(primary), {entry(EntryKind::Person, "Hello")}, {}, Tail{}));
+    Sessions bound({hostSession});
+    bound.shareFriends(empty);
+    deliver(bound);
+    CHECK(received.friendsKnown() && received.friends().empty() && received.friendsList() == roster);
+    CHECK(sent.empty() && friendsToEnsure(model).empty());
+    CHECK(model.tab_count() == 1);
+    if (model.tab_count() != 1) return;
+    const auto tabId = model.tab(0).id;
+    CHECK(model.tab(0).name == primary && model.tab(0).displayName() == "Chat");
+    CHECK(sessionOf(model, 0, mirror) == 7 && model.tab(0).transcript.size() == 1 &&
+          model.tab(0).transcript.front().text == "Hello");
+
+    const auto namedSession = std::make_shared<const SessionView>(
+        tailOf(8, infoOf("fern"), {entry(EntryKind::Friend, "Named reply")}, {}, Tail{}));
+    Sessions both({hostSession, namedSession});
+    both.setFriends({{"fern"}});
+    deliver(both);
+    CHECK(model.tab_count() == 2);
+    if (model.tab_count() != 2) return;
+    const std::size_t chat = model.tab(0).name == primary ? 0 : 1;
+    const std::size_t named = 1 - chat;
+    CHECK(model.tab(chat).id == tabId && sessionOf(model, chat, mirror) == 7);
+    CHECK(model.tab(named).name == "fern" && sessionOf(model, named, mirror) == 8);
+    CHECK(model.tab(named).transcript.size() == 1 && model.tab(named).transcript.front().text == "Named reply");
+    CHECK(sent.size() == 1 && sent.front().kind == ActionKind::Ensure && sent.front().friendName == "fern");
+
+    Model restored({}, true);
+    FriendStrip saved({}, "fern", {});
+    saved.take(restored, received);
+    CHECK(restored.tab(restored.active()).name == "fern" && !saved.pending());
+
+    Sessions unbound({namedSession});
+    unbound.shareFriends(both);
+    deliver(unbound);
+    CHECK(model.tab_count() == 1 && model.tab(0).name == "fern" && sessionOf(model, 0, mirror) == 8);
+    CHECK(mirror.session(tabId) == 0 && sent.size() == 1);
+
+    Model fresh({}, true);
+    FriendStrip defaultStrip;
+    defaultStrip.take(fresh, unbound);
+    defaultStrip.take(fresh, both);
+    CHECK(fresh.tab(fresh.active()).name == primary);
+
+    Model chosen({}, true);
+    FriendStrip explicitStrip;
+    explicitStrip.take(chosen, unbound);
+    CHECK(chosen.tab_count() == 2);
+    if (chosen.tab_count() != 2) return;
+    CHECK(chosen.select_tab(chosen.tab(0).name == "fern" ? 0 : 1));
+    explicitStrip.personSelected();
+    explicitStrip.take(chosen, both);
+    CHECK(chosen.tab(chosen.active()).name == "fern");
+}
+
+void replacement_primary_starts_with_its_own_transcript() {
+    const std::string primary(kPrimaryChat);
+    const auto first = std::make_shared<const SessionView>(tailOf(14, infoOf(primary),
+        {entry(EntryKind::Person, "Old question"), entry(EntryKind::Friend, "Old reply")},
+        {"Old queue"}, Tail{}, entry(EntryKind::Friend, "Old stream", false)));
+    Sessions before({first});
+    before.setFriends({});
+    Model model({});
+    FriendStrip strip;
+    Mirror mirror;
+    takeFriends(strip, model, mirror, before, {});
+    mirror.apply(model, before);
+    CHECK(model.tab_count() == 1);
+    if (model.tab_count() != 1) return;
+    const auto original = model.tab(0).id;
+    CHECK(model.set_draft(0, "For the old session"));
+    CHECK(mirror.seen(original).next == 2 && mirror.open(original) != nullptr);
+    CHECK(model.tab(0).queue.size() == 1);
+
+    const auto second = std::make_shared<const SessionView>(tailOf(15, infoOf(primary),
+        {entry(EntryKind::Friend, "New reply")}, {}, Tail{}));
+    Sessions after({second});
+    after.shareFriends(before);
+    before.apply_string(after.diff_from(before));
+    takeFriends(strip, model, mirror, before, {});
+    mirror.apply(model, before);
+    CHECK(model.tab_count() == 1);
+    if (model.tab_count() != 1) return;
+    const auto& chat = model.tab(0);
+    CHECK(chat.displayName() == "Chat" && mirror.session(chat.id) == 15);
+    CHECK(chat.transcript.size() == 1 && chat.transcript.front().text == "New reply");
+    CHECK(chat.draft.empty() && chat.queue.empty());
+    CHECK(mirror.seen(chat.id).next == 1 && mirror.open(chat.id) == nullptr);
+}
+
 // The tab saved as selected waits for its friend: selected when the friend's tab arrives, unless the person chose a
 // tab first; a list from the server that does not name it ends the wait, the selection as it was.
 void saved_tab_waits_for_its_friend() {
@@ -2555,6 +2984,8 @@ const Case kCases[] = {
     {"hub_limits", hub_limits},
     {"hub_shares_untouched_sessions", hub_shares_untouched_sessions},
     {"mirror_appends_in_order_once", mirror_appends_in_order_once},
+    {"mirror_bus_grants_reconcile_cached_history", mirror_bus_grants_reconcile_cached_history},
+    {"mirror_skips_masked_bus_slots_and_respects_clear", mirror_skips_masked_bus_slots_and_respects_clear},
     {"mirror_marks_entries_not_received", mirror_marks_entries_not_received},
     {"mirror_waits_for_open_entry", mirror_waits_for_open_entry},
     {"mirror_queue_keeps_draft", mirror_queue_keeps_draft},
@@ -2569,6 +3000,8 @@ const Case kCases[] = {
     {"hub_ids_never_reused", hub_ids_never_reused},
     {"hub_unknown_session_refused", hub_unknown_session_refused},
     {"hub_settings", hub_settings},
+    {"conversation_commands", conversation_commands},
+    {"hub_model_limit_choice", hub_model_limit_choice},
     {"hub_stop_reaches_the_responder_once", hub_stop_reaches_the_responder_once},
     {"hub_stop_without_responder_changes_nothing", hub_stop_without_responder_changes_nothing},
     {"hub_queue_goes_to_the_responder", hub_queue_goes_to_the_responder},
@@ -2581,6 +3014,8 @@ const Case kCases[] = {
     {"friends_cross_the_wire", friends_cross_the_wire},
     {"friends_sent_only_when_changed", friends_sent_only_when_changed},
     {"hub_keeps_one_friends_list", hub_keeps_one_friends_list},
+    {"hub_primary_requires_an_installer_binding", hub_primary_requires_an_installer_binding},
+    {"hub_primary_session", hub_primary_session},
     {"friends_within_the_caps", friends_within_the_caps},
     {"friends_not_in_older_formats", friends_not_in_older_formats},
     {"friends_of_a_state", friends_of_a_state},
@@ -2590,6 +3025,8 @@ const Case kCases[] = {
     {"friend_names_are_checked", friend_names_are_checked},
     {"drafts_outlive_their_tabs", drafts_outlive_their_tabs},
     {"strip_takes_only_a_change", strip_takes_only_a_change},
+    {"primary_chat_follows_its_session", primary_chat_follows_its_session},
+    {"replacement_primary_starts_with_its_own_transcript", replacement_primary_starts_with_its_own_transcript},
     {"saved_tab_waits_for_its_friend", saved_tab_waits_for_its_friend},
     {"tab_given_waits_for_the_friends", tab_given_waits_for_the_friends},
     {"mirror_forgets_a_removed_tab", mirror_forgets_a_removed_tab},

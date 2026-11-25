@@ -45,7 +45,7 @@
      ("machines-from-server" "The fleet's machine list from the server, as the friends are: the server sends the machines it knows in its state, and the window stops reading nova-config for the terminal tabs' machine labels, its last outside tool")
      ("sprint" "6. Sprint: see and deal cards without leaving the window")
      ("panels" "7. Panels: friends add UI elements when asked; a panel is data (what to show, which tool's output feeds it, what each button sends) rendered by nexus, never code loaded into it")
-     ("one-app" "Later: one app, nexus-server, starts at boot on the always-on machine and runs every tool and every friend as its own child process, so permissions are granted once to that app and nothing else runs as a separate app or daemon")
+     ("one-app" "One install: nexus-server on macOS, Linux or Windows (WSL2) starts and supervises the configured nova-tools and nova-sprint services as child processes, including Redis, message bus listeners, Sprint scheduling and workers. The host starts nexus-server at boot. Closing a client leaves the services running. iPad and iPhone connect as clients.")
      ("writer-thread" "Writer thread: the store's write and flush run off the server loop's thread, and the loop keeps sending state to the windows while a flush runs, holding back only the acknowledgement until it is durable. mosh cannot hold that back: unmodified, it sends as ack_num the newest remote state it has received, on any tick, so the acknowledgement is bound to received state, and modifying mosh is out (AGENTS.md). So the acknowledgement moves up into nexus: the server's state carries each window's durable applied counter (the number the store has flushed), and the window trims its held actions by that counter, not by mosh's ack, and sends them again after a reconnect as it does now; the state shown is the durable state, or marks what is not yet durable. Changes the Link model (the window's held list, ExactlyOnce across a crash), the Applier, the window's trimming, and their trace binding")
      ("loop-trace" "Server loop bound to a model: a spec of one pass of nexus-server's loop (the batch applied with the drivers held, its one flush, the drivers released, the state set, the links' ticks at the next pass, and a crash anywhere in it), and the real loop's trace (hold, flush, release, tick, with the fs seam's crashes) checked against it in CI, with reversed witnesses for a release, a state or a tick before the flush")
      ("ios-client" "iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend" :later t)
@@ -71,6 +71,8 @@
      ))
   (:id "window-features" :type :roadmap :title "Window features"
    :rows (
+     ("screen-observation" "Let a friend see a display or window the human chooses with Screen Recording permission" :later t)
+     ("desktop-input" "Let a friend click and type in other apps with separate Accessibility permission and a human stop control" :later t)
      ("terminal-tabs" "Terminal tabs: a shell per tab, after the friends; added with Cmd-T, closed with Cmd-W")
      ("sprint-tab" "Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; the page opaque, as nova-sprint serves it")
      ("upload" "The plus button uploads a picked file to the server, into the selected AI's incoming/ directory; an image is also posted to the chat (needs layers 2 and 3)" :later t)
@@ -82,6 +84,8 @@
      )
    :columns (("done" "done"))
    :cells (
+     ("screen-observation" "done" "t-screen-observation")
+     ("desktop-input" "done" "t-desktop-input")
      ("terminal-tabs" "done" "t-terminal-tabs")
      ("sprint-tab" "done" "t-sprint-tab")
      ("upload" "done" "t-upload")
@@ -93,6 +97,7 @@
      ))
   (:id "configuration" :type :roadmap :title "Configuration through your AI"
    :rows (
+     ("personal-policy" "Fork-owned configuration and Starlark in the client and server. Both native hosts run editable rules with shared modules and preview/apply. The window and conversation applications now implement keyboard routing, panel composition, tab registration, message plans and session defaults (docs/policy.md, docs/plugins.md). Continue moving application behavior behind the native host primitives")
      ("client-config" "Client config as data: ~/.nexus/client becomes documented, versioned, human-editable JSON in git, with the same verbs and apply report as the server's (docs/accounts.md); a person's AI changes it through the server, which relays the change to the client that asked and never stores, caches or syncs it: each machine's config is its own. Tab layout is client config too: a tab per friend or a tab per instance of a friend (the server sends every session's friend and instance names, and keeps no tabs of its own)")
      ("client-template" "A client-config template on the server, kept up to date: any change to the template becomes a pending update that each client applies at its next connect; config stays local to each machine, with no live sync. Open question: how a machine's local edits survive an update (proposal: an update replaces only the fields the template change touched)")
      ("client-promote" "Promote one machine's client config to the template, with a pending update for every other machine" :later t)
@@ -105,6 +110,7 @@
      )
    :columns (("done" "done"))
    :cells (
+     ("personal-policy" "done" "t-personal-policy")
      ("client-config" "done" "t-client-config")
      ("client-template" "done" "t-client-template")
      ("client-promote" "done" "t-client-promote")
@@ -117,7 +123,7 @@
      ))
   (:id "tab-kinds" :type :roadmap :title "Tab kinds"
    :rows (
-     ("tab-kinds-data" "Tab kinds are pluggable, described as data that nexus renders with Prax: friend, terminal, sprint board, editor, files, chat, mail, social and more; which tabs a machine shows is set in its client config (and the server's client template), by talking with your AI")
+     ("tab-kinds-data" "Fork-defined registrations, groups and shortcuts support compiled Prax renderers and Starlark panels (docs/plugins.md). Further tab kinds: friend, terminal, sprint board, editor, files, chat, mail, social and more; which tabs a machine shows is set in its client config (and the server's client template), by talking with your AI")
      ("tab-groups" "The tab strip is made of tab groups, generalizing today's fixed zones (sprint, then friends, then terminals): a dashboards group (the sprint board is one dashboard), a friends group (a tab per friend or per instance, as configured) and a terminals group; later groups for editor, files, chat, mail and social. Which groups exist, their order and their contents are client config, set by talking with your AI; the default order is dashboards, friends, terminals. Each group's definition carries its behaviour: whether Cmd-W closes its tabs (a group is not closable unless its config says so; terminals are closable by default), how a new tab is made (Cmd-T for terminals), and dragging moves a tab within its group only")
      ("editor-tab" "Editor tab, modelled on Sublime Text 3: fast open, a command palette, multiple cursors, Goto Anything; keyboard-first and the same on every OS, with nexus's own look; Prax's highest text layers first. After the friends layer" :later t)
      ("files-tab" "File explorer tab. Open: whose files (this machine's, the server's, a fleet machine's)" :later t)
@@ -196,6 +202,7 @@
   (:id "t-ts-mosh" :type :task :title "Tailscale 5. mosh over tsnet through a loopback relay, its latency measured in ms" :state :todo)
   (:id "t-ts-discovery" :type :task :title "Tailscale 6. Discovery of nexus servers among the tailnet's peers" :state :todo)
   (:id "t-ts-expiry" :type :task :title "Tailscale 7. Expiry and recovery in the app; ssh retired once 4 to 6 are secured" :state :todo)
+  (:id "t-personal-policy" :type :task :title "Move further client and server decisions into fork-owned Starlark" :state :todo)
   (:id "t-client-config" :type :task :title "Client config as documented, versioned JSON in git, relayed by the server, never stored by it" :state :todo)
   (:id "t-client-template" :type :task :title "Client-config template on the server: pending updates applied at each client's next connect" :state :todo)
   (:id "t-client-promote" :type :task :title "Promote one machine's client config to the template" :state :todo)
@@ -283,6 +290,8 @@
    :note "Waits on a gemini driver. Sources: geminicli.com/docs/get-started/authentication; google-gemini/gemini-cli packages/core/src/code_assist/oauth2.ts (access tokens about an hour).")
   (:id "login-life-api-keys" :type :task :title "API keys (Anthropic Console, OpenAI, Gemini, xAI) last until revoked: stored once, never asked again but on a 401 the provider gives, saying so; an xAI key's optional expiry is read once and noticed 30, 7 and 1 days ahead as a claude login's year is" :state :todo
    :note "Waits on a provider of nexus that stores a key. Source for the optional expiry: docs.x.ai.")
+  (:id "t-screen-observation" :type :task :title "Human-authorized screen observation for a friend" :state :todo)
+  (:id "t-desktop-input" :type :task :title "Human-authorized desktop pointer and keyboard input" :state :todo)
   (:id "t-heads-down" :type :task :title "Heads-down: server-side timer and queue, stop always gets through, one away-report" :state :todo)
   (:id "t-fleet" :type :task :title "Fleet: the machines and what runs on each" :state :todo)
   (:id "t-machines-from-server" :type :task :title "The fleet's machine list from the server, as the friends are: the server sends the machines it knows in its state (nova-config an optional source on the server's side), and the window stops reading nova-config for the terminal tabs' machine labels (src/remote.cpp, the client config's nova-config key), its last outside tool" :state :todo)

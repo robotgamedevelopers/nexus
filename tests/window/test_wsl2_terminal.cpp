@@ -76,11 +76,11 @@ CommandResult run(PrProcessLauncher* launcher, const Command& command, int timeo
         return result;
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
-    PrProcessInfo info{};
+    PrProcessState info{};
     for (;;) {
         drain(process, PrProcessStream_Output, result.out);
         drain(process, PrProcessStream_Error, result.err);
-        info = prProcessInfo(process);
+        info = prProcessState(process);
         if (info.exited && info.outputEnded) {
             break;
         }
@@ -278,11 +278,11 @@ void wsl2ShellStartsWithItsPrompt(PrProcessLauncher* launcher) {
     // exit ends it, as it closes a tab.
     shell.type("exit\r");
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-    PrProcessInfo info = prProcessInfo(shell.process);
+    PrProcessState info = prProcessState(shell.process);
     while (!(info.exited && info.outputEnded) && std::chrono::steady_clock::now() < deadline) {
         shell.read();
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        info = prProcessInfo(shell.process);
+        info = prProcessState(shell.process);
     }
     CHECK(info.exited && info.code == 0);
     const std::string text = plain(shell.raw);

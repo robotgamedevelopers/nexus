@@ -71,6 +71,17 @@ void layout() {
     // Writing what was read gives the same text: a save never reshuffles the lists.
     CHECK(accounts::accountsText(back) == a);
     CHECK(accounts::friendsText(back) == f);
+    Registry labeled = r;
+    auto& account = labeled.accounts.front();
+    account.label = "Work";
+    account.email = "dev+work@example.test";
+    account.signInOnUse = true;
+    const std::string withOptions = accounts::accountsText(labeled);
+    CHECK(withOptions.find("\"version\": 3") != std::string::npos);
+    CHECK(accounts::readAccounts(withOptions, "accounts.json", &back).ok && back == labeled);
+    CHECK(back.accounts[1].label.empty() && back.accounts[1].email.empty() && !back.accounts[1].signInOnUse);
+    CHECK(accounts::accountsText(back) == withOptions);
+    CHECK(has(accounts::changes(r, back), "display label changed"));
     Registry none;
     CHECK(accounts::accountsText(none) == "{\n  \"version\": 2,\n  \"accounts\": []\n}\n");
     CHECK(accounts::readAccounts(accounts::accountsText(none), "a", &back).ok && back.accounts.empty());
@@ -97,6 +108,11 @@ void refusals() {
     CHECK(!rd.ok && has(rd.errors, "is not a name"));
     rd = accounts::readAccounts("{\"version\": 1, \"accounts\": [{\"name\": \"w\", \"provider\": \"Claude\"}]}", "a", &r);
     CHECK(!rd.ok && has(rd.errors, "provider \"Claude\" is not one"));
+    rd = accounts::readAccounts(R"({"version":2,"accounts":[{"name":"w","provider":"codex","label":"x\ny"}]})", "a", &r);
+    CHECK(!rd.ok && has(rd.errors, "label must be one line"));
+    rd = accounts::readAccounts(R"({"version":3,"accounts":[{"name":"w","provider":"codex","sign_in_on_use":"yes"}]})",
+                                "a", &r);
+    CHECK(!rd.ok && has(rd.errors, "not true or false"));
     rd = accounts::readAccounts("{\"version\": 1, \"accounts\": {}}", "a", &r);
     CHECK(!rd.ok && has(rd.errors, "\"accounts\" is an object, not a list"));
     rd = accounts::readAccounts("[]", "a", &r);
@@ -131,8 +147,8 @@ void versions() {
     // Written back in the one layout, in the person's order, in version 2.
     CHECK(accounts::accountsText(r).find("\"name\": \"work\"") < accounts::accountsText(r).find("\"name\": \"cx\""));
     CHECK(accounts::accountsText(r).find("\"version\": 2,") != std::string::npos);
-    rd = accounts::readAccounts("{\"version\": 3, \"accounts\": []}", "/h/accounts.json", &r);
-    CHECK(!rd.ok && has(rd.errors, "/h/accounts.json:1: \"version\" is 3, newer than this nexus-server reads (2)"));
+    rd = accounts::readAccounts("{\"version\": 4, \"accounts\": []}", "/h/accounts.json", &r);
+    CHECK(!rd.ok && has(rd.errors, "/h/accounts.json:1: \"version\" is 4, newer than this nexus-server reads (3)"));
     CHECK(has(rd.errors, "the file was left as it is"));
     rd = accounts::readAccounts("{\"version\": 1.5, \"accounts\": []}", "a", &r);
     CHECK(!rd.ok && has(rd.errors, "not a whole number"));
@@ -328,7 +344,16 @@ void hubActions() {
 
     // A create takes the friend's default, and runs its provider's harness.
     CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Create, 0, "ada", "", ""}, &why, "w"));
-    CHECK(store.find(1)->info.account == "work" && store.find(1)->info.harness == "claude");
+    CHECK(store.find(1)->info.account == "work" && store.find(1)->info.autoAccount && store.find(1)->info.harness == "claude");
+    // Repeated key presses resolve against the server's latest account, in link order, wrapping both ways.
+    CHECK(hub.apply(act(n++, sync::ActionKind::SetAccount, "", "", "+next", 1), &why, "w"));
+    CHECK(store.find(1)->info.account == "cx");
+    CHECK(hub.apply(act(n++, sync::ActionKind::SetAccount, "", "", "+next", 1), &why, "w"));
+    CHECK(store.find(1)->info.account == "work");
+    CHECK(hub.apply(act(n++, sync::ActionKind::SetAccount, "", "", "+previous", 1), &why, "w"));
+    CHECK(store.find(1)->info.account == "cx");
+    CHECK(!hub.apply(act(n++, sync::ActionKind::SetAccount, "", "", "+unknown", 1), &why, "w"));
+    CHECK(store.find(1)->info.account == "cx");
     // A set to an account not linked is refused with a notice; to a linked one of another provider, its harness.
     CHECK(!hub.apply(act(n++, sync::ActionKind::SetAccount, "", "", "home", 1), &why, "w"));
     CHECK(has({lastNotice(store, 1)}, "home is not one of ada's accounts (no account home is set up"));
@@ -374,22 +399,36 @@ void hubReloadAndRotate() {
     // A session from before accounts, on an account name the registry does not hold: settled at the start.
     CHECK(hub.apply(sync::Action{1, sync::ActionKind::Ensure, 0, "ada", "", ""}, &why, "w"));
     CHECK(hub.apply(act(2, sync::ActionKind::SetAccount, "", "", "old", 1), &why, "w"));
-    std::vector<std::string> report = hub.useAccounts(sample(), &keeper);
+    Registry registry = sample();
+    registry.accounts[1].email = "subscriber@example.test";
+    registry.accounts[1].label = "weekend";
+    std::vector<std::string> report = hub.useAccounts(registry, &keeper);
     CHECK(has(report, "session 1 (ada): account old -> none"));
     CHECK(store.find(1)->info.account.empty());
     CHECK(hub.apply(act(3, sync::ActionKind::SetAccount, "", "", "work", 1), &why, "w"));
+
+    CHECK(!store.find(1)->info.autoAccount && !hub.rotate(1, &why) && has({why}, "pinned"));
+    CHECK(hub.apply(act(4, sync::ActionKind::SetAccount, "", "", sync::kAutoAccountTarget, 1), &why, "w"));
+    CHECK(store.find(1)->info.autoAccount);
 
     // Rotation: the next signed-in link after the current one; none signed in, a notice and no move.
     CHECK(!hub.rotate(1, &why));
     CHECK(store.find(1)->info.account == "work");
     CHECK(has({lastNotice(store, 1)}, "has no other signed-in account"));
+    hub.probeSignInWith([](const accounts::Account& a) { return a.email == "subscriber@example.test"; });
     hub.reportSignedIn("cx", true);
     hub.reportSignedIn("home", true);
     CHECK(hub.rotate(1, &why));
     CHECK(store.find(1)->info.account == "home");
+    const auto& switched = *store.find(1)->transcript.back();
+    CHECK(switched.text == "Switched to subscriber@example.test (weekend)");
+    CHECK(switched.accountEmailEnd == std::string("Switched to subscriber@example.test").size());
     CHECK(hub.rotate(1, &why));
     CHECK(store.find(1)->info.account == "cx" && store.find(1)->info.harness == "codex");
-    CHECK(has({lastNotice(store, 1)}, "reached its usage limit, so this session now runs on the account cx"));
+    CHECK(lastNotice(store, 1) == "Switched to cx");
+    bool exhausted = false;
+    CHECK(!hub.rotate(1, &why, {"work", "home"}, &exhausted) && exhausted);
+    CHECK(store.find(1)->info.account == "cx" && store.find(1)->info.autoAccount);
     hub.reportSignedIn("home", false);
     CHECK(!hub.rotate(1, &why));
     CHECK(!hub.rotate(9, &why) && has({why}, "no session 9"));
@@ -421,6 +460,47 @@ void hubReloadAndRotate() {
     CHECK(store.find(1)->info.account == "cx" && store.find(1)->transcript.size() == entries + 1);
     // The keeper was given each registry applied.
     CHECK(keeper.kept.size() == 4 && keeper.kept.back() == withAda);
+}
+
+// Auto routes only among linked subscriptions. A real registry account may itself be named "auto".
+void hubAutoSubscriptions() {
+    sync::MemoryStore store;
+    sync::Hub hub(store);
+    Keeper keeper;
+    Registry fleet = sample();
+    fleet.accounts[0].billing = accounts::Billing::Api;
+    fleet.accounts[1].name = "auto";
+    fleet.friends[0].accounts = {"work", "auto", "cx"};
+    fleet.friends[1].accounts.clear();
+    hub.probeSignInWith([](const accounts::Account& a) { return a.name != "auto"; });
+    CHECK(hub.useAccounts(fleet, &keeper).empty());
+    std::uint64_t n = 0;
+    auto make = [&](sync::SessionId from = 0) {
+        return hub.apply(sync::Action{++n, sync::ActionKind::Create, from, "ada", "", ""}, nullptr, "w");
+    };
+    auto set = [&](const std::string& target) {
+        return hub.apply(act(++n, sync::ActionKind::SetAccount, "", "", target, 1), nullptr, "w");
+    };
+    CHECK(make());
+    CHECK(store.find(1)->info.autoAccount && store.find(1)->info.account == "cx");
+    CHECK(make(1));
+    CHECK(store.find(2)->info.autoAccount && store.find(2)->info.account == "cx");
+    std::string why;
+    CHECK(!hub.rotate(1, &why));
+    CHECK(set("cx"));  // pin the same payer
+    CHECK(!store.find(1)->info.autoAccount);
+    CHECK(make(1));
+    CHECK(!store.find(3)->info.autoAccount && store.find(3)->info.account == "cx");
+    CHECK(set("auto") && !store.find(1)->info.autoAccount && store.find(1)->info.account == "auto");
+    CHECK(set(sync::kAutoAccountTarget) && store.find(1)->info.autoAccount && store.find(1)->info.account == "cx");
+    hub.reportSignedIn("auto", true);
+    CHECK(hub.nextSubscription(1, {}, why) == "auto" && store.find(1)->info.account == "cx");
+    CHECK(hub.rotate(1, &why) && store.find(1)->info.account == "auto");
+    fleet.friends[0].accounts = {"work", "cx"};
+    std::vector<std::string> report;
+    CHECK(hub.applyAccounts(fleet, "reload", &report));
+    CHECK(!store.find(1)->info.autoAccount && store.find(1)->info.account == "cx");
+    CHECK(!hub.state().friends().front().canAutoAccount && !set(sync::kAutoAccountTarget));
 }
 
 // A memory store that fails from a chosen step on, as a disk that stops taking writes: that step and every later one
@@ -660,6 +740,42 @@ void friendsCap() {
     CHECK(hub.accounts()->friends.size() == accounts::kMaxFriends && keeper.kept.empty());
 }
 
+// Repeating valid labels across friends used to publish a roster that every window refused.
+void pickerBudget() {
+    Registry roster;
+    std::vector<std::string> links;
+    for (int i = 0; i < 100; ++i) {
+        auto name = std::to_string(i);
+        name.append(64 - name.size(), 'a');
+        links.push_back(name);
+        roster.accounts.push_back({name, "fake"});
+    }
+    for (std::size_t i = 0; i < accounts::kMaxFriends; ++i) {
+        roster.friends.push_back({"friend" + std::to_string(i), links, ""});
+    }
+    sync::MemoryStore store;
+    sync::Hub hub(store);
+    Keeper keeper;
+    CHECK(hub.useAccounts(roster, &keeper).empty()); // all 25,600 choices fit without the labels
+    sync::Sessions window;
+    window.apply_string(hub.state().init_diff());
+    CHECK(window.friends() == hub.state().friends());
+    CHECK(window.friends().size() == accounts::kMaxFriends && window.friends().back().accounts.size() == 100);
+    for (const auto& [label, email] : {std::pair{51, 0}, std::pair{25, 26}, std::pair{0, 254}}) {
+        // At 51 added bytes the strings fit and framing pushes the roster over. At 254 bytes,
+        // the emails alone exceed the limit before the server expands the repeated choices.
+        for (auto& a : roster.accounts) {
+            a.label.assign(label, 'L');
+            a.email.assign(email, 'E');
+        }
+        std::vector<std::string> report;
+        CHECK(!hub.applyAccounts(roster, "oversized edit", &report));
+        CHECK(has(report, "linked account choices exceed the window roster budget"));
+        CHECK(keeper.kept.empty() && hub.accounts()->accounts.front().label.empty() && hub.accounts()->accounts.front().email.empty());
+        CHECK(window.friends() == hub.state().friends());
+    }
+}
+
 // A friend's "limit" and an account's "billing" (docs/accounts.md): the defaults by version, the migration of a
 // version 1 file, the refusals with their line, the always-limited rule for an API-billed account, the decision at a
 // session's start (limitedFor), and the hub's reload of a limit, which tells the friend's sessions.
@@ -839,23 +955,41 @@ void hubFriends() {
     sync::Hub hub(store);
     Keeper keeper;
     CHECK(!hub.state().friendsKnown() && hub.state().friends().empty());
-    CHECK(hub.useAccounts(sample(), &keeper).empty());
-    CHECK(hub.state().friendsKnown() && (hub.state().friends() == Names{{"ada"}, {"bo"}}));
+    Registry edit = sample();
+    edit.accounts[0].label = "Work";
+    edit.accounts[0].email = "dev+work@example.test";
+    edit.accounts.push_back({"unused", "fake", accounts::Billing::Subscription, "", false, "unlinked@example.test"});
+    sync::ServerFriend ada{"ada", {{"work", "Work", false, "dev+work@example.test"}, {"home"}, {"cx"}}};
+    ada.canAutoAccount = true;
+    const sync::ServerFriend bo{"bo", {{"home"}}};
+    CHECK(hub.useAccounts(edit, &keeper).empty());
+    CHECK(hub.state().friendsKnown() && (hub.state().friends() == Names{ada, bo}));
+    sync::Sessions window;
+    window.apply_string(hub.state().init_diff());
+    CHECK((window.friends() == Names{ada, bo}));
+    CHECK(hub.state().init_diff().find("unlinked@example.test") == std::string::npos);
+    const auto before = hub.state();
+    edit.accounts[0].email = "replacement@example.test";
+    std::vector<std::string> report;
+    CHECK(hub.applyAccounts(edit, "email edited", &report));
+    window.apply_string(hub.state().diff_from(before));
+    ada.accounts[0].email = edit.accounts[0].email;
+    CHECK((window.friends() == Names{ada, bo}));
     // A session made rebuilds the state: the friends stay.
     std::string why;
     std::uint64_t n = 1;
     CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Ensure, 0, "ada", "", ""}, &why, "w"));
-    CHECK(hub.state().sessions().size() == 1 && (hub.state().friends() == Names{{"ada"}, {"bo"}}));
+    CHECK(hub.state().sessions().size() == 1 && (hub.state().friends() == Names{ada, bo}));
     // A reload that drops bo and adds cy.
-    Registry edit = sample();
+    edit.accounts[0].label = "dev@example.test";
+    ada.accounts[0].label = edit.accounts[0].label;
     edit.friends.erase(edit.friends.begin() + 1);
     edit.friends.push_back(accounts::Friend{"cy", {}, ""});
-    std::vector<std::string> report;
     CHECK(hub.applyAccounts(edit, "reload", &report));
-    CHECK(hub.state().friendsKnown() && (hub.state().friends() == Names{{"ada"}, {"cy"}}));
+    CHECK(hub.state().friendsKnown() && (hub.state().friends() == Names{ada, {"cy"}}));
     // A window's AddFriend.
     CHECK(hub.apply(act(n++, sync::ActionKind::AddFriend, "di", ""), &why, "w"));
-    CHECK((hub.state().friends() == Names{{"ada"}, {"cy"}, {"di"}}));
+    CHECK((hub.state().friends() == Names{ada, {"cy"}, {"di"}}));
     // A registry with no friends: known, and none.
     CHECK(hub.applyAccounts(Registry{sample().accounts, {}}, "reload", &report));
     CHECK(hub.state().friendsKnown() && hub.state().friends().empty());
@@ -874,6 +1008,7 @@ const Group kGroups[] = {
     {"picks", picks},
     {"hub_actions", hubActions},
     {"hub_reload_rotate", hubReloadAndRotate},
+    {"hub_auto_subscriptions", hubAutoSubscriptions},
     {"hub_store_fails", hubStoreFails},
     {"hub_adopt_defaults", hubAdoptDefaults},
     {"hub_probe", hubProbe},
@@ -882,7 +1017,7 @@ const Group kGroups[] = {
     {"limits", limits},
     {"keeps_out", keepsOut},
     {"hub_friends", hubFriends},
-    {"friends_cap", friendsCap},
+    {"friends_cap", [] { friendsCap(); pickerBudget(); }},
 };
 
 } // namespace

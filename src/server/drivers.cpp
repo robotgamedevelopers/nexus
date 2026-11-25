@@ -13,6 +13,9 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
+
+#include "pr/json.h"
 #include <memory>
 #include <sstream>
 
@@ -162,36 +165,82 @@ std::string tailOf(const std::string& text, std::size_t bytes) {
     return text.substr(from);
 }
 
-// What goes before the prompt of a driver started afresh in another directory: the conversation's newest entries,
+// What goes before the prompt of a driver started afresh on another account or in another directory: the conversation's newest entries,
 // oldest first, within kSummaryBytes, each said whose it is. Only the turns before `prompt`: the transcript already
 // ends with it (the person's entry, shown when it left the queue, and what followed it), and the send carries it
 // after.
-std::string summaryOf(const std::string& friendName, const std::vector<sync::EntryRef>& transcript,
-                      const std::string& prompt) {
+std::string summaryOf(const std::string& friendName, const sync::StoredSession& session,
+                      const std::string& prompt, const std::vector<std::string>* waiting = nullptr) {
+    const auto& transcript = session.transcript;
+    using Position = std::vector<sync::EntryRef>::const_reverse_iterator;
+    const auto submitted = [&](Position pos) -> const std::string* {
+        const auto& entry = **pos;
+        if (entry.kind == EntryKind::Person) return &entry.text;
+        if (entry.kind != EntryKind::Bus) return nullptr;
+        const auto index = static_cast<std::size_t>(pos.base() - transcript.begin() - 1);
+        const auto bus = session.busPrompts.find(index);
+        return bus == session.busPrompts.end() ? nullptr : &bus->second;
+    };
+    const auto matches = [&](Position pos, const std::string& text) {
+        const auto* input = submitted(pos);
+        return input && *input == text;
+    };
+    bool busRequest = false;
     auto before = transcript.rbegin();
-    while (before != transcript.rend() && !((*before)->kind == EntryKind::Person && (*before)->text == prompt)) {
-        ++before;
+    if (waiting == nullptr) {
+        while (before != transcript.rend() && !matches(before, prompt)) {
+            ++before;
+        }
+        if (before == transcript.rend()) {
+            before = transcript.rbegin();
+        } else {
+            busRequest = (*before)->kind == EntryKind::Bus;
+            ++before;
+        }
     }
-    if (before == transcript.rend()) {
-        before = transcript.rbegin();   // not shown (cannot be, but then nothing is left out)
-    } else {
-        ++before;
-    }
+    std::size_t later = waiting == nullptr ? 0 : waiting->size();
+    bool skippedRequest = false;
     std::vector<std::string> parts;
-    std::size_t bytes = 0;
-    for (auto it = before; it != transcript.rend() && bytes < kSummaryBytes; ++it) {
+    // Preserve recent tool outcomes even after a large streamed reply consumed the text budget.
+    std::size_t toolsLeft = waiting == nullptr ? 0 : kSummaryBytes / 4;
+    std::size_t textLeft = kSummaryBytes - toolsLeft;
+    for (auto it = before; it != transcript.rend() && (textLeft || toolsLeft); ++it) {
+        if (waiting != nullptr) {
+            // Later submissions are already visible in the transcript and will get their own turns.
+            if (later != 0 && matches(it, (*waiting)[later - 1])) {
+                --later;
+                continue;
+            }
+            if (!skippedRequest && matches(it, prompt)) {
+                skippedRequest = true;   // the continuation always includes the original request in full
+                continue;
+            }
+            if ((*it)->kind == EntryKind::Notice) {
+                continue;
+            }
+        }
         const char* who = (*it)->kind == EntryKind::Person ? "The person" :
-            (*it)->kind == EntryKind::Friend ? "You" : "nexus";
-        std::string part = std::string(who) + ": " + tailOf((*it)->text, kSummaryBytes - bytes) + "\n";
-        bytes += part.size();
+            (*it)->kind == EntryKind::Friend ? "You" : (*it)->kind == EntryKind::Tool ? "Tool activity" :
+            (*it)->kind == EntryKind::Bus ? "Message bus" : "nexus";
+        std::size_t& left = waiting != nullptr && (*it)->kind == EntryKind::Tool ? toolsLeft : textLeft;
+        std::string part = std::string(who) + ": ";
+        if (left <= part.size() + 1) {
+            left = 0;
+            continue;
+        }
+        // The bus envelope holds the subject and attachment path that the small display body may omit.
+        const auto* envelope = (*it)->kind == EntryKind::Bus ? submitted(it) : nullptr;
+        part += tailOf(envelope ? *envelope : (*it)->text, left - part.size() - 1) + "\n";
+        left -= part.size();
         parts.push_back(std::move(part));
     }
-    std::string text = "[nexus: this conversation with " + friendName + " was held in another working directory, "
-        "where its harness session stays, so it starts afresh here. Its newest entries so far, oldest first:]\n";
+    std::string text = "[nexus: this conversation with " + friendName + " continues in a fresh harness session. "
+        "Its newest entries so far, oldest first:]\n";
     for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
         text += *it;
     }
-    return text + "[nexus: the person's prompt follows.]\n\n";
+    if (waiting != nullptr) return text;
+    return text + (busRequest ? "[nexus: the bus message follows.]\n\n" : "[nexus: the person's prompt follows.]\n\n");
 }
 
 class PosixHost : public Drivers::Host {
@@ -264,19 +313,29 @@ std::string Drivers::friendOf(sync::SessionId id) const {
 // none is listed: the deny direction, as limitedFor reads no registry as limited (models/Supervisor.tla NoSendUnknown).
 bool Drivers::listed(sync::SessionId id) const {
     const accounts::Registry* registry = hub_ != nullptr ? hub_->accounts() : nullptr;
-    return registry != nullptr && registry->friendNamed(friendOf(id)) != nullptr;
+    return (hub_ && hub_->isPrimary(id)) || (registry && registry->friendNamed(friendOf(id)));
 }
 
-// The session's driver: its friend's line of the drivers file, with the session's account in place of the value its
-// command passes after `--account` (the Claude driver's: part 4 of the sign-in work gives every driver its account,
-// docs/roadmap.sexp). A command that takes an account starts for a session with one only: a session on no account (one
+// The session's driver: its friend's line of the drivers file. The supervisor binds any `--account` argument at
+// process start. A command that takes an account starts for a session with one only: a session on no account (one
 // whose friend had no signed-in account left when its own was unlinked) gets the reason and how to link one. A session
-// on an account of another provider than its friend's harness has no driver here until that provider's driver exists.
+// using a provider other than its friend's configured harness needs an account on that harness.
 ResolvedDriver Drivers::resolve(sync::SessionId id) const {
     const std::string friendName = friendOf(id);
     DriverTable table;
     ResolvedDriver r = resolveFriend(friendName, &table);
     const sync::StoredSession* stored = store_.find(id);
+    const bool primary = hub_ && hub_->isPrimary(id);
+    if (primary && stored) {
+        if (!table.errors.empty() || !table.primary || !table.primary->matches(stored->info) ||
+                !table.primaryDrivers.contains(table.primary->harness))
+            return {{}, {}, "The primary harness configuration changed. Reconnect to the current workspace."};
+        r = {table.primaryDrivers.at(table.primary->harness), table.primary->cwd, {}};
+        if (std::find(r.command.begin(), r.command.end(), "--account") == r.command.end())
+            r.command.insert(r.command.end(), {"--account", stored->info.account});
+        if (!table.primary->resume.empty() && stored->driver.nextTurn == 1 && stored->driver.session.empty())
+            r.command.insert(r.command.end(), {"--resume", table.primary->resume});
+    }
     if (!r.problem.empty() || stored == nullptr) {
         return r;
     }
@@ -315,17 +374,20 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
     const accounts::Account* held = hub_ != nullptr && hub_->accounts() != nullptr ?
         hub_->accounts()->account(info.account) : nullptr;
     auto line = table.friends.find(friendName);
-    const std::string harness = line == table.friends.end() ? std::string() : line->second.harness;
+    const std::string harness = primary ? info.harness : line == table.friends.end() ? std::string() : line->second.harness;
     if (held != nullptr && held->provider != harness) {
         return refuse("Session " + std::to_string(id) + " runs on the account " + info.account + ", whose provider is " +
             held->provider + ", but " + friendName + "'s driver in " + options_.table + " is " + harness + "'s, and "
             "nexus-server has no " + held->provider + " driver for it yet, so the prompt was not sent. Set the "
             "session to one of " + friendName + "'s " + harness + " accounts.");
     }
-    for (std::size_t i = 1; i + 1 < r.command.size(); ++i) {
-        if (r.command[i] == "--account") {
-            r.command[i + 1] = info.account;
+    if (held != nullptr && held->requiresVerifiedEmail()) {
+        if (!takesAccount || options_.verifiedHelper.empty() || options_.authClaude.empty()) {
+            return refuse("Configure the Claude sign-in helper, Claude executable and driver --account for " +
+                          held->name + " to verify its email.");
         }
+        r.command.insert(r.command.end(), {"--account-email", held->email, "--verified-helper", options_.verifiedHelper,
+                                           "--auth-claude", options_.authClaude});
     }
     return r;
 }
@@ -356,15 +418,10 @@ std::vector<std::string> Drivers::keepsOut() const {
     return hub_ != nullptr && hub_->accounts() != nullptr ? hub_->accounts()->keepsOut : std::vector<std::string>{};
 }
 
-ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable* table) const {
+DriverTable Drivers::readDriverTable(std::string& problem) const {
     std::string text;
     if (options_.readTable) {
-        std::string problem;
-        if (!options_.readTable(&text, &problem)) {
-            ResolvedDriver r;
-            r.problem = problem;
-            return r;
-        }
+        if (!options_.readTable(&text, &problem)) return {};
     } else {
         std::ifstream in(options_.tableNow ? options_.tableNow() : options_.table);
         if (in) {
@@ -372,13 +429,37 @@ ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable
             all << in.rdbuf();
             text = all.str();
         } else if (errno != ENOENT) {
-            ResolvedDriver r;
-            r.problem = "nexus-server cannot read " + options_.table + " (" + std::strerror(errno) +
-                "), so the prompt to " + friendName + " was not sent. Make the file readable by this user.";
-            return r;
+            problem = "nexus-server cannot read " + options_.table + " (" + std::strerror(errno) +
+                "). Make the file readable by this user.";
+            return {};
         }
     }
-    DriverTable parsed = parseDriverTable(text, options_.home);
+    return parseDriverTable(text, options_.home);
+}
+
+std::optional<sync::AccountRoutes> Drivers::accountRoutes() const {
+    std::string problem;
+    const DriverTable table = readDriverTable(problem);
+    sync::AccountRoutes routes;
+    if (problem.empty()) {
+        for (const auto& [name, row] : table.friends) {
+            const auto driver = table.drivers.find(row.harness);
+            if (driver != table.drivers.end() &&
+                    std::find(driver->second.begin(), driver->second.end(), "--account") != driver->second.end())
+                routes.emplace(name, row.harness);
+        }
+    }
+    return routes;
+}
+
+ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable* table) const {
+    std::string problem;
+    DriverTable parsed = readDriverTable(problem);
+    if (!problem.empty()) {
+        ResolvedDriver r;
+        r.problem = std::move(problem);
+        return r;
+    }
     ResolvedDriver r = resolveDriver(parsed, friendName, options_.table);
     if (table != nullptr) {
         *table = std::move(parsed);
@@ -387,7 +468,7 @@ ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable
 }
 
 sync::SessionInfo Drivers::defaults(const std::string& friendName) const {
-    // The drivers file names a program per friend, not a harness: every driver nexus has is Claude's, for now.
+    // A server without a roster uses the legacy harness default. A named account supplies its own provider.
     return sync::SessionInfo{friendName, sync::kDefaultHarness, {}, {}, {}};
 }
 
@@ -399,6 +480,7 @@ Config Drivers::config(sync::SessionId id, const ResolvedDriver& driver) const {
         c.model = stored->info.model;
         c.effort = stored->info.effort;
         c.account = stored->info.account;
+        c.autoAccount = stored->info.autoAccount;
     }
     c.command = driver.command;
     c.cwd = driver.cwd;
@@ -413,7 +495,12 @@ Config Drivers::config(sync::SessionId id, const ResolvedDriver& driver) const {
     c.present = listed(id);
     c.summarize = [this, id, name = c.name](const std::string& prompt) {
         const sync::StoredSession* s = store_.find(id);
-        return s == nullptr ? std::string() : summaryOf(name, s->transcript, prompt);
+        return s == nullptr ? std::string() : summaryOf(name, *s, prompt);
+    };
+    c.continuationContext = [this, id, name = c.name] {
+        const sync::StoredSession* s = store_.find(id);
+        return s == nullptr ? std::string() :
+            summaryOf(name, *s, s->driver.continuationPrompt, &s->driver.waiting);
     };
     c.configured = options_.table;
     c.timing = options_.timing;
@@ -429,7 +516,7 @@ bool Drivers::start(Millis now) {
         const sync::StoredSession* stored = store_.find(id);
         sync::DriverState state = stored->driver;
         const ResolvedDriver r = resolve(id);
-        if (state.openTurn == 0 && state.waiting.empty() &&
+        if (state.openTurn == 0 && state.waiting.empty() && state.continuationPrompt.empty() &&
             (stored->queue.empty() || !r.problem.empty() || !listed(id))) {
             // Nothing to run, or only queued prompts and no driver to give them (they stay queued, as they are): the
             // session shows idle, or down when its friend has no driver configured or is not in friends.json.
@@ -478,6 +565,16 @@ Supervisor& Drivers::pending(sync::SessionId id, const ResolvedDriver& driver, M
 }
 
 std::vector<sync::SessionChange> Drivers::send(sync::SessionId id, const std::string& prompt) {
+    return preparePrompt(id, prompt, nullptr);
+}
+
+std::vector<sync::SessionChange> Drivers::prepareBus(sync::SessionId id, const std::string& prompt, std::string& why) {
+    why.clear();
+    return preparePrompt(id, prompt, &why);
+}
+
+std::vector<sync::SessionChange> Drivers::preparePrompt(sync::SessionId id, const std::string& prompt,
+                                                       std::string* busRefusal) {
     const Millis now = options_.clock();
     pendingSup_.reset();
     pendingOut_ = Output{};
@@ -485,10 +582,18 @@ std::vector<sync::SessionChange> Drivers::send(sync::SessionId id, const std::st
     // friends.json gets the notice that says how to put it back.
     const ResolvedDriver r = resolve(id);
     if (!r.problem.empty()) {
+        if (busRefusal) {
+            *busRefusal = r.problem;
+            return {};
+        }
         return {sync::SessionChange{entry(EntryKind::Person, prompt), {}}, sync::SessionChange{entry(EntryKind::Notice,
             r.problem), {}}};
     }
     if (!listed(id)) {
+        if (busRefusal) {
+            *busRefusal = "The message bus recipient is not in the current friend roster.";
+            return {};
+        }
         const std::string name = friendOf(id);
         const bool none = hub_ == nullptr || hub_->accounts() == nullptr;
         return {sync::SessionChange{entry(EntryKind::Person, prompt), {}}, sync::SessionChange{entry(EntryKind::Notice,
@@ -500,7 +605,17 @@ std::vector<sync::SessionChange> Drivers::send(sync::SessionId id, const std::st
             "`nexus-server config reload` (docs/accounts.md); this session and its queued prompts are kept."), {}}};
     }
     Supervisor& sup = pending(id, r, now);
-    append(pendingOut_, sup.prompt(prompt, now));
+    auto submitted = sup.prompt(prompt, now);
+    if (busRefusal) {
+        // Supervisor::prompt emits its admission first, before any effects of starting or advancing the turn.
+        // A refused bus message stays in its inbox. An admitted one has its attributed entry written by the hub.
+        if (submitted.effects.empty() || submitted.effects.front().what != Effect::What::Prompt) {
+            *busRefusal = submitted.effects.empty() ? "The driver could not admit the message." : submitted.effects.front().text;
+            return {};
+        }
+        submitted.effects.erase(submitted.effects.begin());
+    }
+    append(pendingOut_, std::move(submitted));
     return changes(pendingOut_, sup);
 }
 
@@ -523,7 +638,53 @@ std::vector<sync::SessionChange> Drivers::queue(sync::SessionId id, const std::s
 }
 
 // A stop of an open turn changes nothing in the store: its stop line is written once the hub has counted the action.
-// A stop of a start cancels the turn about to begin: its prompt leaves the waiting prompts, committed with a notice.
+std::string Drivers::friendInfo(const std::string& name) const {
+    if (name.empty() || name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-") != std::string::npos)
+        return {};
+    const auto file = std::filesystem::path(options_.table).parent_path() / "friend-info" / (name + ".json");
+    std::ifstream input(file, std::ios::binary);
+    if (!input) return {};
+    std::string data(16385, '\0');
+    input.read(data.data(), static_cast<std::streamsize>(data.size()));
+    data.resize(static_cast<size_t>(input.gcount()));
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    if (data.size() > 16384 || !prJsonParse(doc.get(), {data.data(), data.size()}, nullptr) ||
+        prJsonKind(doc.get(), 0) != PrJsonKind_Object) return {};
+    return data;
+}
+
+std::string Drivers::catalog(const sync::SessionInfo& info) const {
+    if (info.harness.empty() || info.harness.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_-") != std::string::npos)
+        return {};
+    const auto now = options_.clock();
+    auto& cached = catalogs_[info.harness];
+    if (now < cached.nextRead) return cached.json;
+    cached.nextRead = now + 1000;
+    cached.json.clear();
+    const auto path = std::filesystem::path(options_.table).parent_path() / "catalogs" / (info.harness + ".json");
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return {};
+    std::string json(16385, '\0');
+    input.read(json.data(), static_cast<std::streamsize>(json.size()));
+    json.resize(static_cast<size_t>(input.gcount()));
+    if (json.size() > 16384) return {};
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> parsed(prJsonCreate(), prJsonDestroy);
+    if (!prJsonParse(parsed.get(), {json.data(), json.size()}, nullptr) ||
+            prJsonKind(parsed.get(), prJsonMember(parsed.get(), 0, {"models", 6})) != PrJsonKind_Object) return {};
+    cached.json = std::move(json);
+    return cached.json;
+}
+
+std::vector<sync::SessionChange> Drivers::resetContext(sync::SessionId id, const sync::DriverState& state, bool compact) {
+    pendingSup_.reset();
+    pendingOut_ = {};
+    auto slot = slots_.find(id);
+    if (slot == slots_.end()) return Responder::resetContext(id, state, compact);
+    pendingSup_ = slot->second.sup;
+    pendingOut_ = pendingSup_->resetContext(compact, options_.clock());
+    return changes(pendingOut_, *pendingSup_);
+}
+
 std::vector<sync::SessionChange> Drivers::stop(sync::SessionId id) {
     pendingSup_.reset();
     pendingOut_ = Output{};
@@ -590,7 +751,8 @@ Output Drivers::syncSlot(sync::SessionId id, Supervisor& sup, Millis now) {
         append(out, sup.configure({}, dir, options_.table, now));
     }
     append(out, sup.setOptions(s->info.model, s->info.effort, now));
-    append(out, sup.setAccount(s->info.account, now));
+    sup.acceptModelChoice(s->driver);
+    append(out, sup.setAccount(s->info.account, now, s->info.autoAccount, &r.command));
     append(out, sup.setLimited(limitedOf(s->info), now));
     append(out, sup.setKeepsOut(keepsOut(), now));
     if (!none) {
@@ -623,6 +785,37 @@ void Drivers::configured(sync::SessionId id, const sync::SessionInfo& info) {
 
 void Drivers::made(sync::SessionId id) {
     showResolved(id, resolve(id));
+}
+
+bool Drivers::refreshSandbox(const std::set<std::string>& unsandboxed) {
+    if (unsandboxed == unsandboxed_) return true;
+    const auto now = options_.clock();
+    for (auto& [id, slot] : slots_) {
+        const auto* session = store_.find(id);
+        if (!session) continue;
+        const auto& name = session->info.friendName;
+        const bool enabled = unsandboxed.contains(name);
+        if (enabled != unsandboxed_.contains(name) &&
+            !run(id, slot.sup.refreshSandbox(!enabled, now), now, false)) return false;
+    }
+    unsandboxed_ = unsandboxed;
+    return true;
+}
+
+std::string Drivers::retireForSignOut(const std::string& account) {
+    for (const auto& [id, slot] : slots_) {
+        (void)id;
+        const auto& sup = slot.sup;
+        if ((sup.driverAccount() == account && (sup.phase() == Phase::Starting || sup.state().openTurn != 0)) ||
+                (sup.account() == account && !sup.state().waiting.empty()))
+            return "Finish or stop the work using " + account + ", then retry /logout.";
+    }
+    const auto now = options_.clock();
+    for (auto& [id, slot] : slots_)
+        if (slot.sup.driverAccount() == account && slot.sup.phase() == Phase::Idle &&
+                !run(id, slot.sup.retireIdleLogin(now), now, false))
+            return "Nexus could not retire the driver for " + account + ". Check the server and retry /logout.";
+    return {};
 }
 
 void Drivers::signedIn(const std::string& account) {
@@ -756,7 +949,7 @@ std::vector<sync::SessionChange> Drivers::changes(const Output& out, const Super
 // cursor): in memory only, never in the store. True when either changed.
 bool Drivers::showOpen(sync::SessionId id, const Slot& t) {
     const bool open = hub_->setOpen(id, t.sup.gathered());
-    const bool activity = hub_->setActivity(id, t.sup.activity());
+    const bool activity = hub_->setActivity(id, t.sup.activity(), t.sup.activeAgents());
     return open || activity;
 }
 
@@ -1027,6 +1220,9 @@ int Drivers::waitMs(Millis now) const {
         wait = resolveAt_ > now ? resolveAt_ - now : 0;
     }
     for (const auto& [id, t] : slots_) {
+        if (t.sup.awaitingRotation()) {
+            return 0;
+        }
         if (const std::optional<Millis> d = t.sup.deadline()) {
             wait = std::min(wait, *d > now ? *d - now : 0);
         }
@@ -1081,6 +1277,11 @@ bool Drivers::serve(Millis now, bool* changed) {
             append(out, t.sup.closed(t.proc->broken, now));
         }
         append(out, t.sup.tick(now));
+        // A committed checkpoint also requests rotation after a server restart between the quota report and move.
+        if (t.sup.awaitingRotation()) {
+            out.account = t.sup.account();
+            out.usageLimit = true;
+        }
         if ((out.signedIn || out.usageLimit) && !out.account.empty()) {
             reports.push_back(Report{id, out.account, out.signedIn, out.usageLimit});
         }
@@ -1113,11 +1314,20 @@ bool Drivers::serve(Millis now, bool* changed) {
         const sync::StoredSession* s = store_.find(r.id);
         if (r.usageLimit && s != nullptr && s->info.account == r.account) {
             std::string why;
-            if (hub_->rotate(r.id, &why)) {
+            const auto exhausted = s->driver.exhaustedAccounts;
+            bool noEligible = false;
+            if (hub_->rotate(r.id, &why, exhausted, &noEligible)) {
                 log(r.id, "the account " + r.account + " reached its usage limit; the session moved to " +
                     store_.find(r.id)->info.account);
             } else {
                 log(r.id, "the account " + r.account + " reached its usage limit: " + why);
+                if (!noEligible) {
+                    return false;   // the move or notice failed to commit; recover the checkpoint on restart
+                }
+                auto it = slots_.find(r.id);
+                if (it != slots_.end() && !run(r.id, it->second.sup.rotationExhausted(), now, false, changed)) {
+                    return false;
+                }
             }
             if (changed != nullptr) {
                 *changed = true;

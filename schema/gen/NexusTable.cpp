@@ -6416,6 +6416,43 @@ int64_t SecretRequestToJson( const SecretRequest * root, char * buffer, int64_t 
     return TableJsonWriteGraph( root, SecretRequestTableType(), buffer, capacity, allocator );
 }
 
+bool AccountChoiceFromJson( AccountChoiceBuilder & builder, const char * text, int64_t bytes, TableReport * report )
+{
+    AccountChoice * root = builder.GetRoot();
+    if ( root == NULL )
+    {
+        if ( report != NULL ) { *report = TableReport(); }
+        return false;
+    } // locked: the report stays empty
+    TableReport read;
+    bool ok = TableJsonReadGraph( builder.main, root, AccountChoiceTableType(), text, bytes, &read );
+    if ( !ok || read.refused || read.damaged || read.missing_required != 0 )
+    {
+        // the walk names the condition it refused where it met it; what it
+        // left unnamed is malformed text or a missing required field
+        if ( read.refuse_reason == TableRefuseReason::ok )
+        {
+            read.refuse_reason = read.missing_required != 0 && !read.damaged ? TableRefuseReason::missing_required : TableRefuseReason::malformed;
+        }
+        AccountChoiceTableType()->reset( root );
+        if ( report != NULL ) { *report = read; }
+        return false;
+    }
+    read.refuse_reason = TableRefuseReason::ok;
+    if ( report != NULL ) { *report = read; }
+    return true;
+}
+
+int64_t AccountChoiceToJsonMeasure( const AccountChoice * root, TableAllocator allocator )
+{
+    return TableJsonWriteGraph( root, AccountChoiceTableType(), NULL, 0, allocator );
+}
+
+int64_t AccountChoiceToJson( const AccountChoice * root, char * buffer, int64_t capacity, TableAllocator allocator )
+{
+    return TableJsonWriteGraph( root, AccountChoiceTableType(), buffer, capacity, allocator );
+}
+
 bool FriendFromJson( FriendBuilder & builder, const char * text, int64_t bytes, TableReport * report )
 {
     Friend * root = builder.GetRoot();
@@ -7041,6 +7078,51 @@ bool SecretRequestEditTextForm( const char * document, int64_t document_bytes, c
     if ( !edited.empty() ) { memcpy( buffer, edited.data(), edited.size() ); }
     TableReport report;
     if ( !SecretRequestFromJson( builder, json.data(), (int64_t) json.size(), &report ) || report.damaged || report.unknown != 0 || report.refused )
+    {
+        *refusal = report.refuse_reason == TableRefuseReason::out_of_range ? "text_bound" : "text_kind_mismatch";
+        return false;
+    }
+    return true;
+}
+
+bool AccountChoiceLoadTextForm( const char * text, int64_t bytes, AccountChoiceBuilder & builder, const char ** refusal )
+{
+    std::string json;
+    if ( !TableTextFormToJson( text, bytes, AccountChoiceTableType(), json, refusal ) ) { return false; }
+    TableReport report;
+    if ( !AccountChoiceFromJson( builder, json.data(), (int64_t) json.size(), &report ) || report.damaged || report.unknown != 0 || report.refused )
+    {
+        *refusal = report.refuse_reason == TableRefuseReason::out_of_range ? "text_bound" : "text_kind_mismatch";
+        return false;
+    }
+    return true;
+}
+
+bool AccountChoiceLoadTextForm( const char * text, int64_t bytes, const char ** document, int64_t * document_bytes, AccountChoiceBuilder & builder, const char ** refusal )
+{
+    if ( !AccountChoiceLoadTextForm( text, bytes, builder, refusal ) ) { return false; }
+    if ( document != NULL ) { *document = text; }
+    if ( document_bytes != NULL ) { *document_bytes = bytes; }
+    return true;
+}
+
+int64_t AccountChoiceSaveTextForm( const char * document, int64_t document_bytes, char * buffer, int64_t capacity )
+{
+    if ( document == NULL || document_bytes < 0 || buffer == NULL || capacity < document_bytes ) { return -1; }
+    if ( document_bytes > 0 ) { memcpy( buffer, document, (size_t) document_bytes ); }
+    return document_bytes;
+}
+
+bool AccountChoiceEditTextForm( const char * document, int64_t document_bytes, const TableTextFormEdit * edits, int64_t count, char * buffer, int64_t capacity, int64_t * edited_bytes, AccountChoiceBuilder & builder, const char ** refusal )
+{
+    std::string edited;
+    std::string json;
+    if ( !tableTextFormEditText( std::string( document, (size_t) document_bytes ), AccountChoiceTableType(), edits, count, edited, json, refusal ) ) { return false; }
+    if ( edited_bytes != NULL ) { *edited_bytes = (int64_t) edited.size(); }
+    if ( buffer == NULL || capacity < (int64_t) edited.size() ) { return false; }
+    if ( !edited.empty() ) { memcpy( buffer, edited.data(), edited.size() ); }
+    TableReport report;
+    if ( !AccountChoiceFromJson( builder, json.data(), (int64_t) json.size(), &report ) || report.damaged || report.unknown != 0 || report.refused )
     {
         *refusal = report.refuse_reason == TableRefuseReason::out_of_range ? "text_bound" : "text_kind_mismatch";
         return false;

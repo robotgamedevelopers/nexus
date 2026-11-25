@@ -47,7 +47,9 @@ const char* kindName(ActionKind kind) {
         case ActionKind::SecretCancel: return "secret-cancel";
         case ActionKind::SignInClaim: return "sign-in-claim";
         case ActionKind::SignInOpened: return "sign-in-opened";
+        case ActionKind::SignOut: return "sign-out";
         case ActionKind::SignInCallback: return "sign-in-callback";
+        case ActionKind::ResolveLimit: return "resolve-limit";
     }
     return "unknown";
 }

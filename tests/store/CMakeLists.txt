@@ -46,7 +46,7 @@ foreach(group codec memfs journal journal_crash store ids store_crash driver mig
     add_test(NAME store_unit_${group} COMMAND store_test ${group})
     set_tests_properties(store_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()
-foreach(group restart resend crash batch batch_flush take migrate kinds)
+foreach(group restart resend crash batch batch_flush take migrate kinds switch_notice_reconnect bus_reconnect bus_history)
     add_test(NAME durable_unit_${group} COMMAND durable_test ${group})
     set_tests_properties(durable_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()

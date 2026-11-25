@@ -1,0 +1,30 @@
+{
+  "tab_types": [
+    {
+      "id": "editor",
+      "title": "Editor",
+      "group": "Writing",
+      "native": "text_editor",
+      "open": "Command+E",
+      "close": "Command+W",
+      "service": "text-tools",
+      "invoke": "Command+Enter",
+      "panels": ["native", "service_reply"]
+    },
+    {
+      "id": "word-counter",
+      "title": "Word count",
+      "group": "Tools",
+      "open": "Command+Shift+W",
+      "close": "Command+W",
+      "label": "Enter text to count",
+      "panels": ["label", "text_area", "service_reply"],
+      "service": "word-count",
+      "invoke": "Command+Enter"
+    }
+  ],
+  "services": {
+    "text-tools": {"native": "text.sha256"},
+    "word-count": {"handler": "word_count"}
+  }
+}

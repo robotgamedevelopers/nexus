@@ -43,6 +43,9 @@ void lines() {
     const DriverTable again = parseDriverTable("friend ada a\nfriend ada b\ndriver a x\ndriver a y", "/h");
     CHECK(again.friends.at("ada").harness == "b");
     CHECK((again.drivers.at("a") == std::vector<std::string>{"y"}));
+    const auto enroll = parseDriverTable("signin codex /bin/login --device\nsignin grok relative\n", "/h");
+    CHECK((enroll.signins.at("codex") == std::vector<std::string>{"/bin/login", "--device"}));
+    CHECK(enroll.signins.size() == 1 && enroll.errors.size() == 1);
     CHECK(parseDriverTable("", "/h").friends.empty());
 }
 
@@ -53,7 +56,7 @@ void refusals() {
         CHECK(has(t.errors[0], "line 1: a driver line is `driver <harness> <program>"));
         CHECK(has(t.errors[1], "line 2: a friend line is `friend <name> <harness> [<directory>]`"));
         CHECK(has(t.errors[2], "line 3: a friend line"));
-        CHECK(has(t.errors[3], "line 4: \"thing\" is not `driver` or `friend`"));
+        CHECK(has(t.errors[3], "line 4: \"thing\" is not `driver`, `signin` or `friend`"));
     }
     CHECK(t.drivers.empty() && t.friends.empty());
 }
@@ -70,12 +73,15 @@ void resolve() {
     CHECK(has(cy.problem, "cy has no driver, so the prompt was not sent"));
     CHECK(has(cy.problem, "`friend cy <harness> [<directory>]` in /d/drivers"));
     CHECK(has(cy.problem, "`driver <harness> <program> [<argument>...]`"));
-    CHECK(has(cy.problem, "/d/drivers line 4: \"bad\" is not `driver` or `friend`."));
+    CHECK(has(cy.problem, "/d/drivers line 4: \"bad\" is not `driver`, `signin` or `friend`."));
     // A friend whose harness has no driver.
     const ResolvedDriver bo = resolveDriver(t, "bo", "/d/drivers");
     CHECK(bo.command.empty());
     CHECK(has(bo.problem, "bo's harness, codex, has no driver, so the prompt was not sent"));
     CHECK(has(bo.problem, "`driver codex <program> [<argument>...]` to /d/drivers"));
+    const auto templated = parseDriverTable("driver engine /program {friend} {harness}\nfriend cy engine /work\n", "/h");
+    CHECK((resolveDriver(templated, "cy", "/d/drivers").command ==
+        std::vector<std::string>{"/program", "cy", "engine"}));
     // No file at all is an empty table.
     CHECK(has(resolveDriver(parseDriverTable("", "/h"), "ada", "/d/drivers").problem, "ada has no driver"));
 }

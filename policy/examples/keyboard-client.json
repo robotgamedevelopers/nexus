@@ -1,0 +1,90 @@
+{
+  "overlay_hotkey": {
+    "code": "Backquote",
+    "modifiers": "Command"
+  },
+  "overlay_opacity": 0.6,
+  "tab_style": {
+    "fill": "#1b1b1b",
+    "opacity": 1,
+    "ink": "#999999",
+    "weight": 400,
+    "selected_fill": "#86c5ff",
+    "selected_ink": "#ffffff",
+    "selected_opacity": 0.5,
+    "selected_radius": 8,
+    "selected_weight": 700,
+    "reserve_width": true
+  },
+  "tab_labels": {
+    "sprint": "Dashboard"
+  },
+  "transcript_style": {
+    "pending_outline_width": 3,
+    "sent_outline_width": 0,
+    "person_bold": true,
+    "glyph_peak": 3,
+    "glyph_seconds": 0.133333,
+    "glyph_stagger": 0.018333,
+    "person_flash_peak": 1,
+    "person_flash_seconds": 0.15
+  },
+  "hold_on_enter": true,
+  "sounds": {
+    "startup": {"from_hz": 185, "to_hz": 555, "duration_ms": 850, "gain": 0.11, "synth": true},
+    "step": {"from_hz": 1660, "to_hz": 1440, "duration_ms": 24, "gain": 0.012},
+    "hold": {"gain": 0},
+    "copy": {"from_hz": 1600, "to_hz": 480, "duration_ms": 32, "gain": 0.04},
+    "discard": {"from_hz": 750, "to_hz": 250, "duration_ms": 24, "gain": 0.045},
+    "send": {"from_hz": 520, "to_hz": 690, "duration_ms": 65, "gain": 0.045},
+    "dialog": {"from_hz": 465, "to_hz": 620, "duration_ms": 70, "gain": 0.07},
+    "cancel": {"from_hz": 455, "to_hz": 335, "duration_ms": 65, "gain": 0.075},
+    "ready": {"from_hz": 285, "to_hz": 1140, "duration_ms": 320, "gain": 0.12},
+    "open": {"from_hz": 310, "to_hz": 820, "duration_ms": 145, "gain": 0.11},
+    "close": {"from_hz": 680, "to_hz": 245, "duration_ms": 165, "gain": 0.09},
+    "tab": {"from_hz": 710, "to_hz": 510, "duration_ms": 42, "gain": 0.07},
+    "confirm": {"from_hz": 580, "to_hz": 920, "duration_ms": 80, "gain": 0.09}
+  },
+  "prompt_style": {"text_peak": 1.8,
+    "bold": true,
+    "fill": "#303030",
+    "border": "#3a3a3a",
+    "ink": "#f3f3f3",
+    "width": 98,
+    "radius": 20.16,
+    "caret_gap": 2,
+    "caret_height": 28,
+    "caret_offset_y": 2,
+    "caret_aspect": 0.618034,
+    "caret_radius": 3.36,
+    "caret_ink": "#ff801f",
+    "caret_peak": 3,
+    "caret_seconds": 1.5,
+    "caret_hold": 0.1,
+    "caret_bottom_hold": 0.2,
+    "caret_fall_ratio": 0.5,
+    "show_plus": false
+  },
+  "message_card": {
+    "fill": "#303030",
+    "ink": "#ffffff",
+    "selected_opacity": 0.5,
+    "text_size": 34,
+    "radius": 20,
+    "email_ink": "#477fba",
+    "selected_radius": 8,
+    "selector_width_em": 16,
+    "side_extension": 20,
+    "vertical_extension": 10,
+    "unselected_weight": 400,
+    "email_weight": 700
+  },
+  "centered_account_menu": true,
+  "sign_in_on_select": true,
+  "account_picker_shortcuts": {
+    "ArrowUp": "previous",
+    "ArrowDown": "next",
+    "Command+ArrowUp": "previous",
+    "Command+ArrowDown": "next"
+  }
+}
