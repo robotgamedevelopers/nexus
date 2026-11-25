@@ -13,7 +13,7 @@
 ## Platform support
 
 - **macOS 26 or newer on Apple silicon** supports the full desktop chat experience. The same Mac can run the client and server.
-- **Windows x64** has a native window and tested WSL2 terminal tabs. Connecting that window to the Nexus server for chat is still in development.
+- **Windows x64** has native window code and tested WSL2 terminal support. Connecting that window to the Nexus server for chat is still in development.
 - **Linux** has CI coverage for core libraries, drivers and services. The Wayland desktop client is still in development.
 
 Bring a supported subscription to use a connected friend. [Build and platform details](docs/README.md)
