@@ -6527,6 +6527,80 @@ int64_t SignInOfferToJson( const SignInOffer * root, char * buffer, int64_t capa
     return TableJsonWriteGraph( root, SignInOfferTableType(), buffer, capacity, allocator );
 }
 
+bool TerminalLineFromJson( TerminalLineBuilder & builder, const char * text, int64_t bytes, TableReport * report )
+{
+    TerminalLine * root = builder.GetRoot();
+    if ( root == NULL )
+    {
+        if ( report != NULL ) { *report = TableReport(); }
+        return false;
+    } // locked: the report stays empty
+    TableReport read;
+    bool ok = TableJsonReadGraph( builder.main, root, TerminalLineTableType(), text, bytes, &read );
+    if ( !ok || read.refused || read.damaged || read.missing_required != 0 )
+    {
+        // the walk names the condition it refused where it met it; what it
+        // left unnamed is malformed text or a missing required field
+        if ( read.refuse_reason == TableRefuseReason::ok )
+        {
+            read.refuse_reason = read.missing_required != 0 && !read.damaged ? TableRefuseReason::missing_required : TableRefuseReason::malformed;
+        }
+        TerminalLineTableType()->reset( root );
+        if ( report != NULL ) { *report = read; }
+        return false;
+    }
+    read.refuse_reason = TableRefuseReason::ok;
+    if ( report != NULL ) { *report = read; }
+    return true;
+}
+
+int64_t TerminalLineToJsonMeasure( const TerminalLine * root, TableAllocator allocator )
+{
+    return TableJsonWriteGraph( root, TerminalLineTableType(), NULL, 0, allocator );
+}
+
+int64_t TerminalLineToJson( const TerminalLine * root, char * buffer, int64_t capacity, TableAllocator allocator )
+{
+    return TableJsonWriteGraph( root, TerminalLineTableType(), buffer, capacity, allocator );
+}
+
+bool TerminalChangeFromJson( TerminalChangeBuilder & builder, const char * text, int64_t bytes, TableReport * report )
+{
+    TerminalChange * root = builder.GetRoot();
+    if ( root == NULL )
+    {
+        if ( report != NULL ) { *report = TableReport(); }
+        return false;
+    } // locked: the report stays empty
+    TableReport read;
+    bool ok = TableJsonReadGraph( builder.main, root, TerminalChangeTableType(), text, bytes, &read );
+    if ( !ok || read.refused || read.damaged || read.missing_required != 0 )
+    {
+        // the walk names the condition it refused where it met it; what it
+        // left unnamed is malformed text or a missing required field
+        if ( read.refuse_reason == TableRefuseReason::ok )
+        {
+            read.refuse_reason = read.missing_required != 0 && !read.damaged ? TableRefuseReason::missing_required : TableRefuseReason::malformed;
+        }
+        TerminalChangeTableType()->reset( root );
+        if ( report != NULL ) { *report = read; }
+        return false;
+    }
+    read.refuse_reason = TableRefuseReason::ok;
+    if ( report != NULL ) { *report = read; }
+    return true;
+}
+
+int64_t TerminalChangeToJsonMeasure( const TerminalChange * root, TableAllocator allocator )
+{
+    return TableJsonWriteGraph( root, TerminalChangeTableType(), NULL, 0, allocator );
+}
+
+int64_t TerminalChangeToJson( const TerminalChange * root, char * buffer, int64_t capacity, TableAllocator allocator )
+{
+    return TableJsonWriteGraph( root, TerminalChangeTableType(), buffer, capacity, allocator );
+}
+
 bool SessionsDiffFromJson( SessionsDiffBuilder & builder, const char * text, int64_t bytes, TableReport * report )
 {
     SessionsDiff * root = builder.GetRoot();
@@ -7213,6 +7287,96 @@ bool SignInOfferEditTextForm( const char * document, int64_t document_bytes, con
     if ( !edited.empty() ) { memcpy( buffer, edited.data(), edited.size() ); }
     TableReport report;
     if ( !SignInOfferFromJson( builder, json.data(), (int64_t) json.size(), &report ) || report.damaged || report.unknown != 0 || report.refused )
+    {
+        *refusal = report.refuse_reason == TableRefuseReason::out_of_range ? "text_bound" : "text_kind_mismatch";
+        return false;
+    }
+    return true;
+}
+
+bool TerminalLineLoadTextForm( const char * text, int64_t bytes, TerminalLineBuilder & builder, const char ** refusal )
+{
+    std::string json;
+    if ( !TableTextFormToJson( text, bytes, TerminalLineTableType(), json, refusal ) ) { return false; }
+    TableReport report;
+    if ( !TerminalLineFromJson( builder, json.data(), (int64_t) json.size(), &report ) || report.damaged || report.unknown != 0 || report.refused )
+    {
+        *refusal = report.refuse_reason == TableRefuseReason::out_of_range ? "text_bound" : "text_kind_mismatch";
+        return false;
+    }
+    return true;
+}
+
+bool TerminalLineLoadTextForm( const char * text, int64_t bytes, const char ** document, int64_t * document_bytes, TerminalLineBuilder & builder, const char ** refusal )
+{
+    if ( !TerminalLineLoadTextForm( text, bytes, builder, refusal ) ) { return false; }
+    if ( document != NULL ) { *document = text; }
+    if ( document_bytes != NULL ) { *document_bytes = bytes; }
+    return true;
+}
+
+int64_t TerminalLineSaveTextForm( const char * document, int64_t document_bytes, char * buffer, int64_t capacity )
+{
+    if ( document == NULL || document_bytes < 0 || buffer == NULL || capacity < document_bytes ) { return -1; }
+    if ( document_bytes > 0 ) { memcpy( buffer, document, (size_t) document_bytes ); }
+    return document_bytes;
+}
+
+bool TerminalLineEditTextForm( const char * document, int64_t document_bytes, const TableTextFormEdit * edits, int64_t count, char * buffer, int64_t capacity, int64_t * edited_bytes, TerminalLineBuilder & builder, const char ** refusal )
+{
+    std::string edited;
+    std::string json;
+    if ( !tableTextFormEditText( std::string( document, (size_t) document_bytes ), TerminalLineTableType(), edits, count, edited, json, refusal ) ) { return false; }
+    if ( edited_bytes != NULL ) { *edited_bytes = (int64_t) edited.size(); }
+    if ( buffer == NULL || capacity < (int64_t) edited.size() ) { return false; }
+    if ( !edited.empty() ) { memcpy( buffer, edited.data(), edited.size() ); }
+    TableReport report;
+    if ( !TerminalLineFromJson( builder, json.data(), (int64_t) json.size(), &report ) || report.damaged || report.unknown != 0 || report.refused )
+    {
+        *refusal = report.refuse_reason == TableRefuseReason::out_of_range ? "text_bound" : "text_kind_mismatch";
+        return false;
+    }
+    return true;
+}
+
+bool TerminalChangeLoadTextForm( const char * text, int64_t bytes, TerminalChangeBuilder & builder, const char ** refusal )
+{
+    std::string json;
+    if ( !TableTextFormToJson( text, bytes, TerminalChangeTableType(), json, refusal ) ) { return false; }
+    TableReport report;
+    if ( !TerminalChangeFromJson( builder, json.data(), (int64_t) json.size(), &report ) || report.damaged || report.unknown != 0 || report.refused )
+    {
+        *refusal = report.refuse_reason == TableRefuseReason::out_of_range ? "text_bound" : "text_kind_mismatch";
+        return false;
+    }
+    return true;
+}
+
+bool TerminalChangeLoadTextForm( const char * text, int64_t bytes, const char ** document, int64_t * document_bytes, TerminalChangeBuilder & builder, const char ** refusal )
+{
+    if ( !TerminalChangeLoadTextForm( text, bytes, builder, refusal ) ) { return false; }
+    if ( document != NULL ) { *document = text; }
+    if ( document_bytes != NULL ) { *document_bytes = bytes; }
+    return true;
+}
+
+int64_t TerminalChangeSaveTextForm( const char * document, int64_t document_bytes, char * buffer, int64_t capacity )
+{
+    if ( document == NULL || document_bytes < 0 || buffer == NULL || capacity < document_bytes ) { return -1; }
+    if ( document_bytes > 0 ) { memcpy( buffer, document, (size_t) document_bytes ); }
+    return document_bytes;
+}
+
+bool TerminalChangeEditTextForm( const char * document, int64_t document_bytes, const TableTextFormEdit * edits, int64_t count, char * buffer, int64_t capacity, int64_t * edited_bytes, TerminalChangeBuilder & builder, const char ** refusal )
+{
+    std::string edited;
+    std::string json;
+    if ( !tableTextFormEditText( std::string( document, (size_t) document_bytes ), TerminalChangeTableType(), edits, count, edited, json, refusal ) ) { return false; }
+    if ( edited_bytes != NULL ) { *edited_bytes = (int64_t) edited.size(); }
+    if ( buffer == NULL || capacity < (int64_t) edited.size() ) { return false; }
+    if ( !edited.empty() ) { memcpy( buffer, edited.data(), edited.size() ); }
+    TableReport report;
+    if ( !TerminalChangeFromJson( builder, json.data(), (int64_t) json.size(), &report ) || report.damaged || report.unknown != 0 || report.refused )
     {
         *refusal = report.refuse_reason == TableRefuseReason::out_of_range ? "text_bound" : "text_kind_mismatch";
         return false;
