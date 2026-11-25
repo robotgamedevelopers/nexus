@@ -2,11 +2,15 @@
 # Linux), then restores the newest cache of this name for Prax's pin (read from CMakeLists.txt): the build directory
 # (build/, so Prax is not recompiled: tar keeps its sources' times, and the checkout makes only nexus's own files
 # newer) and ~/nexus-ci (ccache, the linker's ThinLTO cache, Prax's downloads, cargo's target directory), and cargo's
-# registry. Sets what the jobs' steps read: NEXUS_CACHES, PR_DOWNLOAD_DIR, CCACHE_*, NEXUS_CARGO_TARGET_DIR
-# (cmake/policy.cmake), JOBS and TEST_JOBS.
+# registry, and the pinned Rust toolchain. Sets what the jobs' steps read: NEXUS_CACHES, PR_DOWNLOAD_DIR, CCACHE_*,
+# NEXUS_CARGO_TARGET_DIR (cmake/policy.cmake), RUSTUP_TOOLCHAIN, JOBS and TEST_JOBS.
 #
-# The caches are made only by .github/workflows/cache-warm.yml, on main (daily, and by hand after a pin changes), so
-# every pull request can restore them. A per-commit job (require: true) fails at once when there is none for this
+# Rust is pinned (1.98.1, as windows-build pins it), not the image's: the hosted images roll out a new Rust every few
+# days, and a cargo target directory built by another rustc rebuilds every crate (67 s on 4 cores, PR #89's run).
+# The toolchain lives in ~/nexus-ci/rustup (RUSTUP_HOME), so it is restored with the rest of ~/nexus-ci.
+#
+# The caches are made only by .github/workflows/cache-warm.yml, on main (on every push to main, daily, and by hand), so
+# every pull request can restore them, built from main as it is now. A per-commit job (require: true) fails at once when there is none for this
 # pin, saying to run cache-warm; it never builds Prax cold inside its 2 minutes.
 name: hosted-caches
 description: Tools and restored caches for a GitHub-hosted macOS or Linux job
@@ -106,6 +110,15 @@ runs:
         caches="$HOME/nexus-ci"
         mkdir -p "$caches/ccache" "$caches/lto" "$caches/prax-downloads" "$caches/cargo-target"
         if [ "$RUNNER_OS" = macOS ]; then cores=$(sysctl -n hw.ncpu); else cores=$(nproc); fi
+        toolchain=1.98.1
+        export RUSTUP_HOME="$caches/rustup"
+        if ! ls -d "$RUSTUP_HOME/toolchains/$toolchain-"*/bin/cargo >/dev/null 2>&1; then
+          if ! command -v rustup >/dev/null 2>&1; then
+            echo "::error::no rustup on $(hostname -s), so Rust $toolchain cannot be installed"
+            exit 1
+          fi
+          rustup toolchain install "$toolchain" --profile minimal --no-self-update
+        fi
         {
           echo "NEXUS_CACHES=$caches"
           echo "PR_DOWNLOAD_DIR=$caches/prax-downloads"
@@ -114,6 +127,8 @@ runs:
           echo "CCACHE_MAXSIZE=2G"
           echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
           echo "NEXUS_CARGO_TARGET_DIR=$caches/cargo-target"
+          echo "RUSTUP_HOME=$RUSTUP_HOME"
+          echo "RUSTUP_TOOLCHAIN=$toolchain"
           echo "JOBS=$cores"
           echo "CARGO_BUILD_JOBS=$cores"
           echo "TEST_JOBS=$cores"
