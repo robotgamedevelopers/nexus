@@ -544,6 +544,10 @@ bool Server::restoreAll(std::string* why) {
             loginLive(a.provider, inspectLogin(logins + "/" + a.name + "/" + file),
                       static_cast<std::uint64_t>(wallMs()));
     });
+    // Who a Claude login with no email set signed in as: the email in its verified grant (server/login_life.h).
+    hub_->identityWith([logins = paths_.accounts](const accounts::Account& a) {
+        return a.provider == "claude" ? verifiedClaudeEmail(logins + "/" + a.name) : std::string();
+    });
     // A login lost: ask in the window only when a paste can fix it, saying why (server/login_life.h loginAsk).
     hub_->loginsWith([logins = paths_.accounts](const accounts::Account& a) {
         if (a.requiresVerifiedEmail()) return sync::Hub::LoginAsk{false, "Sign in to " + a.email + " in Nexus to verify this account."};
@@ -762,6 +766,14 @@ void Server::openSignIn(const std::string& host) {
             return;
         }
         if (a->provider == "claude") {
+            // No email set: the same verified login, with no identity asked for. The identity Claude reports for it
+            // is stored with the grant, and the hub takes it as the account's email (Hub::signInEnrolled). Without
+            // the helper, the older `claude setup-token`, which proves no identity.
+            if (!authClaude_.empty() && !verifiedHelper_.empty() && access(verifiedHelper_.c_str(), X_OK) == 0) {
+                signIns_->start(id, account, a->provider, {verifiedHelper_, "enroll", "--account-dir",
+                    paths_.accounts + "/" + account, "--claude", authClaude_});
+                return;
+            }
             signIns_->start(id, account);
             return;
         }

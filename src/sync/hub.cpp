@@ -1099,6 +1099,13 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
 
 // The registry becomes `next`; an account it no longer holds loses its sign-in, and one it did not hold before is
 // probed (probeSignInWith).
+// Two email addresses the same, as Claude compares them: ASCII letters in either case, nothing else folded.
+static bool sameAddress(const std::string& a, const std::string& b) {
+    auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c; };
+    return !a.empty() && a.size() == b.size() &&
+        std::equal(a.begin(), a.end(), b.begin(), [&](char x, char y) { return lower(x) == lower(y); });
+}
+
 static bool sameLogin(const accounts::Account* previous, const accounts::Account& current) {
     return previous && previous->provider == current.provider &&
         (current.provider != "claude" || previous->email == current.email);
@@ -1359,16 +1366,62 @@ void Hub::signInEnrolled(const std::string& account, const std::string& provider
     if (!flow || flow->first != id || !signInRunning(flow->second) || a == nullptr || a->provider != provider) {
         return;
     }
-    if (!probe_ || !probe_(*a)) {
+    // A Claude account with no email set learns it from the login: the identity Claude reported for it. One that is
+    // another Claude account's email is that account's login, never this one's: refused, and the login removed.
+    const bool learn = a->provider == "claude" && a->email.empty() && identity_;
+    std::string identity;
+    if (learn) {
+        identity = identity_(*a);
+        std::string refused;
+        if (identity.empty()) {
+            refused = "Claude did not report who signed in";
+        }
+        for (const accounts::Account& other : accounts_->accounts) {
+            if (refused.empty() && other.name != account && other.provider == "claude" &&
+                    sameAddress(other.email, identity)) {
+                refused = "this browser signed in as " + identity + ", which is " + other.name + "'s login. Sign out "
+                    "of " + identity + " in the browser, or choose another identity, and sign in to " + account +
+                    " again";
+            }
+        }
+        if (!refused.empty()) {
+            if (signOut_) signOut_(*a);
+            const std::string said = "Could not sign in to " + account + ": " + refused;
+            dropSwitches(account, said);
+            tellAccount(account, said + ".");
+            signInExited(account, id, refused);
+            return;
+        }
+    } else if (!probe_ || !probe_(*a)) {
         signInExited(account, id, "the provider did not confirm this account's enrollment");
         return;
     }
     SignInEffects effects;
     signIns_.printed(account, &effects);
     signInEffects(effects);
+    if (learn) {
+        accounts::Registry next = *accounts_;
+        for (accounts::Account& row : next.accounts) {
+            if (row.name == account) row.email = identity;
+        }
+        const std::string message = "the account " + account + " signed in as " + identity + " (its email, recorded)";
+        std::string failed;
+        if (keeper_ != nullptr && !keeper_->keep(next, message, &failed)) {
+            tellAccount(account, "Signed in to " + account + " as " + identity + ", but its email was not recorded (" +
+                        failed + "), so the login is not used. Sign in again.");
+            if (signOut_ && accounts_->account(account)) signOut_(*accounts_->account(account));
+            reportSignedIn(account, false);
+            return;
+        }
+        take(std::move(next));
+    }
     reportSignedIn(account, true);
     if (responder_ != nullptr) {
         responder_->signedIn(account);
+    }
+    if (const accounts::Account* now = accounts_->account(account); now && now->provider == "claude" &&
+            !now->email.empty() && signedIn_.contains(account)) {
+        noteAccount(account, "Signed in to " + account + " as " + now->email + ".");
     }
 }
 

@@ -108,16 +108,15 @@ int openAccountDirectory(const std::string& dir, std::string& problem) {
     return fd;
 }
 
-bool hasVerifiedClaude(const std::string& accountDir, const std::string& expectedEmail) {
-    if (expectedEmail.empty()) return false;
+std::string verifiedClaudeEmail(const std::string& accountDir) {
     std::string problem;
     const int dir = openAccountDirectory(accountDir, problem);
-    if (dir < 0) return false;
+    if (dir < 0) return std::string();
     struct stat st{};
     const bool privateDir = ::fstat(dir, &st) == 0 && st.st_uid == ::getuid() && (st.st_mode & 0777) == 0700;
     const int fd = privateDir ? openExactAt(dir, "verified-claude.json", O_NONBLOCK) : -1;
     ::close(dir);
-    if (fd < 0) return false;
+    if (fd < 0) return std::string();
     std::string bytes;
     if (::fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == ::getuid() && st.st_nlink == 1 &&
         (st.st_mode & 0777) == 0600 && st.st_size > 0 && st.st_size <= 65536) {
@@ -133,29 +132,37 @@ bool hasVerifiedClaude(const std::string& accountDir, const std::string& expecte
         if (at != bytes.size() || ::read(fd, &extra, 1) != 0) sync::wipeBytes(bytes);
     }
     ::close(fd);
-    if (bytes.empty()) return false;
+    if (bytes.empty()) return std::string();
     PrJson* doc = prJsonCreate();
     const bool parsed = doc && prJsonParse(doc, {bytes.data(), bytes.size()}, nullptr);
-    bool valid = false;
+    std::string identity;
     if (parsed) {
         auto member = [&](PrJsonValueIndex object, std::string_view key) {
             return prJsonMember(doc, object, {key.data(), key.size()});
         };
         const PrStringView email = prJsonString(doc, member(0, "email"));
         const auto grant = member(0, "credential");
-        auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : int(c); };
         const auto version = member(0, "version");
         const auto expiry = member(grant, "expiresAt");
-        valid = prJsonKind(doc, version) == PrJsonKind_Number && prJsonNumber(doc, version, 0) == 1 && email.data &&
-            email.size == expectedEmail.size() && std::equal(expectedEmail.begin(), expectedEmail.end(), email.data,
-                [&](char a, char b) { return lower(a) == lower(b); }) &&
+        const bool valid = prJsonKind(doc, version) == PrJsonKind_Number && prJsonNumber(doc, version, 0) == 1 &&
+            email.data && email.size > 0 && email.size <= 254 &&
             prJsonString(doc, member(grant, "accessToken")).size > 0 &&
             prJsonString(doc, member(grant, "refreshToken")).size > 0 &&
             prJsonKind(doc, expiry) == PrJsonKind_Number && prJsonNumber(doc, expiry, 0) > 0;
+        if (valid) identity.assign(email.data, email.size);
     }
     prJsonDestroy(doc);
     sync::wipeBytes(bytes);
-    return valid;
+    return identity;
+}
+
+bool hasVerifiedClaude(const std::string& accountDir, const std::string& expectedEmail) {
+    if (expectedEmail.empty()) return false;
+    const std::string email = verifiedClaudeEmail(accountDir);
+    auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c; };
+    return email.size() == expectedEmail.size() &&
+        std::equal(email.begin(), email.end(), expectedEmail.begin(),
+                   [&](char a, char b) { return lower(a) == lower(b); });
 }
 
 static int enrollmentDirectory(const std::string& home, const std::string& provider, const std::string& account) {

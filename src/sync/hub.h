@@ -376,6 +376,9 @@ public:
     // The server retires any idle driver holding this exact login and forgets its grants under the account lock.
     void signOutWith(std::function<std::string(const accounts::Account&)> hook) { signOut_ = std::move(hook); }
     void probeSignInWith(std::function<bool(const accounts::Account&)> probe) { probe_ = std::move(probe); }
+    // Who a Claude sign-in with no email set signed in as: the email Claude reported for that login (empty: none). The
+    // hub records it as the account's email, or refuses the login when another account has it (signInEnrolled).
+    void identityWith(std::function<std::string(const accounts::Account&)> identity) { identity_ = std::move(identity); }
 
     // Pure request handlers. The server commits the returned text with the request's acknowledgement.
     using NativeService = std::function<std::string(const std::string&)>;
@@ -518,6 +521,7 @@ private:
     bool needsVerifiedLogin(const accounts::Account& account);
     std::set<std::string> signedIn_;
     std::function<bool(const accounts::Account&)> probe_;
+    std::function<std::string(const accounts::Account&)> identity_;
     std::function<std::string(const accounts::Account&)> signOut_;
     // A login switch (/login to another linked account): each account being signed in, and the sessions that move
     // to it once it is. A session stays on its account until then; a sign-in that fails, is declined or expires moves
