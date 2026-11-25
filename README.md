@@ -5,8 +5,8 @@
 ## What you get
 
 - **One tab per AI.** Give an AI a name if you like. Work with Claude on a change, then switch to Codex for a second opinion. Each keeps its own conversation and workspace.
-- **The same controls across harnesses.** Use `/model` and `/effort` to choose how an AI works. Type `/info` to see the account, model and working directories.
-- **Room to finish a thought.** Stack messages with Enter and send them together. Close the overlay while your AIs work. The server keeps going.
+- **The same controls across harnesses.** Use `/model` and `/effort` for each AI. Type `/info` to see the account, model and working directories.
+- **Room to finish a thought.** Stack messages with Enter and send them together. Close the overlay while your AIs work. Close your laptop. The server keeps going.
 - **A setup your AI can change with you.** Configure AIs in nova-config. Tune shortcuts, tabs, colors and sounds in Starlark and JSON.
 - **Terminal windows in tabs, and a dashboard you can customize.** Run a test or inspect a diff in a shell, then switch to the dashboard to see what your AIs are working on.
 
