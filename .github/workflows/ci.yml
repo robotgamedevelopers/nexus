@@ -162,7 +162,16 @@ jobs:
         env:
           CC: clang
           CXX: clang++
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF
+        shell: bash
+        run: |
+          set -euo pipefail
+          # On Linux the Release build is ThinLTO, which only LLD links: the image's LLVM 18 linker, as hosted-caches links it.
+          linker=()
+          if [ "$RUNNER_OS" = Linux ]; then
+            if [ ! -e /usr/bin/ld.lld ] && [ -x /usr/bin/ld.lld-18 ]; then sudo ln -s ld.lld-18 /usr/bin/ld.lld; fi
+            linker=(-DCMAKE_LINKER_TYPE=LLD)
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF ${linker[@]+"${linker[@]}"}
       - name: Build the conformance test
         run: cmake --build build --parallel "$JOBS" --target driver_conformance_test
       - name: Conformance of the Claude driver
