@@ -275,7 +275,7 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
     for (auto i = prJsonFirst(d, obj); i != kPrJsonMissing; i = prJsonAfter(d, obj, i)) {
         const auto key = stringAt(d, i);
         if (key != "fill" && key != "ink" && key != "person_ink" && key != "bus_ink" && key != "message_inks" && key != "notice_ink" && key != "status_ink" && key != "switch_email_ink" &&
-                key != "radius" && key != "show_notices" && key != "show_tools" && key != "reply_width" && key != "markdown" && key != "conversation_panel" && key != "tool_prompts" && key != "list_gap_em" &&
+                key != "radius" && key != "show_notices" && key != "show_tools" && key != "reply_width" && key != "markdown" && key != "conversation_panel" && key != "tool_prompts" && key != "list_gap_em" && key != "list_item_gap_lines" &&
                 key != "panel_fill" && key != "link_ink" && key != "pending_text_pulse" && key != "pending_text_seconds" && key != "pending_dash_seconds" && key != "pending_outline_width" && key != "sent_outline_width" && key != "sent_outline_ink" && key != "read_path_ink" && key != "command_ink" && key != "code_ink" && key != "code_fill" &&
                 key != "code_background" && key != "code_padding" && key != "code_radius" && key != "code_size_offset" &&
                 key != "glyph_peak" && key != "glyph_seconds" && key != "glyph_stagger" &&
@@ -356,6 +356,7 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
         readPoints(d, obj, {"pending_outline_width", 21}, style.pendingOutlineWidth, 0, 8) &&
         readPoints(d, obj, {"radius", 6}, style.radius, 0, 64) &&
         readFlag(d, obj, {"show_notices", 12}, style.showNotices) && readFlag(d, obj, {"show_tools", 10}, style.showTools) &&
+        readPoints(d, obj, {"list_item_gap_lines", 19}, style.listItemGapLines, 0, 4) &&
         readPoints(d, obj, {"list_gap_em", 11}, style.listGap, 0, 4) &&
         readPoints(d, obj, {"reply_width", 11}, style.replyWidth, 1, 100) && readFlag(d, obj, {"markdown", 8}, style.markdown) && readFlag(d, obj, {"conversation_panel", 18}, style.conversationPanel);
     if (prJsonMember(d, obj, {"person_ink", 10}) == kPrJsonMissing)

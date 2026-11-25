@@ -121,6 +121,7 @@ struct TranscriptStyle {
     float scannerPause = 0.1f, scannerEase = 1.f / 30, scannerFade = 0.17f;
     float scannerGap = 0.15f * style::kU, scannerOffset = 0;
     float scannerSeconds = 1.5f, scannerPeak = 3, scannerPulseFloor = 0.12f;
+    float listItemGapLines = 0.5f;
     float listGap = 0.4f; // em between a list marker and its text
     bool markdown = true;
     bool conversationPanel = true;

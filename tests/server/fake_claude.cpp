@@ -238,6 +238,13 @@ int main(int argc, char** argv) {
     const bool state = first.find(std::string("state=") + kState) != std::string::npos;
     const bool code = first.find(std::string("code=") + kCode) != std::string::npos;
     const bool error = first.find("error=") != std::string::npos;
+    sigset_t term;
+    if (mode == "late") {
+        // The parent can stop us as soon as it reads the HTTP response.
+        sigemptyset(&term);
+        sigaddset(&term, SIGTERM);
+        sigprocmask(SIG_BLOCK, &term, nullptr);
+    }
     const char* answer = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
     send(c, answer, std::strlen(answer), 0);
     close(c);
@@ -264,10 +271,7 @@ int main(int argc, char** argv) {
     if (mode == "late") {
         // Slow to print: the token comes only once the runner has told it to end (SIGTERM), in the grace before the
         // SIGKILL, as when the flow's deadline passed while the browser was sent back.
-        sigset_t term;
-        sigemptyset(&term);
-        sigaddset(&term, SIGTERM);
-        sigprocmask(SIG_BLOCK, &term, nullptr);
+
         int sig = 0;
         sigwait(&term, &sig);
     }

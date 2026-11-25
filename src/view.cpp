@@ -675,7 +675,17 @@ struct Builder {
 
     void accountSelector(PrLayoutNode parent, const std::vector<AccountItem>& items) {
         if (items.empty()) return;
-        const auto card = element(element(parent, Part::SelectorLayer), Part::SelectorCard);
+        const auto layer = element(parent, Part::SelectorLayer);
+        if (view.windowApp.surface.showTabs) {
+            // Balance the strip above the panels while keeping its hit area free.
+            auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, layer));
+            auto& group = record.groups[PrLayoutGroup_Box];
+            auto box = prLayoutBoxStyleRecord(tree, group);
+            box.padding[PrRectSide_Bottom] = px(look.tabs.height * k() + 1);
+            group = prLayoutBoxStyleIntern(tree, &box);
+            prLayoutTreeFrameSetStyle(tree, layer, prLayoutStyleIntern(tree, &record));
+        }
+        const auto card = element(layer, Part::SelectorCard);
         view.accountMenu = card;
         element(card, Part::SelectorBackground);
         const float lineHeight = kit->theme.types[PrKitTextRole_Body].lineHeight;
@@ -1442,6 +1452,7 @@ struct Builder {
             return;
         }
         const auto column = element(parent, Part::Paragraphs);
+        PrLayoutNode list = kPrLayoutNodeNone;
         size_t sourceOffset = 0;
         for (const auto& paragraph : paragraphs) {
             const auto em = kit->theme.types[PrKitTextRole_Body].size;
@@ -1450,12 +1461,16 @@ struct Builder {
                 PrKitBoxStyle layout{.direction = PrKitDirection_Row, .align = PrKitAlign_Start};
                 layout.padding.left = em * (0.7f * paragraph.ancestorColumns +
                     (paragraph.depth - 1) * look.transcriptStyle.listGap);
-                row = prKitBox(kit, column, {}, layout);
+                if (list == kPrLayoutNodeNone)
+                    list = prKitBox(kit, column, {}, {.gap = kLinePitch * k() * look.transcriptStyle.listItemGapLines});
+                row = prKitBox(kit, list, {}, layout);
                 const auto marker = plainLabel(label(row, paragraph.marker, body));
                 PrKitPlace gutter{};
                 gutter.width = prKitPx(em * (0.7f * paragraph.markerColumns + look.transcriptStyle.listGap));
                 gutter.flex = PrKitFlex_Fixed;
                 prKitPlace(kit, marker, gutter);
+            } else {
+                list = kPrLayoutNodeNone;
             }
             const auto text = prKitText(kit, row, {}, body);
             const auto plain = sourceInk.value_or(tone == kPersonTone ? style.personInk : style.ink);
@@ -2606,6 +2621,7 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
         if (look.transcriptStyle.showNotices != view.windowApp.transcriptStyle.showNotices ||
             look.transcriptStyle.showTools != view.windowApp.transcriptStyle.showTools ||
             look.transcriptStyle.codeSizeOffset != view.windowApp.transcriptStyle.codeSizeOffset ||
+            look.transcriptStyle.listItemGapLines != view.windowApp.transcriptStyle.listItemGapLines ||
             look.transcriptStyle.listGap != view.windowApp.transcriptStyle.listGap ||
             look.transcriptStyle.replyWidth != view.windowApp.transcriptStyle.replyWidth ||
             look.prompt.width != view.windowApp.surface.prompt.width)

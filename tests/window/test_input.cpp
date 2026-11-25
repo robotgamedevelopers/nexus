@@ -2911,8 +2911,7 @@ int main(int argc, char** argv) {
             CHECK(h.hasText(h.view.accountRows[i], std::string(1, 'a' + i) + "@example.test"));
         const auto menu = h.bounds(h.view.accountMenu);
         CHECK(std::abs((menu.left + menu.right) / 2 - h.extent.x / 2) < 2);
-        const auto page = h.bounds(prLayoutNodeParent(h.tree, h.view.accountMenu));
-        CHECK(std::abs((menu.top + menu.bottom - page.top - page.bottom) / 2) < 2);
+        CHECK(std::abs((menu.top + menu.bottom - h.extent.y) / 2) < 2);
         CHECK(colorMatches(fillOf(h, h.view.accountMenu), h.look.messageCard.fill));
         down(0);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 2 && link.sent.empty());
@@ -2941,6 +2940,7 @@ int main(int argc, char** argv) {
         CHECK(rowOpacity > 0.4f && rowOpacity < 0.85f);  // half-opacity selection plus its SDR pulse and flash
         checkTextPaint(h, "a@example.test", h.look.messageCard.ink, h.look.messageCard.fill);
         const auto card = h.bounds(h.view.accountMenu);
+        CHECK(std::abs((card.top + card.bottom - h.extent.y) / 2) < 2);
         const auto selectedRow = h.bounds(h.view.accountRows[2]);
         CHECK(selectedRow.left - card.left < 0.25f * lineHeight);
         CHECK(card.right - selectedRow.right < 0.25f * lineHeight);

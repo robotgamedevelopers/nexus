@@ -260,6 +260,7 @@ The Starlark `window` result accepts these color settings, also available in the
 
 Inline code uses the monospace font. `code_size_offset` adjusts its size in logical points relative to the monospace base size (−8 to 32, default +2). `code_padding` sets horizontal padding in logical points (default 6), `code_radius` sets the corner radius (default 7), and `code_background` toggles the fill. These fields belong to `transcript_style` and scale with keyboard zoom.
 
+Set `transcript_style.list_item_gap_lines` to adjust vertical space between consecutive list entries in line heights (0–4, default 0.5).
 Markdown list items share a marker column. Set `transcript_style.list_gap_em` to change the space between the marker and the text at every zoom level (0–4, default 0.4).
 
 When the selected account needs sign-in, the shipped client policy shows a centered sign-in card and the composer.
