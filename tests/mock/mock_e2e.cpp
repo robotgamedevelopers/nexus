@@ -75,7 +75,9 @@ std::size_t count(const sync::SessionView& v, EntryKind kind, const std::string&
 }
 
 void fiveAndSignIn(const std::string& mock, const std::string& dir) {
-    if (!run(mock, {"start", "--dir", dir, "--ais", "5", "--sign-in", "--instant"}))
+    const bool started = run(mock, {"start", "--dir", dir, "--ais", "5", "--sign-in", "--instant"});
+    CHECK(started);
+    if (!started)
         return;
     std::string command = readFile(dir + "/server-command");
     while (!command.empty() && command.back() == '\n')
@@ -190,7 +192,9 @@ void fiveAndSignIn(const std::string& mock, const std::string& dir) {
 }
 
 void none(const std::string& mock, const std::string& dir) {
-    if (!run(mock, {"start", "--dir", dir, "--ais", "0", "--instant"}))
+    const bool started = run(mock, {"start", "--dir", dir, "--ais", "0", "--instant"});
+    CHECK(started);
+    if (!started)
         return;
     std::string command = readFile(dir + "/server-command");
     while (!command.empty() && command.back() == '\n')
