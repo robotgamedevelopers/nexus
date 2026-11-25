@@ -16,6 +16,7 @@
 #include "pr/font_set.h"
 #include "pr/kit.h"
 #include "pr/kit_panel.h"
+#include "pr/layout_query.h"
 #include "pr/layout_tree.h"
 #include "pr/text.h"
 #include "pr/ui.h"
