@@ -98,6 +98,107 @@ void aFlingStopsAtTheEndAndNeverComesBackInside() {
     CHECK(s.offset() == s.max());
 }
 
+// A fling that reaches the bottom bounces past it, as one reaching the top does past the top (its spring once began at
+// the end with no speed, p0 = 0 read as the inside: it stopped dead at the bottom). models/FingerScroll.tla.
+void aFlingBouncesPastTheBottomAsPastTheTop() {
+    for (const int way : {1, -1}) {
+        auto s = list();
+        if (way < 0) {
+            s.down(400, 0, 0);
+            s.move(390, 0.0);
+            s.move(-210, 1.0);
+            s.up(3, 3); // at rest at 600
+        }
+        const double t0 = 4;
+        s.down(400, t0, t0);
+        s.move(400 - way * 10, t0);
+        s.move(400 - way * 210, t0 + 0.05);
+        s.move(400 - way * 410, t0 + 0.10); // 4000 px/s toward the end
+        s.up(t0 + 0.10, t0 + 0.10);
+        bool past = false;
+        for (double t = t0 + 0.10; t < t0 + 5; t += 1.0 / 120) {
+            s.frame(t);
+            if (way > 0 ? s.offset() > s.max() + 1 : s.offset() < -1) past = true;
+        }
+        CHECK(past);
+        CHECK(s.phase() == FingerPhase::Rest);
+        CHECK(s.offset() == (way > 0 ? s.max() : 0));
+    }
+}
+
+// Let go past the bottom, then the range shrinks (a row goes) while it springs back: it springs to the new bottom from
+// where it shows, never inside it, and rests there, inside the range (it rested at the old bottom, past the new one).
+void aShorterRangeWhileSpringingSpringsToTheNewBottom() {
+    auto s = list();
+    s.down(400, 0, 0);
+    s.move(390, 0.0);
+    s.move(-210, 1.0);
+    s.move(-1000, 1.5); // past the bottom
+    s.up(3, 3);
+    CHECK(s.phase() == FingerPhase::Spring);
+    s.frame(3.02);
+    const double shown = s.offset();
+    CHECK(shown > 1000);
+    s.setRange(600, 500);
+    CHECK(s.phase() == FingerPhase::Spring);
+    CHECK(s.offset() == shown);
+    s.frame(3.02);
+    CHECK(std::fabs(s.offset() - shown) < 1e-9); // no jump
+    for (double t = 3.02; t < 5; t += 1.0 / 120) {
+        s.frame(t);
+        CHECK(s.offset() >= 600);
+    }
+    CHECK(s.phase() == FingerPhase::Rest);
+    CHECK(s.offset() == 600);
+    s.setRange(600, 500); // the same range each frame changes nothing
+    CHECK(s.offset() == 600);
+}
+
+// The range grows past where a spring back to the bottom shows (a row comes): the list is inside, and stops there.
+void aLongerRangeUnderASpringStopsIt() {
+    auto s = list();
+    s.down(400, 0, 0);
+    s.move(390, 0.0);
+    s.move(-210, 1.0);
+    s.move(-1000, 1.5);
+    s.up(3, 3);
+    s.frame(3.02);
+    const double shown = s.offset();
+    s.setRange(2000, 500);
+    CHECK(s.phase() == FingerPhase::Rest);
+    CHECK(s.offset() == shown);
+    s.frame(4);
+    CHECK(s.offset() == shown);
+}
+
+// The range shrinks under a fling, below where it shows: it springs back to the new bottom from there, with no jump,
+// and rests on it (it jumped to the new bottom at its next frame first).
+void aShorterRangeUnderAFlingSpringsBackFromWhereItShows() {
+    auto s = list();
+    s.down(400, 0, 0);
+    s.move(390, 0.00);
+    s.move(340, 0.05);
+    s.move(290, 0.10); // 1000 px/s down the list
+    s.up(0.10, 0.10);
+    s.frame(0.30);
+    CHECK(s.phase() == FingerPhase::Fling);
+    const double shown = s.offset();
+    CHECK(shown > 100);
+    s.setRange(50, 500);
+    CHECK(s.phase() == FingerPhase::Spring);
+    s.frame(0.30);
+    CHECK(std::fabs(s.offset() - shown) < 1e-9);
+    double last = shown;
+    for (double t = 0.30; t < 3; t += 1.0 / 120) {
+        s.frame(t);
+        CHECK(s.offset() >= 50);
+        CHECK(std::fabs(s.offset() - last) < 40); // no frame jumps
+        last = s.offset();
+    }
+    CHECK(s.phase() == FingerPhase::Rest);
+    CHECK(s.offset() == 50);
+}
+
 void pastTheTopIsRubberBandedAndSpringsBack() {
     auto s = list();
     s.down(100, 0, 0);
@@ -185,6 +286,10 @@ int main() {
     theContentFollowsTheFinger();
     aFlickFlingsOnAndSlows();
     aFlingStopsAtTheEndAndNeverComesBackInside();
+    aFlingBouncesPastTheBottomAsPastTheTop();
+    aShorterRangeWhileSpringingSpringsToTheNewBottom();
+    aLongerRangeUnderASpringStopsIt();
+    aShorterRangeUnderAFlingSpringsBackFromWhereItShows();
     pastTheTopIsRubberBandedAndSpringsBack();
     letGoPastTheTopMovingInsideStillStopsAtTheTop();
     aPressCatchesAMovingListAndIsNoTap();

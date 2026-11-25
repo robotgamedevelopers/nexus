@@ -9,11 +9,16 @@
 //   Drag    the finger moves the content, offset = where it began - how far the finger went, rubber-banded past an end.
 //   Fling   let go at speed v0 inside the range: v(t) = v0 d^(1000 t), so the content goes v0 (d^(1000 t) - 1) / ln(d^1000)
 //           further, and comes to rest when slower than kSettleSpeed. Reaching an end, it springs there.
-//   Spring  past an end: scroll_glide.h's critically damped spring back to the end, never crossing back inside.
+//   Spring  past an end: scroll_glide.h's critically damped spring back to the end, never crossing back inside; a
+//           speed away from the end (a fling's that reached it, a finger's let go past it) carries it on out first.
 // A press stops a fling or a spring where it shows (as a finger on a moving UIScrollView catches it), and is no tap.
+// The range may change under any of these (the list's rows come and go): at rest the offset is pulled in at once; a
+// fling now past the bottom springs back to it, and a spring back to the bottom goes to the new bottom, each from
+// where it shows (or, the bottom now past it, the spring stops there).
 //
 // Pure: time is an argument, the events' own (seconds); nothing here reads a clock. The model is
-// models/FingerScroll.tla, checked against this code's traces (tests/voice/finger_walk.cpp).
+// models/FingerScroll.tla (offsets in whole rows, the motion's curves abstracted to the ways they move), checked
+// against this code's traces by models/FingerScrollTrace.tla (tests/voice/finger_walk.cpp writes them).
 #pragma once
 
 #include <array>
@@ -57,11 +62,14 @@ public:
     // A finger is down and moved past the slop: what it is over must not take the press.
     bool dragging() const { return phase_ == FingerPhase::Drag; }
 
-private:
+protected:
+    // Protected, not private: the trace walk (tests/voice/finger_walk.cpp) reads the motion to quantise it, and its
+    // faulty scroller breaks it on purpose.
     double raw(double y) const;     // the offset the finger asks for, before the rubber band
     double banded(double r) const;  // the offset drawn for a raw offset
     void release(double v, double t);
-    void springFrom(double end, double v, double t);
+    // A spring back to the top (side -1) or the bottom (1), from where the list shows at time t, at speed v.
+    void springFrom(int side, double v, double t);
     double speedAt(double t) const;
 
     FingerPhase phase_ = FingerPhase::Rest;
@@ -74,8 +82,10 @@ private:
     std::array<double, 8> times_{}, ys_{};
     std::size_t samples_ = 0;
     bool caught_ = false; // the press caught a moving list: lifted without a drag it was no tap
-    // Fling and Spring: where and when the motion began, its speed then, and a spring's end.
-    double start_ = 0, p0_ = 0, v0_ = 0, end_ = 0;
+    // Fling and Spring: where and when the motion began, its speed then, and a spring's end and its side (-1 the
+    // top, 1 the bottom); the time the offset shows (the motion's last frame, or its start).
+    double start_ = 0, p0_ = 0, v0_ = 0, end_ = 0, shown_ = 0;
+    int side_ = 0;
 };
 
 } // namespace nexus
