@@ -7,7 +7,9 @@
 #include <utility>
 #include <vector>
 
+#include "pr/hash.h"
 #include "pr/layout_query.h"
+#include "pr/ui_records.h"
 
 #include "platform.h"
 #include "board.h"
@@ -1045,6 +1047,40 @@ bool FrameHost::event(const PrAppEvent& e) {
 
 void FrameHost::build(PrKit* kit, PrLayoutNode root) {
     buildWindow(*view, kit, root);
+}
+
+} // namespace nexus
+
+namespace nexus {
+
+namespace {
+
+// The part of the window above the on-screen keyboard: all of it while no keyboard shows. The window is built in it in
+// every frame, keyboard or none, so that its nodes keep their place in the tree as the keyboard comes and goes. Built
+// straight into the root while no keyboard showed, the window's nodes were new ones in the frame the keyboard came up:
+// the terminal's screen lost the focus, so the keyboard went down, the nodes moved back, the screen took the focus
+// again and the keyboard came up, every frame (tests/window/test_terminal_frames.cpp).
+struct AboveKeyboard {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
+    float width;
+    float height;
+
+    void make(const View&, PrLayoutBoxStyle& box) const {
+        box.boxSizing = PrLayoutBoxSizing_BorderBox;
+        box.display = PrLayoutDisplay_Flex;
+        box.width = prLayoutLengthPx(width);
+        box.height = prLayoutLengthPx(height);
+    }
+};
+
+} // namespace
+
+void FrameHost::buildAbove(PrKit* kit, PrLayoutNode root, PrVec2 extent, float cover) {
+    cover = std::clamp(cover, 0.0f, extent.y);
+    view->extent = PrVec2{extent.x, extent.y - cover};
+    const PrLayoutNode above = prUiElement(ui, root, prHashString(PrStringView{"above-keyboard", 14}, 0),
+        pr::uiStyle(ui, *view, AboveKeyboard{view->extent.x, view->extent.y}), 0);
+    build(kit, above);
 }
 
 } // namespace nexus
