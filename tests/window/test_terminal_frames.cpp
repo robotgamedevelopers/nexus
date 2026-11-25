@@ -158,6 +158,10 @@ bool same(PrRect a, PrRect b) {
 void stillWithNoInput(PrVec2 size, const char* what) {
     Window w(size);
     w.serve();
+    w.frame();
+    for (std::size_t i = 0; i < w.model.tab_count(); ++i) {
+        if (w.model.tab(i).kind == TabKind::Terminal) w.model.select_tab(i);
+    }
     for (int i = 0; i < 30; ++i) w.frame();
     CHECK(w.model.tab_count() > 0 && w.model.tab(w.model.active()).kind == TabKind::Terminal);
     const PrLayoutNode focus = prUiFocus(w.ui);
