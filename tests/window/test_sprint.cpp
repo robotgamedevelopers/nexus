@@ -1,5 +1,4 @@
-// Unit tests of the sprint tab's logic without a page (src/sprint.h): reading the board's address from the sprint's
-// record through a fake command runner, every way that lookup fails, the routing of events between the page and the
+// Unit tests of a dashboard tab's logic without a page (src/sprint.h): the routing of events between the page and the
 // window, and the script and style nexus adds to the page. No OS, no clock, no window, no process, no network.
 
 #include <cstdio>
@@ -27,131 +26,6 @@ void check(bool ok, const char* what, int line) {
 
 bool has(const std::string& s, const char* part) {
     return s.find(part) != std::string::npos;
-}
-
-// What `nova-config service show sprint-run --json` prints for a service whose argv is `argv` (a JSON array).
-std::string record(const std::string& argv) {
-    return R"({"result":{"verb":"service show","status":"ok","exit":0},"items":[{"kind":"service","fields":{)"
-        R"("name":"sprint-run","machine":"studio","argv":)" + argv + "}}]}";
-}
-
-void parsesTheListenAddress() {
-    SprintBoardAddress a = parseSprintRun(record(R"(["nova-sprint","run","--listen","100.76.29.55:8080"])"));
-    CHECK(a.error.empty() && a.url == "http://100.76.29.55:8080/");
-    a = parseSprintRun(record(R"(["nova-sprint","run","--listen=10.0.0.2:9000"])"));
-    CHECK(a.error.empty() && a.url == "http://10.0.0.2:9000/");
-}
-
-// A service listening everywhere is reached on this machine.
-void listeningEverywhereIsReachedLocally() {
-    CHECK(parseSprintRun(record(R"(["nova-sprint","run","--listen","0.0.0.0:8080"])")).url == "http://127.0.0.1:8080/");
-    CHECK(parseSprintRun(record(R"(["nova-sprint","run","--listen",":8080"])")).url == "http://127.0.0.1:8080/");
-    CHECK(parseSprintRun(record(R"(["nova-sprint","run","--listen","[::]:8080"])")).url == "http://127.0.0.1:8080/");
-}
-
-void aRecordWithoutABoardSaysWhatToDo() {
-    SprintBoardAddress none = parseSprintRun(record(R"(["nova-sprint","run"])"));
-    CHECK(none.url.empty() && has(none.error, "no --listen") && has(none.error, "nova-sprint up"));
-    CHECK(has(none.error, "sprint-url http://<host>:<port>/"));
-    SprintBoardAddress empty = parseSprintRun(R"({"result":{"status":"ok"},"items":[]})");
-    CHECK(empty.url.empty() && has(empty.error, "nova-sprint up") && has(empty.error, "sprint-url http://<host>:<port>/"));
-    SprintBoardAddress refused = parseSprintRun(R"({"result":{"status":"refused"},"items":[]})");
-    CHECK(refused.url.empty() && has(refused.error, "status refused") && has(refused.error, "run it in a terminal"));
-    SprintBoardAddress junk = parseSprintRun("not json");
-    CHECK(junk.url.empty() && has(junk.error, "not JSON") && has(junk.error, "run it in a terminal"));
-}
-
-// A fake runner: records the command and gives back `result`. No process is spawned.
-struct FakeRun {
-    CommandResult result;
-    Command ran;
-    int timeout = 0;
-    int calls = 0;
-    CommandRunner runner() {
-        return [this](const Command& c, int seconds) {
-            ran = c;
-            timeout = seconds;
-            ++calls;
-            return result;
-        };
-    }
-};
-
-// What the sprint's command runs (with SHELL /bin/zsh), and how its errors show it.
-#if defined(_WIN32)
-constexpr const char* kShown = "nova-config service show sprint-run --json";
-constexpr const char* kProgram = "nova-config";
-#else
-constexpr const char* kShown = "/bin/zsh -l -c 'exec nova-config service show sprint-run --json'";
-constexpr const char* kProgram = "/bin/zsh";
-#endif
-
-SprintBoardAddress findWith(CommandResult result, FakeRun* seen = nullptr, const char* override = nullptr) {
-    FakeRun fake{result, {}, 0, 0};
-    SprintBoardAddress a = findSprintBoard(override, sprintRunCommand(nullptr, "/bin/zsh"), fake.runner());
-    if (seen != nullptr)
-        *seen = fake;
-    return a;
-}
-
-void commandIsTheLoginShellOrTheOverride() {
-    Command shell = sprintRunCommand(nullptr, "/bin/zsh");
-    CHECK(shell.program == kProgram);
-    CHECK(shell.shown == kShown);
-#if defined(_WIN32)
-    CHECK((shell.arguments == std::vector<std::string>{"service", "show", "sprint-run", "--json"}));
-    CHECK(sprintRunCommand(nullptr, nullptr).program == "nova-config");
-#else
-    CHECK((shell.arguments == std::vector<std::string>{"-l", "-c", "exec nova-config service show sprint-run --json"}));
-    CHECK(sprintRunCommand(nullptr, nullptr).program == "/bin/sh");
-#endif
-    Command direct = sprintRunCommand("/opt/nova/nova-config", "/bin/zsh");
-    CHECK(direct.program == "/opt/nova/nova-config");
-    CHECK((direct.arguments == std::vector<std::string>{"service", "show", "sprint-run", "--json"}));
-}
-
-void theRecordGivesTheAddress() {
-    FakeRun seen;
-    SprintBoardAddress a = findWith(CommandResult{CommandResult::End::Exited, 0,
-        record(R"(["nova-sprint","run","--listen","127.0.0.1:8080"])"), ""}, &seen);
-    CHECK(a.error.empty() && a.url == "http://127.0.0.1:8080/");
-    CHECK(seen.calls == 1 && seen.timeout == kSprintRunTimeoutSeconds);
-}
-
-// The client config's sprint-url wins, and nothing is run; one that is not an http address says so.
-void theOverrideWinsWithoutRunningAnything() {
-    FakeRun seen;
-    SprintBoardAddress a = findWith(CommandResult{}, &seen, "http://board.test:8080/");
-    CHECK(a.error.empty() && a.url == "http://board.test:8080/" && seen.calls == 0);
-    a = findWith(CommandResult{}, &seen, "board.test:8080");
-    CHECK(a.url.empty() && has(a.error, "sprint-url http://<host>:<port>/") && has(a.error, "not an http://") && seen.calls == 0);
-    // An empty override is unset.
-    a = findWith(CommandResult{CommandResult::End::Exited, 0, record(R"(["x","--listen","h:1"])"), ""}, &seen, "");
-    CHECK(a.url == "http://h:1/" && seen.calls == 1);
-}
-
-void notFoundSaysWhatToDo() {
-    SprintBoardAddress shell = findWith(CommandResult{CommandResult::End::Exited, 127, "", "zsh: command not found"});
-    CHECK(shell.url.empty() && has(shell.error, kShown) && has(shell.error, "status 127"));
-    CHECK(has(shell.error, "command not found") && has(shell.error, "nova-config <path>"));
-    SprintBoardAddress missing = findWith(CommandResult{CommandResult::End::NotFound, 0, "", ""});
-    CHECK(has(missing.error, (std::string(kProgram) + " was not found").c_str()) && has(missing.error, "nova-config <path>"));
-    SprintBoardAddress unstarted = findWith(CommandResult{CommandResult::End::NotStarted, 0, "", ""});
-    CHECK(has(unstarted.error, "could not start") && has(unstarted.error, "sprint-url http://<host>:<port>/"));
-}
-
-void timeoutSaysSo() {
-    SprintBoardAddress a = findWith(CommandResult{CommandResult::End::TimedOut, 0, "", ""});
-    CHECK(a.url.empty() && has(a.error, kShown) && has(a.error, "within 5 seconds") && has(a.error, "run it in a terminal"));
-}
-
-void failuresCarryWhatTheCommandSaid() {
-    SprintBoardAddress a = findWith(CommandResult{CommandResult::End::Exited, 1, "", "no service sprint-run\n"});
-    CHECK(has(a.error, "status 1: no service sprint-run;") && has(a.error, "nova-sprint up"));
-    a = findWith(CommandResult{CommandResult::End::Exited, 3, "", ""});
-    CHECK(has(a.error, "status 3") && has(a.error, "nothing on standard error"));
-    a = findWith(CommandResult{CommandResult::End::Signaled, 9, "", ""});
-    CHECK(has(a.error, "signal 9") && has(a.error, "sprint-url http://<host>:<port>/"));
 }
 
 PrAppEvent key(PrAppKey k, PrAppModifierFlags modifiers) {
@@ -257,15 +131,6 @@ void linksLeaveForAnotherDocument() {
 } // namespace
 
 int main() {
-    parsesTheListenAddress();
-    listeningEverywhereIsReachedLocally();
-    aRecordWithoutABoardSaysWhatToDo();
-    commandIsTheLoginShellOrTheOverride();
-    theRecordGivesTheAddress();
-    theOverrideWinsWithoutRunningAnything();
-    notFoundSaysWhatToDo();
-    timeoutSaysSo();
-    failuresCarryWhatTheCommandSaid();
     eventsAreRouted();
     preludeCarriesTheZonesAndEscapesThem();
     styleLeavesThePageBackgroundAlone();

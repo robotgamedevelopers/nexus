@@ -210,13 +210,27 @@ void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
 }
 
 void PraxBoard::offer(const std::string& url) {
+    bool taken;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (offered_ && offeredUrl_ == url) return;
-        offered_ = true;
+        if (url.empty() || offeredUrl_ == url) return;
         offeredUrl_ = url;
+        taken = urlTaken_;
     }
-    wake_.notify_one();
+    if (!taken) {
+        wake_.notify_one();
+        return;
+    }
+    // The page's thread owns its address now: another dashboard's is a navigation there, in order with the rest.
+    post(Message{Message::Kind::Run, {}, {}, [this, url](PrHtmlPage*) {
+        if (url == pageUrl_) return;
+        pageUrl_ = url;
+        home_.clear();
+        if (page_ != nullptr) {
+            endScroll();
+            navigate();
+        }
+    }});
 }
 
 void PraxBoard::openLink(const std::string& url) {
@@ -471,50 +485,22 @@ std::string PraxBoard::documentUrl() {
 void PraxBoard::run() {
     std::unique_lock<std::mutex> lock(mutex_);
     pageUrl_ = desc_.url;
-    if (pageUrl_.empty() && desc_.fromServer) {
-        lookupError_ = "waiting for nexus-server to say which dashboards it offers";
+    if (pageUrl_.empty()) {
+        lookupError_ = "waiting for nexus-server to say where this dashboard is";
         if (app_) prAppWake(app_);
-        // Frames are acknowledged while it waits, as while a lookup fails (below). The wait has a predicate: a frame
-        // posted before this thread first waits must not be missed, or its poster waits for ever (wait()).
-        while (!ending_ && !offered_) {
+        // Frames are acknowledged while it waits. The wait has a predicate: a frame posted before this thread first
+        // waits must not be missed, or its poster waits for ever (wait()).
+        while (!ending_ && offeredUrl_.empty()) {
             done_ = posted_;
             stepped_.notify_all();
-            wake_.wait(lock, [&] { return ending_ || offered_ || done_ != posted_; });
+            wake_.wait(lock, [&] { return ending_ || !offeredUrl_.empty() || done_ != posted_; });
         }
         done_ = posted_;
         stepped_.notify_all();
         lookupError_.clear();
         pageUrl_ = offeredUrl_;
     }
-    while (pageUrl_.empty() && !ending_) {
-        lock.unlock();
-#if NEXUS_PROCESSES
-        auto found = desc_.find ? desc_.find() : findSprintBoard();
-#else
-        auto found = desc_.find ? desc_.find() : SprintBoardAddress{{}, "nexus-server offers no dashboard: "
-            "its config has no dashboard line, or it is older than this window"};
-#endif
-        lock.lock();
-        if (pageUrl_.empty() && offered_ && !offeredUrl_.empty()) {
-            pageUrl_ = offeredUrl_;
-            lookupError_.clear();
-            break;
-        }
-        lookupError_ = found.error;
-        pageUrl_ = std::move(found.url);
-        if (app_) prAppWake(app_);
-        if (pageUrl_.empty()) {
-            done_ = posted_;
-            stepped_.notify_all();
-            // Process frame acknowledgments while the service is unavailable.
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(int(kRetrySeconds));
-            while (!ending_ && std::chrono::steady_clock::now() < deadline && offeredUrl_.empty()) {
-                wake_.wait_until(lock, deadline);
-                done_ = posted_;
-                stepped_.notify_all();
-            }
-        }
-    }
+    urlTaken_ = true;
     for (;;) {
         if (ending_) {
             break;
@@ -821,15 +807,14 @@ void PraxBoard::navigate() {
     loadError_.clear();
     if (fetcher_ == nullptr) {
         load_ = Load::Failed;
-        loadError_ = "cannot show the sprint board: this build has no network to fetch " + pageUrl_ + " with";
+        loadError_ = "cannot show the dashboard: this build has no network to fetch " + pageUrl_ + " with";
         retryAt_ = 1e300;
         return;
     }
     if (prHtmlPageNavigate(page_, sv(pageUrl_)) != PrStatus_Ok) {
         load_ = Load::Failed;
-        loadError_ = "cannot show the sprint board: \"" + pageUrl_ + "\" is not an address; give the board's "
-            "address in nexus's client config (a line `sprint-url http://<host>:<port>/` in ~/.nexus/client/config), "
-            "or remove that line to read the sprint's record";
+        loadError_ = "cannot show the dashboard: \"" + pageUrl_ + "\" is not an address; fix its `dashboard` line in "
+            "nexus-server's config (~/.nexus/server/config)";
         retryAt_ = 1e300;
     }
 }
@@ -860,9 +845,9 @@ void PraxBoard::loaded(void* context, PrHtmlPage*, PrStatus status) {
         return;
     }
     b.load_ = Load::Failed;
-    b.loadError_ = "cannot load the sprint board from " + b.pageUrl_ + ": " + statusName(status) + "; check that the "
-        "sprint runs (`nova-sprint up`), or give the board's address in ~/.nexus/client/config (a line `sprint-url http://<host>:<port>/`); trying again every " +
-        std::to_string(int(kRetrySeconds)) + " seconds";
+    b.loadError_ = "cannot load the dashboard from " + b.pageUrl_ + ": " + statusName(status) + "; check that what "
+        "serves it runs, and its `dashboard` line in nexus-server's config (~/.nexus/server/config); trying again "
+        "every " + std::to_string(int(kRetrySeconds)) + " seconds";
     b.retryAt_ = b.frameTime_ + kRetrySeconds;
 }
 

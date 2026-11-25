@@ -105,6 +105,39 @@ void FrameHost::restoreLayout() {
     if (model->tab_count()) view->selectedId = model->tab(model->active()).id;
 }
 
+std::string FrameHost::dashboardUrl(const std::string& name) const {
+    const auto url = dashboardUrls_.find(name);
+    return url == dashboardUrls_.end() ? std::string() : url->second;
+}
+
+void FrameHost::takeDashboards(const sync::Sessions& state) {
+    const std::vector<sync::Dashboard>& list = state.dashboards();
+    if (dashboardsTaken_ && list == *dashboardsTaken_) return;
+    dashboardsTaken_ = list;
+    dashboardUrls_.clear();
+    std::vector<std::string> names;
+    for (const sync::Dashboard& d : list) {
+        const std::string problem = sync::dashboardProblem(d);
+        if (!problem.empty()) {
+            std::fprintf(stderr, "nexus: %s sent a dashboard this window cannot show (%s): it has no tab\n",
+                host.c_str(), loggable(problem).c_str());
+        } else if (dashboardUrls_.count(d.name) != 0) {
+            std::fprintf(stderr, "nexus: %s sent the dashboard \"%s\" twice: the first has its tab\n", host.c_str(),
+                loggable(d.name).c_str());
+        } else if (names.size() == sync::kDashboardsMax) {
+            std::fprintf(stderr, "nexus: %s sent more than the %zu dashboards a window shows: \"%s\" has no tab\n",
+                host.c_str(), sync::kDashboardsMax, loggable(d.name).c_str());
+        } else {
+            dashboardUrls_.emplace(d.name, d.url);
+            names.push_back(d.name);
+        }
+    }
+    if (model->sync_dashboards(names).empty()) return;
+    restoreLayout();
+    // A tab the server's list selected (the strip was empty, or the one showing went) is no choice of the person's.
+    if (view != nullptr && model->tab_count() != 0) view->selectedId = model->tab(model->active()).id;
+}
+
 void FrameHost::takeAIs(const sync::Sessions& state) {
     std::function<void(sync::Action)> ensure;
     if (link != nullptr) {
@@ -248,10 +281,6 @@ void FrameHost::pollLink() {
     LinkState s;
     if (link == nullptr || !link->poll(&s))
         return;
-    // The first dashboard's address, as the server says it (empty: none), for the sprint tab's page, until the strip
-    // holds a tab for each dashboard.
-    if (board != nullptr && s.phase == sync::LinkPhase::Connected)
-        board->offer(s.sessions.dashboards().empty() ? std::string() : s.sessions.dashboards().front().url);
     // The AIs first, so that an AI's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
         for (const auto& [name, claim] : pendingClaims_) {
@@ -290,6 +319,7 @@ void FrameHost::pollLink() {
                 s.sessions.nextAction() > pending.second.action;
         });
         takeAIs(s.sessions);
+        takeDashboards(s.sessions);
     }
     mirror.apply(*model, s.sessions);
     if (s.phase == sync::LinkPhase::Connected) {
@@ -803,7 +833,6 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
                 }
                 if (result.action.text.size() > kPromptBytes) result.error = "Attachment paths exceed the prompt limit.";
                 ready.set_value(std::move(result));
-                if (wake) wake();
             });
             return;
 #else
@@ -836,6 +865,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
 void FrameHost::showState(const sync::Sessions& state, bool lost) {
     accountState_ = state;
     takeAIs(state);
+    takeDashboards(state);
     mirror.apply(*model, state);
     phase = sync::LinkPhase::Connected;
     refreshPicker();
@@ -893,6 +923,12 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
     }
     if (board != nullptr) {
         HitchScope scope(hitch, Phase::Board);
+        // The page is the active dashboard's: its address as the server gives it (one page, which a switch of
+        // dashboard tabs navigates).
+        if (model->tab_count() != 0 && model->tab(model->active()).kind == TabKind::Dashboard) {
+            const std::string url = dashboardUrl(model->tab(model->active()).name);
+            if (!url.empty()) board->offer(url);
+        }
         board->frame(time, display);
     }
 }

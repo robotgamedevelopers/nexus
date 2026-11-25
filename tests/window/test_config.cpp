@@ -28,21 +28,21 @@ bool has(const std::string& text, const std::string& part) {
 }
 
 void parsing() {
-    const std::vector<std::string> keys{"nova-config", "sprint-url"};
+    const std::vector<std::string> keys{"nova-config", "server"};
     // Good lines, comments and blank lines; the value is the rest of the line, spaces inside kept.
     Config c = parseConfig("# settings\n\n  nova-config /opt/my tools/nova-config  \r\n\t# indented comment\n"
-                           "sprint-url\thttp://127.0.0.1:8000/\n", "/h/.nexus/client/config", keys);
+                           "server\thttp://127.0.0.1:8000/\n", "/h/.nexus/client/config", keys);
     CHECK(c.errors.empty() && c.warnings.empty());
     CHECK(c.values.size() == 2);
     CHECK(c.values.at("nova-config") == "/opt/my tools/nova-config");
-    CHECK(c.values.at("sprint-url") == "http://127.0.0.1:8000/");
+    CHECK(c.values.at("server") == "http://127.0.0.1:8000/");
     // An unknown key: a warning naming the file, the line and the keys; the line is skipped.
-    c = parseConfig("colour blue\nsprint-url http://h:1/\n", "/c", keys);
+    c = parseConfig("colour blue\nserver http://h:1/\n", "/c", keys);
     CHECK(c.errors.empty() && c.warnings.size() == 1);
-    CHECK(has(c.warnings[0], "/c line 1:") && has(c.warnings[0], "\"colour\"") && has(c.warnings[0], "`sprint-url`"));
-    CHECK(c.values.size() == 1 && c.values.at("sprint-url") == "http://h:1/");
+    CHECK(has(c.warnings[0], "/c line 1:") && has(c.warnings[0], "\"colour\"") && has(c.warnings[0], "`server`"));
+    CHECK(c.values.size() == 1 && c.values.at("server") == "http://h:1/");
     // A key with no value, and a key given twice: errors naming the file and the line; the first value stands.
-    c = parseConfig("sprint-url\nnova-config /a\nnova-config /b\n", "/c", keys);
+    c = parseConfig("server\nnova-config /a\nnova-config /b\n", "/c", keys);
     CHECK(c.errors.size() == 2 && c.warnings.empty());
     CHECK(has(c.errors[0], "/c line 1:") && has(c.errors[0], "no value"));
     CHECK(has(c.errors[1], "/c line 3:") && has(c.errors[1], "set again"));
