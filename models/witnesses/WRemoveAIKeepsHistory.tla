@@ -1,6 +1,6 @@
 ---------------------- MODULE WRemoveAIKeepsHistory ----------------------
 \* Reversed witness: removing an AI's tab leaves its id in the selection history, so the history names a tab that
-\* no longer stands (trace_walk's --faulty-remove-AI is this fault in code). HistoryOpen must reject it.
+\* no longer stands (trace_walk's --faulty-remove-ai is this fault in code). HistoryOpen must reject it.
 EXTENDS MCWindow
 
 BrokenRemoveAI(i) ==

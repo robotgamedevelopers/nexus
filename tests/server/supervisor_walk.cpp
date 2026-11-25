@@ -3,7 +3,7 @@
 // processes, no clock: the walk plays the driver and the person, keeps the time itself, and commits each step's
 // durable state as the server's store does, so that a restart starts from exactly what was committed.
 //
-//   supervisor_walk <seed> <steps> [--AIs-churn] [--faulty-turn | --faulty-resume | --faulty-queue |
+//   supervisor_walk <seed> <steps> [--ais-churn] [--faulty-turn | --faulty-resume | --faulty-queue |
 //                                   --faulty-setting | --faulty-account | --faulty-activity | --faulty-dir |
 //                                   --faulty-limit | --faulty-remove | --faulty-unknown] <out.tla>
 //
@@ -27,10 +27,10 @@
 //             (/work, the model's "", or /work/d, its "d"; on this machine or another); the drivers file loses the
 //             AI's driver, or gives it back; the session's limit is tightened or loosened ("on", "off")
 //   remove, back
-//             with --AIs-churn only: the AI is taken out of ais.json, and put back (a reload,
+//             with --ais-churn only: the AI is taken out of ais.json, and put back (a reload,
 //             Supervisor::setPresent); while it is out the person sends nothing (the server refuses a send first)
 //   restart-unknown, learn
-//             with --AIs-churn only: a restart whose committed AIs list does not read, so the server holds
+//             with --ais-churn only: a restart whose committed AIs list does not read, so the server holds
 //             none and the AI reads out (Drivers::listed); then the first list applied, with the AI in it
 //             ("in") or not ("out")
 //
@@ -43,9 +43,9 @@
 //   --faulty-activity the activity it records reads a crashed driver as idle, as a cursor that forgot the crash would
 //   --faulty-dir     a restart finds no directory for the harness session, as if the store had not kept it
 //   --faulty-limit   a restart starts the session unlimited, as if the limit were not decided at the start
-//   --faulty-remove  (with --AIs-churn) the supervisor is never told the AI was taken out, so a turn open
+//   --faulty-remove  (with --ais-churn) the supervisor is never told the AI was taken out, so a turn open
 //                    runs on, as a server that only moved the session to no account would leave it
-//   --faulty-unknown (with --AIs-churn) a restart holding no list starts the supervisor with its AI in it, as
+//   --faulty-unknown (with --ais-churn) a restart holding no list starts the supervisor with its AI in it, as
 //                    Drivers::listed did when it read no registry as every AI listed
 
 #include <algorithm>
@@ -369,7 +369,7 @@ private:
         return take("exit", "", 0, "", std::move(out));
     }
 
-    // With --AIs-churn, one restart in three finds the committed AIs list unreadable (restart-unknown): the
+    // With --ais-churn, one restart in three finds the committed AIs list unreadable (restart-unknown): the
     // server holds none, and the AI reads out (Drivers::listed) until one is applied. A restart that reads the list
     // after one that did not may find the AI in it or not.
     bool restart(Rng& rng) {
@@ -798,9 +798,9 @@ int main(int argc, char** argv) {
     std::uint64_t seed = 0, steps = 0;
     if (rest.size() != 3 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) || faults > 1 ||
         ((fault == Fault::Remove || fault == Fault::Unknown) && !churn)) {
-        std::fprintf(stderr, "usage: supervisor_walk <seed> <steps> [--AIs-churn] [--faulty-turn | "
+        std::fprintf(stderr, "usage: supervisor_walk <seed> <steps> [--ais-churn] [--faulty-turn | "
                      "--faulty-resume | --faulty-queue | --faulty-setting | --faulty-account | --faulty-activity | "
-                     "--faulty-dir | --faulty-limit | --faulty-remove | --faulty-unknown (both with --AIs-churn)] "
+                     "--faulty-dir | --faulty-limit | --faulty-remove | --faulty-unknown (both with --ais-churn)] "
                      "<out.tla>\n");
         return 2;
     }

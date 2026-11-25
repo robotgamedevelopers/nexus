@@ -2,13 +2,13 @@
 // (WindowTraceData.tla) for models/WindowTrace.tla, under which TLC checks that the trace is a behaviour of
 // models/Window.tla.
 //
-//   trace_walk <seed> <steps> <ais> [--no-sprint] [--AIs-churn] [--faulty | --faulty-queue | --faulty-move |
+//   trace_walk <seed> <steps> <ais> [--no-sprint] [--ais-churn] [--faulty | --faulty-queue | --faulty-move |
 //              --faulty-queue-cap | --faulty-send-trim | --faulty-send-dedup | --faulty-close |
 //              --faulty-sprint-move | --faulty-sprint-close | --faulty-close-fallback | --faulty-remove-ai]
 //              <out.tla>
 //
 // The model is made with the sprint tab first, as the window makes it, unless --no-sprint.
-// With --AIs-churn the AIs come and go as the server's list does (sync/client.h applyAIs): add_ai with
+// With --ais-churn the AIs come and go as the server's list does (sync/client.h applyAIs): add_ai with
 // each of kArrivals (TraceArrivals; a removed AI returning, a standing one and the empty name refused) and
 // remove_ai at every position, among the other steps.
 //
@@ -29,8 +29,8 @@
 // --faulty-close walks FaultyCloseModel: its close_tab removes an AI's tab too. --faulty-sprint-move walks
 // FaultySprintMoveModel: its move_tab puts the sprint tab in the AIs' zone. --faulty-sprint-close walks
 // FaultySprintCloseModel: its close_tab removes the sprint tab too. --faulty-close-fallback walks
-// FaultyCloseFallbackModel: closing the active tab ignores the selection history. --faulty-remove-AI (with
-// --AIs-churn) walks FaultyRemoveAIModel: its remove_ai leaves the tab's id in the selection history. TLC
+// FaultyCloseFallbackModel: closing the active tab ignores the selection history. --faulty-remove-ai (with
+// --ais-churn) walks FaultyRemoveAIModel: its remove_ai leaves the tab's id in the selection history. TLC
 // must reject each one's traces; that is the negative check that shows the binding can fail.
 
 #include "model.h"
@@ -171,7 +171,7 @@ public:
     }
 };
 
-// The test-only remove-AI fault: remove_ai takes the tab out but leaves its id in the selection history, as if
+// The test-only remove-ai fault: remove_ai takes the tab out but leaves its id in the selection history, as if
 // the history were the strip's alone to keep. Hides Model::remove_ai.
 class FaultyRemoveAIModel : public Model {
 public:
@@ -241,7 +241,7 @@ constexpr const char* kFault = std::is_same_v<M, FaultyModel> ? ", faulty model"
                              : std::is_same_v<M, FaultySprintMoveModel> ? ", faulty sprint-move model"
                              : std::is_same_v<M, FaultySprintCloseModel> ? ", faulty sprint-close model"
                              : std::is_same_v<M, FaultyCloseFallbackModel> ? ", faulty close-fallback model"
-                             : std::is_same_v<M, FaultyRemoveAIModel> ? ", faulty remove-AI model" : "";
+                             : std::is_same_v<M, FaultyRemoveAIModel> ? ", faulty remove-ai model" : "";
 
 const char* tab_kind_name(nexus::TabKind k) {
     switch (k) {
@@ -629,10 +629,10 @@ int main(int argc, char** argv) {
     if (rest.size() != 4 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) ||
         !parse(rest[2].c_str(), ai_count) || ai_count > kAIs.size() || faultCount > 1 ||
         (fault == "--faulty-remove-ai" && !churn)) {
-        std::fprintf(stderr, "usage: trace_walk <seed> <steps> <ais 0..%zu> [--no-sprint] [--AIs-churn] "
+        std::fprintf(stderr, "usage: trace_walk <seed> <steps> <ais 0..%zu> [--no-sprint] [--ais-churn] "
                      "[--faulty | --faulty-queue | --faulty-move | --faulty-queue-cap | --faulty-send-trim | "
                      "--faulty-send-dedup | --faulty-close | --faulty-sprint-move | --faulty-sprint-close | "
-                     "--faulty-close-fallback | --faulty-remove-AI (with --AIs-churn)] <out.tla>\n",
+                     "--faulty-close-fallback | --faulty-remove-ai (with --ais-churn)] <out.tla>\n",
                      kAIs.size());
         return 2;
     }
