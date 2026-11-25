@@ -13,6 +13,10 @@
 
 #pragma once
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -88,10 +92,20 @@ private:
     double lastInput_ = 0;
 };
 
+// How the person asks to unlock: a key or a click on the Mac and Windows, a tap on a phone. Chosen at build time
+// (kLockInput); the tests pass each one.
+enum class LockInput { KeyOrClick, Tap };
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+inline constexpr LockInput kLockInput = LockInput::Tap;
+#else
+inline constexpr LockInput kLockInput = LockInput::KeyOrClick;
+#endif
+
 // What the lock screen says: one line for the reason, and what to do. `method` names the system's authentication
 // ("Touch ID or your password", "Windows Hello"). Nothing of nexus's content.
 std::string lockTitle(LockState state);
-std::string lockMessage(LockState state, LockReason why, const std::string& method, const std::string& detail);
+std::string lockMessage(LockState state, LockReason why, const std::string& method, const std::string& detail,
+                        LockInput input = kLockInput);
 
 // The systems' codes, mapped to the lock's terms. Each platform file checks the numbers against its SDK
 // (static_assert), so a change there fails the build rather than the lock.
