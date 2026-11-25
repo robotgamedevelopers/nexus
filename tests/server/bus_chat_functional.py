@@ -45,7 +45,7 @@ def prepare(home, driver, messages):
     (state / "config").write_text("machine testbench\n")
     (home / "fake-driver").symlink_to(driver)
     (state / "drivers").write_text(
-        f"driver codex {home}/policy -I -m nexus_policy AI-driver {home}/profile "
+        f"driver codex {home}/policy -I -m nexus_policy ai-driver {home}/profile "
         f"{{ai}} {{harness}} {home}/fake-driver --script {home}/driver-script\n"
         f"ai bob codex {workspace}\n"
     )
@@ -155,7 +155,7 @@ def exercise(home, binary, driver, probe):
     long_peer = "peer-" + "p" * 85   # valid nova-config friend beyond the 64-byte Nexus tab-name limit
     diagnostic_sender = "service-hook-" + "z" * 128  # valid bus sender outside nova-config's 128-byte names
     messages = [("1730800000000-1", "peer-a", "", "first topic", short),
-                ("1730800000000-2", "not-a-ai", "1730800000000-1", "ordinary message", unknown),
+                ("1730800000000-2", "not-an-ai", "1730800000000-1", "ordinary message", unknown),
                 ("1730800000000-3", diagnostic_sender, "", "first topic", short),
                 ("1730800000000-4", long_peer, "", "second topic", large)]
     ids = [row[0] for row in messages]
@@ -174,7 +174,7 @@ def exercise(home, binary, driver, probe):
         if run == 1:
             roster(home, "peer-a")
         else:
-            roster(home, "peer-a", long_peer, "not-a-ai")
+            roster(home, "peer-a", long_peer, "not-an-ai")
             (home / "hook-ready").unlink()
             (home / "old-profile").touch()
         with (home / "server-output").open("ab") as log:
