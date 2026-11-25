@@ -218,7 +218,6 @@ def handle(event, state, config):
             "prompt_command": False,
             "prompt_style": _prompt_style(config),
             "tab_style": config.get("tab_style", {}),
-            "overlay_blur_sigma": config.get("overlay_blur_sigma", 24),
             "overlay_opacity": config.get("overlay_opacity", 0.60),
             "tab_groups": groups,
             "closable": closable,

@@ -20,8 +20,6 @@
 	<string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
 	<key>CFBundleVersion</key>
 	<string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
-	<key>NSScreenCaptureUsageDescription</key>
-	<string>nexus samples the desktop behind the overlay to draw its blurred background.</string>
 	<key>CSResourcesFileMapped</key>
 	<true/>
 </dict>

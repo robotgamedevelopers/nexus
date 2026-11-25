@@ -369,7 +369,6 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
 
 bool readSurface(const PrJson* doc, AccountSurface& surface) {
     surface = {};
-    if (!readPoints(doc, 0, {"overlay_blur_sigma", 18}, surface.overlayBlurSigma, 0, 64)) return false;
     const auto sounds = prJsonMember(doc, 0, {"sounds", 6});
     if (sounds != kPrJsonMissing) {
         auto cue = [&](PrStringView name, Chirp& chirp) {

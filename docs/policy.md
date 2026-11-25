@@ -64,7 +64,6 @@ Set `"overlay_opacity": 0.60` in the client’s `config.json` and apply the clie
 `client/window.star` returns it as a number from 0 (clear) through 1 (opaque). A profile that omits the field
 gets 0.60. The overlay and terminal use the same dark background. Text and the ordinary window stay opaque.
 
-On macOS, `overlay_blur_sigma` sets the Gaussian blur width in display points (default 24, range 0–64). Set it to 0 to disable desktop capture. The client applies the setting when the overlay opens. Screen Recording permission enables the shader. Capture stops when the overlay closes.
 
 ## Tab and account navigation
 
