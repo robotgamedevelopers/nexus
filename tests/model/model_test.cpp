@@ -569,21 +569,21 @@ void close_active_goes_back_to_the_tab_selected_before() {
     CHECK(none.tab_count() == 0 && none.active() == 0 && history(none).empty());   // none left
 }
 
-// The owner's case: AI, terminal, sprint, terminal; each close goes back to the tab selected before, whatever its
+// The owner's case: AI, terminal, dashboard, terminal; each close goes back to the tab selected before, whatever its
 // kind and wherever it stands, not to the tab beside it.
 void close_goes_back_across_kinds() {
-    Model m(three(), true);   // sprint 3, then AIs 0 1 2
+    Model m(three(), {"sprint"});   // sprint 3, then AIs 0 1 2
     CHECK(history(m) == "3");
     m.select_tab(1);          // AI ada, id 0
     m.add_terminal();         // terminal 1, id 4, at 4
-    m.select_tab(0);          // the sprint tab
+    m.select_tab(0);          // the dashboard
     m.add_terminal();         // terminal 2, id 5, at 5
     CHECK(history(m) == "0 4 3 5");
     CHECK(m.close_tab(5));
-    CHECK(m.active() == 0 && m.tab(0).kind == TabKind::Sprint);   // not AI cy, beside it
+    CHECK(m.active() == 0 && m.tab(0).kind == TabKind::Dashboard);   // not AI cy, beside it
     CHECK(m.select_tab(4));
     CHECK(m.close_tab(4));
-    CHECK(m.active() == 0);   // the sprint tab again: selected after ada
+    CHECK(m.active() == 0);   // the dashboard again: selected after ada
     CHECK(history(m) == "0 3");
     m.add_terminal();         // id 6
     m.select_tab(1);          // ada again
@@ -613,7 +613,7 @@ void close_skips_closed_tabs() {
 // select puts its tab's id at the end and nowhere else; a refused select, set_draft, send, queue, append and move leave
 // the history as it was; the history's last id is the active tab's.
 void history_follows_selection_only() {
-    Model m(three(), true);
+    Model m(three(), {"sprint"});
     m.add_terminal();         // id 4
     CHECK(history(m) == "3 4");
     m.select_tab(2);          // id 1
@@ -668,68 +668,224 @@ void moves_stay_in_their_zone() {
     CHECK(m.tab(m.active()).id == 1);
 }
 
-// ---- The sprint tab ----
+// ---- Dashboards (Window.tla Init, AddBoard, RemoveBoard) ----
 
-void sprint_tab_is_first_and_active_with_the_ais_after() {
-    Model m(three(), true);
-    CHECK(m.tab_count() == 4);
-    CHECK(m.active() == 0);
-    CHECK(m.tab(0).kind == TabKind::Sprint && m.tab(0).id == 3);
-    CHECK(m.tab(0).name.empty() && m.tab(0).model.empty() && m.tab(0).transcript.empty() && m.tab(0).queue.empty());
-    CHECK(ids(m) == "3 0 1 2");
-    CHECK(m.tab(1).name == "ada" && m.tab(2).name == "bo" && m.tab(3).name == "cy");
-    CHECK(m.tab(1).kind == TabKind::AI);
+using Names = std::vector<std::string>;
+
+// The dashboards stand first, in the list's order, with the ids after the AIs'; then the AIs, with theirs. The first tab
+// is active and the history. With none, the AIs alone; with neither, no tab.
+void dashboards_stand_first_in_order_with_the_ais_after() {
+    Model none(three(), Names{});
+    CHECK(ids(none) == "0 1 2" && history(none) == "0");
+    Model one(three(), Names{"sprint"});
+    CHECK(ids(one) == "3 0 1 2" && one.active() == 0 && history(one) == "3");
+    CHECK(one.tab(0).kind == TabKind::Dashboard && one.tab(0).name == "sprint");
+    CHECK(one.tab(0).model.empty() && one.tab(0).transcript.empty() && one.tab(0).draft.empty() &&
+          one.tab(0).queue.empty());
+    CHECK(one.tab(1).kind == TabKind::AI && one.tab(1).name == "ada" && one.tab(3).name == "cy");
+    Model several(three(), Names{"sprint", "fleet", "CI runs"});
+    CHECK(ids(several) == "3 4 5 0 1 2" && names(several) == "sprint fleet CI runs ada bo cy");
+    CHECK(several.tab(2).kind == TabKind::Dashboard && several.tab(3).kind == TabKind::AI);
+    CHECK(several.add_terminal() == 6);   // the ids go on after the dashboards'
+    Model boardsOnly({}, Names{"a", "b"});
+    CHECK(ids(boardsOnly) == "0 1" && history(boardsOnly) == "0");
+    Model neither({}, Names{});
+    CHECK(neither.tab_count() == 0 && history(neither).empty());
 }
 
-void sprint_tab_takes_no_text() {
-    Model m(three(), true);
-    m.set_draft(1, "ada's");
-    const Model before = m;
-    CHECK(!m.set_draft(0, "hi"));
-    CHECK(!m.send(0));
-    CHECK(!m.queue(0));
-    CHECK(!m.append(0, Entry{EntryKind::AI, "x"}));
-    CHECK(same(m, before));
-    CHECK(m.send(1));   // the AI after it still sends
+// An empty name, or one given before, makes no tab, and takes no id.
+void constructor_skips_empty_and_repeated_dashboard_names() {
+    Model m({{"ada", "m1"}}, Names{"", "sprint", "fleet", "sprint", ""});
+    CHECK(ids(m) == "1 2 0" && names(m) == "sprint fleet ada");
+    CHECK(m.add_terminal() == 3);
 }
 
-void sprint_tab_never_moves() {
-    Model m(three(), true);
-    m.add_terminal();   // 4
-    m.select_tab(2);
+void dashboard_takes_no_text() {
+    Model m(three(), Names{"sprint", "fleet"});
+    m.set_draft(2, "ada's");
     const Model before = m;
-    CHECK(!m.move_tab(0, 1));   // dragged onto an AI
-    CHECK(!m.move_tab(0, 3));
-    CHECK(!m.move_tab(0, 4));   // onto a terminal
-    CHECK(!m.move_tab(1, 0));   // an AI dropped in front of it
-    CHECK(!m.move_tab(4, 0));   // a terminal dropped in front of it
+    for (std::size_t i : {0u, 1u}) {
+        CHECK(!m.set_draft(i, "hi"));
+        CHECK(!m.send(i));
+        CHECK(!m.queue(i));
+        CHECK(!m.take_queued(i));
+        CHECK(!m.append(i, Entry{EntryKind::AI, "x"}));
+    }
     CHECK(same(m, before));
-    CHECK(m.move_tab(0, 0));    // onto itself: in its zone, and nothing changes
-    CHECK(same(m, before));
-    CHECK(m.move_tab(1, 3));    // the AIs still move among themselves behind it
-    CHECK(ids(m) == "3 1 2 0 4" && m.tab(m.active()).id == 1);
+    CHECK(m.send(2));   // the AI after them still sends
 }
 
-void sprint_tab_never_closes() {
-    Model m(three(), true);
+// The dashboards move among themselves, and nothing moves into or out of their zone.
+void dashboards_move_only_among_themselves() {
+    Model one(three(), Names{"sprint"});
+    one.add_terminal();   // 4
+    one.select_tab(2);
+    const Model before = one;
+    CHECK(!one.move_tab(0, 1));   // dragged onto an AI
+    CHECK(!one.move_tab(0, 4));   // onto a terminal
+    CHECK(!one.move_tab(1, 0));   // an AI dropped in front of it
+    CHECK(!one.move_tab(4, 0));   // a terminal dropped in front of it
+    CHECK(same(one, before));
+    CHECK(one.move_tab(0, 0));    // onto itself: in its zone, and nothing changes
+    CHECK(same(one, before));
+    Model m(three(), Names{"sprint", "fleet", "CI runs"});
+    CHECK(m.select_tab(4));       // AI bo
+    CHECK(!m.move_tab(2, 3));     // the last dashboard onto the first AI
+    CHECK(!m.move_tab(3, 2));
+    CHECK(m.move_tab(0, 2));      // the first dashboard to the zone's end
+    CHECK(names(m) == "fleet CI runs sprint ada bo cy" && ids(m) == "4 5 3 0 1 2");
+    CHECK(m.tab(m.active()).name == "bo");
+    CHECK(m.select_tab(1) && m.move_tab(2, 0));   // the active dashboard is carried
+    CHECK(names(m) == "sprint fleet CI runs ada bo cy" && m.active() == 2 && m.tab(2).name == "CI runs");
+}
+
+void dashboard_never_closes() {
+    Model m(three(), Names{"sprint", "fleet"});
     const Model before = m;
+    CHECK(!m.close_tab(0) && !m.close_tab(1));
+    CHECK(same(m, before));
+    CHECK(m.add_terminal() == 5);   // the first id after the AIs' and the dashboards'
+    CHECK(m.add_terminal() == 6);
+    CHECK(m.close_tab(6) && m.close_tab(5));
+    CHECK(ids(m) == "3 4 0 1 2" && m.active() == 0);   // back to the dashboard selected before both terminals
     CHECK(!m.close_tab(0));
-    CHECK(same(m, before));
-    CHECK(m.add_terminal() == 4);   // the first id after the AIs' and the sprint tab's
-    CHECK(m.add_terminal() == 5);
-    CHECK(m.close_tab(5) && m.close_tab(4));
-    CHECK(ids(m) == "3 0 1 2" && m.active() == 0);   // back to the sprint tab, selected before both terminals
-    CHECK(!m.close_tab(0));
 }
 
-void sprint_tab_alone_without_ais() {
-    Model m({}, true);
-    CHECK(m.tab_count() == 1 && m.tab(0).kind == TabKind::Sprint && m.tab(0).id == 0 && m.active() == 0);
+void dashboard_alone_without_ais() {
+    Model m({}, Names{"sprint"});
+    CHECK(m.tab_count() == 1 && m.tab(0).kind == TabKind::Dashboard && m.tab(0).id == 0 && m.active() == 0);
     CHECK(m.add_terminal() == 1);
     CHECK(ids(m) == "0 1" && m.active() == 1);
     CHECK(m.close_tab(1));
-    CHECK(ids(m) == "0" && m.active() == 0);   // closing the last terminal leaves the sprint tab active
+    CHECK(ids(m) == "0" && m.active() == 0);   // closing the last terminal leaves the dashboard active
     CHECK(!m.close_tab(0) && !m.set_draft(0, "x") && m.select_tab(0));
+}
+
+// A dashboard's tab goes at the end of the dashboards' zone, before every AI and terminal, with a new id, holding
+// nothing; the active tab stays active, wherever it now stands, and the history is untouched.
+void add_dashboard_goes_to_the_end_of_the_dashboards() {
+    Model m(three(), Names{"sprint"});
+    CHECK(m.add_terminal() == 4);
+    CHECK(m.select_tab(2));                 // AI bo, id 1
+    CHECK(history(m) == "3 4 1");
+    CHECK(m.add_dashboard("fleet"));
+    CHECK(ids(m) == "3 5 0 1 2 4" && names(m) == "sprint fleet ada bo cy ");
+    CHECK(m.tab(1).kind == TabKind::Dashboard && m.tab(1).model.empty() && m.tab(1).transcript.empty());
+    CHECK(m.tab(1).draft.empty() && m.tab(1).queue.empty());
+    CHECK(m.active() == 3 && m.tab(3).id == 1);   // bo, shifted right
+    CHECK(history(m) == "3 4 1");
+    CHECK(m.select_tab(0));                 // a dashboard before the new one's place stays where it is
+    CHECK(m.add_dashboard("CI runs"));
+    CHECK(ids(m) == "3 5 6 0 1 2 4" && m.active() == 0);
+    CHECK(m.select_tab(6));                 // the terminal, at the strip's end, shifted right
+    CHECK(m.add_dashboard("notes"));
+    CHECK(ids(m) == "3 5 6 7 0 1 2 4" && m.active() == 7);
+    CHECK(m.add_terminal() == 8);           // the ids go on after the dashboard's
+    Model none(three());                    // with no dashboard, it stands first
+    CHECK(none.select_tab(1) && none.add_dashboard("sprint"));
+    CHECK(ids(none) == "3 0 1 2" && none.active() == 2 && history(none) == "0 1");
+}
+
+// The first tab in an empty strip is active, and the history.
+void add_dashboard_to_an_empty_strip_selects_it() {
+    Model m({});
+    CHECK(m.add_dashboard("sprint"));
+    CHECK(m.tab_count() == 1 && m.active() == 0 && m.tab(0).id == 0 && history(m) == "0");
+    CHECK(m.add_dashboard("fleet"));
+    CHECK(ids(m) == "0 1" && m.active() == 0 && history(m) == "0");
+    CHECK(m.add_ai({"ada", ""}));
+    CHECK(m.add_dashboard("CI runs"));      // before the AI
+    CHECK(ids(m) == "0 1 3 2" && m.active() == 0 && history(m) == "0");
+}
+
+// An empty name and a name a dashboard's tab has are refused; an AI's name is not a dashboard's.
+void add_dashboard_refuses_an_empty_or_standing_name() {
+    Model m(three(), Names{"sprint"});
+    const Model before = m;
+    CHECK(!m.add_dashboard(""));
+    CHECK(!m.add_dashboard("sprint"));
+    CHECK(same(m, before));
+    CHECK(m.add_dashboard("ada"));          // AI ada's name, on a dashboard: a different tab
+    CHECK(names(m) == "sprint ada ada bo cy");
+    CHECK(!m.add_dashboard("ada"));
+}
+
+// Removing a dashboard's tab takes exactly it; the tabs after shift left; it comes back as a new tab with a new id.
+void remove_dashboard_removes_exactly_that_tab() {
+    Model m(three(), Names{"sprint", "fleet", "CI runs"});
+    CHECK(m.set_draft(3, "ada's"));
+    CHECK(m.select_tab(4));                 // bo
+    CHECK(m.remove_dashboard(1));           // fleet, not active
+    CHECK(ids(m) == "3 5 0 1 2" && names(m) == "sprint CI runs ada bo cy");
+    CHECK(m.active() == 3 && m.tab(3).name == "bo" && history(m) == "3 1");
+    CHECK(m.tab(2).draft == "ada's");
+    CHECK(m.add_dashboard("fleet"));        // back: at the dashboards' end, a new id
+    CHECK(ids(m) == "3 5 6 0 1 2" && names(m) == "sprint CI runs fleet ada bo cy");
+}
+
+// An active dashboard's tab removed: the tab selected before it shows, by close's rule.
+void remove_active_dashboard_goes_back_to_the_tab_selected_before() {
+    Model m(three(), Names{"sprint", "fleet"});
+    CHECK(m.select_tab(4) && m.select_tab(1));   // AI bo, then fleet
+    CHECK(history(m) == "3 1 4");
+    CHECK(m.remove_dashboard(1));
+    CHECK(m.tab(m.active()).id == 1 && m.tab(m.active()).name == "bo" && history(m) == "3 1");
+    // With no tab left in the history, the tab now at its place shows and is the history.
+    Model n({}, Names{"sprint"});
+    CHECK(n.add_ai({"ada", ""}));
+    CHECK(n.remove_dashboard(0));
+    CHECK(ids(n) == "1" && n.active() == 0 && history(n) == "1");
+    Model alone({}, Names{"sprint"});
+    CHECK(alone.remove_dashboard(0));
+    CHECK(alone.tab_count() == 0 && alone.active() == 0 && history(alone).empty());
+}
+
+void remove_dashboard_refuses_every_other_tab() {
+    Model m(three(), Names{"sprint"});
+    CHECK(m.add_terminal() == 4);
+    const Model before = m;
+    CHECK(!m.remove_dashboard(1));     // an AI's
+    CHECK(!m.remove_dashboard(4));     // a terminal's
+    CHECK(!m.remove_dashboard(5));
+    CHECK(!m.remove_dashboard(kHuge));
+    CHECK(!m.remove_ai(0));            // and remove_ai refuses a dashboard's
+    CHECK(same(m, before));
+}
+
+// The strip follows the server's dashboard list: a name gone loses its tab, a new name gets one at the dashboards'
+// end, in the list's order; the tabs that stay keep the person's order; a rename is a remove and an add.
+void sync_dashboards_follows_the_list() {
+    Model m(three(), Names{"sprint"});
+    m.add_terminal();                        // id 4, active
+    auto c = m.sync_dashboards({"fleet", "sprint", "CI runs"});
+    CHECK(names(m) == "sprint fleet CI runs ada bo cy " && c.removed.empty());
+    CHECK((c.added == Names{"fleet", "CI runs"}));
+    CHECK(m.tab(m.active()).kind == TabKind::Terminal);   // the active tab stays active
+    c = m.sync_dashboards({"fleet", "sprint", "CI runs"});  // the same list again changes nothing
+    CHECK(c.empty() && names(m) == "sprint fleet CI runs ada bo cy ");
+    CHECK(m.move_tab(2, 0));                 // the person's order: CI runs first
+    c = m.sync_dashboards({"sprint", "fleet", "CI runs", "notes"});
+    CHECK(names(m) == "CI runs sprint fleet notes ada bo cy " && (c.added == Names{"notes"}) && c.removed.empty());
+    const std::size_t fleetId = m.tab(2).id;
+    CHECK(m.select_tab(2));                  // fleet active
+    c = m.sync_dashboards({"notes", "sprint", "fleet board", "CI runs"});   // fleet renamed
+    CHECK((c.removed == Names{"fleet"}) && (c.added == Names{"fleet board"}));
+    CHECK(names(m) == "CI runs sprint notes fleet board ada bo cy " && m.tab(3).id != fleetId);
+    CHECK(m.tab(m.active()).kind == TabKind::Terminal);   // fleet was active: the tab selected before it shows
+    c = m.sync_dashboards({"notes", "notes", ""});        // a repeated or empty name makes one tab, or none
+    CHECK((c.removed == Names{"CI runs", "sprint", "fleet board"}) && c.added.empty());
+    CHECK(names(m) == "notes ada bo cy ");
+    c = m.sync_dashboards({});                             // none: no dashboard tab
+    CHECK((c.removed == Names{"notes"}) && names(m) == "ada bo cy ");
+}
+
+// A tab group a fork names the "dashboard" type for holds the dashboards (window.star's dashboards group).
+void dashboards_go_to_the_group_that_names_their_type() {
+    Model m({{"ada", ""}}, Names{"sprint"});
+    m.set_tab_groups({{"boards", {"dashboard"}}, {"people", {"ai"}}, {"shells", {"terminal"}, true}});
+    CHECK(m.tab(0).group == "boards" && m.tab(1).group == "people");
+    CHECK(m.add_dashboard("fleet"));
+    CHECK(m.tab(1).name == "fleet" && m.tab(1).group == "boards" && m.tab(2).name == "ada");
 }
 
 // ---- AIs from the server's list (Window.tla AddAI, RemoveAI) ----
@@ -737,7 +893,7 @@ void sprint_tab_alone_without_ais() {
 // An AI's tab goes at the end of the AIs' zone, before every terminal, with a new id, holding nothing; the
 // active tab stays active and the history is untouched.
 void add_ai_goes_to_the_end_of_the_ais() {
-    Model m({{"ada", "m1"}}, true);
+    Model m({{"ada", "m1"}}, {"sprint"});
     CHECK(m.add_terminal() == 2);
     CHECK(history(m) == "1 2" && m.active() == 2);
     CHECK(m.add_ai({"bo", ""}));
@@ -768,7 +924,7 @@ void add_ai_refuses_an_empty_or_standing_name() {
 
 // Removing an AI's tab takes its transcript, draft and queue with it; the tabs after it shift left.
 void remove_ai_removes_exactly_that_tab() {
-    Model m(three(), true);
+    Model m(three(), {"sprint"});
     CHECK(m.append(2, Entry{EntryKind::AI, "said"}));
     CHECK(m.set_draft(2, "unsent"));
     CHECK(m.remove_ai(2));
@@ -780,7 +936,7 @@ void remove_ai_removes_exactly_that_tab() {
 
 // An active AI's tab removed: the tab selected before it shows, by close's rule.
 void remove_active_ai_goes_back_to_the_tab_selected_before() {
-    Model m(three(), true);
+    Model m(three(), {"sprint"});
     CHECK(m.select_tab(3) && m.select_tab(2));
     CHECK(history(m) == "3 2 1");
     CHECK(m.remove_ai(2));
@@ -807,10 +963,10 @@ void close_with_an_empty_history_enters_the_tab_that_shows() {
 }
 
 void remove_ai_refuses_every_other_tab() {
-    Model m(three(), true);
+    Model m(three(), {"sprint"});
     CHECK(m.add_terminal() == 4);
     const Model before = m;
-    CHECK(!m.remove_ai(0));   // the sprint tab
+    CHECK(!m.remove_ai(0));   // a dashboard's
     CHECK(!m.remove_ai(4));   // a terminal
     CHECK(!m.remove_ai(5));
     CHECK(!m.remove_ai(kHuge));
@@ -938,11 +1094,21 @@ const Case kCases[] = {
     {"history_follows_selection_only", history_follows_selection_only},
     {"a_terminal_takes_no_text", a_terminal_takes_no_text},
     {"moves_stay_in_their_zone", moves_stay_in_their_zone},
-    {"sprint_tab_is_first_and_active_with_the_ais_after", sprint_tab_is_first_and_active_with_the_ais_after},
-    {"sprint_tab_takes_no_text", sprint_tab_takes_no_text},
-    {"sprint_tab_never_moves", sprint_tab_never_moves},
-    {"sprint_tab_never_closes", sprint_tab_never_closes},
-    {"sprint_tab_alone_without_ais", sprint_tab_alone_without_ais},
+    {"dashboards_stand_first_in_order_with_the_ais_after", dashboards_stand_first_in_order_with_the_ais_after},
+    {"constructor_skips_empty_and_repeated_dashboard_names", constructor_skips_empty_and_repeated_dashboard_names},
+    {"dashboard_takes_no_text", dashboard_takes_no_text},
+    {"dashboards_move_only_among_themselves", dashboards_move_only_among_themselves},
+    {"dashboard_never_closes", dashboard_never_closes},
+    {"dashboard_alone_without_ais", dashboard_alone_without_ais},
+    {"add_dashboard_goes_to_the_end_of_the_dashboards", add_dashboard_goes_to_the_end_of_the_dashboards},
+    {"add_dashboard_to_an_empty_strip_selects_it", add_dashboard_to_an_empty_strip_selects_it},
+    {"add_dashboard_refuses_an_empty_or_standing_name", add_dashboard_refuses_an_empty_or_standing_name},
+    {"remove_dashboard_removes_exactly_that_tab", remove_dashboard_removes_exactly_that_tab},
+    {"remove_active_dashboard_goes_back_to_the_tab_selected_before",
+        remove_active_dashboard_goes_back_to_the_tab_selected_before},
+    {"remove_dashboard_refuses_every_other_tab", remove_dashboard_refuses_every_other_tab},
+    {"sync_dashboards_follows_the_list", sync_dashboards_follows_the_list},
+    {"dashboards_go_to_the_group_that_names_their_type", dashboards_go_to_the_group_that_names_their_type},
     {"add_ai_goes_to_the_end_of_the_ais", add_ai_goes_to_the_end_of_the_ais},
     {"add_ai_to_an_empty_strip_selects_it", add_ai_to_an_empty_strip_selects_it},
     {"add_ai_refuses_an_empty_or_standing_name", add_ai_refuses_an_empty_or_standing_name},

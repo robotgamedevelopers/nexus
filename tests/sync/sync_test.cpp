@@ -2057,7 +2057,7 @@ void hub_activity() {
 }
 
 void mirror_signed_out_console() {
-    Model model(ais2(), false);
+    Model model(ais2());
     Mirror mirror;
     std::vector<EntryRef> rows = {entry(EntryKind::AI, "previous conversation")};
     auto update = [&] {
@@ -2086,7 +2086,7 @@ void mirror_signed_out_console() {
 
 // The mirror holds the activity of the session a tab shows from the last state applied that held it.
 void mirror_activity() {
-    Model m(ais2(), false);
+    Model m(ais2());
     Mirror mirror;
     const std::size_t id = m.tab(0).id;
     CHECK(mirror.activity(id) == nullptr);
@@ -2107,7 +2107,7 @@ void mirror_activity() {
 // A state without the tab's session takes its open entry with it: no growing text is left to draw beside the grey
 // cursor.
 void mirror_drops_open_with_the_session() {
-    Model m(ais2(), false);
+    Model m(ais2());
     Mirror mirror;
     const std::size_t id = m.tab(0).id;
     SessionView v = tailFor("ada", {entry(EntryKind::Person, "q")}, {}, Tail{}, entry(EntryKind::AI, "gro", false));
@@ -2123,7 +2123,7 @@ void mirror_drops_open_with_the_session() {
 // The state cursor from the server's state only: grey whenever the link is lost or no state has held the session, so
 // never blue on stale state; otherwise the session's activity.
 void cursor_from_the_servers_state() {
-    Model m(ais2(), false);
+    Model m(ais2());
     Mirror mirror;
     const std::size_t id = m.tab(0).id;
     CHECK(cursorOf(LinkPhase::Connected, 0, mirror, id) == CursorState::Lost);     // no session yet
@@ -2170,7 +2170,7 @@ Sessions stateOf(const std::string& name, const std::vector<EntryRef>& t, std::v
 }
 
 void mirror_appends_in_order_once() {
-    Model m(ais2(), true);
+    Model m(ais2(), {"sprint"});
     Mirror mirror;
     std::vector<EntryRef> t = {entry(EntryKind::Person, "hi"), entry(EntryKind::AI, kReceived)};
     CHECK(mirror.apply(m, stateOf("ada", t, {})));
@@ -2185,7 +2185,7 @@ void mirror_appends_in_order_once() {
 }
 
 void mirror_marks_entries_not_received() {
-    Model m(ais2(), false);
+    Model m(ais2());
     Mirror mirror;
     std::vector<EntryRef> t;
     for (int i = 0; i < 10; ++i)
@@ -2299,7 +2299,7 @@ void mirror_skips_masked_bus_slots_and_respects_clear() {
 }
 
 void mirror_waits_for_open_entry() {
-    Model m(ais2(), false);
+    Model m(ais2());
     Mirror mirror;
     std::vector<EntryRef> t = {entry(EntryKind::Person, "q"), entry(EntryKind::AI, "part", false)};
     mirror.apply(m, stateOf("ada", t, {}));
@@ -2310,7 +2310,7 @@ void mirror_waits_for_open_entry() {
 }
 
 void mirror_queue_keeps_draft() {
-    Model m(ais2(), false);
+    Model m(ais2());
     Mirror mirror;
     m.set_draft(0, "typing");
     mirror.apply(m, stateOf("ada", {}, {"one", "two"}));
@@ -2326,7 +2326,7 @@ Sessions openState(const std::vector<EntryRef>& t, EntryRef open, Tail tail = {}
 }
 
 void mirror_holds_open_entry_apart() {
-    Model m(ais2(), false);
+    Model m(ais2());
     Mirror mirror;
     const std::size_t id = m.tab(0).id;
     std::vector<EntryRef> t = {entry(EntryKind::Person, "q")};
@@ -2356,7 +2356,7 @@ void mirror_holds_open_entry_apart() {
 }
 
 void mirror_queue_follows_the_servers() {
-    Model m(ais2(), false);
+    Model m(ais2());
     Mirror mirror;
     m.set_draft(0, "typing");
     mirror.apply(m, stateOf("ada", {}, {"one", "two"}));
@@ -2376,7 +2376,7 @@ void mirror_queue_follows_the_servers() {
 }
 
 void mirror_ignores_other_tabs() {
-    Model m(ais2(), true);
+    Model m(ais2(), {"sprint"});
     Mirror mirror;
     CHECK(!mirror.apply(m, stateOf("zed", {entry(EntryKind::Person, "x")}, {"q"})));
     for (std::size_t i = 0; i < m.tab_count(); ++i)
@@ -2386,7 +2386,7 @@ void mirror_ignores_other_tabs() {
 // The session a tab shows is the window's own: its AI's first (lowest id) in the first state that holds one, and
 // that one from then on, whatever sessions the AI gets later; nothing until then.
 void mirror_shows_first_session() {
-    Model m(ais2(), false);
+    Model m(ais2());
     Mirror mirror;
     const std::size_t ada = m.tab(0).id;
     CHECK(mirror.session(ada) == 0 && sessionOf(m, 0, mirror) == 0);
@@ -2415,7 +2415,7 @@ void link_status_lines() {
 }
 
 void take_prompt_rules() {
-    Model m(ais2(), true);
+    Model m(ais2(), {"sprint"});
     std::string text;
     std::string why;
     CHECK(!takePrompt(m, 0, 100, &text, &why));             // the sprint tab
@@ -2433,10 +2433,10 @@ void take_prompt_rules() {
 }
 
 void ensure_each_ai() {
-    Model m(ais2(), true);
+    Model m(ais2(), {"sprint"});
     m.add_terminal();
     CHECK((aisToEnsure(m) == std::vector<std::string>{"ada", "bo"}));
-    CHECK(aisToEnsure(Model({}, true)).empty());
+    CHECK(aisToEnsure(Model({}, {"sprint"})).empty());
 }
 
 // ---- the AIs: the server's list over the wire, and the window's tabs from it ----
@@ -2445,7 +2445,7 @@ std::string tabNames(const Model& m) {
     std::string out;
     for (std::size_t i = 0; i < m.tab_count(); ++i) {
         const Tab& t = m.tab(i);
-        out += (i != 0 ? " " : "") + (t.kind == TabKind::Sprint ? std::string("[sprint]")
+        out += (i != 0 ? " " : "") + (t.kind == TabKind::Dashboard ? std::string("[sprint]")
             : t.kind == TabKind::Terminal ? std::string("[term]") : t.name);
     }
     return out;
@@ -2586,7 +2586,7 @@ void ais_of_a_state() {
 // The strip follows the server's list: each AI gets a tab at the end of the AIs' zone, in the saved order then
 // the list's; an AI that leaves the list loses its tab, with what it held; the tabs standing keep their order.
 void apply_ais_follows_the_list() {
-    Model m({}, true);
+    Model m({}, {"sprint"});
     m.add_terminal();
     AIChanges c = applyAIs(m, listOf({"ada", "bo", "cy"}), true, {"cy", "gone", "ada"});
     CHECK(tabNames(m) == "[sprint] cy ada bo [term]");
@@ -2833,7 +2833,7 @@ void primary_chat_follows_its_session() {
     CHECK(model.tab(named).transcript.size() == 1 && model.tab(named).transcript.front().text == "Named reply");
     CHECK(sent.size() == 1 && sent.front().kind == ActionKind::Ensure && sent.front().aiName == "fern");
 
-    Model restored({}, true);
+    Model restored({}, {"sprint"});
     AIStrip saved({}, "fern", {});
     saved.take(restored, received);
     CHECK(restored.tab(restored.active()).name == "fern" && !saved.pending());
@@ -2844,13 +2844,13 @@ void primary_chat_follows_its_session() {
     CHECK(model.tab_count() == 1 && model.tab(0).name == "fern" && sessionOf(model, 0, mirror) == 8);
     CHECK(mirror.session(tabId) == 0 && sent.size() == 1);
 
-    Model fresh({}, true);
+    Model fresh({}, {"sprint"});
     AIStrip defaultStrip;
     defaultStrip.take(fresh, unbound);
     defaultStrip.take(fresh, both);
     CHECK(fresh.tab(fresh.active()).name == primary);
 
-    Model chosen({}, true);
+    Model chosen({}, {"sprint"});
     AIStrip explicitStrip;
     explicitStrip.take(chosen, unbound);
     CHECK(chosen.tab_count() == 2);
@@ -2899,7 +2899,7 @@ void replacement_primary_starts_with_its_own_transcript() {
 // The tab saved as selected waits for its AI: selected when the AI's tab arrives, unless the person chose a
 // tab first; a list from the server that does not name it ends the wait, the selection as it was.
 void saved_tab_waits_for_its_ai() {
-    Model m({}, true);
+    Model m({}, {"sprint"});
     AIStrip strip({"bo", "ada"}, "ada", {});
     CHECK(strip.pending());
     strip.take(m, Sessions());                                  // a first state with nothing in it
@@ -2907,18 +2907,18 @@ void saved_tab_waits_for_its_ai() {
     strip.take(m, listState({"ada", "bo"}));
     CHECK(!strip.pending() && tabNames(m) == "[sprint] bo ada" && m.active() == 2);
     // The person chose first: the saved tab is not selected.
-    Model n({}, true);
+    Model n({}, {"sprint"});
     AIStrip chose({}, "ada", {});
     chose.personSelected();
     chose.take(n, listState({"ada"}));
     CHECK(n.active() == 0 && !chose.pending());
     // The server's list without the saved AI: the wait ends, the selection stays.
-    Model o({}, true);
+    Model o({}, {"sprint"});
     AIStrip absent({}, "zed", {});
     absent.take(o, listState({"ada"}));
     CHECK(!absent.pending() && o.active() == 0 && absent.taken());
     // An older server's sessions without it: the wait goes on, since its AI may yet have a session.
-    Model p({}, true);
+    Model p({}, {"sprint"});
     AIStrip waiting({}, "zed", {});
     waiting.take(p, Sessions({std::make_shared<const SessionView>(tailOf(1, infoOf("ada"), {}, {}, Tail{}))}));
     CHECK(waiting.pending() && p.active() == 0);
@@ -2930,7 +2930,7 @@ void tab_given_waits_for_the_ais() {
     CHECK(!tabWaitsForAIs(true, true, 1, 1));       // there already
     CHECK(!tabWaitsForAIs(true, false, 3, 1));      // no server: no AIs will come, judged at once
     CHECK(!tabWaitsForAIs(false, true, 3, 1));      // no --tab
-    Model m({}, true);
+    Model m({}, {"sprint"});
     AIStrip strip;
     CHECK(tabWaitGoesOn(strip, false, 1000, 21000));    // nothing heard yet
     strip.take(m, Sessions());                          // a state with no list and no session: still waiting
@@ -2944,7 +2944,7 @@ void tab_given_waits_for_the_ais() {
 
 // A removed AI's tab is forgotten by the mirror: nothing of its session is held for its id.
 void mirror_forgets_a_removed_tab() {
-    Model m(ais2(), false);
+    Model m(ais2());
     Mirror mirror;
     const std::size_t ada = m.tab(0).id;
     CHECK(mirror.apply(m, stateOf("ada", {entry(EntryKind::Person, "x")}, {})));
@@ -2954,7 +2954,7 @@ void mirror_forgets_a_removed_tab() {
 }
 
 void stop_target_rules() {
-    Model m(ais2(), true);
+    Model m(ais2(), {"sprint"});
     Mirror mirror;
     SessionId session = 0;
     CHECK(!stopTarget(m, 1, mirror, &session) && session == 0);     // no session shown yet
@@ -2973,7 +2973,7 @@ void stop_target_rules() {
 // AI's tab that shows a session is an action in the outbox, sent in order with the others once the link carries
 // them. The server decides each against its state when it processes it.
 void stop_never_filtered_by_the_window() {
-    Model m(ais2(), true);
+    Model m(ais2(), {"sprint"});
     Mirror mirror;
     mirror.apply(m, stateOf("ada", {}, {}));    // the link was up: the tab shows ada's session
     Actions outbox;                             // the link is down: nothing leaves the window
