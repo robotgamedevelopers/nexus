@@ -107,6 +107,20 @@ later field goes after them.
   first at its dashboard tab (`board.h`); a tab for each is the next step (docs/ios.md); with none, the window finds
   its board as before. An older window skips the field. Formats 1 to 3 carry none (`sync_unit`
   `sessions_dashboards_appended`).
+- Absent terminals (a server from before them, or a link of format 3 or older): **the server runs none**.
+  `SessionsDiff.terminals_served` (`bool`, default false) says the server runs terminals (`docs/terminals.md`);
+  `terminal_epoch` (`uint64`, default 0) names its run, which a terminal's id holds in its high 32 bits; `terminals`
+  (`[]TerminalChange`) holds every terminal in id order, each unchanged (its id alone) or changed as a session is: its
+  opener's token, title, extent, cursor, input modes (`modes`, the DEC private modes a window's keys follow, as
+  `1,2004`), how its shell ended (`ended`, empty while it runs) and the rows that changed (`TerminalLine`: the row and
+  its text, printable UTF-8 with SGR runs only). A reader refuses a terminal past the limits (16 terminals, 500 by 300,
+  64 KiB a row), out of order, or unchanged while it holds none. A window offers no terminal while `terminals_served`
+  is false; an older window skips the fields and offers none. The action kinds `TerminalCreate`, `TerminalInput`,
+  `TerminalResize` and `TerminalClose` (22 to 25) name the terminal in `Action.terminal` and the extent in
+  `Action.columns` and `rows`; a terminal's input rides in `Action.secret`. An older server reads them as unknown and
+  refuses each, counted (rule 1); the server writes no terminal state on a link of 1 to 3, and the hand-written codecs
+  write a terminal kind as a stop naming session 0, which the server refuses. A state file holds `terminals_served` and
+  the epoch, never a screen (`terminals_unit_state`, `wire_unit_roundtrip`).
 
 Text in format 4 is schema's text: well-formed UTF-8 with no NUL, or the whole diff would not load. The server writes
 what it holds with each malformed byte, and each NUL, shown as U+FFFD (the replacement character), so an AI's

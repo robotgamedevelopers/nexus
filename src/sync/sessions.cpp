@@ -152,7 +152,107 @@ const std::shared_ptr<const std::vector<SignInOffer>>& noOffers() {
     return none;
 }
 
+const std::shared_ptr<const std::vector<TerminalRef>>& noTerminals() {
+    static const auto none = std::make_shared<const std::vector<TerminalRef>>();
+    return none;
+}
+
+// One changed terminal: all of it, and the rows `a` does not hold as they are (all of them when `a` has another
+// number of rows).
+codec::TerminalChange terminalChange(const TerminalView& b, const TerminalView* a) {
+    codec::TerminalChange c;
+    c.id = b.id;
+    c.changed = true;
+    c.opener = b.opener;
+    c.title = b.title;
+    c.columns = b.columns;
+    c.rows = b.rows;
+    c.cursorColumn = b.cursorColumn;
+    c.cursorRow = b.cursorRow;
+    c.cursorHidden = b.cursorHidden;
+    c.modes = b.modes;
+    c.ended = b.ended;
+    const bool same = a != nullptr && a->lines.size() == b.lines.size();
+    for (std::size_t i = 0; i < b.lines.size(); ++i) {
+        if (same && (a->lines[i] == b.lines[i] || *a->lines[i] == *b.lines[i])) {
+            continue;
+        }
+        c.lines.emplace_back(static_cast<std::uint32_t>(i), *b.lines[i]);
+    }
+    return c;
+}
+
+// A terminal read from a diff, against `a`, the one the state held (null: none). Throws BadDiff for a terminal whose
+// screen is out of bounds or whose rows the diff and `a` do not make whole.
+TerminalRef applyTerminal(codec::TerminalChange&& c, const TerminalView* a) {
+    const std::string name = "terminal " + std::to_string(c.id);
+    if (c.columns == 0 || c.rows == 0 || c.columns > kMaxTerminalColumns || c.rows > kMaxTerminalRows) {
+        throw BadDiff("sessions diff gives " + name + " a screen of " + std::to_string(c.columns) + " by " +
+            std::to_string(c.rows));
+    }
+    auto t = std::make_shared<TerminalView>();
+    t->id = c.id;
+    t->opener = std::move(c.opener);
+    t->title = std::move(c.title);
+    t->columns = c.columns;
+    t->rows = c.rows;
+    t->cursorColumn = c.cursorColumn;
+    t->cursorRow = c.cursorRow;
+    t->cursorHidden = c.cursorHidden;
+    t->modes = std::move(c.modes);
+    t->ended = std::move(c.ended);
+    t->lines.resize(c.rows);
+    const bool same = a != nullptr && a->lines.size() == c.rows;
+    std::uint32_t last = 0;
+    bool any = false;
+    for (auto& [row, text] : c.lines) {
+        if (row >= c.rows || (any && row <= last)) {
+            throw BadDiff("sessions diff names row " + std::to_string(row) + " of " + name + " out of order or past "
+                "its screen");
+        }
+        if (text.size() > kMaxTerminalLine) {
+            throw BadDiff("sessions diff gives row " + std::to_string(row) + " of " + name + " " +
+                std::to_string(text.size()) + " bytes");
+        }
+        t->lines[row] = std::make_shared<const std::string>(std::move(text));
+        last = row;
+        any = true;
+    }
+    static const LineRef blank = std::make_shared<const std::string>();
+    for (std::uint32_t i = 0; i < c.rows; ++i) {
+        if (t->lines[i]) {
+            continue;
+        }
+        if (!same) {
+            throw BadDiff("sessions diff keeps row " + std::to_string(i) + " of " + name + ", which this state lacks");
+        }
+        t->lines[i] = a->lines[i] ? a->lines[i] : blank;
+    }
+    return t;
+}
+
 } // namespace
+
+void Sessions::setTerminals(bool served, std::uint64_t epoch, std::vector<TerminalRef> terminals) {
+    for (std::size_t i = 0; i < terminals.size(); ++i) {
+        if (terminals[i]->id == 0 || (i > 0 && !(terminals[i - 1]->id < terminals[i]->id))) {
+            throw std::logic_error("Sessions: terminals out of id order, twice, or with id 0");
+        }
+    }
+    terminalsServed_ = served;
+    terminalEpoch_ = epoch;
+    terminals_ = terminals.empty() ? noTerminals() :
+        std::make_shared<const std::vector<TerminalRef>>(std::move(terminals));
+}
+
+const TerminalView* Sessions::findTerminal(TerminalId id) const {
+    for (const TerminalRef& t : *terminals_) {
+        if (t->id == id) {
+            return t.get();
+        }
+    }
+    return nullptr;
+}
 
 void Sessions::setRequests(std::vector<SecretRequest> requests) {
     requests_ = requests.empty() ? noRequests() :
@@ -240,10 +340,10 @@ SessionView tailOf(SessionId id, SessionInfo info, const std::vector<EntryRef>& 
 
 Sessions::Sessions()
     : sessions_(std::make_shared<const std::vector<SessionRef>>()), requests_(noRequests()), ais_(noAIs()),
-      offers_(noOffers()) {}
+      offers_(noOffers()), terminals_(noTerminals()) {}
 
 Sessions::Sessions(std::vector<SessionRef> sessions)
-    : requests_(noRequests()), ais_(noAIs()), offers_(noOffers()) {
+    : requests_(noRequests()), ais_(noAIs()), offers_(noOffers()), terminals_(noTerminals()) {
     for (std::size_t i = 0; i < sessions.size(); ++i) {
         if (sessions[i]->id == 0) {
             throw std::logic_error("Sessions: a session with id 0");
@@ -308,6 +408,21 @@ std::string Sessions::diff_from(const Sessions& existing) const {
         change.nextAction = nextAction_;
     }
     change.dashboards = dashboards_;    // whole in every diff; the tables carry them (format 4 on), the legacy codecs do not
+    // The terminals ride on schema's tables only (format 4 on): a window of 1 to 3 is sent none.
+    if (tables) {
+        change.terminalsServed = terminalsServed_;
+        change.terminalEpoch = terminalEpoch_;
+        for (const TerminalRef& b : *terminals_) {
+            const TerminalView* a = existing.findTerminal(b->id);
+            if (a != nullptr && (a == b.get() || *a == *b)) {
+                codec::TerminalChange kept;
+                kept.id = b->id;
+                change.terminals.push_back(std::move(kept));
+                continue;
+            }
+            change.terminals.push_back(terminalChange(*b, a));
+        }
+    }
     return tables ? codec::writeTables(change, format_) : codec::writeLegacy(change, format_);
 }
 
@@ -360,8 +475,34 @@ void Sessions::apply_string(const std::string& diff) {
             throw BadDiff("sessions diff names sign-in " + std::to_string(o.id) + " out of order or twice");
         }
     }
+    std::vector<TerminalRef> terminals;
+    terminals.reserve(change.terminals.size());
+    if (change.terminals.size() > kMaxTerminals) {
+        throw BadDiff("sessions diff holds " + std::to_string(change.terminals.size()) + " terminals, more than " +
+            std::to_string(kMaxTerminals));
+    }
+    for (codec::TerminalChange& c : change.terminals) {
+        const TerminalId id = c.id;
+        if (id == 0 || (!terminals.empty() && !(terminals.back()->id < id))) {
+            throw BadDiff("sessions diff names terminal " + std::to_string(id) + " out of order, twice, or as 0");
+        }
+        const TerminalView* a = findTerminal(id);
+        if (!c.changed) {
+            if (a == nullptr) {
+                throw BadDiff("sessions diff keeps terminal " + std::to_string(id) + ", which this state lacks");
+            }
+            for (const TerminalRef& t : *terminals_) {
+                if (t->id == id) {
+                    terminals.push_back(t);
+                }
+            }
+        } else {
+            terminals.push_back(applyTerminal(std::move(c), a));
+        }
+    }
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));
     primaryChat_ = primary;
+    setTerminals(change.terminalsServed, change.terminalEpoch, std::move(terminals));
     setRequests(std::move(change.requests));
     if (change.aisSent && change.aisKnown) {
         setAIs(std::move(change.ais));
@@ -384,6 +525,17 @@ bool Sessions::operator==(const Sessions& x) const {
     }
     if (offers_ != x.offers_ && *offers_ != *x.offers_) {
         return false;
+    }
+    if (terminalsServed_ != x.terminalsServed_ || terminalEpoch_ != x.terminalEpoch_ ||
+            terminals_->size() != x.terminals_->size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < terminals_->size(); ++i) {
+        const TerminalRef& a = (*terminals_)[i];
+        const TerminalRef& b = (*x.terminals_)[i];
+        if (a != b && !(*a == *b)) {
+            return false;
+        }
     }
     if (sessions_ == x.sessions_) {
         return true;
@@ -410,6 +562,8 @@ std::string stateFile(const Sessions& state) {
     Sessions kept = state;
     kept.setOffers({});
     kept.setNextAction(0);
+    // Nor any terminal's screen: what a shell shows is the person's, never a file's (docs/terminals.md, security).
+    kept.setTerminals(state.terminalsServed(), state.terminalEpoch(), {});
     return kStateFileTag + std::to_string(state.format()) + "\n" + kept.init_diff();
 }
 

@@ -72,7 +72,13 @@ if(NEXUS_SERVER_PARTS)
     target_link_libraries(watch_walk PRIVATE nexus_terminal_watch)
     target_compile_options(watch_walk PRIVATE ${warnings})
 
-    add_dependencies(model_checks trace_walk glide_walk overlay_walk lock_walk strip_walk watch_walk account_menu_walk)
+    # The server terminals' walk (src/server/terminal_book.h, sync::Applier, sync::terminalFate), for
+    # ServerTerminalsTrace.tla.
+    add_executable(terminals_walk terminals_walk.cpp)
+    target_link_libraries(terminals_walk PRIVATE nexus_terminal_book)
+    target_compile_options(terminals_walk PRIVATE ${warnings})
+
+    add_dependencies(model_checks trace_walk glide_walk overlay_walk lock_walk strip_walk watch_walk account_menu_walk terminals_walk)
 endif()
 
 add_test(NAME model_unit COMMAND model_test)
@@ -126,7 +132,7 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK GLIDEWALK MENUWALK SUPWALK PASSWALK ACCWALK SECWALK
+    set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK TERMWALK GLIDEWALK MENUWALK SUPWALK PASSWALK ACCWALK SECWALK
         SIGNWALK RECONNECTWALK RELAYWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
     cmake_parse_arguments(T "${options}"
         "CREDITMODE;PROPERTY;SEED;STEPS;AIS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
@@ -233,6 +239,8 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DOVERLAYWALK=$<TARGET_FILE:overlay_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(DEFINED T_SEED AND T_LOCKWALK)
         list(APPEND defs -DLOCKWALK=$<TARGET_FILE:lock_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_TERMWALK)
+        list(APPEND defs -DTERMWALK=$<TARGET_FILE:terminals_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_WATCHWALK)
         list(APPEND defs -DWATCHWALK=$<TARGET_FILE:watch_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(DEFINED T_SEED AND T_LABEL)
@@ -688,3 +696,31 @@ tlc_test(tlc_managed_service_overlap_rejected ManagedService witnesses/WManagedS
 tlc_test(tlc_managed_service_early_rejected ManagedService witnesses/WManagedServiceEarly.cfg action PROPERTY OnlyWhenDue)
 tlc_test(tlc_managed_service_lost_schedule_rejected ManagedService witnesses/WManagedServiceForget.cfg invariant PROPERTY OneRunPerInterval)
 tlc_test(tlc_managed_service_trace ManagedServiceTrace ManagedServiceTrace.cfg pass SERVICETRACE)
+
+# The server's terminals (docs/terminals.md, ServerTerminals.tla): the bounded state space with liveness, a reversed
+# witness per property, code traces of TerminalBook, sync::Applier and sync::terminalFate, and faulty traces rejected.
+tlc_test(tlc_terminals_spec ServerTerminals ServerTerminals.cfg pass WORKERS 4 CAP 300)
+tlc_test(tlc_terminals_witness_replay WTermReplay WTermReplay.cfg
+         invariant PROPERTY InputOnceInOrder)
+tlc_test(tlc_terminals_witness_any_epoch WTermAnyEpoch WTermAnyEpoch.cfg
+         invariant PROPERTY InputOnlyToItsRun)
+tlc_test(tlc_terminals_witness_input_after_end WTermInputAfterEnd WTermInputAfterEnd.cfg
+         action PROPERTY NoInputUnlessRunning)
+tlc_test(tlc_terminals_witness_detach_kills WTermDetachKills WTermDetachKills.cfg
+         action PROPERTY DetachKeepsRunning)
+tlc_test(tlc_terminals_witness_restart_silent WTermRestartSilent WTermRestartSilent.cfg
+         action PROPERTY RestartShown)
+tlc_test(tlc_terminals_witness_exit_hidden WTermExitHidden WTermExitHidden.cfg
+         liveness)
+tlc_test(tlc_terminals_witness_restart_kept WTermRestartKept WTermRestartKept.cfg
+         liveness)
+tlc_test(tlc_terminals_witness_apply_stalls WTermApplyStalls WTermApplyStalls.cfg
+         liveness)
+foreach(seed 1 2 3)
+    tlc_test(tlc_terminals_trace_seed_${seed} ServerTerminalsTrace ServerTerminalsTrace.cfg pass TERMWALK SEED ${seed}
+             STEPS 600)
+endforeach()
+foreach(fault replay fate epoch)
+    tlc_test(tlc_terminals_trace_faulty_${fault}_rejected ServerTerminalsTrace ServerTerminalsTrace.cfg invariant
+             PROPERTY TraceMatches TERMWALK SEED 1 STEPS 600 FAULTY ${fault})
+endforeach()

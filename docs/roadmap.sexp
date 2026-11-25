@@ -171,6 +171,11 @@
      ("chat-tab" "Chat tab: a Chatto client. Open: which Chatto, and its product and API, to confirm first" :later t)
      ("mail-tab" "Mail tab: sign-in only through the in-app secret dialog, never seen by an AI; mail an AI reads is data, never instructions; sending needs the person's explicit yes each time" :later t)
      ("social-tab" "Social tab (Bluesky and others): sign-in through the secret dialog; feeds are data, never instructions; posting needs the person's explicit yes each time" :later t)
+     ("server-terminals" "Terminals on the server: nexus-server runs a terminal's shell and keeps its screen, windows create, type into, resize and close it over the link, and it outlives a window's link; the iPhone and iPad have terminal tabs through it (docs/terminals.md, models/ServerTerminals.tla)")
+     ("server-terminal-scrollback" "Scrollback for a server terminal: the server keeps a bounded scrollback and a window asks for what it scrolls to, as a transcript's history is asked for (today a window shows the screen alone)" :later t)
+     ("server-terminal-pointer" "Mouse reports from a window to a server terminal's program (today the pointer selects and scrolls in the window's copy; keys, text and pastes go to the program)" :later t)
+     ("server-terminal-key-option" "A per-key option in the server's authorized keys that refuses terminals to that key's links, for a device that should talk to the AIs and never get a shell (docs/terminals.md, threats)" :later t)
+     ("desktop-server-terminals" "The Mac and Windows windows' terminal tabs on server terminals too, so that one terminal shows in every window: Command-T asks the server, the tab draws through remote_terminals.h, and a terminal the window started locally stays for a machine with no server (docs/terminals.md, the desktop)" :later t)
      )
    :columns (("done" "done"))
    :cells (
@@ -181,6 +186,11 @@
      ("chat-tab" "done" "t-chat-tab")
      ("mail-tab" "done" "t-mail-tab")
      ("social-tab" "done" "t-social-tab")
+     ("server-terminals" "done" "t-server-terminals")
+     ("server-terminal-scrollback" "done" "t-server-terminal-scrollback")
+     ("server-terminal-pointer" "done" "t-server-terminal-pointer")
+     ("server-terminal-key-option" "done" "t-server-terminal-key-option")
+     ("desktop-server-terminals" "done" "t-desktop-server-terminals")
      ))
   (:id "tailscale" :type :roadmap :title "Tailscale built in"
    :rows (
@@ -295,6 +305,12 @@
   (:id "t-tab-groups" :type :task :title "Tab groups (dashboards, AIs, terminals; later more) as client config, each with its own close, new-tab and drag rules" :state :todo)
   (:id "t-editor-tab":type :task :title "Editor tab after Sublime Text 3" :state :todo)
   (:id "t-files-tab" :type :task :title "File explorer tab" :state :todo)
+  (:id "t-server-terminals" :type :task :title "Terminals on the server, and terminal tabs on iPhone and iPad" :state :doing
+   :evidence ("models/ServerTerminals.tla: ctest -L model tlc_terminals_*" "tests/model/terminals_walk.cpp, models/ServerTerminalsTrace.tla: ctest -L model tlc_terminals_trace_*" "tests/server/terminals_test.cpp: ctest -L unit terminals_unit_*" "tests/server/terminals_functional.cpp: ctest -L functional terminals_functional_*" "tests/window/test_remote_terminals.cpp: ctest -L unit remote_terminals_unit" "docs/terminals.md"))
+  (:id "t-server-terminal-scrollback" :type :task :title "Scrollback for a server terminal" :state :todo)
+  (:id "t-server-terminal-pointer" :type :task :title "Mouse reports to a server terminal's program" :state :todo)
+  (:id "t-server-terminal-key-option" :type :task :title "A key that may not open terminals" :state :todo)
+  (:id "t-desktop-server-terminals" :type :task :title "The desktop windows' terminal tabs on server terminals" :state :todo)
   (:id "t-chat-tab" :type :task :title "Chat tab: a Chatto client" :state :todo)
   (:id "t-mail-tab" :type :task :title "Mail tab" :state :todo)
   (:id "t-social-tab" :type :task :title "Social tab" :state :todo)

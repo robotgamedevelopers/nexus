@@ -33,7 +33,8 @@ device (`.github/workflows/ios.yml`); the nightly runs the rest (nightly.yml ios
 
 To see the app in the simulator: `xcrun simctl install booted build-ios-sim/nexus.app`, then
 `xcrun simctl launch booted com.robotgamedevelopers.nexus`. With `--state FILE` after the identifier it shows a server's
-state file, as `nexus --screenshot --state FILE` draws it on the desktop.
+state file, as `nexus --screenshot --state FILE` draws it on the desktop. `--server USER@HOST --ssh-port N` links to a
+server whose sshd answers on port N in place of 22: an sshd of a test's own, beside the simulator.
 
 ## Reaching the server
 
@@ -77,7 +78,6 @@ An iOS app starts no processes: the system gives it none. So the iOS build leave
 run time, everything that runs one (`src/build_parts.h`, `NEXUS_PROCESSES`; `cmake/ios.cmake`):
 
 - **nexus-server**, its store and drivers. The server runs on a Mac or Linux machine; the app reaches it.
-- **Terminal tabs.** A terminal tab is a local login shell. There is no Command-T.
 - **Looking up a dashboard.** A desktop window can still find the sprint's board itself by running nova-config. The
   app takes the dashboards nexus-server sends in its state (`SessionsDiff.dashboards`, `docs/formats.md`), from the
   server's config, and shows the first in its Dashboard tab through the same page code as the desktop
@@ -86,7 +86,24 @@ run time, everything that runs one (`src/build_parts.h`, `NEXUS_PROCESSES`; `cma
   runs only the link's commands, so attaching a file, or pasting text long enough to become one, says that it is not
   available on iOS yet; nothing is lost.
 
-## Where it keeps things
+## Terminal tabs
+
+A terminal tab on iOS is a shell that runs on the server (`docs/terminals.md`): nexus-server starts it, keeps its
+screen and keeps it running while the app is away; the tab shows the screen and sends what is typed, through the link
+the app already has. On iPad, the + after the last tab, or Command-T on a keyboard, opens one; on iPhone, the New
+terminal row at the end of the list. The close at the end of the key row, or Command-W, closes the tab and ends its
+shell, as on the Mac. A terminal another window opened, on this device or another, shows in a tab of its own here
+too.
+
+Under the screen is a row of the keys the on-screen keyboard lacks: Escape, Tab, Control (held for the next key) and
+the arrows, then close. The phone's keyboard types the rest; a hardware keyboard types everything. iOS hands a hardware key's
+character to the app after the key itself, at times after the next keys: so a key that types a character sends it as
+the key goes down, and the character that follows is dropped, so that `ls` then Return reaches the shell as typed
+(`TerminalKeys`, `src/remote_terminals.h`; Prax's own terminal view would need the same on iOS).
+
+What a terminal tab keeps on the device: the screen, in memory, while the tab is open. Nothing in a file or a log.
+
+
 
 The app's home is `Library/Application Support/.nexus/client` inside its own container (`src/client_home.h`): HOME on
 iOS is the container, whose top an app may not write. It holds what the desktop window's `~/.nexus/client` holds.
