@@ -6,6 +6,9 @@
 #include <utility>
 #include <vector>
 
+#include "pr/hash.h"
+#include "pr/kit_box.h"
+#include "pr/kit_button.h"
 #include "pr/terminal.h"
 #include "pr/vterm.h"
 #include "pr/vterm_input.h"
@@ -19,7 +22,8 @@ namespace nexus {
 
 namespace {
 
-const PrStringView kMono{"monospace", 9};
+// The monospaced family, as the desktop's terminals set theirs (terminals.cpp kMono).
+const PrFontFamily kMono{.name = {}, .generic = PrFontGeneric_Monospace};
 
 PrStringView sv(const std::string& s) {
     return {s.data(), s.size()};
