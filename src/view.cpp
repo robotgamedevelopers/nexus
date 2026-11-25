@@ -1254,7 +1254,8 @@ struct Builder {
         for (std::size_t i = items.entries; i < entries.size(); ++i) {
             const Entry& e = entries[i];
             if ((e.kind == EntryKind::Tool && (!look.transcriptStyle.showTools ||
-                    e.text.starts_with("mcp__nexus__nexus_bus_send:") || e.text.starts_with("nexus_bus_send:"))) ||
+                    e.text.starts_with("SendMessage:") || e.text.starts_with("mcp__nexus__nexus_bus_send:") ||
+                    e.text.starts_with("nexus_bus_send:"))) ||
                     (e.kind == EntryKind::Notice && !look.transcriptStyle.showNotices))
                 continue;
             uint32_t lines = 1;

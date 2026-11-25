@@ -1718,10 +1718,12 @@ void nativeBusSendIsPrivateInHistory() {
     Harness h;
     h.model.append(0, Entry{EntryKind::Tool, "Read: before"});
     h.model.append(0, Entry{EntryKind::Tool, "mcp__nexus__nexus_bus_send: private body"});
+    h.model.append(0, Entry{EntryKind::Tool, "SendMessage: private child message"});
     h.model.append(0, Entry{EntryKind::Tool, "Read: after"});
     h.frame();
     CHECK(h.entries().size() == 2);
-    CHECK(!h.hasText(h.window(), "private body"));
+    CHECK(!h.hasText(h.window(), "SendMessage: private child message"));
+    CHECK(!h.hasText(h.window(), "mcp__nexus__nexus_bus_send: private body"));
 }
 
 void scannerHasPromptPadding() {
