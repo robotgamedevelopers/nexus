@@ -709,15 +709,15 @@ jobs:
           fi
           "${frames[@]}"
 
-  # The Tailscale shim on Windows (tailscale.yml), with no time limit: restoring its primed cache alone takes most of a
-  # per-commit job's 2 minutes on the hosted Windows image, so ci.yml runs macOS and Linux and this runs Windows. It
-  # saves the primed cache again when the pins changed.
-  tailscale-windows:
+  # The Tailscale shim on Windows and on macOS with its x86_64 slice under Rosetta (tailscale.yml), with no time limit:
+  # restoring Windows's primed cache alone takes most of a per-commit job's 2 minutes on the hosted image, and the
+  # x86_64 build and run do not fit beside the arm64 one, so ci.yml runs macOS arm64 and Linux and this runs the rest.
+  # It saves the primed caches again when the pins changed.
+  tailscale-windows-and-rosetta:
     uses: ./.github/workflows/tailscale.yml
     permissions:
       contents: read
     with:
       prime: true
       save: true
-      macos: false
       linux: false

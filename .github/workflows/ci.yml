@@ -40,7 +40,7 @@ jobs:
   # fleet Mac: a shared 3-core VM is not the machine those budgets are for.
   build-and-unit:
     runs-on: macos-26
-    name: ${{ matrix.check }}${{ matrix.shard && format(' ({0} of 2)', matrix.shard) || '' }}
+    name: ${{ matrix.check }}${{ matrix.shard && format(' ({0} of 4)', matrix.shard) || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -50,6 +50,10 @@ jobs:
             shard: 1
           - check: functional
             shard: 2
+          - check: functional
+            shard: 3
+          - check: functional
+            shard: 4
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -89,10 +93,10 @@ jobs:
       # The headless window (system fonts), real child processes and a real file, and the link end to end (nexus-server
       # over ssh to this machine, mosh's transport over real UDP): not unit tests.
       # The frame budget and the server lock under contention run in the nightly.
-      - name: Functional tests (every other one, from the shard's)
+      - name: Functional tests (every fourth one, from the shard's)
         if: matrix.check == 'functional'
         run: >-
-          ctest --test-dir build -L functional -E '^(window_frame_budget|server_lock_functional)$' -I '${{ matrix.shard }},,2'
+          ctest --test-dir build -L functional -E '^(window_frame_budget|server_lock_functional)$' -I '${{ matrix.shard }},,4'
           -j "$TEST_JOBS" --output-on-failure --no-tests=error
 
   # The model and its check programs built Debug with AddressSanitizer and UndefinedBehaviorSanitizer, which stop at
@@ -103,7 +107,7 @@ jobs:
   sanitizers:
     runs-on: macos-26
     timeout-minutes: 2
-    name: sanitizers (${{ matrix.part }}${{ matrix.half && format(' {0} of 2', matrix.half) || '' }})
+    name: sanitizers (${{ matrix.part }}${{ matrix.half && format(' {0} of 4', matrix.half) || '' }})
     strategy:
       fail-fast: false
       matrix:
@@ -113,7 +117,7 @@ jobs:
               model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
               store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
               nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
-          # The walks in two halves (every other walk each): together they take over a minute on the image's 3 cores.
+          # The walks in four quarters (every fourth walk each): together they take over two minutes on the image's 3 cores.
           - part: walks
             half: 1
             targets: >-
@@ -122,6 +126,18 @@ jobs:
               migration_walk takeover_walk
           - part: walks
             half: 2
+            targets: >-
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+              migration_walk takeover_walk
+          - part: walks
+            half: 3
+            targets: >-
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+              migration_walk takeover_walk
+          - part: walks
+            half: 4
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
@@ -183,7 +199,7 @@ jobs:
           # (outside $GITHUB_WORKSPACE, so a SIGKILLed 0555 build directory never breaks the next checkout), checking
           # every exit status.
           walks_root="$RUNNER_TEMP/nexus-walks"
-          chmod -R u+w "$walks_root" 2>/dev/null || true
+          chmod -R u+w "$walks_root"
           rm -rf "$walks_root"
           launched=0
           in_batch=0
@@ -197,11 +213,11 @@ jobs:
             batch_pids=()
             in_batch=0
           }
-          # This job runs every other walk: HALF 1 the first, third, ...; HALF 2 the second, fourth, ...
+          # This job runs every fourth walk: HALF 1 the first, fifth, ...; HALF 2 the second, sixth, ...; and so on
           listed=0
           walk() {
             listed=$((listed + 1))
-            if [ $((listed % 2)) -ne $((HALF % 2)) ]; then return 0; fi
+            if [ $((listed % 4)) -ne $((HALF % 4)) ]; then return 0; fi
             local dir="$walks_root/$launched"
             mkdir -p "$dir"
             ( "$@" "$dir/trace.tla" >"$dir/output" 2>&1 || { echo "::error::walk failed: $*"; cat "$dir/output"; exit 1; } ) &
@@ -329,9 +345,9 @@ jobs:
             walk build/tests/server/takeover_walk 1 40 --fault "$fault"
           done
           flush_walks
-          chmod -R u+w "$walks_root" 2>/dev/null || true
+          chmod -R u+w "$walks_root"
           rm -rf "$walks_root"
-          echo "$launched of $listed walks passed (half $HALF; the other job runs the rest)"
+          echo "$launched of $listed walks passed (quarter $HALF; the other three jobs run the rest)"
 
 
   # The Claude driver (drivers/claude): compiled under the strict tsconfig, linted with warnings as errors, its unit
@@ -721,7 +737,7 @@ jobs:
         run: |
           set -euo pipefail
           walks_root="$RUNNER_TEMP/nexus-walks"
-          chmod -R u+w "$walks_root" 2>/dev/null || true
+          chmod -R u+w "$walks_root"
           rm -rf "$walks_root"
           launched=0
           running=0
@@ -869,7 +885,7 @@ jobs:
             wait -n
             running=$((running - 1))
           done
-          chmod -R u+w "$walks_root" 2>/dev/null || true
+          chmod -R u+w "$walks_root"
           rm -rf "$walks_root"
           echo "$launched walks passed"
 
@@ -886,8 +902,10 @@ jobs:
     with:
       prime: false
       sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      # Windows runs in the nightly: restoring its primed cache alone took 83 s here (docs/tailscale.md).
+      # Windows runs in the nightly: restoring its primed cache alone took 83 s here (docs/tailscale.md). So does macOS's
+      # x86_64 slice under Rosetta: built and run beside arm64 it took the job past 2 minutes.
       windows: false
+      rosetta: false
       status: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
   # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
