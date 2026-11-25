@@ -8,8 +8,8 @@
 // phase of the frame for the hitch detector (hitch.h).
 //
 // Nothing here waits: the link has a thread of its own (link/client.h), the terminals start, stop and are read on
-// threads of theirs (terminals.h), the board's address is found on one, and the preferences are written by a writer
-// thread (tab_order.h asyncStore). The client runs at 120 Hz with an 8.3 ms budget (AGENTS.md).
+// threads of theirs (terminals.h), the board's page runs on one of its own (board.h), and the preferences are written
+// by a writer thread (tab_order.h asyncStore). The client runs at 120 Hz with an 8.3 ms budget (AGENTS.md).
 
 #pragma once
 #include <future>
@@ -213,6 +213,10 @@ struct FrameHost {
     // waits for the server's AIs.
     void pollLink();
 
+    // The address the server gave for the dashboard tab named `name` (takeDashboards), or empty if it gave none the
+    // window can show.
+    std::string dashboardUrl(const std::string& name) const;
+
 private:
     std::vector<StagedFile> stagedFiles_;
     unsigned stagedCount_ = 0, pasteFrame_ = 0;
@@ -245,6 +249,12 @@ private:
     // tab forgotten, a session ensured for each added one when there is a link, each name the server sent that is not
     // an AI's logged, the kept drafts saved when they changed, and the notice for a strip without AIs.
     void takeAIs(const sync::Sessions& state);
+    // The server's dashboards (sync/dashboards.h): a tab for each in the model (Model::sync_dashboards), and each one's
+    // address by name, which the board opens while that tab shows. A dashboard the window cannot show, a name given
+    // twice, or one past kDashboardsMax gets no tab, and says so on stderr.
+    void takeDashboards(const sync::Sessions& state);
+    std::map<std::string, std::string> dashboardUrls_;   // the server's dashboards that have a tab: name to address
+    std::optional<std::vector<sync::Dashboard>> dashboardsTaken_;   // the list the server last sent; none before
 };
 
 } // namespace nexus

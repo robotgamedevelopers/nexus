@@ -22,8 +22,8 @@
 // each a new login shell in the directory its shell last worked in (tab_order.h).
 //
 // The first tabs are the server's dashboards (sync/dashboards.h), one tab each, labelled with its name; with none, there is
-// no dashboard tab. A dashboard's tab shows nova-sprint's served board (board.h), at the address in the sprint's record
-// (sprint.h) or the client config's sprint-url (client_home.h). The AI tabs are the server's AIs (frame_host.h
+// no dashboard tab. A dashboard's tab shows the page at the address the server gives for it (board.h, frame_host.h
+// takeDashboards); the window looks up no address itself. The AI tabs are the server's AIs (frame_host.h
 // takeAIs), in the order the person last left them. The window opens on the tab selected when it last quit
 // (tab_order.h), or the first tab if that tab is gone or nothing is saved; --tab N opens tab N, and a screenshot
 // without --tab shows the first tab. The text scale (Command-plus and Command-minus) is saved as it changes and comes
@@ -157,7 +157,7 @@ struct App {
     std::unique_ptr<PraxBoard> board;           // the sprint tab's page, over the window's kit, from open() to close()
     // The sign-in page and the board's links, opened in the system's browser off the frame thread, open() to close().
     std::unique_ptr<UrlOpener> urls;
-    std::function<SprintBoardAddress()> findBoard; // the board's address; unset, the sprint's (board.h)
+    bool statePages = true;         // false with --state: a screenshot of a state file loads no dashboard's page
     unsigned bench = 0;     // with --bench, frames to draw back to back before stopping
     FrameStats stats;
     // Kept across launches (tab_order.h); a screenshot keeps nothing. The terminal tabs reopened at launch, by Tab::id,
@@ -421,11 +421,9 @@ bool open(void* context, PrStudioWindow* window) {
         board.initialExtent = {float(screen.extent.x), float(screen.extent.y)};
     board.initialExtent.y -= a.look.tabs.height * style::textScale(a.look.textSteps) + 1;
     board.open = a.urls->handle();
-    // Linked to a server: the board it says it serves, and this window's own lookup only if it says none.
-    board.fromServer = a.link != nullptr;
     if (a.overlay)
         board.visible = [&a] { return overlayVisible(a); };
-    if (clientConfig().sprintEnabled) a.board = std::make_unique<PraxBoard>(board);
+    a.board = std::make_unique<PraxBoard>(board);
     a.view.board = a.board.get();
     a.host.terminals = a.terminals.get();
     a.host.board = a.board.get();
@@ -681,7 +679,6 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     PraxBoard::Desc boardDesc;
     boardDesc.kit = off.kit();
     boardDesc.fonts = a.fonts;
-    boardDesc.find = a.findBoard;
     auto board = std::make_unique<PraxBoard>(boardDesc);
     a.view.board = board.get();
     auto frame = [&] {
@@ -692,14 +689,24 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
         }, [&] { board->wait(); });
     };
     if (a.model->tab_count() != 0 && a.model->tab(a.model->active()).kind == TabKind::Dashboard) {
-        // The board's page, once it has loaded and painted its first answers, within 20 s; or the line that says why
-        // it has none.
-        for (int i = 0; i < 1000 && !board->settled(); ++i) {
-            frame();
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        // The dashboard's page at the address the server gave, once it has loaded and painted its first answers,
+        // within 20 s; or the line that says why it has none.
+        const std::string& name = a.model->tab(a.model->active()).name;
+        const std::string url = a.host.dashboardUrl(name);
+        if (!a.statePages) {
+            std::fprintf(stderr, "nexus: a screenshot of a state file loads no dashboard's page\n");
+        } else if (url.empty()) {
+            std::fprintf(stderr, "nexus: the server gave no address for the dashboard \"%s\"\n", name.c_str());
+        } else {
+            board->offer(url);
+            for (int i = 0; i < 1000 && !board->settled(); ++i) {
+                frame();
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+            if (!board->settled())
+                std::fprintf(stderr, "nexus: the dashboard \"%s\" did not settle: %s\n", name.c_str(),
+                    board->problem().c_str());
         }
-        if (!board->settled())
-            std::fprintf(stderr, "nexus: the sprint board did not settle: %s\n", board->problem().c_str());
     }
     if (a.demoTerminal) {
         // A terminal tab running /bin/sh in the home directory, after a command has printed, within 10 s.
@@ -1165,7 +1172,7 @@ int main(int argc, char** argv) {
     // it has lost the server).
     if (fromState) {
         a.host.showState(held, lost);
-        a.findBoard = [] { return SprintBoardAddress{"", "a screenshot of a state file shows no sprint board"}; };
+        a.statePages = false;
     }
 #endif
     // --demo: sample entries after what the state file holds, in the active tab if it is an AI's.

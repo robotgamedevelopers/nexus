@@ -28,7 +28,7 @@ int failures = 0;
 using test::FakeLink;
 
 struct Window {
-    Model model{{}, {"sprint"}};
+    Model model{{}};
     View view;
     FakeLink link;
     FrameHost host;
@@ -125,6 +125,74 @@ void loggableEscapesAndCuts() {
     CHECK(loggable(std::string(78, 'a') + "\xff" + "b") == std::string(78, 'a') + "...");
     CHECK(loggable(std::string(76, 'a') + "\xff" + "b") == std::string(76, 'a') + "\\xff...");
     CHECK(loggable("").empty());
+}
+
+// The names of the dashboard tabs, in strip order.
+std::vector<std::string> dashboardTabs(const Model& model) {
+    std::vector<std::string> names;
+    for (std::size_t i = 0; i < model.tab_count(); ++i)
+        if (model.tab(i).kind == TabKind::Dashboard) names.push_back(model.tab(i).name);
+    return names;
+}
+
+// The server's list of dashboards is the window's dashboard tabs: none, one, several, in its order, at the head of the
+// strip and labelled with each one's name; each tab's address is the one the server gave for it; a dashboard that
+// leaves the list loses its tab, and an address that changes is the new one.
+void dashboardsAreTheServersList() {
+    Window w("");
+    w.link.ais({"ada"});
+    w.host.pollLink();
+    CHECK(dashboardTabs(w.model).empty() && w.model.tab_count() == 1);
+    CHECK(w.host.dashboardUrl("Dashboard").empty());
+
+    w.link.dashboards({{"Dashboard", "http://100.76.29.55:8080/"}});
+    w.host.pollLink();
+    CHECK(dashboardTabs(w.model) == std::vector<std::string>{"Dashboard"});
+    CHECK(w.model.tab(0).kind == TabKind::Dashboard && w.model.tab(1).name == "ada");
+    CHECK(w.host.dashboardUrl("Dashboard") == "http://100.76.29.55:8080/");
+
+    w.link.dashboards({{"Dashboard", "http://100.76.29.55:8080/"}, {"Builds", "https://ci.test/"},
+        {"Costs", "http://costs.test:9000/"}});
+    w.host.pollLink();
+    CHECK((dashboardTabs(w.model) == std::vector<std::string>{"Dashboard", "Builds", "Costs"}));
+    CHECK(w.model.tab(3).name == "ada");
+    CHECK(w.host.dashboardUrl("Builds") == "https://ci.test/" && w.host.dashboardUrl("Costs") == "http://costs.test:9000/");
+
+    w.link.dashboards({{"Dashboard", "http://100.76.29.55:8080/"}, {"Costs", "http://costs.test:9001/"}});
+    w.host.pollLink();
+    CHECK((dashboardTabs(w.model) == std::vector<std::string>{"Dashboard", "Costs"}));
+    CHECK(w.host.dashboardUrl("Builds").empty() && w.host.dashboardUrl("Costs") == "http://costs.test:9001/");
+
+    w.link.dashboards({});
+    w.host.pollLink();
+    CHECK(dashboardTabs(w.model).empty() && w.model.tab_count() == 1 && w.model.tab(0).name == "ada");
+    CHECK(w.host.dashboardUrl("Dashboard").empty());
+}
+
+// A dashboard the window cannot show (a bad address), a name given twice, and one past the most a window shows get no
+// tab; the rest of the list does.
+void aDashboardTheWindowCannotShowHasNoTab() {
+    Window w("");
+    std::vector<sync::Dashboard> list{{"Bad", "ftp://files.test/"}, {"Good", "http://good.test/"},
+        {"Good", "http://other.test/"}};
+    for (std::size_t i = 0; i < sync::kDashboardsMax; ++i) list.push_back({"D" + std::to_string(i), "http://d.test/"});
+    w.link.dashboards(list);
+    w.host.pollLink();
+    const std::vector<std::string> tabs = dashboardTabs(w.model);
+    CHECK(tabs.size() == sync::kDashboardsMax);
+    CHECK(!tabs.empty() && tabs.front() == "Good" && tabs.back() == "D" + std::to_string(sync::kDashboardsMax - 2));
+    CHECK(w.host.dashboardUrl("Bad").empty() && w.host.dashboardUrl("Good") == "http://good.test/");
+    CHECK(w.host.dashboardUrl("D" + std::to_string(sync::kDashboardsMax - 1)).empty());
+}
+
+// A window that starts with a dashboard tab (an older window's, or a model built with one) loses it when the first
+// state the server sends lists none.
+void theFirstStateWithNoDashboardsLeavesNoTab() {
+    Window w("");
+    CHECK(w.model.add_dashboard("Old"));
+    w.link.ais({"ada"});
+    w.host.pollLink();
+    CHECK(dashboardTabs(w.model).empty());
 }
 
 void extensionTargetsItsConfiguredConversation() {
@@ -435,6 +503,9 @@ int main() {
     logoutUsesTheConfirmedAccountAndReturnsToSignIn();
     savedStateShowsTheSelectedEmailWithoutStartingSignIn();
     extensionTargetsItsConfiguredConversation();
+    dashboardsAreTheServersList();
+    aDashboardTheWindowCannotShowHasNoTab();
+    theFirstStateWithNoDashboardsLeavesNoTab();
     removedTabIsNoChoice();
     savedTabArrivingIsNoChoice();
     waitOutlastsOtherAIs();

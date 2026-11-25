@@ -1,6 +1,5 @@
 // Running a command from the window's logic, with a deadline, behind a seam tests fill with a fake: the fleet's
-// machine list (remote.h), the sprint board's address (sprint.h) and the link's ssh bootstrap (link/bootstrap.h) run
-// through it.
+// machine list (remote.h) and the link's ssh bootstrap (link/bootstrap.h) run through it.
 
 #pragma once
 
@@ -34,8 +33,8 @@ using CommandRunner = std::function<CommandResult(const Command& command, int ti
 // client_home.h), that program is run directly. Otherwise nova-config is run through `shell` (SHELL, or /bin/sh if
 // unset) as a login shell, so that it is found on the PATH the person's terminal has: an app launched from Finder or at
 // login gets a minimal PATH. On Windows, which has no login shell, nova-config is run directly from PATH and `shell` is
-// not used. The fleet's machine list (remote.h) and the sprint board's address (sprint.h) are read through it; the
-// AIs never are: they are the server's.
+// not used. The fleet's machine list (remote.h) is read through it; the AIs and the dashboards never are: they are the
+// server's.
 Command novaConfigCommand(const char* override, const char* shell, const std::vector<std::string>& arguments);
 
 // What went wrong when `command` (a nova-config command) gave `r`, naming the command, what happened and what to do;

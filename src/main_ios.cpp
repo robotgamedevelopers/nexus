@@ -175,7 +175,6 @@ bool open(void* context, PrStudioWindow* window) {
         if (!a.home.empty()) board.storageDirectory = a.home + "/dashboard-storage";
         board.initialExtent = {1000, 780};
         board.open = a.urls->handle();
-        board.fromServer = true;
         a.board = std::make_unique<PraxBoard>(board);
         a.view.board = a.board.get();
         a.host.board = a.board.get();
