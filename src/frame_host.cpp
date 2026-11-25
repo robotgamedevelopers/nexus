@@ -967,7 +967,14 @@ bool FrameHost::menuFinger(const PrAppEvent& e) {
         return false;
     }
     const bool dragged = scroll.dragging();
-    scroll.up(e.time, view->time);
+    const bool tap = scroll.up(e.time, view->time);
+    if (!dragged && !tap && ui) {
+        // A press that only caught a moving list is no tap: the row under it must not take it.
+        PrAppEvent cancel = e;
+        cancel.kind = PrAppEventKind_PointerCancel;
+        prUiPushEvent(ui, kPrUiViewportMain, &cancel);
+        return true;
+    }
     return dragged;
 }
 
