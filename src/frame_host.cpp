@@ -146,12 +146,89 @@ void LinkSignIn::lost() {
     opener.lost();
     gate_.reset();
     gateFlow_ = 0;
+    wipeCode();
+}
+
+const sync::SignInOffer* LinkSignIn::codeAsk() const {
+    if (opener.token().empty() || !activeTab) {
+        return nullptr;
+    }
+    const auto [session, account] = activeTab();
+    if (session == 0 || account.empty()) {
+        return nullptr;
+    }
+    // models/SignInPaste.tla Paste: held by this window, opened here, a code wanted, not sent from here before.
+    for (const sync::SignInOffer& o : opener.view()) {
+        if (o.account == account && o.opener == opener.token() && o.codeWanted &&
+                sync::signsInByPastedCode(o.provider) && opener.opened().contains(o.id) && !codeSent_.contains(o.id) &&
+                !codePutAway_.contains(o.id)) {
+            return &o;
+        }
+    }
+    return nullptr;
+}
+
+void LinkSignIn::wipeCode() {
+    typed_.clear();
+    typedFor_ = 0;
+}
+
+void LinkSignIn::typeCode(std::string_view text) {
+    const sync::SignInOffer* ask = codeAsk();
+    if (ask == nullptr) {
+        wipeCode();
+        return;
+    }
+    typed_ = sync::SecretValue(text.substr(0, sync::kSignInCodeBytes + 2));
+    typedFor_ = ask->id;
+}
+
+void LinkSignIn::submitCode() {
+    const sync::SignInOffer* ask = codeAsk();
+    if (ask == nullptr || port == nullptr || typedFor_ != ask->id) {
+        wipeCode();
+        return;
+    }
+    // A paste brings spaces and line breaks at its ends: cut, as the secret dialog cuts them.
+    std::string_view v = typed_.bytes();
+    while (!v.empty() && (v.front() == ' ' || v.front() == '\t' || v.front() == '\r' || v.front() == '\n')) {
+        v.remove_prefix(1);
+    }
+    while (!v.empty() && (v.back() == ' ' || v.back() == '\t' || v.back() == '\r' || v.back() == '\n')) {
+        v.remove_suffix(1);
+    }
+    if (v.empty()) {
+        return;
+    }
+    sync::Action action;
+    action.kind = sync::ActionKind::SignInCode;
+    action.request = ask->id;
+    action.text = opener.token();
+    action.session = activeTab().first;
+    action.secret = sync::SecretValue(v);
+    codeSent_.insert(ask->id);
+    wipeCode();
+    port->send(std::move(action));
+}
+
+void LinkSignIn::dismissCode() {
+    if (const sync::SignInOffer* ask = codeAsk()) {
+        codePutAway_.insert(ask->id);
+    }
+    wipeCode();
+}
+
+void LinkSignIn::askCodeAgain(std::uint64_t id) {
+    codePutAway_.erase(id);
 }
 
 namespace {
 
 bool onThisMachine(const sync::SignInOffer& offer, const void* context) {
     const LinkSignIn* s = static_cast<const LinkSignIn*>(context);
+    if (sync::signsInByPastedCode(offer.provider)) {
+        return true;    // its browser goes to the vendor's own pages: nothing to bind, wherever the window runs
+    }
     if (sync::usesLocalSignInPage(offer.provider)) {
         return s->loopback;
     }
@@ -335,6 +412,15 @@ void FrameHost::pollLink() {
 }
 
 const SecretAsk* LinkSecrets::showing() {
+    if (const sync::SignInOffer* ask = signIn != nullptr ? signIn->codeAsk() : nullptr) {
+        code_ = true;
+        if (shown_.id != (ask->id | kCodeAsk)) {
+            shown_ = SecretAsk{ask->id | kCodeAsk, ask->account, "sign-in code", std::string(),
+                               "Paste the code the sign-in page showed after you signed in, then press Enter."};
+        }
+        return &shown_;
+    }
+    code_ = false;
     const sync::SecretRequest* r = prompt.showing();
     if (r == nullptr) {
         return nullptr;
@@ -345,7 +431,24 @@ const SecretAsk* LinkSecrets::showing() {
     return &shown_;
 }
 
+std::string_view LinkSecrets::typed() {
+    return code_ && signIn != nullptr ? std::string_view(signIn->typedCode().bytes()) :
+                                        std::string_view(prompt.typed().bytes());
+}
+
+void LinkSecrets::type(std::string_view text) {
+    if (code_ && signIn != nullptr) {
+        signIn->typeCode(text);
+    } else {
+        prompt.type(text);
+    }
+}
+
 void LinkSecrets::submit() {
+    if (code_ && signIn != nullptr) {
+        signIn->submitCode();
+        return;
+    }
     sync::Action action;
     if (port != nullptr && prompt.submit(&action.request, &action.secret)) {
         action.kind = sync::ActionKind::SecretAnswer;
@@ -354,6 +457,10 @@ void LinkSecrets::submit() {
 }
 
 void LinkSecrets::cancel() {
+    if (code_ && signIn != nullptr) {
+        signIn->dismissCode();      // the flow goes on to its deadline; Sign in in the tab asks again
+        return;
+    }
     sync::Action action;
     if (port != nullptr && prompt.cancel(&action.request)) {
         action.kind = sync::ActionKind::SecretCancel;
@@ -448,6 +555,7 @@ bool FrameHost::activateSignIn() {
             signIn.openUrl(offer->url.bytes());
             view->problem.clear();
         }
+        signIn.askCodeAgain(offer->id);
         return true;
     }
     if (pendingClaims_.contains(choice->name)) {
@@ -662,8 +770,15 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
     link = port;
     host = serverHost;
     secrets.port = port;
+    secrets.signIn = &signIn;
     view->secrets = &secrets;
     signIn.port = port;
+    signIn.activeTab = [this]() -> std::pair<sync::SessionId, std::string> {
+        if (!model->tab_count()) return {0, std::string()};
+        const auto session = mirror.session(model->tab(model->active()).id);
+        const auto* choice = activeChoice();
+        return {session, choice ? choice->name : std::string()};
+    };
     signIn.serverArg = serverHost;
     signIn.local = localHostName();
     if (signIn.opener.token().empty()) {

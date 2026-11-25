@@ -128,15 +128,18 @@ table Friend
 // provider, the claim token of the window that holds it (`*` to every other window; absent: no window holds it), the
 // server's host name, and its sign-in URL, set only in the state of the window that holds it (Hub::stateFor), as
 // bytes, never text. A window of format 4 skips the field that holds these, and the server never counts it as able to
-// sign in in the browser (docs/formats.md, format 5).
+// sign in in the browser (docs/formats.md, format 5). code_wanted, also for the holding window alone: the flow's
+// process waits for the code the vendor's page shows, pasted into that window (sync/signin.h signsInByPastedCode); a
+// window from before it reads it as false and never offers the paste.
 table SignInOffer
 {
-    id       uint64
-    account  *string
-    provider *string
-    opener   *string
-    host     *string
-    url      *bytes
+    id          uint64
+    account     *string
+    provider    *string
+    opener      *string
+    host        *string
+    url         *bytes
+    code_wanted bool
 }
 
 // A sessions diff (Sessions::diff_from): every session in the state, in id order. A session the state diffed from
@@ -182,7 +185,8 @@ enum ActionKind
     SignInOpened,
     SignInCallback,
     SignOut,
-    ResolveLimit
+    ResolveLimit,
+    SignInCode
 }
 
 // One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's friend,

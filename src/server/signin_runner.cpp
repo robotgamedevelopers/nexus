@@ -95,6 +95,12 @@ SignInRunner::SignInRunner(Options options, Events events) : options_(std::move(
         events_.url = [this, f = std::move(events.url)](const std::string& a, std::uint64_t id,
                                                         const sync::SecretValue& u) { acted_ = true; f(a, id, u); };
     }
+    if (events.codeWanted) {
+        events_.codeWanted = [this, f = std::move(events.codeWanted)](const std::string& a, std::uint64_t id) {
+            acted_ = true;
+            f(a, id);
+        };
+    }
     if (events.printed) {
         events_.printed = [this, f = std::move(events.printed)](const std::string& a, const sync::SecretValue& t) {
             acted_ = true;
@@ -122,6 +128,7 @@ SignInRunner::~SignInRunner() {
         if (p.lock >= 0) {
             ::close(p.lock);
         }
+        sync::wipeBytes(p.codeOut);
         std::error_code ec;
         std::filesystem::remove_all(p.configDir, ec);
     }
@@ -504,6 +511,46 @@ void SignInRunner::replay(std::uint64_t id, const std::string& account, const sy
     replays_.push_back(std::move(r));
 }
 
+void SignInRunner::code(std::uint64_t id, const std::string& account, const sync::SecretValue& code) {
+    const auto it = procs_.find(account);
+    if (it == procs_.end() || it->second.id != id || it->second.setupToken ||
+            !sync::signsInByPastedCode(it->second.provider) || it->second.master < 0 || it->second.killAt != 0 ||
+            !it->second.codeAsked || it->second.codeTaken || !sync::isSignInCode(code)) {
+        if (events_.log) {
+            events_.log("sign-in " + std::to_string(id) + ": " + account + ": a pasted code, dropped: its sign-in "
+                        "process is not waiting for one");
+        }
+        return;
+    }
+    Proc& p = it->second;
+    p.codeTaken = true;
+    p.codeOut = code.bytes() + "\n";
+    writeCode(p);
+    if (events_.log) {
+        events_.log("sign-in " + std::to_string(id) + ": " + account + ": code handed to its sign-in process");
+    }
+}
+
+// What of the code's line is left goes to the helper's terminal, without waiting; the rest on a later serve().
+void SignInRunner::writeCode(Proc& p) {
+    while (!p.codeOut.empty() && p.master >= 0) {
+        const ssize_t n = ::write(p.master, p.codeOut.data(), p.codeOut.size());
+        if (n > 0) {
+            std::fill_n(p.codeOut.begin(), static_cast<std::size_t>(n), '\0');
+            p.codeOut.erase(0, static_cast<std::size_t>(n));
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n < 0 && errno == EAGAIN) {
+            return;
+        }
+        break;      // its terminal is gone: the process ends, and its end says how the sign-in went
+    }
+    sync::wipeBytes(p.codeOut);
+}
+
 std::vector<pollfd> SignInRunner::fds() const {
     std::vector<pollfd> out;
     if (listen_ >= 0) {
@@ -524,7 +571,9 @@ std::vector<pollfd> SignInRunner::fds() const {
 }
 
 int SignInRunner::waitMs() const {
-    const bool ending = std::any_of(procs_.begin(), procs_.end(), [](const auto& e) { return e.second.killAt != 0; });
+    const bool ending = std::any_of(procs_.begin(), procs_.end(), [](const auto& e) {
+        return e.second.killAt != 0 || !e.second.codeOut.empty();
+    });
     return ending || !replays_.empty() || !helpers_.empty() ? 100 : -1;
 }
 
@@ -589,6 +638,7 @@ void SignInRunner::reap(const std::string& account, Proc& p, bool reported, std:
         ::close(p.lock);
         p.lock = -1;
     }
+    sync::wipeBytes(p.codeOut);
     std::error_code ec;
     std::filesystem::remove_all(p.configDir, ec);
     const std::uint64_t id = p.id;
@@ -648,7 +698,8 @@ void SignInRunner::acceptHelper() {
     }
 }
 
-// One line from the helper: "<flow>-<word> <url>". Taken for the process it names, once; any other is dropped.
+// One line from the helper: "<flow>-<word> <url>", taken for the process it names, once; then, from a helper of a
+// provider that signs in by a pasted code, "<flow>-<word> ?code", once. Any other is dropped.
 void SignInRunner::readHelper(Helper& h) {
     char buf[1024];
     for (;;) {
@@ -670,15 +721,28 @@ void SignInRunner::readHelper(Helper& h) {
     const std::size_t space = h.bytes.find(' ');
     if (end != std::string::npos && space != std::string::npos && space < end) {
         const std::string word = h.bytes.substr(0, space);
+        const std::string_view payload = std::string_view(h.bytes).substr(space + 1, end - space - 1);
         for (auto& [account, p] : procs_) {
-            if (!p.urlSent && sync::sameBytes(word, std::to_string(p.id) + "-" + p.nonce)) {
+            if (!sync::sameBytes(word, std::to_string(p.id) + "-" + p.nonce)) {
+                continue;
+            }
+            if (payload == "?code") {
+                if (p.urlSent && !p.codeAsked && !p.setupToken && sync::signsInByPastedCode(p.provider)) {
+                    p.codeAsked = true;
+                    if (events_.codeWanted) {
+                        events_.codeWanted(account, p.id);
+                    }
+                }
+                break;
+            }
+            if (!p.urlSent) {
                 p.urlSent = true;
                 const sync::SecretValue url(std::string_view(h.bytes).substr(space + 1, end - space - 1));
                 if (events_.url) {
                     events_.url(account, p.id, url);
                 }
-                break;
             }
+            break;
         }
     }
     sync::wipeBytes(h.bytes);
@@ -719,6 +783,9 @@ bool SignInRunner::serve() {
             continue;
         }
         Proc& q = it->second;
+        if (!q.codeOut.empty()) {
+            writeCode(q);
+        }
         // Ended? Looked at without collecting it (WNOWAIT), so that its group is ended (reap) while its pid is still
         // its own; then collected.
         siginfo_t info{};

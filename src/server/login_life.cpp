@@ -159,7 +159,7 @@ bool hasVerifiedClaude(const std::string& accountDir, const std::string& expecte
 }
 
 static int enrollmentDirectory(const std::string& home, const std::string& provider, const std::string& account) {
-    if (!sync::usesLocalSignInPage(provider) || !accounts::isName(account) || home.empty() ||
+    if (!sync::enrollsByHelper(provider) || !accounts::isName(account) || home.empty() ||
         home.find('\0') != std::string::npos) {
         errno = EINVAL;
         return -1;

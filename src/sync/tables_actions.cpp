@@ -33,13 +33,14 @@ wire::ActionKind actionOut(ActionKind k) {
         case ActionKind::SignOut: return wire::ActionKind::SignOut;
         case ActionKind::SignInCallback: return wire::ActionKind::SignInCallback;
         case ActionKind::ResolveLimit: return wire::ActionKind::ResolveLimit;
+        case ActionKind::SignInCode: return wire::ActionKind::SignInCode;
     }
     return wire::ActionKind::None;
 }
 
 bool isSignIn(ActionKind k) {
     return k == ActionKind::SignOut || k == ActionKind::SignInClaim ||
-        k == ActionKind::SignInOpened || k == ActionKind::SignInCallback;
+        k == ActionKind::SignInOpened || k == ActionKind::SignInCallback || k == ActionKind::SignInCode;
 }
 
 // A kind this build does not know (None: a later window's) is Unknown, which the server counts and never applies.
@@ -66,6 +67,7 @@ ActionKind actionIn(wire::ActionKind k) {
         case wire::ActionKind::SignOut: return ActionKind::SignOut;
         case wire::ActionKind::SignInCallback: return ActionKind::SignInCallback;
         case wire::ActionKind::ResolveLimit: return ActionKind::ResolveLimit;
+        case wire::ActionKind::SignInCode: return ActionKind::SignInCode;
         default: return ActionKind::Unknown;
     }
 }

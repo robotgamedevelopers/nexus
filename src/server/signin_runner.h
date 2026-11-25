@@ -16,12 +16,16 @@
 // printed, straight to the one-chance store), its terminal read to the end first. Nothing else of the output is kept,
 // logged or shown. A window's callback is replayed once to the program's listener on the server's loopback (the
 // redirect's own host: localhost is tried on ::1, then on 127.0.0.1, as browsers do; 127.0.0.1 on that alone), its
-// answer read and dropped. The runner never writes to the program's input. The program runs in a process group of its
+// answer read and dropped. The runner never writes to `claude setup-token`'s input. The program runs in a process group of its
 // own, and the group is what is ended: by stop(), at its grace, and once the program has ended, so that nothing it
 // started outlives it.
 //
-// Other providers use their configured enrollment helper. Its authenticated socket message carries only a local
-// page URL. Terminal output is discarded. A successful exit asks the hub to verify the named enrollment receipt.
+// Other providers use their configured enrollment helper (drivers/rpc nexus_rpc.enroll). Its authenticated socket
+// messages carry its URL (a local page's, or for a provider that signs in by a pasted code, the vendor's own sign-in
+// URL), then for the latter `?code` once its vendor's CLI asks for the code. Terminal output is discarded. A code a
+// window pasted (SignInDesk::code took it) is written once to the helper's terminal, with echo off there, as one
+// line: the one thing the runner ever writes to a program's input (models/SignInPaste.tla CodeWith). A successful exit
+// asks the hub to verify the named enrollment receipt.
 //
 // POSIX (a pty, poll, posix_spawn), like the rest of nexus-server: macOS and Linux, and Linux inside WSL2 on Windows.
 
@@ -60,6 +64,8 @@ public:
     };
     struct Events {
         std::function<void(const std::string& account, std::uint64_t id, const sync::SecretValue& url)> url;
+        // The helper of flow `id` says its vendor's CLI waits for the code (after its URL, once).
+        std::function<void(const std::string& account, std::uint64_t id)> codeWanted;
         std::function<void(const std::string& account, const sync::SecretValue& token)> printed;
         std::function<void(const std::string& account, std::uint64_t id, const std::string& why)> exited;
         std::function<void(const std::string& line)> log;
@@ -86,6 +92,9 @@ public:
     void stop(const std::string& account);
     void replay(std::uint64_t id, const std::string& account, const sync::SignInTarget& target,
                 const sync::SecretValue& query);
+    // A pasted code for flow `id` of `account` (the hub's code hook): written once to that helper's terminal, a line,
+    // when the helper still runs for that flow and asked; dropped otherwise (logged without its bytes).
+    void code(std::uint64_t id, const std::string& account, const sync::SecretValue& code);
 
     // The fds the server's poll waits on, and what came in on them (and any process past its grace). Calls the events;
     // true when it called any.
@@ -109,6 +118,9 @@ private:
         std::string provider;
         bool setupToken = false;
         bool urlSent = false;
+        bool codeAsked = false;     // its helper said `?code`
+        bool codeTaken = false;     // a code was written, or is being: no other
+        std::string codeOut;        // what of the code's line is still to write; wiped as it goes
         std::uint64_t killAt = 0;   // when SIGKILL follows the SIGTERM; 0: not ending
     };
     struct Helper {
@@ -132,6 +144,7 @@ private:
     // `reported`).
     void reap(const std::string& account, Proc& p, bool reported, std::optional<int> status);
     bool connectReplay(Replay& r);
+    void writeCode(Proc& p);
     void acceptHelper();
     void readHelper(Helper& h);
     std::uint64_t now() const;

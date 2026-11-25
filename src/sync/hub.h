@@ -225,6 +225,8 @@ struct SignInHooks {
     std::function<void(const std::string& account)> stop;
     std::function<void(std::uint64_t id, const std::string& account, const SignInTarget& target,
                        const SecretValue& query)> replay;
+    // Hand a pasted code to flow `id`'s waiting process (SignInDesk::code took it): once, never logged.
+    std::function<void(std::uint64_t id, const std::string& account, const SecretValue& code)> code;
     // Whether any linked window reads sign-ins (its link of format kSignInFormat or later). Unset: taken as yes. When
     // windows that take a paste are linked but none of them reads sign-ins (each from a build before them), an
     // account is asked for by a paste instead (Hub::signInWindowsChanged).
@@ -435,6 +437,8 @@ public:
     bool requestSignIn(const std::string& account, std::string* said);
     // The account's process handed over its URL; printed its token; ended with no token (`why`, one line).
     void signInUrl(const std::string& account, std::uint64_t id, const SecretValue& url);
+    // Flow `id`'s process waits for the vendor's code (models/SignInPaste.tla Ask).
+    void signInCodeWanted(const std::string& account, std::uint64_t id);
     void signInPrinted(const std::string& account, const SecretValue& token);
     void signInEnrolled(const std::string& account, const std::string& provider, std::uint64_t id);
     void signInExited(const std::string& account, std::uint64_t id, const std::string& why);

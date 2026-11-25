@@ -79,12 +79,28 @@ std::string answer(std::string_view body) {
 
 } // namespace
 
+bool enrollsByHelper(std::string_view provider) {
+    return usesLocalSignInPage(provider) || signsInByPastedCode(provider);
+}
+
 bool usesLocalSignInPage(std::string_view provider) {
-    return provider == "codex" || provider == "antigravity" || provider == "grok" || provider == "muse";
+    return provider == "codex" || provider == "grok" || provider == "muse";
+}
+
+bool signsInByPastedCode(std::string_view provider) {
+    return provider == "antigravity";
+}
+
+bool isSignInCode(const SecretValue& code) {
+    const std::string& b = code.bytes();
+    return !b.empty() && b.size() <= kSignInCodeBytes && std::all_of(b.begin(), b.end(), [](char c) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        return u > 0x20 && u < 0x7f;
+    });
 }
 
 bool hasSignIn(const std::string& provider) {
-    return provider == "claude" || usesLocalSignInPage(provider);
+    return provider == "claude" || enrollsByHelper(provider);
 }
 
 std::string queryValue(std::string_view query, std::string_view name) {
@@ -110,12 +126,14 @@ namespace {
 // The hosts each harness's sign-in sends the browser to: the one list, which the server checks when the process hands
 // its URL over and the window checks again before it opens a browser. claude: `claude setup-token`'s authorize pages
 // (its CLAUDE_AI_AUTHORIZE_URL, claude.com; the console's, platform.claude.com; and claude.ai, which earlier versions
-// of the program use). Compared byte for byte: a host in upper case, with a trailing dot, a port, userinfo or in
-// punycode is not on it.
+// of the program use). antigravity: Google's account sign-in, the one host its CLI's login prints (the enrollment
+// helper's PROVIDERS table, drivers/rpc/nexus_rpc/enroll.py, holds the same). Compared byte for byte: a host in upper
+// case, with a trailing dot, a port, userinfo or in punycode is not on it.
 const std::vector<std::string_view>& signInHosts(std::string_view provider) {
     static const std::vector<std::string_view> kClaude{"claude.com", "platform.claude.com", "claude.ai"};
+    static const std::vector<std::string_view> kAntigravity{"accounts.google.com"};
     static const std::vector<std::string_view> kNone;
-    return provider == "claude" ? kClaude : kNone;
+    return provider == "claude" ? kClaude : provider == "antigravity" ? kAntigravity : kNone;
 }
 
 bool isLocalSignInUrl(std::string_view url) {
@@ -194,6 +212,16 @@ bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarge
     }
     if (!signInHostAllowed(provider, urlHost(url))) {
         return false;
+    }
+    if (signsInByPastedCode(provider)) {
+        // The vendor's own page, opened as it is: its redirect goes to the vendor's page that shows the code, never
+        // to a listener, so there is no target to gate.
+        const std::string_view rest = url.substr(8 + urlHost(url).size());
+        if (rest.empty() || rest.front() != '/') {
+            return false;
+        }
+        *out = {};
+        return true;
     }
     const std::size_t q = url.find('?');
     if (q == std::string_view::npos) {
@@ -336,6 +364,15 @@ std::optional<SignInState> SignInDesk::stateOf(std::uint64_t id) const {
     return it->second;
 }
 
+std::optional<std::pair<bool, bool>> SignInDesk::codeStateOf(std::uint64_t id) const {
+    for (const auto& [account, f] : flows_) {
+        if (f.id == id) {
+            return std::make_pair(f.asked, f.sent);
+        }
+    }
+    return std::nullopt;
+}
+
 void SignInDesk::end(const std::string& account, SignInState state, SignInEffects& out) {
     const auto it = flows_.find(account);
     if (it == flows_.end()) {
@@ -382,7 +419,7 @@ SignInEffects SignInDesk::need(std::uint64_t id, const std::string& account, con
     if (live(account)) {
         return out;
     }
-    flows_[account] = Flow{id, account, provider, SignInState::Needed, {}, {}, {}, 0, false};
+    flows_[account] = Flow{id, account, provider, SignInState::Needed, {}, {}, {}, 0, false, false, false};
     out.log.push_back(line(id, account, "needed"));
     out.notes.push_back({account, account + " needs signing in: show nexus's window (its hotkey) to sign in in the "
                          "browser"});
@@ -455,7 +492,7 @@ SignInEffects SignInDesk::opened(std::uint64_t id, const std::string& opener) {
 SignInEffects SignInDesk::callback(std::uint64_t id, const std::string& opener, const SecretValue& query) {
     SignInEffects out;
     Flow* f = byId(id);
-    if (f == nullptr || usesLocalSignInPage(f->provider) || f->opener != opener || opener.empty() ||
+    if (f == nullptr || enrollsByHelper(f->provider) || f->opener != opener || opener.empty() ||
             (f->state != SignInState::Waiting && !callbackFault_) || query.size() > kSignInQueryBytes) {
         out.log.push_back("sign-in " + std::to_string(id) + ": a callback, late");
         return out;
@@ -476,6 +513,54 @@ SignInEffects SignInDesk::callback(std::uint64_t id, const std::string& opener, 
     f->denied = !code;
     out.replays.push_back({f->id, f->account, f->target, query});
     out.log.push_back(line(id, f->account, "forwarded"));
+    out.changed = true;
+    return out;
+}
+
+SignInEffects SignInDesk::codeWanted(const std::string& account, std::uint64_t id) {
+    SignInEffects out;
+    const auto it = flows_.find(account);
+    if (it == flows_.end() || it->second.id != id || !signsInByPastedCode(it->second.provider) ||
+            (it->second.state != SignInState::UrlSent && it->second.state != SignInState::Waiting) ||
+            it->second.asked || it->second.sent) {
+        out.log.push_back("sign-in " + std::to_string(id) + ": " + account + ": a code asked for, late");
+        return out;
+    }
+    it->second.asked = true;
+    out.log.push_back(line(id, account, "code asked"));
+    out.changed = true;
+    return out;
+}
+
+SignInEffects SignInDesk::code(std::uint64_t id, const std::string& opener, const SecretValue& code,
+                               std::string* refusal) {
+    SignInEffects out;
+    Flow* f = byId(id);
+    std::string why;
+    // models/SignInPaste.tla TakesCorrect: running, asked, none sent, from its holder. Each refusal says what to do.
+    if (f == nullptr || !signInRunning(f->state) || !signsInByPastedCode(f->provider)) {
+        why = "No sign-in is waiting for a code. Start the sign-in again from the account's tab.";
+    } else if ((opener.empty() || f->opener != opener) && !codeFault_) {
+        why = "This sign-in was started in another Nexus window. Paste the code there, or start again here.";
+    } else if (f->sent) {
+        why = "A code was already sent for this sign-in. Wait for it to finish, or start again when it ends.";
+    } else if (!f->asked) {
+        why = "This sign-in is not waiting for a code yet. Open the sign-in page and finish it first.";
+    } else if (!isSignInCode(code)) {
+        // Not consumed: the person may paste the right thing.
+        why = "That is not a sign-in code. Paste the code the sign-in page shows, on one line.";
+    }
+    if (!why.empty()) {
+        out.log.push_back("sign-in " + std::to_string(id) + ": a pasted code, refused: " + why);
+        if (refusal != nullptr) {
+            *refusal = why;
+        }
+        return out;
+    }
+    f->asked = false;
+    f->sent = true;
+    out.codes.push_back({f->id, f->account, code});
+    out.log.push_back(line(f->id, f->account, "code sent"));
     out.changed = true;
     return out;
 }
@@ -580,13 +665,28 @@ SignInEffects SignInDesk::drop() {
 std::vector<SignInOffer> SignInDesk::offers() const {
     std::vector<SignInOffer> out;
     for (const auto& [account, f] : flows_) {
-        SignInOffer o{f.id, f.account, f.provider, f.opener, host_, {}};
+        SignInOffer o{f.id, f.account, f.provider, f.opener, host_, {}, false};
         if (!f.opener.empty() && signInRunning(f.state) && f.state != SignInState::Started) {
             o.url = f.url;
         }
+        o.codeWanted = !f.opener.empty() && signInRunning(f.state) && f.asked && !f.sent;
         out.push_back(std::move(o));
     }
     std::sort(out.begin(), out.end(), [](const SignInOffer& a, const SignInOffer& b) { return a.id < b.id; });
+    return out;
+}
+
+std::vector<SignInOffer> SignInDesk::offersFor(const std::string& opener) const {
+    std::vector<SignInOffer> out = offers();
+    for (SignInOffer& o : out) {
+        if (opener.empty() || o.opener != opener) {
+            o.url.clear();
+            o.codeWanted = false;
+            if (!o.opener.empty()) {
+                o.opener = kSignInHeldBy;
+            }
+        }
+    }
     return out;
 }
 
@@ -636,7 +736,9 @@ SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const voi
         if ((activeAccount && o.account != *activeAccount) || o.opener != token_ || o.url.empty() || opened_.count(o.id) != 0) {
             continue;
         }
-        const bool gate = same == nullptr || !same(o, context);
+        // A pasted-code flow needs no gate wherever the window runs: its redirect goes to the vendor's own page
+        // (models/SignInPaste.tla Open).
+        const bool gate = !signsInByPastedCode(o.provider) && (same == nullptr || !same(o, context));
         if (gate && usesLocalSignInPage(o.provider)) {
             continue;
         }
@@ -669,7 +771,7 @@ SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const voi
     }
     for (const SignInOffer& o : view_) {
         if (o.opener.empty() && claimed_.count(o.id) == 0 &&
-            (wantedAccount_.empty() ? !usesLocalSignInPage(o.provider) : wantedAccount_ == o.account) &&
+            (wantedAccount_.empty() ? !enrollsByHelper(o.provider) : wantedAccount_ == o.account) &&
             (!usesLocalSignInPage(o.provider) || (same != nullptr && same(o, context)))) {
             claimed_.insert(o.id);
             armed_ = false;

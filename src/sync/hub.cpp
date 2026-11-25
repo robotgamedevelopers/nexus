@@ -226,7 +226,7 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         return secretAction(action, why, client);
     }
     if (action.kind == ActionKind::SignInClaim || action.kind == ActionKind::SignInOpened ||
-            action.kind == ActionKind::SignInCallback) {
+            action.kind == ActionKind::SignInCallback || action.kind == ActionKind::SignInCode) {
         return signInAction(action, why, client);
     }
     if (action.kind == ActionKind::SignOut) {
@@ -1304,6 +1304,10 @@ void Hub::signInUrl(const std::string& account, std::uint64_t id, const SecretVa
     signInEffects(signIns_.url(account, id, url));
 }
 
+void Hub::signInCodeWanted(const std::string& account, std::uint64_t id) {
+    signInEffects(signIns_.codeWanted(account, id));
+}
+
 void Hub::signInPrinted(const std::string& account, const SecretValue& token) {
     const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
     if (!a || a->provider != "claude" || a->requiresVerifiedEmail() || !secretKeeper_) {
@@ -1413,14 +1417,7 @@ void Hub::dropSignIns() {
 }
 
 std::vector<SignInOffer> Hub::publicOffers() const {
-    std::vector<SignInOffer> offers = signIns_.offers();
-    for (SignInOffer& o : offers) {
-        o.url.clear();
-        if (!o.opener.empty()) {
-            o.opener = kSignInHeldBy;
-        }
-    }
-    return offers;
+    return signIns_.offersFor(std::string());
 }
 
 Sessions Hub::historyPage(SessionId id, std::uint64_t epoch, std::uint64_t first) const {
@@ -1447,19 +1444,10 @@ Sessions Hub::historyPage(SessionId id, std::uint64_t epoch, std::uint64_t first
 Sessions Hub::stateFor(const std::string& opener, const std::string& client) const {
     Sessions s = state_;
     if (!client.empty()) s.setNextAction(store_.applied(client) + 1);
-    std::vector<SignInOffer> offers = signIns_.offers();
-    if (opener.empty() || offers.empty()) {
+    if (opener.empty() || signIns_.offers().empty()) {
         return s;
     }
-    for (SignInOffer& o : offers) {
-        if (o.opener != opener) {
-            o.url.clear();
-            if (!o.opener.empty()) {
-                o.opener = kSignInHeldBy;
-            }
-        }
-    }
-    s.setOffers(std::move(offers));
+    s.setOffers(signIns_.offersFor(opener));
     return s;
 }
 
@@ -1476,7 +1464,7 @@ bool Hub::signOutAction(const Action& action, std::string* why, const std::strin
     if (!account || session->info.account != name ||
             (!isPrimary(action.session) && !accounts_->linked(session->info.friendName, name))) {
         error = "The account selection changed. Select the account to sign out and try again.";
-    } else if ((!usesLocalSignInPage(account->provider) && account->provider != "claude") || !signOut_) {
+    } else if ((!enrollsByHelper(account->provider) && account->provider != "claude") || !signOut_) {
         error = "This server cannot sign out this provider.";
     } else if (desk_.busy(name) || (flow && flow->second != SignInState::Needed)) {
         error = "Finish or cancel the open sign-in for this account, then retry /logout.";
@@ -1536,6 +1524,24 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
         case ActionKind::SignInOpened:
             signInEffects(signIns_.opened(action.request, action.text));
             break;
+        case ActionKind::SignInCode: {
+            // models/SignInPaste.tla CodeWith: the desk takes it from the flow's holder alone, once, while its process
+            // waits; any other is refused with a plain line in the tab it came from. The code is in no line.
+            std::string refusal;
+            signInEffects(signIns_.code(action.request, action.text, action.secret, &refusal));
+            if (!refusal.empty()) {
+                if (store_.find(action.session) != nullptr) {
+                    std::string failed;
+                    if (store_.commit(action.session, {SessionChange{entry(EntryKind::Notice, refusal), {}}}, {}, 0,
+                                      &failed)) {
+                        refresh(action.session);
+                    }
+                }
+                if (why != nullptr) *why = refusal;
+                return false;
+            }
+            break;
+        }
         default:
             signInEffects(signIns_.callback(action.request, action.text, action.secret));
             break;
@@ -1582,6 +1588,11 @@ void Hub::signInEffects(const SignInEffects& effects) {
         for (const SignInEffects::Replay& r : effects.replays) {
             if (signInHooks_->replay) {
                 signInHooks_->replay(r.id, r.account, r.target, r.query);
+            }
+        }
+        for (const SignInEffects::Code& c : effects.codes) {
+            if (signInHooks_->code) {
+                signInHooks_->code(c.id, c.account, c.code);
             }
         }
     }
