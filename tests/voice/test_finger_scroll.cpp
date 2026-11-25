@@ -59,10 +59,10 @@ void theContentFollowsTheFinger() {
 
 void aFlickFlingsOnAndSlows() {
     auto s = list();
-    s.down(400, 0, 0);
+    s.down(400, -0.01, 0);
     s.move(390, 0.00);
     s.move(340, 0.05);
-    s.move(290, 0.10); // 1000 px/s up the screen: the content scrolls down the list
+    s.move(290, 0.10); // 1000 px/s up the screen, steadily: the content scrolls down the list
     CHECK(!s.up(0.10, 10));
     CHECK(s.phase() == FingerPhase::Fling);
     const double from = s.offset();
