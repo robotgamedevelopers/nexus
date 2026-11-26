@@ -227,17 +227,6 @@ jobs:
         uses: ./.github/actions/windows-build
         with:
           require: "false"
-      # Prax's libraries that the native window links (prax::<name> is the target pr_<name>), built into the cache too,
-      # so that a pull request turning the window on for Windows (NEXUS_WINDOW) compiles only nexus's own code within
-      # the windows job's 2 minutes rather than these from cold (124 s and cancelled, run 45713484539). Prax's options do
-      # not depend on nexus's, so these objects stay current when such a pull request configures the directory again.
-      - name: Prax's libraries the window links
-        run: |
-          $targets = @('pr_html', 'pr_html_quickjs', 'pr_svg_quickjs', 'pr_url_quickjs', 'pr_dom', 'pr_fetch', 'pr_net',
-            'pr_tls', 'pr_http', 'pr_image_select', 'pr_compress_select', 'pr_text', 'pr_font', 'pr_draw', 'pr_audio',
-            'pr_png', 'pr_studio_app', 'pr_app_select', 'pr_gpu_select', 'pr_draw_select', 'pr_surface')
-          cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS --target @targets
-          if ($LASTEXITCODE -ne 0) { throw "cmake --build of Prax's window libraries exited $LASTEXITCODE" }
       - name: Record the sources the build was made from
         shell: bash
         run: bash .github/source-times.sh record D:/nexus-ci/sources.txt
