@@ -84,9 +84,24 @@ runs:
         if [ "$RUST" = true ]; then
           toolchain=1.98.1
           export RUSTUP_HOME="$caches/rustup" CARGO_HOME="$caches/cargo"
-          if ! ls -d "$RUSTUP_HOME/toolchains/$toolchain-"*/bin/cargo >/dev/null 2>&1; then
+          # The machine's runners share the toolchain: one installs it at a time (a lock directory; two installs at
+          # once break each other's downloads), and a toolchain left half installed is installed again.
+          lock="$caches/rustup.lock"
+          mkdir -p "$caches"
+          waited=0
+          until mkdir "$lock" 2>/dev/null; do
+            # A lock older than 10 minutes was left by a job that was cut off.
+            if [ -n "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rmdir "$lock" 2>/dev/null || true; continue; fi
+            sleep 1; waited=$((waited + 1))
+          done
+          trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+          if ! rustup run "$toolchain" cargo --version >/dev/null 2>&1; then
+            rustup toolchain uninstall "$toolchain" >/dev/null 2>&1 || true
             rustup toolchain install "$toolchain" --profile minimal --no-self-update
           fi
+          rustup run "$toolchain" cargo --version
+          rmdir "$lock"; trap - EXIT
+          if [ "$waited" -gt 0 ]; then echo "waited $waited s for another runner's Rust install"; fi
           {
             echo "RUSTUP_HOME=$RUSTUP_HOME"
             echo "CARGO_HOME=$CARGO_HOME"
