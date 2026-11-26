@@ -107,6 +107,7 @@
 
 #if NEXUS_LINK
 #include "link/client_port.h"
+#include "policy/stale.h"
 #include "sync/client.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
@@ -1119,7 +1120,15 @@ int main(int argc, char** argv) {
     a.host.model = &model;
     a.host.view = &a.view;
     if (live) {
-        if (!home.empty()) a.view.application->watch(home + "/policy.bundle.json");
+        if (!home.empty()) {
+            a.view.application->watch(home + "/policy.bundle.json");
+            // An applied bundle older than this build silently ran in place of its rules twice (docs/policy.md).
+            const auto stale = policy::staleBundle("client", home + "/policy.bundle.json");
+            if (!stale.empty()) {
+                std::fprintf(stderr, "nexus: %s\n", stale.c_str());
+                a.view.problem = stale;
+            }
+        }
         a.host.layout = std::move(layout);
         a.host.layoutStore = layoutReadable ? &layoutStore : nullptr;
         a.view.restoreTabLayout = [&a] {

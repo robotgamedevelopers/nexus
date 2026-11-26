@@ -15,3 +15,7 @@ link_e2e_signin                             pr       NEXUS_LINK          # sign-
 friends_functional_fable_switch_account     pr       NEXUS_SERVER_PARTS  # switching an AI's account
 sprint_board                                pr       NEXUS_WINDOW        # the dashboard tab
 window_state_screenshot                     pr       NEXUS_WINDOW+NEXUS_LINK  # the window drawn from a state
+
+# Fast unit tests named here so they cannot drop out of the pull request tier.
+policy_unit_stale_bundle                    pr       ALWAYS              # the stale applied-bundle warning's comparison
+policy_unit_stale_bundle_applied            pr       ALWAYS              # what apply writes from this commit is not stale
