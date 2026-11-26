@@ -6,6 +6,12 @@
 # test that already carries a tier label: a test the table names cannot quietly drop out of its tier.
 #
 # The top-level CMakeLists.txt includes this after its last test; nexus_test_tiers() runs at the end of its configure.
+#
+# tier_pr_build: the targets the tier_pr tests run and nothing else, from what cmake/test_targets.cmake recorded of each
+# test's command line (and its NEXUS_NEEDS property). The per-pull-request build jobs build it in place of all, so a
+# change that relinks every program (the policy runtime's archive, say) relinks only those. A tier_pr test whose
+# program would not be built by it fails the configure here; a program it starts by a path of its own and does not
+# declare fails the test itself, never skips it (.github/ctest.sh).
 
 # The table; the planted cases (.github/tiers-selftest.sh) give their own.
 if(NOT DEFINED NEXUS_TIERS_TABLE)
@@ -25,6 +31,44 @@ function(nexus_tiers_collect dir out)
         list(APPEND found ${more})
     endforeach()
     set(${out} "${found}" PARENT_SCOPE)
+endfunction()
+
+# The buildable targets the tier_pr test <name> (registered in <dir>) runs, into <out>; fails the configure for one
+# that cmake/test_targets.cmake did not record, or whose command is a file in the build tree that no target builds.
+function(nexus_tier_pr_needs dir name out)
+    get_property(recorded GLOBAL PROPERTY "NEXUS_TEST_RECORDED_${name}")
+    if(NOT recorded)
+        message(FATAL_ERROR "${name} is a tier_pr test registered before cmake/test_targets.cmake was included: "
+            "tier_pr_build cannot know what it runs")
+    endif()
+    get_property(command GLOBAL PROPERTY "NEXUS_TEST_COMMAND_${name}")
+    get_property(needs GLOBAL PROPERTY "NEXUS_TEST_NEEDS_${name}")
+    get_property(declared TEST "${name}" DIRECTORY "${dir}" PROPERTY NEXUS_NEEDS)
+    list(APPEND needs ${declared})
+    if(TARGET "${command}")
+        list(APPEND needs "${command}")
+    elseif(NOT command MATCHES "\\$<" AND IS_ABSOLUTE "${command}")
+        cmake_path(IS_PREFIX CMAKE_BINARY_DIR "${command}" NORMALIZE in_build)
+        if(in_build)
+            message(FATAL_ERROR "${name} is a tier_pr test whose command, ${command}, is in the build tree but no "
+                "target's: tier_pr_build would not build it. Name the target (or $<TARGET_FILE:...>) instead.")
+        endif()
+    endif()
+    set(buildable "")
+    foreach(target IN LISTS needs)
+        if(NOT TARGET "${target}")
+            message(FATAL_ERROR "${name} is a tier_pr test that needs ${target}, which is not a target of this build")
+        endif()
+        get_target_property(aliased "${target}" ALIASED_TARGET)
+        if(aliased)
+            set(target "${aliased}")
+        endif()
+        get_target_property(imported "${target}" IMPORTED)
+        if(NOT imported)
+            list(APPEND buildable "${target}")
+        endif()
+    endforeach()
+    set(${out} "${buildable}" PARENT_SCOPE)
 endfunction()
 
 function(nexus_test_tiers)
@@ -78,6 +122,7 @@ function(nexus_test_tiers)
 
     set(pr 0)
     set(nightly 0)
+    set(pr_targets "")
     foreach(entry IN LISTS entries)
         string(REGEX MATCH "^[^|]*" dir "${entry}")
         string(REGEX MATCH "[^|]*$" name "${entry}")
@@ -94,7 +139,18 @@ function(nexus_test_tiers)
         endif()
         set_property(TEST "${name}" DIRECTORY "${dir}" APPEND PROPERTY LABELS "tier_${tier}")
         math(EXPR ${tier} "${${tier}} + 1")
+        if(tier STREQUAL "pr")
+            nexus_tier_pr_needs("${dir}" "${name}" needs)
+            list(APPEND pr_targets ${needs})
+        endif()
     endforeach()
+    list(REMOVE_DUPLICATES pr_targets)
+    add_custom_target(tier_pr_build)
+    if(pr_targets)
+        add_dependencies(tier_pr_build ${pr_targets})
+    endif()
+    list(LENGTH pr_targets built)
+    message(STATUS "Test tiers: tier_pr_build builds ${built} targets for the tier_pr tests")
     message(STATUS "Test tiers: ${pr} on every pull request (tier_pr), ${nightly} in the nightly (tier_nightly)")
 endfunction()
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # cmake/tiers.cmake against its planted cases (tests/ci/tiers): the good table puts each test in exactly one tier, as
 # planted, and a table naming a missing test, a tier that is neither, two rows for one test, or a short row each fails
-# the configure. Exits 1 if any case comes out otherwise. Run from the repository's root.
+# the configure. tier_pr_build makes what the tier_pr tests need and nothing the nightly's alone need, and a tier_pr
+# test whose program is a build-tree file no target makes fails the configure. Exits 1 if any case comes out
+# otherwise. Run from the repository's root.
 set -uo pipefail
 here=$(pwd)
 work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/tiers.XXXXXX")
@@ -23,6 +25,14 @@ if cmake -S "$here/tests/ci/tiers" -B "$work/good" "-DNEXUS_TIERS_TABLE=$here/te
       bad=1
     fi
   done
+  if cmake --build "$work/good" --target tier_pr_build > "$work/out" 2>&1 && [ -f "$work/good/pr_tool.made" ] &&
+      [ ! -e "$work/good/nightly_tool.made" ]; then
+    echo "tiers.cmake, tier_pr_build: made the tier_pr test's pr_tool and not the nightly's nightly_tool, as planted"
+  else
+    echo "::error title=tiers.cmake self-test::tier_pr_build did not make pr_tool alone"
+    cat "$work/out"
+    bad=1
+  fi
 else
   echo "::error title=tiers.cmake self-test::the good table failed the configure"
   cat "$work/out"
@@ -36,4 +46,11 @@ for table in missing bad-tier twice short; do
     echo "tiers.cmake, the $table table: the configure fails, as planted ($(grep -m1 -o 'tests/tiers.txt.*\|.*already has a tier.*' "$work/out" | head -1))"
   fi
 done
+if cmake -S "$here/tests/ci/tiers" -B "$work/unbuilt" "-DNEXUS_TIERS_TABLE=$here/tests/ci/tiers/tables/good.txt" \
+    -DPLANTED_UNBUILT=ON > "$work/out" 2>&1; then
+  echo "::error title=tiers.cmake self-test::a tier_pr test running a file no target makes configured; it should fail"
+  bad=1
+else
+  echo "tiers.cmake, a tier_pr test running a file no target makes: the configure fails, as planted ($(grep -m1 -o 'unbuilt_unit is a tier_pr test.*' "$work/out" | head -1))"
+fi
 exit "$bad"
