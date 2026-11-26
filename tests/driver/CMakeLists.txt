@@ -151,7 +151,7 @@ foreach(witness Twice:invariant:AtMostOnce Drop:invariant:NeverLost EarlyFollow:
     endif()
 endforeach()
 # The trace checks run tests/model/tlc.cmake with steering_walk as its WALK (its arguments: SEED, STEPS, and the mode
-# in FRIENDS's place), as tlc_test does for the walks it names.
+# in AIS's place), as tlc_test does for the walks it names.
 function(steering_trace_test name seed steps mode expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
@@ -159,7 +159,7 @@ function(steering_trace_test name seed steps mode expect)
     set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${PROJECT_SOURCE_DIR}/models
              -DMODULE=SteeringTrace -DCFG=SteeringTrace.cfg -DEXPECT=${expect} -DWORKERS=2 -DCAP=60
              -DWALK=$<TARGET_FILE:steering_walk> -DDATA=SteeringTraceData -DSEED=${seed} -DSTEPS=${steps}
-             -DFRIENDS=${mode})
+             -DAIS=${mode})
     if(ARGN)
         list(APPEND defs -DPROPERTY=${ARGN})
     endif()
