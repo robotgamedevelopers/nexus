@@ -137,15 +137,11 @@ runs:
           if ($got -ne $hash) { Remove-Item -Force "$slang\$file.partial"; throw "Slang's $file has sha256 $got, and Prax pins $hash" }
           Move-Item -Force "$slang\$file.partial" "$slang\$file"
         }
-    # Every NEXUS_* option is given, so a kept CMakeCache.txt never decides what is built; `cmake --build` re-runs the
-    # configure itself (ZERO_CHECK) whenever a CMake file changed since the cache's configure.
+    # Configured on every run with every NEXUS_* option given, so a kept CMakeCache.txt (the runner's build directory,
+    # shared by every branch that runs there) never decides what is built: another branch's options are set back here.
     - name: Configure (Release, MSVC x64)
       shell: pwsh
       run: |
-        if (Test-Path "$env:NEXUS_BUILD\CMakeCache.txt") {
-          Write-Output "configured already (the runner's build directory); cmake --build re-runs it if a CMake file changed"
-          exit 0
-        }
         cmake -S . -B $env:NEXUS_BUILD -A x64 "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE" `
           -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DNEXUS_LINK=OFF
         if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
