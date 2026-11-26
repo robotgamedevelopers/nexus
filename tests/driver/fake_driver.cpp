@@ -548,19 +548,27 @@ private:
                 continue;
             }
             if (const Stop* stop = std::get_if<Stop>(&*item->message)) {
-                if (stop->turn == turn || option("stop-any-turn"))
+                if (stop->turn == turn || option("stop-any-turn")) {
+                    stopped(Stop{turn});
                     return true;
+                }
             } else if (const Send* send = std::get_if<Send>(&*item->message)) {
                 badSend(*send, "arrived while turn " + std::to_string(turn) + " is open");
+            } else {
+                steeringLine(*item->message);
             }
         }
     }
 
-    // A stopped turn's end: its open text block's text-end, if one is open, then done outcome stopped (rule 7).
+    // A stopped turn's end: its open text block's text-end, if one is open, then done outcome stopped (rule 7). The
+    // stop already settled the turn (waitOrStop), so steering closes it with the done.
     void endStopped(std::uint64_t turn, bool blockOpen) {
         if (blockOpen)
             emit(TextEnd{turn});
         emit(Done{turn, Outcome::Stopped, std::nullopt, std::nullopt});
+        if (turn == steering_.turn()) {
+            steering_.done();
+        }
         stopped_ = true;
     }
 

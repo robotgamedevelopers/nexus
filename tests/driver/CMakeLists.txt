@@ -44,7 +44,8 @@ if(NOT WIN32)
     set(conformance_cases exchange refused not_json order send_while_open eof_while_open
         secret_ask secret_without_server)
     # Steering a turn: only the fake names steer, follow-up and settled (the Claude driver's hello names none yet).
-    foreach(case steer_exchange steer_stopped steer_crossed steer_unnamed steer_unopened_turn steer_id_order)
+    foreach(case steer_exchange steer_stopped steer_crossed steer_unnamed steer_unopened_turn steer_id_order
+                 steer_paused)
         add_test(NAME driver_conformance_fake_${case}
             COMMAND driver_conformance_test ${case} fake $<TARGET_FILE:nexus_fake_driver>
             WORKING_DIRECTORY "${conformance_dir}")

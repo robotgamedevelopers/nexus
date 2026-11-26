@@ -479,6 +479,24 @@ void steerStopped(Child& d) {
     checkStream(d.items(), {1});
 }
 
+// A steer that arrives during a pause is taken and its queue written; a stop during the pause settles the turn,
+// aborted, before its done, and the next turn opens and settles as any other.
+void steerPaused(Child& d) {
+    d.send(Send{1, "paused"});
+    CHECK(d.readUntil(textOf(1)));
+    d.send(Steer{1, 1, "go left"});
+    CHECK(d.readUntil(queueOf(1)));
+    d.send(Stop{1});
+    CHECK(d.readUntil(doneOf(1)));
+    d.send(Send{2, "reply"});
+    CHECK(d.readUntil(doneOf(2)));
+    CHECK(steeringLines(d.items()) == "q1:1/ s1:aborted d1 s2:ok d2 ");
+    CHECK(count(d.items(), ErrorCode::Protocol) == 0);
+    d.closeInput();
+    CHECK(d.exitStatus() == 0);
+    checkStream(d.items(), {1, 2});
+}
+
 // A steer that crossed its turn's end (settled and done on the way) is ignored and answered by nothing; every done of
 // a driver that names settled follows its settled.
 void steerCrossed(Child& d) {
@@ -558,6 +576,8 @@ std::string fakeScript(const std::string& name) {
         return steering + open + "await-steer\nawait-stop\nemit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n";
     if (name == "steer_crossed")
         return steering + reply + reply;
+    if (name == "steer_paused")
+        return steering + open + "pause 60000\n" + reply;
     if (name == "steer_unnamed")
         return hello + open + "await-stop\n";
     if (name == "steer_unopened_turn" || name == "steer_id_order")
@@ -584,7 +604,8 @@ int main(int argc, char** argv) {
         {"not_json", notJson}, {"order", order}, {"send_while_open", sendWhileOpen}, {"eof_while_open", eofWhileOpen},
         {"secret_ask", secretAsk}, {"secret_without_server", secretWithoutServer},
         {"steer_exchange", steerExchange}, {"steer_stopped", steerStopped}, {"steer_crossed", steerCrossed},
-        {"steer_unnamed", steerUnnamed}, {"steer_unopened_turn", steerUnopenedTurn}, {"steer_id_order", steerIdOrder}};
+        {"steer_unnamed", steerUnnamed}, {"steer_unopened_turn", steerUnopenedTurn}, {"steer_id_order", steerIdOrder},
+        {"steer_paused", steerPaused}};
     const auto found = cases.find(name);
     if (found == cases.end() || (kind != "fake" && kind != "prompted")) {
         std::fprintf(stderr, "driver_conformance_test: no case %s of kind %s\n", name.c_str(), kind.c_str());
