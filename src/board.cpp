@@ -1064,12 +1064,27 @@ int arrowOf(const PrAppEvent& e, bool plain) {
     return e.keyboard.key == PrAppKey_Up ? -1 : e.keyboard.key == PrAppKey_Down ? 1 : 0;
 }
 
+// The key as Prax's view reads it. Command-Up and Command-Down go to the top and the bottom; Prax reads Command as
+// Super or Control, and ignores a key held with Alt, so where Command is Alt (Windows and Linux, style::kCommand) they
+// reach it as Home and End.
+PrAppEvent forPrax(const PrAppEvent& e) {
+    PrAppEvent out = e;
+    const bool keyEvent = e.kind == PrAppEventKind_KeyDown || e.kind == PrAppEventKind_KeyUp;
+    if ((style::kCommand & PrAppModifierFlag_Alt) != 0 && keyEvent && (e.modifiers & style::kCommand) != 0 &&
+        (e.keyboard.key == PrAppKey_Up || e.keyboard.key == PrAppKey_Down)) {
+        out.keyboard.key = e.keyboard.key == PrAppKey_Up ? PrAppKey_Home : PrAppKey_End;
+        out.modifiers = static_cast<PrAppModifierFlags>(e.modifiers & ~style::kCommand);
+    }
+    return out;
+}
+
 } // namespace
 
 // Keys and the wheel go through the scroller (scroll_glide.h), which gives each to Prax's view and moves the page where
 // it went over the next frames; a trackpad's scroll and a press stop that motion where the page shows and go to the
 // view as they are. Returns false for an event the page must not see (a held arrow's repeat).
-bool PraxBoard::scrollEvent(const PrAppEvent& e) {
+bool PraxBoard::scrollEvent(const PrAppEvent& event) {
+    const PrAppEvent e = forPrax(event);
     PrDomElement* s = scroller();
     if (s == nullptr) {
         prHtmlViewEvent(view_, &e, 0);
