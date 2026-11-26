@@ -46,7 +46,7 @@ bool readPng(const char* path, std::vector<uint8_t>* pixels, PrUVec2* extent, st
     PrCompressCodecSet* compress = prCompressCodecSetCreateDefault();
     PrPngDecoder* decoder = nullptr;
     PrStatus status = prPngDecoderCreate(PrByteView{reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()},
-        compress, nullptr, 0, &decoder);
+        compress, nullptr, bytes.size(), &decoder);     // held: the input, which this function holds for the decoder
     bool ok = false;
     if (status != PrStatus_Ok) {
         *why = std::string(path) + " is not a PNG (status " + std::to_string(int(status)) + ")";
