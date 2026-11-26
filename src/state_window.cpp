@@ -3,7 +3,7 @@
 #include <fstream>
 #include <iterator>
 
-#include "sync/friend_strip.h"
+#include "sync/ai_strip.h"
 
 namespace nexus {
 
@@ -24,7 +24,7 @@ bool readStateAt(const std::string& path, sync::Sessions* held, std::string* why
 
 bool showHeldState(const sync::Sessions& held, bool lost, std::size_t tab, Model& model, View& view, FrameHost& host,
         std::string* why) {
-    sync::FriendStrip{}.take(model, held);
+    sync::AIStrip{}.take(model, held);
     if (tab == 0) tab = model.active() + 1;
     if (model.tab_count() != 0 && !model.select_tab(tab - 1)) {
         *why = "no tab " + std::to_string(tab) + " (there are " + std::to_string(model.tab_count()) + ")";

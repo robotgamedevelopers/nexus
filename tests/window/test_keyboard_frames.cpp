@@ -94,7 +94,7 @@ struct Window {
     PrUi* ui = nullptr;
     PrKit* kit = nullptr;
     Look look;
-    Model model{std::vector<FriendInfo>{}, true};
+    Model model{std::vector<AIInfo>{}, true};
     View view;
     FrameHost host;
     test::FakeLink link;
@@ -125,7 +125,7 @@ struct Window {
         host.view = &view;
         host.ui = ui;
         host.connect(&link, "server.test");
-        link.friends({"rowan", "stella"});
+        link.ais({"rowan", "stella"});
     }
 
     ~Window() {
@@ -257,7 +257,7 @@ struct Window {
 
     std::size_t tabOf(const std::string& name) const {
         for (std::size_t i = 0; i < model.tab_count(); ++i) {
-            if (model.tab(i).kind == TabKind::Friend && model.tab(i).name == name) return i;
+            if (model.tab(i).kind == TabKind::AI && model.tab(i).name == name) return i;
         }
         return model.tab_count();
     }
