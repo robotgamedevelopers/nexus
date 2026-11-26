@@ -1143,6 +1143,14 @@ int main(int argc, char** argv) {
                 "--demo-terminal, --bench or --print-window-config\n");
             return 2;
         }
+#if !NEXUS_LINK
+        // The relay (Windows) does not pass a server command on yet: refused, never dropped (docs/mock.md).
+        if (serverCommand != nullptr) {
+            std::fprintf(stderr, "nexus: --server-command is not supported on Windows yet (the window's link through "
+                "WSL2 does not pass it on)\n");
+            return 2;
+        }
+#endif
 #else
         std::fprintf(stderr, "nexus: this build has no --server (it was configured with -DNEXUS_LINK=OFF)\n");
         return 2;
@@ -1430,6 +1438,11 @@ int main(int argc, char** argv) {
         // another host over ssh from WSL2. NEXUS_WSL_RELAY, when set, is the relay's command there instead of
         // ~/.local/bin/nexus-link-relay (relay/relay_words.h): the program, then what follows the host (a test's `-- COMMAND`), split at
         // spaces.
+        if (!clientConfig().serverCommand.empty()) {
+            std::fprintf(stderr, "nexus: the config's server-command is not supported on Windows yet (the window's link "
+                "through WSL2 does not pass it on)\n");
+            return 2;
+        }
         relay::RelayPort::Options options;
         options.host = server;
         if (const char* relayWords = std::getenv("NEXUS_WSL_RELAY")) {
