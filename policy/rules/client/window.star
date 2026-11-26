@@ -31,8 +31,9 @@ _COMMAND_HELP = {
     "/info": "Show the AI, account, model, effort, repository and working directories.",
     "/clear": "Clear the conversation and its context. When signed out, clear the local conversation.",
     "/compact": "Compact the current conversation context.",
-    "/login": "Open the account sign-in window.",
-    "/logout": "Sign out of the selected account.",
+    "/account": "Choose this AI's account: its signed-in accounts, and signing in to another.",
+    "/login": "Sign this AI in to another account, then switch to it. It stays on its account until then.",
+    "/logout": "Sign out of this AI's account and delete its saved login, after a confirm that names the email.",
     "/quiet": "Mute nexus sounds.",
     "/quiet off": "Turn sounds back on.",
     "/loud": "Turn sounds back on (same as /quiet off).",
@@ -224,6 +225,7 @@ def handle(event, state, config):
             "prompt_command": False,
             "prompt_style": _prompt_style(config),
             "tab_style": config.get("tab_style", {}),
+            "account_menu": config.get("account_menu", {}),
             "overlay_opacity": config.get("overlay_opacity", 0.60),
             "tab_groups": groups,
             "closable": closable,
@@ -296,9 +298,10 @@ def handle(event, state, config):
                     "PageUp": "page_up", "PageDown": "page_down"}).items():
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["scroll_transcript", direction])
         if state["tab"] == "ai" and state["prompt_open"] and not state.get("account_picker_open") and not state.get("ui", {}).get("choice_kind"):
-            if state.get("ui", {}).get("draft") == "/login":
+            command = state.get("ui", {}).get("draft", "").strip()
+            if command in ["/account", "/login"]:
                 for chord in ["Enter", "Command+Enter"]:
-                    window["shortcuts"] = _bind(window["shortcuts"], chord, ["account_picker", "open"])
+                    window["shortcuts"] = _bind(window["shortcuts"], chord, ["account_menu", command[1:]])
             for chord in config.get("clear_draft_keys", ["Command+Backspace", "Command+Delete"]):
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["clear_composer"])
         if state["tab"] == "ai" and state.get("needs_sign_in"):

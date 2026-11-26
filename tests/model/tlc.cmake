@@ -32,6 +32,8 @@
 #               with SEED, STEPS and AIS (2 or 3), and FAULTY one of forget, wait
 #   GLIDEWALK   optional, in place of WALK: glide_walk; it is run first and writes GlideTraceData.tla into WORK, with
 #               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
+#   MENUWALK    optional, in place of WALK: account_menu_walk; it is run first and writes AccountMenuTraceData.tla
+#               into WORK, with SEED and STEPS, and FAULTY sideways for the gesture that keeps the menu on a sideways move
 #   SUPWALK     optional, in place of WALK: tests/server's supervisor_walk; it is run first and writes
 #               SupervisorTraceData.tla into WORK, with SEED and STEPS, FAULTY one of turn, resume, queue,
 #               limit, setting, account, activity, dir, remove or unknown (both with CHURN), and CHURN ON for the
@@ -359,6 +361,19 @@ elseif(DEFINED PASSWALK AND NOT "${PASSWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "pass_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED MENUWALK AND NOT "${MENUWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "sideways")
+        list(APPEND walk_args --faulty-sideways)
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not sideways")
+    endif()
+    execute_process(COMMAND "${MENUWALK}" ${walk_args} "${WORK}/AccountMenuTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "account_menu_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED GLIDEWALK AND NOT "${GLIDEWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")

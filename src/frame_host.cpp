@@ -355,8 +355,9 @@ void FrameHost::pollLink() {
                 const auto* offer = offerFor(it->first);
                 if (offer && !it->second) it->second = offer->id;
                 const auto* choice = activeChoice();
-                if ((offer && offer->id != it->second) ||
-                    (!offer && (it->second || !choice || choice->name != it->first || !choice->needsSignIn)))
+                const bool login = pendingLogin_ && pendingLogin_->second == it->first;
+                if ((offer && offer->id != it->second) || (!offer && it->second) ||
+                    (!offer && !login && (!choice || choice->name != it->first || !choice->needsSignIn)))
                     it = pendingClaims_.erase(it);
                 else
                     ++it;
@@ -388,6 +389,7 @@ void FrameHost::pollLink() {
             signInSelection_.reset();
         }
     }
+    settleLogin();
     refreshPicker();
     heardMsAgo = s.heardMsAgo;
     view->status = sync::linkStatus(s.phase, host, s.heardMsAgo, s.problem);
@@ -459,8 +461,17 @@ void FrameHost::selectSignInAccount() {
         signIn.activeAccount.reset();
         return;
     }
+    signIn.activeAccount = signInTarget().value_or(std::string{});
+}
+
+// The account whose sign-in page this window opens for the AI that shows: one /login signs in, else the account the
+// AI's session is on.
+std::optional<std::string> FrameHost::signInTarget() const {
+    if (pendingLogin_ && model->tab_count() && mirror.session(model->tab(model->active()).id) == pendingLogin_->first)
+        return pendingLogin_->second;
     const auto* choice = activeChoice();
-    signIn.activeAccount = choice ? choice->name : std::string{};
+    if (!choice) return std::nullopt;
+    return choice->name;
 }
 
 bool FrameHost::activateSignIn() {
@@ -598,6 +609,158 @@ std::optional<AccountPicker> FrameHost::previewAccounts(int direction) const {
     return AccountPicker::open(tab, *session, *roster, direction, view->windowApp.centeredAccounts);
 }
 
+const sync::ServerAI* FrameHost::rosterOf(sync::SessionId id) const {
+    const auto* session = accountState_.find(id);
+    if (!session) return nullptr;
+    const auto& ais = accountState_.ais();
+    const auto it = std::find_if(ais.begin(), ais.end(),
+                                 [&](const auto& f) { return f.name == session->info.aiName; });
+    return it == ais.end() || it->accounts.empty() ? nullptr : &*it;
+}
+
+// A switch of a session to another of its AI's accounts, the server's login switch (src/sync/hub.cpp): a sign-in claim
+// naming the session and the account, with this window's claim token and no request. An account already signed in is
+// switched to at once, with no sign-in; one that needs signing in signs in while the session stays where it is, and the
+// server moves the session once it has. Never SetAccount first: a sign-in that then failed would leave the session on an
+// account with no login.
+std::uint64_t FrameHost::claimAccount(sync::SessionId session, const std::string& account) {
+    if (!link) return 0;
+    sync::Action action;
+    action.kind = sync::ActionKind::SignInClaim;
+    action.account = account;
+    action.session = session;
+    action.request = 0;
+    action.text = signIn.opener.token();
+    return link->send(std::move(action));
+}
+
+// /login of an account for the AI that shows: the account signs in while the AI stays on its own account (claimAccount),
+// and the server switches the AI to it once it has (settleLogin watches). A sign-in that is cancelled or fails leaves
+// everything as it was.
+void FrameHost::startLogin(const std::string& account) {
+    if (!link || phase != sync::LinkPhase::Connected || !model->tab_count()) {
+        view->problem = "Reconnect to the Nexus server to sign in.";
+        return;
+    }
+    const auto session = mirror.session(model->tab(model->active()).id);
+    const auto* current = accountState_.find(session);
+    const auto* roster = activeAccountRoster();
+    if (!current || !roster) return;
+    const auto it = std::find_if(roster->accounts.begin(), roster->accounts.end(),
+                                 [&](const auto& a) { return a.name == account; });
+    if (it == roster->accounts.end() || !pickable(*it)) return;
+    if (!it->needsSignIn) {         // signed in since the dialog opened: the claim switches at once
+        if (current->info.account != account && !accountSelections_.contains(session)) {
+            const auto number = claimAccount(session, account);
+            if (accountState_.nextAction()) accountSelections_[session] = number;
+        }
+        return;
+    }
+    if (sync::usesLocalSignInPage(current->info.harness) && !signIn.loopback) {
+        view->problem = "Open Nexus on the server machine to sign in to " + accountShownAs(*it) + ".";
+        return;
+    }
+    pendingLogin_ = std::make_pair(session, account);
+    signIn.activeAccount = account;
+    view->problem = "Signing in to " + accountShownAs(*it) + "\xE2\x80\xA6 " +
+        std::string(model->tab(model->active()).displayName()) + " stays on its account until then.";
+    const auto* offer = offerFor(account);
+    if (offer && offer->opener == signIn.opener.token()) return;    // this window holds the flow: its page opens
+    if (pendingClaims_.contains(account)) return;
+    pendingClaims_.emplace(account, 0);
+    claimAccount(session, account);
+}
+
+// A /login under way, against the server's latest state: the server moved the session to the account, it is done; its
+// flow gone with the account still not signed in (cancelled, failed, expired), or the link lost, it ends and nothing
+// changes. The window sends nothing more: the server moves the session itself, once no turn is open.
+void FrameHost::settleLogin() {
+    if (!pendingLogin_) return;
+    const auto [id, account] = *pendingLogin_;
+    const auto* roster = rosterOf(id);
+    const auto* session = accountState_.find(id);
+    const sync::AccountChoice* choice = nullptr;
+    if (roster) {
+        const auto it = std::find_if(roster->accounts.begin(), roster->accounts.end(),
+                                     [&](const auto& a) { return a.name == account; });
+        if (it != roster->accounts.end()) choice = &*it;
+    }
+    if (phase != sync::LinkPhase::Connected || !session || !choice) {
+        pendingLogin_.reset();
+        return;
+    }
+    if (session->info.account == account) {
+        pendingLogin_.reset();
+        view->problem.clear();
+        return;
+    }
+    if (choice->needsSignIn && !offerFor(account) && !pendingClaims_.contains(account)) {
+        pendingLogin_.reset();
+        view->problem = "The sign-in to " + accountShownAs(*choice) + " did not finish. The AI stays on its account.";
+    }
+}
+
+void FrameHost::wireAccountMenu() {
+    view->accountMenuRows = [this]() -> std::optional<std::vector<AccountMenuRow>> {
+        if (phase != sync::LinkPhase::Connected || !model->tab_count()) return std::nullopt;
+        const auto* roster = activeAccountRoster();
+        const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id));
+        if (!roster || !session || accountSelections_.contains(session->id)) return std::nullopt;
+        return accountMenuRows(*roster, session->info.account);
+    };
+    view->accountLoginRows = [this]() -> std::vector<AccountMenuRow> {
+        const auto* roster = phase == sync::LinkPhase::Connected ? activeAccountRoster() : nullptr;
+        return roster ? accountLoginRows(*roster) : std::vector<AccountMenuRow>{};
+    };
+    view->switchAccount = [this](const std::string& account) {
+        if (phase != sync::LinkPhase::Connected || !model->tab_count()) return;
+        const auto* roster = activeAccountRoster();
+        const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id));
+        if (!roster || !session || session->info.account == account || accountSelections_.contains(session->id)) return;
+        const auto it = std::find_if(roster->accounts.begin(), roster->accounts.end(),
+                                     [&](const auto& a) { return a.name == account; });
+        if (it == roster->accounts.end() || !pickable(*it) || it->needsSignIn) return;
+        view->accountPicker.reset();
+        const auto number = claimAccount(session->id, account);
+        if (accountState_.nextAction()) accountSelections_[session->id] = number;
+    };
+    view->loginAccount = [this](const std::string& account) { startLogin(account); };
+    view->logoutTarget = [this](std::string& account, std::string& shown, std::string& next) {
+        if (!link || phase != sync::LinkPhase::Connected) {
+            view->problem = "Reconnect to the Nexus server before signing out.";
+            return false;
+        }
+        const auto* choice = activeChoice();
+        if (!choice) {
+            view->problem = "The server has not confirmed a selected account for this conversation.";
+            return false;
+        }
+        account = choice->name;
+        shown = accountShownAs(*choice);
+        const auto* roster = activeAccountRoster();
+        logoutNext_ = roster ? accountAfterLogout(*roster, choice->name) : std::string{};
+        next.clear();
+        if (roster) {
+            for (const auto& a : roster->accounts)
+                if (a.name == logoutNext_) next = accountShownAs(a);
+        }
+        return true;
+    };
+    view->logout = [this] {
+        if (!model->tab_count() || !view->signOut) return false;
+        const auto session = mirror.session(model->tab(model->active()).id);
+        const auto next = logoutNext_;
+        if (!view->signOut()) return false;
+        // The server applies the actions in order: the sign-out leaves the session on its account, asking for its
+        // sign-in; the claim of the next signed-in account then switches it there at once.
+        if (!next.empty()) {
+            const auto number = claimAccount(session, next);
+            if (accountState_.nextAction()) accountSelections_[session] = number;
+        }
+        return true;
+    };
+}
+
 LimitOffer FrameHost::currentLimit() const {
     if (!model->tab_count()) return {};
     const auto& tab = model->tab(model->active());
@@ -658,6 +821,7 @@ void FrameHost::wire() {
         }
     };
     view->previewAccounts = [this](int direction) { return previewAccounts(direction); };
+    wireAccountMenu();
     view->pickerCommand = [this](const std::string& command) { pickerCommand(command); };
     view->chooseAccount = [this](const std::string& account) { chooseAccount(account); };
     view->dismissAI = [this](const Tab& tab) {
@@ -923,9 +1087,9 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
         HitchScope scope(hitch, Phase::SyncApply);
         pollLink();
         if (signIn.activeAccount) {
-            const auto* choice = activeChoice();
-            if (!choice) signIn.activeAccount->clear();
-            else if (*signIn.activeAccount != choice->name) *signIn.activeAccount = choice->name;
+            const auto target = signInTarget();
+            if (!target) signIn.activeAccount->clear();
+            else if (*signIn.activeAccount != *target) *signIn.activeAccount = *target;
         }
         if (view->lockScreen && !signIn.locked) signIn.lock();
         else if (!view->lockScreen) signIn.unlock();
@@ -1124,6 +1288,8 @@ bool FrameHost::event(const PrAppEvent& e) {
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {
         return false;
     }
+    // The account menu under the active AI's tab takes its press, and every pointer event of that gesture.
+    if (routeAccountMenu(*view, ui, e)) return true;
     if (!view->accountPicker && view->choiceKind.empty() &&
             (!view->windowApp.surface.items || view->windowApp.surface.items->empty())) {
         const bool output = view->selection.event(e, view->transcript, view->copy, view->openLink);

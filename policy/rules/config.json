@@ -1,5 +1,20 @@
 {
   "account_default": "first",
+  "account_menu": {
+    "dialog_text_em": 16,
+    "fill": "#2a2a2a",
+    "gap": 4,
+    "hover_fill": "#86c5ff",
+    "hover_opacity": 0.5,
+    "ink": "#ffffff",
+    "mark": "✓",
+    "mark_ink": "#86c5ff",
+    "max_width_em": 22,
+    "padding_x": 14,
+    "radius": 10,
+    "row_height": 44,
+    "tab_move_threshold": 12
+  },
   "account_picker_shortcuts": {
     "ArrowDown": "next",
     "ArrowUp": "previous",

@@ -23,6 +23,7 @@
 #include "pr/layout_tree.h"
 #include "pr/ui.h"
 
+#include "account_menu.h"
 #include "account_picker.h"
 #include "chat_markdown.h"
 #include "chat_selection.h"
@@ -150,12 +151,49 @@ struct TranscriptItems {
     int steps = 0;                              // the text scale the heights were laid out at
 };
 
+// The account menu that drops from the active AI's tab, and the /account, /login and /logout dialogs (account_menu.h,
+// docs/accounts.md "Switching accounts"). The menu's gesture is fed the pointer by routeAccountMenu before the tab strip
+// sees it; the menu draws below the tab's highlight and changes nothing about the tab.
+struct AccountMenuView {
+    enum class Dialog : std::uint8_t { None, Account, Login, Logout };
+    AccountMenuGesture gesture;
+    std::size_t tab = ~std::size_t(0);          // the Tab::id the menu drops from, while it is open
+    std::vector<AccountMenuRow> rows;           // the rows it opened with
+    AccountMenuLayout layout;                   // as the last round laid it out, for the finger's lift
+    MenuBox anchor;                             // the highlight it drops from, as the press found it
+    float textInset = -1;                       // the tab label's left from the highlight's left; -1: unknown
+    PrLayoutNode node = kPrLayoutNodeNone;      // the menu, as the last round built it
+    std::vector<PrLayoutNode> rowNodes;         // its rows
+    std::vector<PrLayoutNode> rowTexts;         // each row's text
+    Dialog dialog = Dialog::None;               // the dialog that shows
+    bool dialogShown = false;                   // a dialog showed last round
+    std::size_t dialogTab = ~std::size_t(0);    // the Tab::id it was opened on
+    std::vector<AccountMenuRow> dialogRows;     // its rows
+    std::string logoutAccount, logoutShown, logoutNext;   // /logout: the account, its email, where the AI goes
+};
+
 struct View {
     std::function<void(const Chirp&)> playChirp;
     // Plays a cue through playChirp, and none while locked (lockScreen): no sound says what an AI did.
     void chirp(const Chirp& cue) const {
         if (!lockScreen && playChirp) playChirp(cue);
     }
+    AccountMenuView accounts;
+    // What the menu shows, decided from the server's state (frame_host.cpp). Unset, there is no menu and the commands
+    // say why.
+    // The active AI's menu rows (its signed-in accounts and the sign-in row); none while it has no accounts, the link is
+    // down, or a switch is on its way.
+    std::function<std::optional<std::vector<AccountMenuRow>>()> accountMenuRows;
+    std::function<std::vector<AccountMenuRow>()> accountLoginRows;  // the active AI's accounts that need signing in
+    std::function<void(const std::string&)> switchAccount;          // the active AI's session goes to this account
+    std::function<void(const std::string&)> loginAccount;           // sign this account in; switch once it is
+    // /logout: the active AI's current account, its email, and where the AI goes after (empty: the sign-in prompt).
+    std::function<bool(std::string&, std::string&, std::string&)> logoutTarget;
+    std::function<bool()> logout;                                   // signs out and moves the AI, as the dialog says
+    // The node a press opens the menu from this round: the active AI's tab (its highlight), or on the iPhone the AI's
+    // name at the top of its page. kPrLayoutNodeNone: none.
+    PrLayoutNode menuAnchor = kPrLayoutNodeNone;
+    PrLayoutNode menuAnchorText = kPrLayoutNodeNone;                // the anchor's label, for the rows' text to line up
     struct GlyphTrail {
         struct Range { size_t start, end; double birth; };
         size_t tab = SIZE_MAX, entry = SIZE_MAX;
@@ -364,6 +402,13 @@ bool windowWantsFrame(const View& view);
 // there is none) with no prompt. A terminal tab shows its terminal in place of the transcript and the prompt; terminals
 // that do not show are serviced, and one whose shell ended closes.
 bool routePromptPointer(View& view, PrUi* ui, const PrAppEvent& event);
+// The account menu's gesture (account_menu.h), ahead of the tree: true when the event is the menu's. A press on the
+// active AI's tab opens the menu; a sideways drag past the threshold becomes the tab's move, given to the tree as a press
+// at the origin and the movement; a lift on a row chooses it.
+bool routeAccountMenu(View& view, PrUi* ui, const PrAppEvent& event);
+// Opens a dialog on the active AI's tab: Account (/account), Login (/login) or Logout (/logout). False, with
+// view.problem saying why, when there is nothing to show.
+bool openAccountDialog(View& view, AccountMenuView::Dialog dialog);
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent);
 
 } // namespace nexus

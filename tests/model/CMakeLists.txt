@@ -63,11 +63,16 @@ if(NEXUS_SERVER_PARTS)
     target_link_libraries(strip_walk PRIVATE nexus_sync)
     target_compile_options(strip_walk PRIVATE ${warnings})
 
+    # The account menu's gesture (src/account_menu.h), for AccountMenuTrace.tla.
+    add_executable(account_menu_walk account_menu_walk.cpp)
+    target_link_libraries(account_menu_walk PRIVATE nexus_sync)
+    target_compile_options(account_menu_walk PRIVATE ${warnings})
+
     add_executable(watch_walk watch_walk.cpp)
     target_link_libraries(watch_walk PRIVATE nexus_terminal_watch)
     target_compile_options(watch_walk PRIVATE ${warnings})
 
-    add_dependencies(model_checks trace_walk glide_walk overlay_walk lock_walk strip_walk watch_walk)
+    add_dependencies(model_checks trace_walk glide_walk overlay_walk lock_walk strip_walk watch_walk account_menu_walk)
 
     # The walk checks that the strip's dashboards are the server's list after each sync_dashboards: shown failing on
     # a model whose sync never removes one (trace_walk --faulty-sync-keep). It must exit with that check's line; a
@@ -130,7 +135,7 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options SERVICETRACE PICKERTRACE PLUGINTRACE BOARDCHURN CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
+    set(options SERVICETRACE PICKERTRACE PLUGINTRACE BOARDCHURN CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK GLIDEWALK MENUWALK SUPWALK PASSWALK ACCWALK SECWALK
         SIGNWALK RECONNECTWALK RELAYWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
     cmake_parse_arguments(T "${options}"
         "CREDITMODE;PROPERTY;SEED;STEPS;AIS;BOARDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
@@ -227,6 +232,8 @@ function(tlc_test name module cfg expect)
              -DAIS=${T_AIS})
     elseif(T_PASSWALK)
         list(APPEND defs -DPASSWALK=$<TARGET_FILE:pass_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_MENUWALK)
+        list(APPEND defs -DMENUWALK=$<TARGET_FILE:account_menu_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_GLIDEWALK)
         list(APPEND defs -DGLIDEWALK=$<TARGET_FILE:glide_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_LINKWALK)
@@ -492,6 +499,27 @@ foreach(seed 1 2 3 4 5)
 endforeach()
 tlc_test(tlc_glide_trace_faulty_keyup_rejected GlideTrace GlideTrace.cfg deadlock SEED 1 STEPS 1000 GLIDEWALK
          FAULTY keyup)
+
+# The account menu's one gesture (src/account_menu.h): AccountMenu.tla on two rows, every property.
+tlc_test(tlc_account_menu_spec AccountMenu AccountMenu.cfg pass)
+# Its reversed witnesses: a lift that leaves the menu open, a sideways move that keeps it, a press on any tab that
+# opens it, a slide across a row after the press went down that moves the tab.
+tlc_test(tlc_account_menu_witness_lift_keeps_open WAccountMenuLiftKeepsOpen WAccountMenuLiftKeepsOpen.cfg invariant
+         PROPERTY LiftCloses)
+tlc_test(tlc_account_menu_witness_sideways_keeps WAccountMenuSidewaysKeeps WAccountMenuSidewaysKeeps.cfg invariant
+         PROPERTY SidewaysIsTheTabsMove)
+tlc_test(tlc_account_menu_witness_any_tab_opens WAccountMenuAnyTabOpens WAccountMenuAnyTabOpens.cfg invariant
+         PROPERTY OpensOnlyOnTheActiveTab)
+tlc_test(tlc_account_menu_witness_decided_moves WAccountMenuDecidedMoves WAccountMenuDecidedMoves.cfg invariant
+         PROPERTY DecidedStaysTheMenu)
+# Its code traces, each a behaviour of AccountMenu.tla; and a gesture that keeps the menu on a sideways move,
+# rejected (no step of the spec reaches its next state: a deadlock).
+foreach(seed 1 2 3 4 5)
+    tlc_test(tlc_account_menu_trace_seed_${seed} AccountMenuTrace AccountMenuTrace.cfg pass SEED ${seed} STEPS 1000
+             MENUWALK)
+endforeach()
+tlc_test(tlc_account_menu_trace_faulty_sideways_rejected AccountMenuTrace AccountMenuTrace.cfg deadlock SEED 1
+         STEPS 1000 MENUWALK FAULTY sideways)
 
 # The overlay (Overlay.tla): the whole state space, a witness per property, code traces, and faulty traces rejected.
 tlc_test(tlc_window_plugin_groups_trace PluginTabTrace PluginTabTrace.cfg pass PLUGINTRACE)
