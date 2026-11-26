@@ -60,7 +60,7 @@ the server sends, and the window draws it as it shows it (`--tab N` picks the ta
 
 ```
 build/tests/mock/nexus-mock state --out /tmp/nexus-mock/state
-build/nexus.app/Contents/MacOS/nexus --screenshot ada.png --state /tmp/nexus-mock/state --tab 2
+build/nexus.app/Contents/MacOS/nexus --screenshot ada.png --state /tmp/nexus-mock/state --tab 1
 ```
 
 Only the Mac window's way is on `main` today. Each other client reaches the server through the same bootstrap

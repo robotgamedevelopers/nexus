@@ -51,7 +51,7 @@
 // --state FILE draws the screenshot's AI tabs from a server's state file (sync/sessions.h stateFile; the AIs
 // layer's functional test writes them from the fake driver: tests/server/drivers_functional.cpp, case window), as the
 // window shows it once the server is heard; --lost draws it as the window does once it has lost the server. It draws
-// from the file alone: no home, no config, no saved tab order, and no sprint board; the AI tabs are the state's
+// from the file alone: no home, no config, no saved tab order, and no dashboard page; the AI tabs are the state's
 // AIs (sync/client.h aisOf: its list, or the AIs of its sessions in order of session id).
 //
 // Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop] [--locked]
@@ -1023,7 +1023,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     // A screenshot draws a state file or the demo, never the person's own window: that would be the window without the
-    // lock (the sprint board, the AIs' tabs, the terminals).
+    // lock (the dashboards, the AIs' tabs, the terminals).
     if (shot != nullptr && state == nullptr && !demo && !demoTerminal) {
         std::fprintf(stderr, "nexus: --screenshot draws a state file (--state) or the demo (--demo, --demo-terminal) "
             "only, never the live window\n");
