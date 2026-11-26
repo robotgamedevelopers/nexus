@@ -1,5 +1,6 @@
 //! Both native hosts call the same ABI. Its only values are a bundled Starlark
 //! module, an event name, and JSON. A module can load only sources in its bundle.
+//! Built by cmake/policy.cmake, which runs cargo without the job's CC and CFLAGS.
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
