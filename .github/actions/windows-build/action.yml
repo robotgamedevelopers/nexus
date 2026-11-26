@@ -1,9 +1,18 @@
 # The native Windows build (ci.yml's windows job says what it holds) on a GitHub-hosted windows runner: MSVC x64 at
-# /W4, warnings as errors. Restores the newest cache for Prax's pin (C:\nexus-ci: the build directory, Prax's checkout
-# at its pin, Prax's downloads, cargo's target directory, and the pinned Rust toolchain), then configures where the
-# build directory has no CMakeCache.txt and builds; MSBuild rebuilds only what is newer than the cache (the checkout's
-# own files). Used by ci.yml (require: true, a missing cache fails at once) and cache-warm.yml (which saves it).
-# Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one by itself.
+# /W4, warnings as errors. Restores the newest cache for Prax's pin (D:\nexus-ci: the build directory, Prax's checkout
+# at its pin, Prax's downloads, cargo's target directory, the pinned Rust toolchain (RUSTUP_HOME) and cargo's registry
+# (CARGO_HOME)), then configures where the build directory has no CMakeCache.txt and builds; MSBuild rebuilds only
+# what is newer than the cache (the checkout's own files). Used by ci.yml (require: true, a missing cache fails at
+# once) and cache-warm.yml (which saves it). Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh
+# does not stop on one by itself.
+#
+# Everything is on D:, the runner's local disk, and nothing on C:. The same 1.9 GB, 15,800-file cache unpacked in
+# 5.2 to 5.4 s onto D: and in 16 to 35 s onto C: (probe run 45834360990, two rounds each; Defender's real-time scan is
+# already off on these images); restoring it onto C: took 40 s of the windows job's 2 minutes on run 45829821609.
+#
+# Until cache-warm on main has saved a cache on D: (v3), a per-commit job restores main's older cache on C: (v2)
+# instead, with the paths it was built at, so no job fails while main changes over; the first cache-warm on main after
+# this change saves v3 and deletes v2 (.github/cache-prune.sh), and from then on only v3 is restored.
 name: windows-build
 description: Restore caches, configure and build nexus's native Windows part on a GitHub-hosted runner
 inputs:
@@ -23,11 +32,21 @@ runs:
         $pin = [regex]::Match((Get-Content -Raw CMakeLists.txt), 'codeload\.github\.com/pdoane/prax/tar\.gz/([0-9a-f]{40})').Groups[1].Value
         if (-not $pin) { throw "no Prax pin found in CMakeLists.txt (the Prax archive URL)" }
         "PRAX_PIN=$pin" >> $env:GITHUB_ENV
-        "prefix=windows-release-v2-$pin-" >> $env:GITHUB_OUTPUT
-        "older=windows-release-v1-$pin-" >> $env:GITHUB_OUTPUT
-        "key=windows-release-v2-$pin-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
+        "prefix=windows-release-v3-$pin-" >> $env:GITHUB_OUTPUT
+        "legacy=windows-release-v2-$pin-" >> $env:GITHUB_OUTPUT
+        "key=windows-release-v3-$pin-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
     - name: Restore the newest cache for this pin
       id: restore
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: D:\nexus-ci
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+    # Main's cache on C: (v2), only while main has none on D: (the header says why); never for cache-warm, which
+    # builds on D: from nothing instead.
+    - name: Restore main's older cache on C (only while there is none on D)
+      id: restore-legacy
+      if: steps.restore.outputs.cache-matched-key == '' && inputs.require == 'true'
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: |
@@ -35,25 +54,46 @@ runs:
           ~\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc
           ~\.cargo\registry\index
           ~\.cargo\registry\cache
+        key: ${{ steps.key.outputs.legacy }}${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ${{ steps.key.outputs.legacy }}
+    # cache-warm saves a new cache on every push to main and then deletes the one before it (.github/cache-prune.sh).
+    # A job that matched the older one just before that delete fails its download ("The specified blob does not
+    # exist", PR #133's build-macos, run 45830725169), and restore reports nothing restored. One more lookup then finds
+    # the new one, which is saved before the old one is deleted; where there is truly none, it misses again in about a
+    # second and the next step fails by name.
+    - name: Restore again, if the cache was replaced while it downloaded
+      id: restore-again
+      if: steps.restore.outputs.cache-matched-key == '' && steps.restore-legacy.outputs.cache-matched-key == ''
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: D:\nexus-ci
         key: ${{ steps.key.outputs.key }}
-        # cache-warm may also start from a cache made before the source manifest (v1); a per-commit job may not.
-        restore-keys: |
-          ${{ steps.key.outputs.prefix }}
-          ${{ inputs.require != 'true' && steps.key.outputs.older || steps.key.outputs.prefix }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
     - name: Environment and the Rust toolchain
       shell: pwsh
       env:
         REQUIRE: ${{ inputs.require }}
-        MATCHED: ${{ steps.restore.outputs.cache-matched-key }}
+        MATCHED: ${{ steps.restore.outputs.cache-matched-key || steps.restore-again.outputs.cache-matched-key }}
+        LEGACY: ${{ steps.restore-legacy.outputs.cache-matched-key }}
         PREFIX: ${{ steps.key.outputs.prefix }}
       run: |
         $ErrorActionPreference = 'Stop'
-        if (-not $env:MATCHED -and $env:REQUIRE -eq 'true') {
+        if (-not $env:MATCHED -and -not $env:LEGACY -and $env:REQUIRE -eq 'true') {
           Write-Output "::error::no cache $($env:PREFIX)* on main for Prax's pin: run the cache-warm workflow on main (gh workflow run cache-warm.yml --ref main), then re-run this job; a cold Prax build does not fit the 2 minutes"
           exit 1
         }
-        Write-Output "restored: $(if ($env:MATCHED) { $env:MATCHED } else { 'nothing' })"
-        $caches = 'C:\nexus-ci'
+        if ($env:LEGACY) {
+          Write-Output "restored main's older cache on C: $($env:LEGACY)"
+          $caches = 'C:\nexus-ci'
+          $rustupHome = "$HOME\.rustup"
+        } else {
+          Write-Output "restored: $(if ($env:MATCHED) { $env:MATCHED } else { 'nothing' })"
+          $caches = 'D:\nexus-ci'
+          $rustupHome = "$caches\rustup"
+          "RUSTUP_HOME=$rustupHome" >> $env:GITHUB_ENV
+          "CARGO_HOME=$caches\cargo" >> $env:GITHUB_ENV
+          $env:RUSTUP_HOME = $rustupHome
+        }
         New-Item -ItemType Directory -Force -Path "$caches\build-x64", "$caches\prax-downloads", "$caches\cargo-target" | Out-Null
         "NEXUS_CACHES=$caches" >> $env:GITHUB_ENV
         "NEXUS_BUILD=$caches\build-x64" >> $env:GITHUB_ENV
@@ -62,22 +102,23 @@ runs:
         "JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
         "TEST_JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
         $toolchain = '1.98.1-x86_64-pc-windows-msvc'
-        if (-not (Test-Path "$HOME\.rustup\toolchains\$toolchain\bin\cargo.exe")) {
-          rustup toolchain install $toolchain --profile minimal
+        if (-not (Test-Path "$rustupHome\toolchains\$toolchain\bin\cargo.exe")) {
+          rustup toolchain install $toolchain --profile minimal --no-self-update
           if ($LASTEXITCODE -ne 0) { throw "Cannot prepare Rust $toolchain" }
         }
         "RUSTUP_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
     # What the cache was built from keeps an old time, so MSBuild rebuilds only what changed since
     # (.github/source-times.sh; Git's bash).
     - name: Source times by content
-      if: steps.restore.outputs.cache-matched-key != ''
+      if: steps.restore.outputs.cache-matched-key != '' || steps.restore-again.outputs.cache-matched-key != '' || steps.restore-legacy.outputs.cache-matched-key != ''
       shell: bash
       env:
         REQUIRE: ${{ inputs.require }}
       run: |
         set -euo pipefail
-        if [ "$REQUIRE" = true ] || [ -f C:/nexus-ci/sources.txt ]; then
-          bash .github/source-times.sh apply C:/nexus-ci/sources.txt
+        manifest="${NEXUS_CACHES//\\//}/sources.txt"
+        if [ "$REQUIRE" = true ] || [ -f "$manifest" ]; then
+          bash .github/source-times.sh apply "$manifest"
         fi
     # Prax at the commit CMakeLists.txt pins, at depth 1, into a directory of its own, then renamed into place; and
     # Prax's Slang compiler into Prax's download cache, checked against Prax's pinned sha256.

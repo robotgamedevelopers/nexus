@@ -10,7 +10,8 @@
 # cache is keyed by its pins alone, so it is made daily and by hand, not on every push.
 #
 # Each build cache is about 0.5 GB and the repository's caches share one quota, so after saving, a job deletes the
-# older caches of its own name (the one it restored and any before it); a pull request restores the newest.
+# older caches of its own name (the one it restored and any before it); a pull request restores the newest, and looks
+# it up once more when the one it matched is deleted while it downloads (hosted-caches, windows-build).
 
 name: cache-warm
 
@@ -228,15 +229,18 @@ jobs:
           require: "false"
       - name: Record the sources the build was made from
         shell: bash
-        run: bash .github/source-times.sh record C:/nexus-ci/sources.txt
+        run: bash .github/source-times.sh record D:/nexus-ci/sources.txt
+      # The sizes are printed for the record.
+      - name: Sizes
+        shell: bash
+        run: |
+          set -euo pipefail
+          du -sh D:/nexus-ci/*
+          echo "$(find D:/nexus-ci -type f | wc -l) files in D:/nexus-ci"
       - name: Save
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
-          path: |
-            C:\nexus-ci
-            ~\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc
-            ~\.cargo\registry\index
-            ~\.cargo\registry\cache
+          path: D:\nexus-ci
           key: ${{ steps.build.outputs.key }}
       - name: Delete this name's older caches
         shell: bash
