@@ -1,0 +1,8 @@
+# Planted: called from a per-commit workflow, on a hosted Windows runner.
+name: called
+on:
+  workflow_call:
+jobs:
+  win:
+    runs-on: windows-2025
+    steps: [{run: "true"}]

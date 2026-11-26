@@ -1,7 +1,10 @@
-# Every job here runs on GitHub-hosted runners, for every pull request (forks included) and every push to main; no job
-# needs a secret. The fleet's own runners run only the nightly (.github/workflows/nightly.yml), from main, in a runner
-# group that admits nothing else: what needs the fleet by nature runs there (the TLC shards, WSL2 on captain: the
-# wsl2 token wall, wsl2-functional and the WSL2 terminal test).
+# Every job here runs on the fleet's own runners, never GitHub-hosted ones (Glenn, 2026-10-18: "all CI runs on our
+# fleet's self-hosted runners"; restored for this workflow 2026-11-26: "Yes, fleet runners"), for every pull request and
+# every push to main; no job needs a secret. .github/hosted-runners-check.sh refuses a GitHub-hosted runs-on in this
+# workflow and in every workflow and action it uses. The runners are nexus's own (registered to this repository only,
+# label nexus-pr, from the fleet's machine records): Linux on amd-3 and intel, macOS on the macbook, Windows on captain.
+# A pull request from a fork runs only after a maintainer approves it (the repository's Actions setting), since it runs
+# on our machines. The nightly (.github/workflows/nightly.yml) runs from main on its own runner group.
 #
 # The happy path (docs/ci-tiers.md). A pull request builds each configuration once and runs its tier_pr tests: the fast
 # unit tests and one end-to-end happy path per feature (tests/tiers.txt). Every other test is tier_nightly and runs in
@@ -15,19 +18,12 @@
 #
 # Warnings are errors: CMakeLists.txt sets the flags, so these jobs use the plain build commands.
 #
-# Caches. A hosted runner starts empty, so each build job restores the newest cache of its own name for Prax's pin
-# (.github/actions/hosted-caches, windows-build): its build directory (Prax is then not recompiled: the checkout makes
-# only nexus's own files newer) and ccache (nexus's own files hit; CCACHE_BASEDIR keeps paths relative), the linker's
-# ThinLTO cache, Prax's downloads (PR_DOWNLOAD_DIR), cargo's target directory for the Starlark policy crate
-# (NEXUS_CARGO_TARGET_DIR, cmake/policy.cmake) and cargo's registry. Those caches are made only by
-# .github/workflows/cache-warm.yml, on main (daily, and by hand after a Prax or Tailscale pin changes), with the same
-# build steps (.github/actions/nexus-build) and no per-commit limit; jobs here only restore. A job that finds no cache
-# for its pin fails at once, saying to run cache-warm: a cold Prax build never runs inside the 2 minutes.
-#
-# Each configuration is built once per run (build-macos, build-linux), and its build tree is shared
-# with the jobs that run its tests (.github/actions/build-share, build-fetch): those download it and only run tests.
-# Every build job here builds tier_pr_build, the targets the tier_pr tests run and nothing else (cmake/tiers.cmake), so
-# a change that relinks every program relinks only those; the nightly and cache-warm build everything.
+# Build directories. Each runner keeps its own build directory per configuration beside its checkout, never inside it
+# (.github/actions/fleet-build, windows-build): nothing is downloaded or restored, and a build compiles only what changed
+# since the last job on that runner; ccache is shared by the runners of a machine, so a runner whose directory is new
+# compiles little. A cold directory (a new runner, a Prax pin change) is warmed by .github/workflows/cache-warm.yml,
+# with no per-commit limit. Each configuration's build and its tests run in one job, on the runner that holds the
+# build directory.
 
 name: ci
 
@@ -45,125 +41,103 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # The build compiles Metal shaders (Prax) and needs Xcode's Metal toolchain: the newest macOS image (macos-26, arm64).
-  # One build, shared: build-macos builds Debug (no LTO: Prax turns ThinLTO on for Release only, and its link alone took
-  # about 36 s here; asserts on) from the cache and uploads the build tree (.github/actions/build-share); tests-macos
-  # downloads it and runs the tier_pr tests. The Release build with LTO, the frame budgets and every tier_nightly test
-  # run in the nightly on the fleet Mac.
-  build-macos:
-    runs-on: macos-26
+  # No workflow or action here names a GitHub-hosted runner (ubuntu-*, macos-*, windows-*).
+  runners:
+    runs-on: [self-hosted, nexus-pr, Linux, X64]
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: The check refuses a GitHub-hosted runner, as planted
+        run: bash .github/hosted-runners-check.sh --selftest
+      - name: Only fleet runners
+        run: bash .github/hosted-runners-check.sh
+
+  # macOS Debug with the link (no LTO: Prax turns ThinLTO on for Release only; asserts on), built in the runner's own
+  # build directory on the fleet Mac (Xcode, with its Metal toolchain for Prax's shaders), then the tier_pr tests. The
+  # Release build with LTO, the frame budgets and every tier_nightly test run in the nightly.
+  macos:
+    runs-on: [self-hosted, nexus-pr, macOS, ARM64, xcode]
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Tools and caches
-        uses: ./.github/actions/hosted-caches
+      - name: Build directory and caches
+        uses: ./.github/actions/fleet-build
         with:
           name: mac-debug
-          brew: ninja protobuf
-          brew-keep: protobuf abseil
       - name: Configure and build
         uses: ./.github/actions/nexus-build
         with:
           config: mac-debug
+          dir: ${{ env.NEXUS_BUILD }}
           targets: tier_pr_build
-      - name: Share the build tree
-        uses: ./.github/actions/build-share
-        with:
-          name: build-macos
-          libraries: protobuf abseil
-
-  tests-macos:
-    needs: build-macos
-    runs-on: macos-26
-    timeout-minutes: 2
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-          submodules: recursive
-      # The build tree, and Homebrew's protobuf and abseil that the link's programs load at run time, as build-macos
-      # installed and linked them.
-      - name: The build tree
-        uses: ./.github/actions/build-fetch
-        with:
-          name: build-macos
-      # The link's happy paths reach this machine over `ssh localhost` without a password prompt
-      # (tests/link/CMakeLists.txt): a key made here, for this job only, authorized for the runner's own login.
-      - name: Passwordless ssh to this machine
+      # The link's happy paths reach this machine over `ssh localhost` (tests/link/CMakeLists.txt), which the fleet Mac
+      # allows its runner's login; this job writes nothing to that login's ~/.ssh.
+      - name: ssh localhost
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          if [ ! -f ~/.ssh/id_ed25519 ]; then ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519; fi
-          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
-          chmod 600 ~/.ssh/authorized_keys
-          if ! nc -z -G 2 127.0.0.1 22; then
-            sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist
+          if ! ssh -o BatchMode=yes -o ConnectTimeout=5 localhost true; then
+            echo "::error::ssh localhost does not work for $(id -un) on $(hostname -s); the link's tests need it (the fleet Mac's Remote Login, set at its console)"
+            exit 1
           fi
-          ssh-keyscan -T 5 localhost 127.0.0.1 >> ~/.ssh/known_hosts
-          ssh -o BatchMode=yes localhost true
           echo "ssh localhost works for $(id -un)"
       # The fast unit tests and each feature's happy path (tests/tiers.txt).
       - name: The tier_pr tests
-        run: bash .github/ctest.sh --test-dir build -L '^tier_pr$' -j "$TEST_JOBS" --output-on-failure
+        run: bash .github/ctest.sh --test-dir "$NEXUS_BUILD" -L '^tier_pr$' -j "$TEST_JOBS" --output-on-failure
 
   # The Apple Watch app (watch/, docs/watch.md): its core alone (cmake -S watch: no Prax, no link) with its unit tests,
-  # then the watchOS app built warning-free for the simulator and for a watch (arm64_32, signed ad hoc). Swift needs
-  # Ninja and Xcode's watchOS SDKs. Per-PR CI runs on GitHub's hosted macOS (macos-26, with Xcode), never the studio:
-  # the studio is Glenn's screen ("GitHub per-PR, fleet nightly"). Its models run nightly (nightly.yml, shard
+  # then the watchOS app built warning-free for the simulator and for a watch (arm64_32, signed ad hoc), on the fleet Mac
+  # (Xcode's watchOS SDKs, Ninja), each in the runner's own build directory. Its models run nightly (nightly.yml, shard
   # watch-app); its speech test is nightly.yml's watch-speech job.
   watch:
-    runs-on: macos-26
+    runs-on: [self-hosted, nexus-pr, macOS, ARM64, xcode]
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Ninja and the watchOS SDKs
+      - name: Build directory
+        uses: ./.github/actions/fleet-build
+        with:
+          name: watch
+          rust: "false"
+      - name: The watchOS SDKs
         shell: bash
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: 1
-          HOMEBREW_NO_INSTALL_CLEANUP: 1
         run: |
           set -euo pipefail
-          if ! command -v ninja >/dev/null; then
-            brew install ninja
-          fi
-          if ! command -v ninja >/dev/null; then
-            echo "::error::no ninja on $(hostname -s)'s runner PATH after brew install ninja"
-            exit 1
-          fi
           for sdk in watchos watchsimulator; do
             if ! xcrun --sdk "$sdk" --show-sdk-path >/dev/null; then
               echo "::error::no $sdk SDK in $(xcode-select -p) on $(hostname -s)"
               exit 1
             fi
           done
-          echo "JOBS=$(sh .github/job-cores.sh)" >> "$GITHUB_ENV"
       - name: The core and its unit tests
         run: |
-          cmake -S watch -B build-watch -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-watch --parallel "$JOBS" --target watch_core_test
-          bash .github/ctest.sh --test-dir build-watch -L unit --output-on-failure
+          cmake -S watch -B "$NEXUS_BUILD/core" -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$NEXUS_BUILD/core" --parallel "$JOBS" --target watch_core_test
+          bash .github/ctest.sh --test-dir "$NEXUS_BUILD/core" -L unit --output-on-failure
       - name: The app, for the simulator
         run: |
-          cmake -S . -B build-watch-sim -G Ninja -DCMAKE_SYSTEM_NAME=watchOS -DCMAKE_OSX_SYSROOT=watchsimulator \
+          cmake -S . -B "$NEXUS_BUILD/sim" -G Ninja -DCMAKE_SYSTEM_NAME=watchOS -DCMAKE_OSX_SYSROOT=watchsimulator \
             -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-watch-sim --parallel "$JOBS"
-          cmake -DAPP=build-watch-sim/watch/nexus.app/nexus -P watch/tests/no_test_options.cmake
+          cmake --build "$NEXUS_BUILD/sim" --parallel "$JOBS"
+          cmake "-DAPP=$NEXUS_BUILD/sim/watch/nexus.app/nexus" -P watch/tests/no_test_options.cmake
       - name: The app, for a watch
         run: |
-          cmake -S . -B build-watch-device -G Ninja -DCMAKE_SYSTEM_NAME=watchOS -DCMAKE_OSX_SYSROOT=watchos \
+          cmake -S . -B "$NEXUS_BUILD/device" -G Ninja -DCMAKE_SYSTEM_NAME=watchOS -DCMAKE_OSX_SYSROOT=watchos \
             -DCMAKE_OSX_ARCHITECTURES=arm64_32 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-watch-device --parallel "$JOBS"
-          cmake -DAPP=build-watch-device/watch/nexus.app/nexus -P watch/tests/no_test_options.cmake
+          cmake --build "$NEXUS_BUILD/device" --parallel "$JOBS"
+          cmake "-DAPP=$NEXUS_BUILD/device/watch/nexus.app/nexus" -P watch/tests/no_test_options.cmake
+      - name: Record the sources the builds were made from
+        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
 
   server-policy:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, nexus-pr, Linux, X64]
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -184,14 +158,14 @@ jobs:
           "$runtime/bin/python" .github/python-tests.py --tier pr --start policy
           "$runtime/bin/python" .github/python-tests.py --tier pr --start drivers/rpc
 
-  # The Claude driver (drivers/claude), on hosted Ubuntu: compiled under the strict tsconfig, linted with warnings as
+  # The Claude driver (drivers/claude), on a fleet Linux runner: compiled under the strict tsconfig, linted with warnings as
   # errors, and its unit tests (a scripted query: no process, clock or network). The protocol's conformance cases run
   # against it as a process (ctest -L claude_driver) in the nightly, on Linux and macOS, as do its token walls. Node
   # comes from the runner's machine, never installed here; npm ci takes the pinned packages from package-lock.json,
   # without the optional per-platform Claude executable the tests never run. The live test (npm run test:live) spends a
   # subscription and never runs here.
   claude-driver:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, nexus-pr, Linux, X64]
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -222,13 +196,13 @@ jobs:
 
   # Linux: everything but the window, which Prax cannot run here yet (no lib/app backend for Linux, no system fonts in
   # lib/font; CMakeLists.txt NEXUS_WINDOW): the window's logic over Prax's lib/process (on a workaround for its link
-  # error at this pin, CMakeLists.txt "Prax's lib/process on Linux"), the link and nexus-server over mosh and Ubuntu's
-  # protobuf, and their tests. The sandbox's bubblewrap and socat are left to the nightly's claude-driver-wall-linux,
-  # which builds and runs them (NEXUS_SANDBOX_TOOLS=OFF here, .github/actions/nexus-build linux-release), so these
-  # jobs' 2 minutes go to nexus's own code. With clang and lld, warnings as errors as on macOS.
-  # One build, shared: build-linux builds and uploads the build tree; tests-linux downloads it.
-  build-linux:
-    runs-on: ubuntu-24.04
+  # error at this pin, CMakeLists.txt "Prax's lib/process on Linux"), the link and nexus-server over mosh and the
+  # system's protobuf, and their tests. The sandbox's bubblewrap and socat are left to the nightly's
+  # claude-driver-wall-linux, which builds and runs them (NEXUS_SANDBOX_TOOLS=OFF here, .github/actions/nexus-build
+  # linux-release), so this job's 2 minutes go to nexus's own code. With clang and lld, warnings as errors as on macOS.
+  # Built in the runner's own build directory, then tested there.
+  linux:
+    runs-on: [self-hosted, nexus-pr, Linux, X64]
     timeout-minutes: 2
     env:
       CC: clang
@@ -238,82 +212,54 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Tools and caches
-        uses: ./.github/actions/hosted-caches
+      # What the build and the link's programs need from the machine (protobuf and protobuf-lite, which mosh links,
+      # OpenSSL, zlib, lld, and the ssh server the link's tests start), from the fleet's runner packages; this job
+      # installs nothing.
+      - name: The machine's packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          need=()
+          for package in libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev lld clang openssh-server openssh-client; do
+            dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed' || need+=("$package")
+          done
+          if [ ${#need[@]} -gt 0 ]; then
+            echo "::error::$(hostname -s) lacks ${need[*]}: they are fleet runner packages (nova-fleet runner-packages)"
+            exit 1
+          fi
+      - name: Build directory and caches
+        uses: ./.github/actions/fleet-build
         with:
           name: linux-release
-          apt: libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev
       - name: Configure and build
         uses: ./.github/actions/nexus-build
         with:
           config: linux-release
+          dir: ${{ env.NEXUS_BUILD }}
           targets: tier_pr_build
-      - name: Share the build tree
-        uses: ./.github/actions/build-share
-        with:
-          name: build-linux
       # A configure with no options at all takes the defaults that hold here (no window; the window's logic, the link
       # and the sandbox's programs), so a plain `cmake -S . -B build` on Linux builds nexus-server; this proves it.
       - name: Configure with the defaults
         shell: bash
         run: |
           set -euo pipefail
-          cmake -S . -B build-plain
+          plain="$RUNNER_WORKSPACE/fleet-build/linux-plain"
+          rm -rf "$plain"
+          cmake -S . -B "$plain" > "$RUNNER_TEMP/configure-plain.log" || { cat "$RUNNER_TEMP/configure-plain.log"; exit 1; }
           for expect in NEXUS_WINDOW=OFF NEXUS_WINDOW_LOGIC=ON NEXUS_LINK=ON NEXUS_SANDBOX_TOOLS=ON; do
             option=${expect%%=*}
-            value=$(sed -n "s/^$option:BOOL=//p" build-plain/CMakeCache.txt)
+            value=$(sed -n "s/^$option:BOOL=//p" "$plain/CMakeCache.txt")
             if [ "$value" != "${expect#*=}" ]; then
               echo "::error::a plain configure on Linux left $option at '$value', not ${expect#*=}: its default in CMakeLists.txt is wrong"
               exit 1
             fi
           done
-
-  tests-linux:
-    needs: build-linux
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-          submodules: recursive
-      - name: The build tree
-        uses: ./.github/actions/build-fetch
-        with:
-          name: build-linux
-      # What the link's programs load at run time (Ubuntu's protobuf and protobuf-lite, which mosh links) and the ssh
-      # server the link's happy paths reach, installed only where the image lacks them.
-      - name: The link's run-time packages
-        shell: bash
-        run: |
-          set -euo pipefail
-          need=()
-          for package in libprotobuf32t64 libprotobuf-lite32t64 openssh-server; do
-            dpkg -s "$package" >/dev/null 2>&1 || need+=("$package")
-          done
-          if [ ${#need[@]} -gt 0 ]; then
-            echo "installing ${need[*]}"
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq --no-install-recommends "${need[@]}"
-          fi
-      # The link's happy paths reach this machine over `ssh localhost` without a password prompt
-      # (tests/link/CMakeLists.txt): a key made here, for this job only, authorized for the runner's own login.
-      - name: Passwordless ssh to this machine
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          if [ ! -f ~/.ssh/id_ed25519 ]; then ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519; fi
-          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
-          chmod 600 ~/.ssh/authorized_keys
-          chmod go-w ~
-          if ! nc -z -w 2 127.0.0.1 22; then
-            sudo systemctl start ssh
-          fi
-          ssh-keyscan -T 5 localhost 127.0.0.1 >> ~/.ssh/known_hosts
-          ssh -o BatchMode=yes localhost true
-          echo "ssh localhost works for $(id -un)"
+          echo "a plain configure takes the Linux defaults"
+      # The link's happy paths reach this machine over `ssh localhost` (tests/link/CMakeLists.txt). A fleet Linux
+      # runner's login has no ssh login of its own here, so the job starts an sshd of its own on 127.0.0.1 and the tests
+      # reach it through NEXUS_E2E_SSH (.github/ssh-localhost.sh says how); nothing outside the job's directory changes.
+      - name: ssh localhost, through this job's own sshd
+        run: bash .github/ssh-localhost.sh "$RUNNER_TEMP/ssh-localhost"
       # The ctest wrapper every CI ctest call goes through fails a skipped or disabled test and a selection of none:
       # its planted cases (tests/ci/ctest-skips) say so.
       - name: The ctest wrapper refuses a skipped test and an empty selection
@@ -322,10 +268,10 @@ jobs:
       # planted cases (tests/ci/tiers) say so.
       - name: The tiers, as planted
         run: bash .github/tiers-selftest.sh
-      # The fast unit tests and each feature's happy path that builds here (tests/tiers.txt): on Linux now the link's
-      # too (link_e2e_loopback, link_e2e_signin), over ssh to this machine.
+      # The fast unit tests and each feature's happy path that builds here (tests/tiers.txt), the link's too
+      # (link_e2e_loopback, link_e2e_signin).
       - name: The tier_pr tests
-        run: bash .github/ctest.sh --test-dir build -L '^tier_pr$' -j "$TEST_JOBS" --output-on-failure
+        run: bash .github/ctest.sh --test-dir "$NEXUS_BUILD" -L '^tier_pr$' -j "$TEST_JOBS" --output-on-failure
 
   # The code generated from schema/Nexus.schema (and the tests' later version) is checked in; this regenerates it with
   # schema's compiler at the pinned commit (cmake/schema.cmake) and fails on any difference, so the checked-in code is
@@ -333,7 +279,7 @@ jobs:
   # stored data means. Go comes from the runner's machine (the fleet's sdk/bin); the compiler is built once per pin and
   # runner, and kept outside the workspace under ~/.cache/nexus-ci/<runner>/schema.
   schema-generated:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, nexus-pr, Linux, X64]
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -354,7 +300,6 @@ jobs:
             exit 1
           fi
 
-
   # The Tailscale shim built alone on macOS and Linux, with its unit tests (.github/workflows/tailscale.yml, which says
   # how its caches are kept so that only a pin change is cold; its functional tests and Windows, tailscale-windows.yml,
   # run in the nightly). On a pull request it builds the head, not the merge commit, and each OS's verdict is the commit
@@ -374,18 +319,17 @@ jobs:
       status: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
   # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
-  # the flags): the native window's code and its unit tests, nothing else. On Windows only the overlay window is
-  # native; nexus-server, its store, the driver protocol and supervisor, the link and every test of them build and run
-  # as the Linux build inside WSL2 (the nightly's wsl2-functional) and on Linux (build-linux), so a native
-  # Windows build leaves them out (CMakeLists.txt NEXUS_SERVER_PARTS), and the model checks' walks with them, which TLC
-  # runs on Linux and macOS. What is built here: the libraries the window links (the model and overlay, the link's
-  # states with the accounts, the settings files, the hitch detector, the board's scroller, the terminal tab's launch
-  # line), the formats' tables (nexus_wire), src/platform_win.cpp, their unit tests, and the WSL2 terminal test, which
-  # the nightly runs on captain (it needs a WSL2 distribution). Not the window itself (Prax's Win32 backend of lib/app
-  # does not compile at its pin). The build directory and Prax come from cache-warm's cache
-  # (.github/actions/windows-build).
+  # the flags): the native window's code and its unit tests, nothing else, on captain's Windows side. On Windows only
+  # the overlay window is native; nexus-server, its store, the driver protocol and supervisor, the link and every test
+  # of them build and run as the Linux build inside WSL2 (the nightly's wsl2-functional) and on Linux (the linux job),
+  # so a native Windows build leaves them out (CMakeLists.txt NEXUS_SERVER_PARTS), and the model checks' walks with
+  # them, which TLC runs on Linux and macOS. What is built here: the libraries the window links (the model and overlay,
+  # the link's states with the accounts, the settings files, the hitch detector, the board's scroller, the terminal
+  # tab's launch line), the formats' tables (nexus_wire), src/platform_win.cpp, their unit tests, and the WSL2 terminal
+  # test, which the nightly runs on captain (it needs a WSL2 distribution). Not the window itself (Prax's Win32 backend
+  # of lib/app does not compile at its pin). The runner's own build directory, on D: (.github/actions/windows-build).
   windows:
-    runs-on: windows-2025
+    runs-on: [self-hosted, nexus-pr, Windows, X64]
     timeout-minutes: 2
     defaults:
       run:
@@ -394,7 +338,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Caches, configure and build
+      - name: Build directory, configure and build
         uses: ./.github/actions/windows-build
         with:
           target: tier_pr_build

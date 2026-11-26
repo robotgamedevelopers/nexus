@@ -1,0 +1,7 @@
+# Planted: a per-commit job on a GitHub-hosted runner; refused.
+name: ci
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps: [{run: "true"}]
