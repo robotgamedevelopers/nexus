@@ -1198,6 +1198,18 @@ struct Builder {
                 info.offset.y.raw < info.range.bottom.raw ? prLayoutUnitToPx(info.offset.y) : View::kAtEnd;
     }
 
+    // The prompt is not declared this round. A focus left on it goes with it: what shows in its place may reuse its
+    // parent's node (a terminal tab's view is the first element under `window`, as an AI's panels, which hold the
+    // prompt, were), so a focus kept on the gone prompt reads as within the new view (prUiIsFocusWithin), the terminal
+    // asks for none, and what is typed next goes nowhere.
+    void promptGone() {
+        if (view.prompt != kPrLayoutNodeNone && prUiFocus(ui) == view.prompt)
+            prUiSetFocus(ui, kPrLayoutNodeNone);
+        view.prompted = ~std::size_t(0);
+        view.prompt = kPrLayoutNodeNone;
+        view.promptBox = kPrLayoutNodeNone;
+    }
+
     // A terminal tab: its terminal fills the window's width and the height below the strip, with no prompt. The
     // transcript and the prompt are not declared, so the friend shown before keeps its scroll, and its draft comes back
     // with the caret at its end.
@@ -1205,10 +1217,8 @@ struct Builder {
         if (view.shown != ~std::size_t(0))
             leaveTranscript();
         view.shown = ~std::size_t(0);
-        view.prompted = ~std::size_t(0);
         view.transcript = kPrLayoutNodeNone;
-        view.prompt = kPrLayoutNodeNone;
-        view.promptBox = kPrLayoutNodeNone;
+        promptGone();
         HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(tab.id));
         // A shell that cannot run here at all (on Windows, no WSL2): the line that says what is missing, centred as the
         // sprint tab's is.
@@ -1230,10 +1240,8 @@ struct Builder {
         if (view.shown != ~std::size_t(0))
             leaveTranscript();
         view.shown = ~std::size_t(0);
-        view.prompted = ~std::size_t(0);
         view.transcript = kPrLayoutNodeNone;
-        view.prompt = kPrLayoutNodeNone;
-        view.promptBox = kPrLayoutNodeNone;
+        promptGone();
         // The box takes the room the strip leaves; the page is laid out at the box's extent from the last
         // layout (the strip's height beneath the window's in the first).
         PrLayoutNode box = element(window, Part::BoardBox);
@@ -2605,11 +2613,8 @@ struct Builder {
             view.shown = ~std::size_t(0);
             view.transcript = kPrLayoutNodeNone;
         }
-        if (std::find(panels.begin(), panels.end(), Panel::Prompt) == panels.end()) {
-            view.prompted = ~std::size_t(0);
-            view.prompt = kPrLayoutNodeNone;
-            view.promptBox = kPrLayoutNodeNone;
-        }
+        if (std::find(panels.begin(), panels.end(), Panel::Prompt) == panels.end())
+            promptGone();
         if (view.windowApp.surface.items && !asking) window = element(window, Part::FriendPanels);
         for (const auto panel : panels) {
             switch (panel) {

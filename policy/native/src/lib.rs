@@ -18,6 +18,9 @@ use std::time::Duration;
 
 pub const LIMIT: usize = 2 * 1024 * 1024;
 
+// policy/rules/config.json, built in beside the modules (build.rs watches ../rules).
+const SHIPPED_CONFIG: &str = include_str!("../../rules/config.json");
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bundle {
@@ -42,9 +45,10 @@ fn defaults(side: &str) -> Result<Bundle> {
             .filter(|(name, _)| *name != other)
             .map(|(name, text)| (name.to_string(), text.to_string()))
             .collect(),
-        // A server without an applied fork profile keeps the behavior of an absent setting.
-        // The shipped profile's config.json is applied explicitly alongside its modules.
-        config: serde_json::json!({}),
+        // The shipped config.json is the defaults' config, as `nexus-policy apply` passes it with the
+        // shipped modules: a host with no applied bundle (a new install, iOS) runs exactly what an
+        // apply of the shipped profile would.
+        config: serde_json::from_str(SHIPPED_CONFIG).context("the shipped policy/rules/config.json")?,
     })
 }
 
