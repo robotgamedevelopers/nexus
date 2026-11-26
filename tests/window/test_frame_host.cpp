@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "style.h"
 #include "test_link_port.h"
 
 namespace {
@@ -423,10 +424,48 @@ void dismissedAIRemainsLocal() {
     CHECK(w.tabOf("bo") < w.model.tab_count());
 }
 
+
+// Locked (View::lockScreen), the host takes and drops every input but the lock screen's own: a typed key, text, a
+// paste, a scroll and a drop never reach the board, a terminal or the prompt. The pointer and unmodified Return and
+// Escape go on to the lock screen; events that are not input (a wake, a timer) pass. Unlocked, the same key goes on.
+void lockedHostDropsInput() {
+    Window w("");
+    const auto make = [](PrAppEventKind kind, PrAppKey key = 0, PrAppModifierFlags modifiers = 0) {
+        PrAppEvent e{};
+        e.kind = kind;
+        e.keyboard.key = key;
+        e.modifiers = modifiers;
+        return e;
+    };
+    w.view.lockScreen = View::LockScreen{"nexus is locked", ""};
+    CHECK(w.host.event(make(PrAppEventKind_KeyDown, PrAppKey('a'))));
+    CHECK(w.host.event(make(PrAppEventKind_Text)));
+    CHECK(w.host.event(make(PrAppEventKind_Paste)));
+    CHECK(w.host.event(make(PrAppEventKind_Scroll)));
+    CHECK(w.host.event(make(PrAppEventKind_Drop)));
+    CHECK(w.host.event(make(PrAppEventKind_CompositionUpdate)));
+    CHECK(w.host.event(make(PrAppEventKind_Gesture)));
+    CHECK(w.host.event(make(PrAppEventKind_TrackpadTouches)));
+    CHECK(w.host.event(make(PrAppEventKind_DragEnter)));
+    CHECK(w.host.event(make(PrAppEventKind_DragOver)));
+    CHECK(w.host.event(make(PrAppEventKind_DragLeave)));
+    CHECK(w.host.event(make(PrAppEventKind_DragPromise)));
+    CHECK(w.host.event(make(PrAppEventKind_KeyDown, PrAppKey_Enter, PrAppModifierFlag_Shift)));
+    CHECK(w.host.event(make(PrAppEventKind_KeyDown, PrAppKey('t'), style::kCommand)));
+    CHECK(!w.host.event(make(PrAppEventKind_KeyDown, PrAppKey_Enter)));
+    CHECK(!w.host.event(make(PrAppEventKind_KeyUp, PrAppKey_Escape)));
+    CHECK(!w.host.event(make(PrAppEventKind_KeyDown, PrAppKey_Enter, PrAppModifierFlag_CapsLock)));
+    CHECK(!w.host.event(make(PrAppEventKind_PointerDown)));
+    CHECK(!w.host.event(make(PrAppEventKind_Wake)));
+    CHECK(!w.host.event(make(PrAppEventKind_Timer)));
+    w.view.lockScreen.reset();
+    CHECK(!w.host.event(make(PrAppEventKind_KeyDown, PrAppKey('a'))));
+}
 } // namespace
 
 int main() {
     dismissedAIRemainsLocal();
+    lockedHostDropsInput();
     accountCommandsUseTheActiveConversation();
     automaticAccountIsASelectionMode();
     accountPickerRechecksTheServerRoster();

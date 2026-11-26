@@ -248,12 +248,17 @@ jobs:
             run: '^tlc_loop_pass_'
             skip: '^tlc_loop_pass_spec$'
             build: pass_walk
+          # The client lock (models/ClientLock.tla): its spec and witnesses, and its code's walks (lock_walk) against
+          # ClientLockTrace.tla, and their faults.
+          - shard: client-lock
+            run: '^tlc_client_lock_'
+            build: lock_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.
           - shard: window
             run: ''
             build: trace_walk service_process_functional
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_ais$|signin|reconnect|loop_pass|bus_delivery)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_ais$|signin|reconnect|loop_pass|bus_delivery|client_lock)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

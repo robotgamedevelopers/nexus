@@ -1,6 +1,7 @@
 #include "ui_audio.h"
 #include "window_app.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <numbers>
 

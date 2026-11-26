@@ -187,6 +187,10 @@ while hidden. Return a physical key code and modifiers, for example
 Use UI Events physical codes such as `Backquote`, `KeyJ` and `F8`. In-window shortcuts
 continue to use logical key names. Applying a client profile updates the global binding.
 
+The client lock's idle timeout is the `lock` event's answer, `{"idle_minutes": N}`: the stock rule reads
+`lock_idle_minutes`, 10 unless set. N is a whole number of minutes from 1 to 240; nothing turns the lock off, and
+any other answer is the default with a logged reason (`docs/security.md`).
+
 Type `/help` in an AI tab to show overlay, terminal, tab and account shortcuts alongside the slash-command reference. It works while signed out. A fork can add descriptions to the client config’s `command_help` map or replace the help handler in Starlark.
 
 The fork can return `prompt_command` for a draft that should bypass the account reminder.

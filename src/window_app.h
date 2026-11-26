@@ -62,6 +62,15 @@ struct PromptStyle {
 
 PrAppHotkey overlayBinding(policy::Host& host, std::string& why);
 
+// The client lock's idle timeout in seconds (client_lock.h), from the client policy's `lock` event: {"idle_minutes": N},
+// the shipped rule's from config `lock_idle_minutes`, 10 unless set. N is a whole number of minutes from 1 to 240; the
+// lock cannot be turned off. Anything else is the default, with `why` saying what was wrong.
+inline constexpr double kLockIdleMinutesDefault = 10;
+inline constexpr double kLockIdleMinutesMost = 240;
+double lockIdleSeconds(policy::Host& host, std::string& why);
+// The same from the rule's answer (JSON), for the tests.
+double lockIdleSecondsFrom(const std::string& answer, std::string& why);
+
 struct Chirp {
     float startHz = 440, endHz = 440, durationMs = 50, gain = 0;
     bool synth = false;

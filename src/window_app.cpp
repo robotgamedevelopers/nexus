@@ -602,6 +602,26 @@ PrAppHotkey overlayBinding(policy::Host& host, std::string& why) {
     return style::kOverlayHotkey;
 }
 
+double lockIdleSeconds(policy::Host& host, std::string& why) {
+    const auto answer = host.decide({}, "app.lock", "{}", why);
+    if (!why.empty()) return kLockIdleMinutesDefault * 60;
+    return lockIdleSecondsFrom(answer, why);
+}
+
+double lockIdleSecondsFrom(const std::string& answer, std::string& why) {
+    if (answer.empty() || answer == "null") return kLockIdleMinutesDefault * 60;
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    if (prJsonParse(doc.get(), {answer.data(), answer.size()}, nullptr)) {
+        const auto value = prJsonMember(doc.get(), 0, {"idle_minutes", 12});
+        const double minutes = prJsonNumber(doc.get(), value, -1);
+        if (std::isfinite(minutes) && minutes >= 1 && minutes <= kLockIdleMinutesMost && minutes == std::floor(minutes))
+            return minutes * 60;
+    }
+    why = "app.lock needs {\"idle_minutes\": N}, N a whole number of minutes from 1 to 240 (the lock cannot be turned "
+        "off); using 10";
+    return kLockIdleMinutesDefault * 60;
+}
+
 void WindowApplication::update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen,
     bool hasStatus, std::size_t activeTab, std::size_t tabCount, const std::string& group, SignInAccount account, bool pickerOpen, LimitOffer offer, const std::string& ui) {
     std::string escapedGroup;
