@@ -16,7 +16,7 @@
 - **Windows x64** has native window code and tested WSL2 terminal support. Connecting that window to the Nexus server for chat is still in development.
 - **Linux** (and WSL2 on Windows) runs `nexus-server` and the drivers, built and tested in CI. The desktop client waits on a Wayland backend in Prax, the UI library it is built on.
 - **iPhone and iPad (iOS 26 or newer)** have one app that reaches a Nexus server on your Mac over ssh. It is still in
-  development: no terminal tabs and no attachments yet. [Building and installing it](docs/ios.md)
+  development: no attachments yet. [Building and installing it](docs/ios.md)
 - **Apple Watch** (watchOS 26 or newer): talk to your AIs, and they talk back, through the nexus iPhone app. The watch app runs in the simulator; the iPhone's side of its relay is still in development. [The watch](docs/watch.md)
 
 Bring a supported subscription to use a connected AI. [Build and platform details](docs/README.md)
