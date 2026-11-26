@@ -71,7 +71,7 @@ export interface HarnessStart {
     startupContext?: string;
     settingSources: SettingSource[];
     claudePath?: string;
-    limited: boolean;                   // the friend is limited to `cwd` (--limit cwd; wall.ts limitOf)
+    limited: boolean;                   // the AI is limited to `cwd` (--limit cwd; wall.ts limitOf)
     writeDirs?: string[];
     readDirs?: string[];
     gitRemote?: string;
@@ -149,7 +149,7 @@ export interface Arguments {
     primarySession?: boolean;
     settingSources: SettingSource[];
     claudePath?: string;
-    limit?: 'cwd';                      // from the server: the friend may read and write only in --cwd
+    limit?: 'cwd';                      // from the server: the AI may read and write only in --cwd
     writeDirs?: string[];
     readDirs?: string[];
     gitRemote?: string;
@@ -220,7 +220,7 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
                 (name === '--read-dir' ? a.readDirs ??= [] : a.writeDirs ??= []).push(value);
                 break;
             case '--keep-out':
-                // One more directory a limited friend is kept out of: absolute and not the root, or refused.
+                // One more directory a limited AI is kept out of: absolute and not the root, or refused.
                 if (!isAbsolute(value) || value === '/') {
                     return { error: `--keep-out ${value} is not an absolute directory other than /` };
                 }
@@ -259,7 +259,7 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     if ((a.gitRemote || a.busListener || (a.busSender && !a.noSandbox) || a.readDirs?.length) && a.limit !== 'cwd') return {error: 'workspace grants require --limit cwd'};
     if (a.writeDirs?.length && a.limit !== 'cwd') return { error: '--write-dir requires --limit cwd' };
     if (a.keepsOut.length > 0 && a.limit !== 'cwd') {
-        return { error: `--keep-out is for a limited friend, and comes with --limit cwd; ${kUsage}` };
+        return { error: `--keep-out is for a limited AI, and comes with --limit cwd; ${kUsage}` };
     }
     if (a.resume !== undefined && !isSessionId(a.resume)) {
         return { error: `--resume ${a.resume} is not a session id (1 to 256 printable ASCII characters, no spaces)` };
@@ -398,7 +398,7 @@ export function secretMcpServer(askSecret: HarnessStart['askSecret'], busSender?
             ...(busSender ? [busSendTool(busSender)] : []),
             tool(
                 kSecretToolName,
-                'Ask the person, in the nexus window\'s secret dialog, to paste a secret for an account this friend is '
+                'Ask the person, in the nexus window\'s secret dialog, to paste a secret for an account this AI is '
                     + 'linked to (for a claude account, what is "oauth-token"). Writes ask-secret and waits for the '
                     + 'person\'s answer, returning "stored" once the file is saved or "refused: <reason>" ("no-client", '
                     + '"busy", "cancelled", "timeout" or "malformed"); the secret value never crosses this tool.',
@@ -608,7 +608,7 @@ export class Driver {
         }
         let harness: Harness;
         try {
-            const setupGuide = this.args.primarySession ? '' : readFileSync(new URL('friend-setup.txt', import.meta.url), 'utf8').trim();
+            const setupGuide = this.args.primarySession ? '' : readFileSync(new URL('ai-setup.txt', import.meta.url), 'utf8').trim();
             start.startupContext = [this.args.startupContext, setupGuide].filter(Boolean).join('\n\n');
             harness = this.host.startHarness(start);
         } catch (e) {

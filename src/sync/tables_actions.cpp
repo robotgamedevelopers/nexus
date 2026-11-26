@@ -22,7 +22,7 @@ wire::ActionKind actionOut(ActionKind k) {
         case ActionKind::SetEffort: return wire::ActionKind::SetEffort;
         case ActionKind::AddAccount: return wire::ActionKind::AddAccount;
         case ActionKind::RemoveAccount: return wire::ActionKind::RemoveAccount;
-        case ActionKind::AddFriend: return wire::ActionKind::AddFriend;
+        case ActionKind::AddAI: return wire::ActionKind::AddAI;
         case ActionKind::LinkAccount: return wire::ActionKind::LinkAccount;
         case ActionKind::UnlinkAccount: return wire::ActionKind::UnlinkAccount;
         case ActionKind::SetDefault: return wire::ActionKind::SetDefault;
@@ -56,7 +56,7 @@ ActionKind actionIn(wire::ActionKind k) {
         case wire::ActionKind::SetEffort: return ActionKind::SetEffort;
         case wire::ActionKind::AddAccount: return ActionKind::AddAccount;
         case wire::ActionKind::RemoveAccount: return ActionKind::RemoveAccount;
-        case wire::ActionKind::AddFriend: return ActionKind::AddFriend;
+        case wire::ActionKind::AddAI: return ActionKind::AddAI;
         case wire::ActionKind::LinkAccount: return ActionKind::LinkAccount;
         case wire::ActionKind::UnlinkAccount: return ActionKind::UnlinkAccount;
         case wire::ActionKind::SetDefault: return ActionKind::SetDefault;
@@ -100,7 +100,7 @@ std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& h
         }
         x->kind = actionOut(a.kind);
         x->session = a.session;
-        putText(b.main, x->friend_name, a.friendName, scratch);
+        putText(b.main, x->ai_name, a.aiName, scratch);
         putText(b.main, x->text, a.text, scratch);
         putText(b.main, x->account, a.account, scratch);
         x->request = a.request;
@@ -151,7 +151,7 @@ std::vector<Action> readActionsTables(const std::string& diff, std::uint32_t for
         }
         if (a.kind != ActionKind::Unknown) {
             a.session = x.session;
-            a.friendName = textOf(x.friend_name);
+            a.aiName = textOf(x.ai_name);
             a.text = textOf(x.text);
             a.account = textOf(x.account);
             a.request = x.request;

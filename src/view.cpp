@@ -34,9 +34,9 @@ namespace {
 using namespace style;
 
 // Dedicated theme slots for independently configurable app text. Each uses the kit's UI font.
-constexpr auto kSelectedTabRole = PrKitTextRole_MonoStrong;
-constexpr auto kTabRole = PrKitTextRole_MonoNum;
-constexpr auto kAccountRole = PrKitTextRole_Caption;
+constexpr PrKitTextRole kSelectedTabRole = PrKitTextRole_MonoStrong;
+constexpr PrKitTextRole kTabRole = PrKitTextRole_MonoNum;
+constexpr PrKitTextRole kAccountRole = PrKitTextRole_Caption;
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Records for what no kit part draws: the window's frame and background, the transcript's scroller and column, the chat
@@ -61,7 +61,7 @@ enum class Part : unsigned char {
     FocusedCard,
     SelectorCard,
     SelectorLayer,
-    FriendPanels,
+    AIPanels,
     SelectorBackground,
     ActionRow,
     ReplyRow,
@@ -203,7 +203,7 @@ struct BoxRecipe {
                 box.margin[PrRectSide_Left] = prLayoutLengthAuto();
                 box.margin[PrRectSide_Right] = prLayoutLengthAuto();
                 break;
-            case Part::FriendPanels:
+            case Part::AIPanels:
                 box.display = PrLayoutDisplay_Flex;
                 box.position = PrLayoutPosition_Relative;
                 box.minHeight = px(0);
@@ -389,7 +389,7 @@ struct FlexRecipe {
             case Part::Window:
                 flex.direction = PrLayoutFlexDirection_Column;
                 break;
-            case Part::FriendPanels:
+            case Part::AIPanels:
             case Part::Transcript:
             case Part::TranscriptAtEnd:
                 // It starts at the newest entry and stays there as entries arrive (prUiFollowEnd, in transcript()), and
@@ -562,10 +562,10 @@ PrKitTextStyle textStyle(PrKitTextRole role, PrKitTone tone, PrKitTextAlign alig
 }
 
 // Dedicated theme slots keep transcript colors independent of controls and the sign-in card.
-constexpr auto kChatTone = PrKitTone_AxisX;
-constexpr auto kPersonTone = PrKitTone_AxisW;
-constexpr auto kNoticeTone = PrKitTone_AxisY;
-constexpr auto kStatusTone = PrKitTone_AxisZ;
+constexpr PrKitTone kChatTone = PrKitTone_AxisX;
+constexpr PrKitTone kPersonTone = PrKitTone_AxisW;
+constexpr PrKitTone kNoticeTone = PrKitTone_AxisY;
+constexpr PrKitTone kStatusTone = PrKitTone_AxisZ;
 
 void paintPendingOutline(void* context, PrVec2 size, PrDrawList* list) {
     const auto& view = *static_cast<View*>(context);
@@ -668,8 +668,8 @@ struct Builder {
     void selectorAction(const std::string& action) {
         if (!model.tab_count()) return;
         const auto active = model.active();
-        if (view.dialogVisible && (action == "picker:close" || action == "dismiss") && view.playChirp)
-            view.playChirp(view.windowApp.surface.cancelChirp);
+        if (view.dialogVisible && (action == "picker:close" || action == "dismiss"))
+            view.chirp(view.windowApp.surface.cancelChirp);
         if (action == "picker:model" || action == "picker:effort") {
             view.choiceKind = action.substr(7);
             view.choiceTab = model.tab(active).id;
@@ -681,7 +681,7 @@ struct Builder {
         } else if (action.starts_with("point:") && !view.choiceKind.empty()) {
             view.choiceValue = action.substr(6);
         } else if (action.starts_with("choose:") && !view.choiceKind.empty()) {
-            if (view.playChirp) view.playChirp(view.windowApp.surface.confirmChirp);
+            view.chirp(view.windowApp.surface.confirmChirp);
             model.set_draft(active, "/" + view.choiceKind + " " + action.substr(std::string_view("choose:").size()));
             view.choiceKind.clear();
             view.choiceValue.clear();
@@ -724,15 +724,15 @@ struct Builder {
             afterHeading = false;
             place.align = PrKitAlign_Stretch;
             prKitPlace(kit, row, place);
-            const auto email = label(row, item.text, textStyle(item.selected ? PrKitTextRole_Strong : kAccountRole, PrKitTone_Inverse, PrKitTextAlign_Center));
+            const auto email = label(row, item.text, textStyle(static_cast<PrKitTextRole>(item.selected ? PrKitTextRole_Strong : kAccountRole), PrKitTone_Inverse, PrKitTextAlign_Center));
             view.accountRows.push_back(row);
             if (item.selected) {
                 auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, row));
                 auto& group = record.groups[PrLayoutGroup_Decoration];
                 auto decoration = prLayoutDecorationStyleRecord(tree, group);
                 if (view.energyAccount != item.action) {
-                    if (view.dialogVisible && !view.energyAccount.empty() && view.playChirp)
-                        view.playChirp(view.windowApp.surface.stepChirp);
+                    if (view.dialogVisible && !view.energyAccount.empty())
+                        view.chirp(view.windowApp.surface.stepChirp);
                     view.accountEnergyTime = view.time;
                     view.energyAccount = item.action;
                 }
@@ -887,7 +887,7 @@ struct Builder {
     // A drop within a strip is applied by the kit as the strip is declared, and is not reported (kit_choice.cpp
     // prKitTabStrip 738-746; prKitTabMoved reports only moves between strips): it is read back here from the kit's
     // order, and made through the model's move_tab. The model refuses a move across zones (a terminal among the
-    // friends, or a friend among the terminals: the kit has no way to keep its caret out of another zone, and no per-tab
+    // AIs, or an AI among the terminals: the kit has no way to keep its caret out of another zone, and no per-tab
     // drop limit), and the kit's tabs are then put back as the model has them, as they are after an accepted move too,
     // so that the drop leaves the active tab as it was. A request for Prax: a report of a move within a strip, and a
     // per-tab drop limit.
@@ -933,7 +933,7 @@ struct Builder {
     // The secret request the dialog shows this round, or null (read once, before the keys are claimed).
     const SecretAsk* asking = nullptr;
 
-    // The account control fits beneath the friend title. Only the popover floats outside the strip.
+    // The account control fits beneath the AI title. Only the popover floats outside the strip.
     void accountDropdown(PrLayoutNode title, const std::string& current) {
         view.accountAnchor = prKitButton(kit, title, {.key = prHashString(sv("account"), 0)},
                                         {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Sm});
@@ -983,8 +983,8 @@ struct Builder {
             prKitPlace(kit, row, rowSize);
             view.accountRows.push_back(row);
             if (preview && view.lastHighlightedAccount != option.name) {
-                if (view.dialogVisible && !view.lastHighlightedAccount.empty() && view.playChirp)
-                    view.playChirp(view.windowApp.surface.stepChirp);
+                if (view.dialogVisible && !view.lastHighlightedAccount.empty())
+                    view.chirp(view.windowApp.surface.stepChirp);
                 prUiSetFocus(ui, row);
                 prUiReveal(ui, row);
                 view.lastHighlightedAccount = option.name;
@@ -1065,10 +1065,10 @@ struct Builder {
                 prLayoutTreeFrameSetStyle(tree, tab, prLayoutStyleIntern(tree, &record));
             }
             PrKitPlace tabPlace{};
-            const bool currentFriend = i == model.active() && model.tab(i).kind == TabKind::Friend;
+            const bool currentAI = i == model.active() && model.tab(i).kind == TabKind::AI;
             const bool offersAccounts = std::find(view.windowApp.panels.begin(), view.windowApp.panels.end(),
                                                   Panel::Account) != view.windowApp.panels.end();
-            const auto current = !view.windowApp.centeredAccounts && currentFriend && offersAccounts && view.accountCaption ? view.accountCaption() : std::string();
+            const auto current = !view.windowApp.centeredAccounts && currentAI && offersAccounts && view.accountCaption ? view.accountCaption() : std::string();
             tabPlace.height = prKitPx((current.empty() ? std::min(look.tabs.tabHeight, look.tabs.height) : look.tabs.height) * k());
             tabPlace.align = PrKitAlign_Center;
             tabPlace.margin.left = (i == 0 ? look.tabs.leading : look.tabs.gap) * k();
@@ -1085,7 +1085,7 @@ struct Builder {
             prKitPlace(kit, tab, tabPlace);
             const auto title = current.empty() ? tab :
                 prKitBox(kit, tab, {}, {.direction = PrKitDirection_Column, .align = PrKitAlign_Start});
-            const auto text = label(title, titleText, textStyle(active ? kSelectedTabRole : kTabRole, PrKitTone_Primary));
+            const auto text = label(title, titleText, textStyle(static_cast<PrKitTextRole>(active ? kSelectedTabRole : kTabRole), PrKitTone_Primary));
             auto titleStyle = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, text));
             auto& colors = titleStyle.groups[PrLayoutGroup_Color];
             auto ink = prLayoutColorStyleRecord(tree, colors);
@@ -1128,7 +1128,7 @@ struct Builder {
             if (!tabs) tabs.reset(prKitTabsCreate());
             if (many && extensions) caption(row, group, textStyle(PrKitTextRole_BodySmall, kStatusTone));
             strip(row, tabs.get(), first, end, group, exchanges,
-                  many && end == model.tab_count() ? PrKitFlex_Fill : PrKitFlex_Fixed);
+                  static_cast<PrKitFlex>(many && end == model.tab_count() ? PrKitFlex_Fill : PrKitFlex_Fixed));
             first = end;
         }
         if (drop.id) {
@@ -1158,20 +1158,20 @@ struct Builder {
         }
     }
 
-    // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's its label (Terminals::title: the
+    // An AI's tab shows the AI's name; the sprint tab "sprint"; a terminal's its label (Terminals::title: the
     // machine its ssh reaches, or the title its shell set). An untitled terminal starts blank.
     std::string label(const Tab& tab) {
-        if (tab.kind == TabKind::Friend || tab.kind == TabKind::Extension)
+        if (tab.kind == TabKind::AI || tab.kind == TabKind::Extension)
             return std::string(tab.displayName());
         if (tab.kind == TabKind::Sprint)
             return "Dashboard";
         return view.terminals != nullptr ? view.terminals->title(tab.id) : std::string();
     }
 
-    // Each friend keeps its scroll while another shows, wherever its tab stands: a friend that showed its newest entry
+    // Each AI keeps its scroll while another shows, wherever its tab stands: an AI that showed its newest entry
     // (and one never shown) comes back at its newest entry, and one scrolled up comes back at the same offset from the
     // top, where the same entries show, since entries only arrive at the end. Returns false if the transcript should not
-    // follow its end this round: it put back a view scrolled up, and the last layout was another friend's.
+    // follow its end this round: it put back a view scrolled up, and the last layout was another AI's.
     bool keepScroll(PrLayoutNode scroller, std::size_t id) {
         if (view.shown == id)
             return true;
@@ -1179,7 +1179,7 @@ struct Builder {
         view.shown = id;
         if (view.scrolls[id] == View::kAtEnd) {
             // An offset past the end, which layout clamps to the end of the content this round makes, as prUiFollowEnd
-            // sets it (ui.cpp 2488-2493): prUiFollowEnd itself reads the last layout, which was another friend's.
+            // sets it (ui.cpp 2488-2493): prUiFollowEnd itself reads the last layout, which was another AI's.
             prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0), PrLayoutUnit{INT32_MAX}});
             return true;
         }
@@ -1187,8 +1187,8 @@ struct Builder {
         return false;
     }
 
-    // Keeps the scroll of the friend the transcript showed last round (by Tab::id; the friends' ids are 0 to the number
-    // of friends less one, below tab_count()).
+    // Keeps the scroll of the AI the transcript showed last round (by Tab::id; the AIs' ids are 0 to the number
+    // of AIs less one, below tab_count()).
     void leaveTranscript() {
         view.scrolls.resize(model.tab_count(), View::kAtEnd);
         PrLayoutScrollInfo info{};
@@ -1198,17 +1198,27 @@ struct Builder {
                 info.offset.y.raw < info.range.bottom.raw ? prLayoutUnitToPx(info.offset.y) : View::kAtEnd;
     }
 
+    // The prompt is not declared this round. A focus left on it goes with it: what shows in its place may reuse its
+    // parent's node (a terminal tab's view is the first element under `window`, as an AI's panels, which hold the
+    // prompt, were), so a focus kept on the gone prompt reads as within the new view (prUiIsFocusWithin), the terminal
+    // asks for none, and what is typed next goes nowhere.
+    void promptGone() {
+        if (view.prompt != kPrLayoutNodeNone && prUiFocus(ui) == view.prompt)
+            prUiSetFocus(ui, kPrLayoutNodeNone);
+        view.prompted = ~std::size_t(0);
+        view.prompt = kPrLayoutNodeNone;
+        view.promptBox = kPrLayoutNodeNone;
+    }
+
     // A terminal tab: its terminal fills the window's width and the height below the strip, with no prompt. The
-    // transcript and the prompt are not declared, so the friend shown before keeps its scroll, and its draft comes back
+    // transcript and the prompt are not declared, so the AI shown before keeps its scroll, and its draft comes back
     // with the caret at its end.
     void terminal(PrLayoutNode window, const Tab& tab) {
         if (view.shown != ~std::size_t(0))
             leaveTranscript();
         view.shown = ~std::size_t(0);
-        view.prompted = ~std::size_t(0);
         view.transcript = kPrLayoutNodeNone;
-        view.prompt = kPrLayoutNodeNone;
-        view.promptBox = kPrLayoutNodeNone;
+        promptGone();
         HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(tab.id));
         // A shell that cannot run here at all (on Windows, no WSL2): the line that says what is missing, centred as the
         // sprint tab's is.
@@ -1224,16 +1234,14 @@ struct Builder {
     }
 
     // The sprint tab: its page fills the window's width and the height below the strip, with no prompt; or, while there
-    // is no page to show, the line that says why. With no friends, a caption beneath the board gives the reason.
-    // Like a terminal tab, it leaves the friend shown before with its scroll and its draft.
+    // is no page to show, the line that says why. With no AIs, a caption beneath the board gives the reason.
+    // Like a terminal tab, it leaves the AI shown before with its scroll and its draft.
     void sprint(PrLayoutNode window) {
         if (view.shown != ~std::size_t(0))
             leaveTranscript();
         view.shown = ~std::size_t(0);
-        view.prompted = ~std::size_t(0);
         view.transcript = kPrLayoutNodeNone;
-        view.prompt = kPrLayoutNodeNone;
-        view.promptBox = kPrLayoutNodeNone;
+        promptGone();
         // The box takes the room the strip leaves; the page is laid out at the box's extent from the last
         // layout (the strip's height beneath the window's in the first).
         PrLayoutNode box = element(window, Part::BoardBox);
@@ -1272,7 +1280,7 @@ struct Builder {
         }
     }
 
-    // The friend's transcript as laid out (TranscriptItems), with the entries that arrived since grouped into items:
+    // The AI's transcript as laid out (TranscriptItems), with the entries that arrived since grouped into items:
     // an entry each, and a run of tool lines one item.
     TranscriptItems& itemsOf(const Tab& tab) {
         if (view.items.size() <= tab.id)
@@ -1486,7 +1494,7 @@ struct Builder {
             if (tagged != style.messageInks.end()) sourceInk = tagged->second;
         }
         const bool bold = tone == kPersonTone && look.transcriptStyle.personBold;
-        const auto body = textStyle(bold ? PrKitTextRole_Strong : PrKitTextRole_Body, tone);
+        const auto body = textStyle(static_cast<PrKitTextRole>(bold ? PrKitTextRole_Strong : PrKitTextRole_Body), tone);
         const auto plainLabel = [&](PrLayoutNode node) {
             if (trail) textNodes(tree, node, [&](auto leaf) { glyphLight(leaf, 0, *trail, look.transcriptStyle.ink); });
             if (gain != 1 || sourceInk) ink(node, sourceInk.value_or(style.personInk), false, gain);
@@ -1497,7 +1505,7 @@ struct Builder {
             select(plainLabel(label(parent, source, body)));
             return;
         }
-        const auto& paragraphs = view.markdown.get(source, speaker != EntryKind::Friend);
+        const auto& paragraphs = view.markdown.get(source, speaker != EntryKind::AI);
         if (paragraphs.size() == 1 && paragraphs.front().runs.size() == 1 && paragraphs.front().runs.front().href.empty() && !paragraphs.front().depth &&
                 paragraphs.front().runs.front().role == PrKitTextRole_Body && paragraphs.front().runs.front().text == source) {
             select(plainLabel(label(parent, source, body)));
@@ -1527,7 +1535,7 @@ struct Builder {
             const auto text = prKitText(kit, row, {}, body);
             const auto plain = sourceInk.value_or(tone == kPersonTone ? style.personInk : style.ink);
             for (const auto& run : paragraph.runs) {
-                auto runStyle = textStyle(bold && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role, tone);
+                auto runStyle = textStyle(static_cast<PrKitTextRole>(bold && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role), tone);
                 // Keep Markdown in the paragraph's line flow. The kit's default monospace role is nonwrapping.
                 runStyle.wrap = PrKitWrap_Wrap;
                 const auto span = prKitText(kit, text, {}, runStyle);
@@ -1643,10 +1651,10 @@ struct Builder {
                 return row;
             }
             case EntryKind::Person:
-            case EntryKind::Friend:
+            case EntryKind::AI:
             case EntryKind::Notice: {
                 PrLayoutNode entry = element(column, e.kind == EntryKind::Person ? Part::Entry : Part::ReplyRow, 0, key);
-                PrLayoutNode bubble = e.kind == EntryKind::Friend ? assistantMessage(entry, tab) :
+                PrLayoutNode bubble = e.kind == EntryKind::AI ? assistantMessage(entry, tab) :
                     e.kind == EntryKind::Person ? element(entry, Part::Bubble) : entry;
                 if (e.kind == EntryKind::Notice && e.accountEmailEnd) {
                     switchLabel(bubble, e);
@@ -1666,7 +1674,7 @@ struct Builder {
                         }
                     }
                     const auto& reply = view.replyTrail;
-                    const bool justClosed = e.kind == EntryKind::Friend && reply.tab == tab.id &&
+                    const bool justClosed = e.kind == EntryKind::AI && reply.tab == tab.id &&
                         reply.generation == tab.transcriptGeneration && items.first[i] == reply.entry && !reply.ranges.empty();
                     const auto compact = e.kind == EntryKind::Person ? view.attachmentLabels.find({tab.id, e.text}) : view.attachmentLabels.end();
                     message(bubble, compact == view.attachmentLabels.end() ? e.text : compact->second, e.kind, gain, justClosed ? &reply : nullptr);
@@ -1755,7 +1763,7 @@ struct Builder {
             reply.bytes = growing ? growing->size() : 0;
         }
         declareItems(scroller, column, tab, items, atEnd, offset, viewport);
-        // The friend's text still growing (the open entry), after the transcript, a label a paragraph: only its last
+        // The AI's text still growing (the open entry), after the transcript, a label a paragraph: only its last
         // paragraph is set again as it grows. It joins the transcript, closed, when its block ends.
         if (growing != nullptr && !growing->empty()) {
             if (reply.entry != tab.transcript.size() || growing->size() < reply.bytes) {
@@ -1767,7 +1775,7 @@ struct Builder {
                 lightNewText(reply, *growing, reply.bytes, growing->size());
                 reply.bytes = growing->size();
             }
-            message(assistantMessage(element(column, Part::ReplyRow), tab), *growing, EntryKind::Friend, 1, &reply);
+            message(assistantMessage(element(column, Part::ReplyRow), tab), *growing, EntryKind::AI, 1, &reply);
         }
         // Keep the reason alongside the conversation if a prompt could not be sent.
         if (view.helpTab == tab.id)
@@ -1940,8 +1948,8 @@ struct Builder {
             std::string_view(tab.draft).substr(first, tab.draft.find_last_not_of(" \t\r\n") - first + 1) == "/help";
         policy::MessagePlan plan;
         std::string why;
-        const std::string friendName(tab.displayName());
-        const policy::MessageState state{tab.draft, friendName, tab.model, tab.queue.size(),
+        const std::string aiName(tab.displayName());
+        const policy::MessageState state{tab.draft, aiName, tab.model, tab.queue.size(),
             view.cursor && (view.cursor(tab.id) == CursorState::Busy || view.cursor(tab.id) == CursorState::Working), {}, {}, {}, !view.windowApp.signInAccount.name.empty()};
         if (!policy::messagePlan(*view.application, {}, true, key, state, plan, why) ||
                 (plan.text && plan.text->size() > kPromptBytes)) {
@@ -1998,7 +2006,7 @@ struct Builder {
             return;
         }
         if (plan.delivery == policy::Delivery::Hold) {
-            if (model.hold_draft(active) && view.playChirp) view.playChirp(view.windowApp.surface.holdChirp);
+            if (model.hold_draft(active)) view.chirp(view.windowApp.surface.holdChirp);
             return;
         }
         if (plan.delivery == policy::Delivery::Release) {
@@ -2018,7 +2026,7 @@ struct Builder {
             return;
         }
         if (plan.delivery != policy::Delivery::None) {
-            const auto first = tab.transcript.size();
+            const auto sentAt = tab.transcript.size();
             const auto sent = tab.draft;
             const bool queue = plan.delivery == policy::Delivery::Queue;
             if (view.submit)
@@ -2029,7 +2037,7 @@ struct Builder {
                 model.send(active);
             if (!queue && !sent.empty() && sent.front() != '/' && tab.draft.empty() &&
                     look.transcriptStyle.personFlashPeak > 1 && !prUiUserPreferences(ui).reducedMotion)
-                view.sentFlashes.push_back({tab.id, first, tab.transcriptGeneration, sent, view.time});
+                view.sentFlashes.push_back({tab.id, sentAt, tab.transcriptGeneration, sent, view.time});
         }
         if (!plan.notices.empty()) {
             view.problem.clear();
@@ -2206,7 +2214,7 @@ struct Builder {
             if (queue)
                 promptKey(active, "Command+Enter");
         }
-        // A friend's draft comes back with the caret at its end.
+        // An AI's draft comes back with the caret at its end.
         if (pickerInput) {
             view.prompted = ~std::size_t(0);
         } else if (view.prompted != model.tab(active).id) {
@@ -2294,7 +2302,57 @@ struct Builder {
 
     bool pickerInput = false;
 
+    // The lock screen (View::lockScreen): one centred card with the lock's title and message, and nothing else of the
+    // window. The nodes the rounds keep for the window's other parts are cleared, so nothing (the host's routing of
+    // pastes and pointers into the prompt, the selection) reaches a part that is not drawn. The board is told it is
+    // hidden, and the terminals are serviced as hidden tabs, so that their shells and page keep running unseen.
+    void lockScreen(PrLayoutNode parent) {
+        view.prompt = kPrLayoutNodeNone;
+        view.promptBox = kPrLayoutNodeNone;
+        view.transcript = kPrLayoutNodeNone;
+        view.conversation = kPrLayoutNodeNone;
+        view.boardBox = kPrLayoutNodeNone;
+        view.secretField = kPrLayoutNodeNone;
+        view.energyAnimating = false;
+        view.breathing = false;
+        view.dialogVisible = false;
+        if (view.board != nullptr) view.board->hidden();
+        if (view.terminals != nullptr) {
+            for (std::size_t i = model.tab_count(); i-- > 0;) {
+                const Tab& tab = model.tab(i);
+                if (tab.kind != TabKind::Terminal) continue;
+                if (view.terminals->ended(tab.id)) {
+                    view.terminals->close(tab.id);
+                    model.close_tab(i);
+                } else {
+                    view.terminals->update(tab.id);
+                }
+            }
+        }
+        PrLayoutNode window = element(parent, Part::Window);
+        PrLayoutNode box = element(window, Part::BoardBox);
+        PrLayoutNode column = element(box, Part::Column);
+        PrLayoutNode centered = element(column, Part::Centered);
+        const auto card = prKitButton(kit, centered, {.key = prHashString(sv("lock-screen"), 0)}, {});
+        prLayoutTreeFrameSetStyle(tree, card, style(ui, look, Part::MessageCard));
+        auto large = textStyle(PrKitTextRole_Display, PrKitTone_Inverse, PrKitTextAlign_Center);
+        large.wrap = PrKitWrap_Wrap;
+        label(card, view.lockScreen->title, large);
+        auto small = textStyle(PrKitTextRole_BodySmall, PrKitTone_Inverse, PrKitTextAlign_Center);
+        small.wrap = PrKitWrap_Wrap;
+        label(card, view.lockScreen->message, small);
+        // The keys are claimed on the outermost node of the round, as build does (no node has the focus here).
+        const PrLayoutNode claim = parent != kPrLayoutNodeNone ? parent : window;
+        const bool enter = prUiKeyPressed(ui, claim, PrAppKey_Enter, 0);
+        if ((prKitActivated(kit, card) || enter) && view.unlock) view.unlock();
+        if (prUiKeyPressed(ui, claim, PrAppKey_Escape, 0) && view.hide) view.hide();
+    }
+
     void build(PrLayoutNode parent) {
+        if (view.lockScreen) {
+            lockScreen(parent);
+            return;
+        }
         if (view.pendingBoardId && view.board) {
             if (view.board->prepared()) {
                 for (std::size_t i = 0; i < model.tab_count(); ++i) {
@@ -2307,7 +2365,7 @@ struct Builder {
         PrLayoutNode window = element(parent, Part::Window);
         view.selection.begin(tree, model.tab_count() ? model.tab(model.active()).id : SIZE_MAX);
         view.energyAnimating = false;
-        view.breathing = false;     // until a friend's transcript draws a busy cursor this round
+        view.breathing = false;     // until an AI's transcript draws a busy cursor this round
         // The window's keys are claimed on the outermost node of the round: the parent the host builds under (the
         // studio window's surface, the tree's root), else the window. With no focus, as on the sprint tab, which has no
         // prompt, Prax routes a key from the tree's root up (ui.cpp routeKey), so a claim on the window, below the root,
@@ -2324,7 +2382,7 @@ struct Builder {
         serviceTerminals();
         // On a terminal tab Escape is not claimed: the terminal claims it for its shell. Command-Escape does nothing
         // there or on the sprint tab (it is captured below all the same). On the sprint tab Escape hides.
-        const TabKind activeKind = model.tab_count() == 0 ? TabKind::Friend : model.tab(model.active()).kind;
+        const TabKind activeKind = model.tab_count() == 0 ? TabKind::AI : model.tab(model.active()).kind;
         const bool hides = activeKind != TabKind::Terminal;
         // While an input method composes, its Enter commits the composition and its Escape cancels it (the KeyDown comes
         // first, then CompositionEnd): read before the area takes this round's events.
@@ -2355,18 +2413,18 @@ struct Builder {
         // the strip may have selected or moved a tab: read the active tab again
         if (model.tab_count() != 0 && model.tab(model.active()).id != view.selectedId) {
             view.selectedId = model.tab(model.active()).id;
-            if (view.playChirp) view.playChirp(view.windowApp.surface.tabChirp);
+            view.chirp(view.windowApp.surface.tabChirp);
             if (view.selected)
                 view.selected();
         }
         // Cut text on its way to a prompt this round does not build has nowhere to go (the focus left the prompt, and
         // the area does not see the event): nothing more is coming.
-        if (model.tab_count() == 0 || model.tab(model.active()).kind != TabKind::Friend || !view.promptOpen) {
+        if (model.tab_count() == 0 || model.tab(model.active()).kind != TabKind::AI || !view.promptOpen) {
             view.cutComing = false;
         }
         page(window, composing);
         const bool dialog = view.accountMenu != kPrLayoutNodeNone || asking != nullptr;
-        if (dialog && !view.dialogVisible && view.playChirp) view.playChirp(view.windowApp.surface.dialogChirp);
+        if (dialog && !view.dialogVisible) view.chirp(view.windowApp.surface.dialogChirp);
         if (!dialog) view.energyAccount.clear();
         view.dialogVisible = dialog;
         view.displayedLimit = view.windowApp.limitOffer;
@@ -2387,7 +2445,7 @@ struct Builder {
         for (std::size_t i = 0; i < model.tab_count(); ++i) {
             const auto& tab = model.tab(i);
             prJsonWriterBeginObject(w);
-            field("kind", tab.kind == TabKind::Friend ? "friend" : tab.kind == TabKind::Sprint ? "sprint" :
+            field("kind", tab.kind == TabKind::AI ? "ai" : tab.kind == TabKind::Sprint ? "sprint" :
                           tab.kind == TabKind::Extension ? "extension" : "terminal");
             field("label", label(tab));
             field("group", tab.group);
@@ -2402,7 +2460,7 @@ struct Builder {
         field("draft", active ? active->draft : std::string_view{});
         prJsonWriterKey(w, sv("logout"));
         prJsonWriterBool(w, active && active->draft == "/logout");
-        if (active && active->kind == TabKind::Friend && view.sessionCapabilities) {
+        if (active && active->kind == TabKind::AI && view.sessionCapabilities) {
             std::string modelName, effort, catalog;
             view.sessionCapabilities(modelName, effort, catalog);
             field("effort", effort);
@@ -2415,7 +2473,7 @@ struct Builder {
                 prJsonWriterValue(w, parsed.get(), 0);
             }
         }
-        if (active && active->kind == TabKind::Friend && view.previewAccounts) {
+        if (active && active->kind == TabKind::AI && view.previewAccounts) {
             auto picker = view.accountPicker ? view.accountPicker : view.previewAccounts(0);
             if (picker) {
                 field("current", picker->account);
@@ -2440,7 +2498,7 @@ struct Builder {
     void updateApplication() {
         const auto describe = [&] {
             const Tab* active = model.tab_count() ? &model.tab(model.active()) : nullptr;
-            const char* kind = !active ? "empty" : active->kind == TabKind::Friend ? "friend" :
+            const char* kind = !active ? "empty" : active->kind == TabKind::AI ? "ai" :
                 active->kind == TabKind::Terminal ? "terminal" : active->kind == TabKind::Sprint ? "sprint" : "extension";
             if (!active || view.choiceTab != active->id || (view.secrets && view.secrets->showing())) {
                 view.choiceKind.clear();
@@ -2449,14 +2507,14 @@ struct Builder {
             if (view.accountPicker && (!active || active->id != view.accountPicker->tab ||
                     (view.secrets && view.secrets->showing())))
                 view.accountPicker.reset();
-            auto account = active && active->kind == TabKind::Friend && view.signInAccount ? view.signInAccount() : SignInAccount{};
+            auto account = active && active->kind == TabKind::AI && view.signInAccount ? view.signInAccount() : SignInAccount{};
             if (view.dismissedSignIn && (!active || view.dismissedSignIn->first != active->id ||
                     view.dismissedSignIn->second != account.name)) view.dismissedSignIn.reset();
             view.windowApp.update(*view.application, kind, active ? active->type : std::string(), view.promptOpen,
                 !view.status.empty(), model.active(), model.tab_count(), active ? active->group : std::string(),
                 std::move(account),
                 view.accountPicker.has_value(),
-                active && active->kind == TabKind::Friend && view.limitOffer ? view.limitOffer() : LimitOffer{}, policyUiState(active));
+                active && active->kind == TabKind::AI && view.limitOffer ? view.limitOffer() : LimitOffer{}, policyUiState(active));
         };
         describe();
         if (view.tabGroupGeneration != view.windowApp.layoutGeneration) {
@@ -2484,13 +2542,13 @@ struct Builder {
                 break;
             }
             case WindowCommand::ClearComposer:
-                if (model.tab_count() && view.playChirp && (!model.tab(model.active()).draft.empty() || !model.tab(model.active()).held.empty()))
-                    view.playChirp(view.windowApp.surface.discardChirp);
+                if (model.tab_count() && (!model.tab(model.active()).draft.empty() || !model.tab(model.active()).held.empty()))
+                    view.chirp(view.windowApp.surface.discardChirp);
                 model.clear_composer(model.active());
                 view.prompted = ~std::size_t(0);
                 break;
             case WindowCommand::ReplaceDraft:
-                if (model.tab_count() && model.tab(model.active()).kind == TabKind::Friend) {
+                if (model.tab_count() && model.tab(model.active()).kind == TabKind::AI) {
                     model.set_draft(model.active(), key.type);
                     view.prompted = ~std::size_t(0);
                 }
@@ -2557,8 +2615,8 @@ struct Builder {
                 if ((legacy && !terminal) || !view.windowApp.closable.value_or(legacy || tab.kind == TabKind::Extension))
                     break;
                 const auto id = tab.id;
-                if (tab.kind == TabKind::Friend && view.dismissFriend)
-                    view.dismissFriend(tab);
+                if (tab.kind == TabKind::AI && view.dismissAI)
+                    view.dismissAI(tab);
                 const auto closing = model.active();
                 if (terminal) {
                     if (closing > 0 && model.tab(closing - 1).group == tab.group)
@@ -2585,7 +2643,7 @@ struct Builder {
                 }
                 break;
             case WindowCommand::Stop:
-                if (model.tab_count() && model.tab(model.active()).kind == TabKind::Friend && view.stop)
+                if (model.tab_count() && model.tab(model.active()).kind == TabKind::AI && view.stop)
                     view.stop();
                 break;
         }
@@ -2605,12 +2663,9 @@ struct Builder {
             view.shown = ~std::size_t(0);
             view.transcript = kPrLayoutNodeNone;
         }
-        if (std::find(panels.begin(), panels.end(), Panel::Prompt) == panels.end()) {
-            view.prompted = ~std::size_t(0);
-            view.prompt = kPrLayoutNodeNone;
-            view.promptBox = kPrLayoutNodeNone;
-        }
-        if (view.windowApp.surface.items && !asking) window = element(window, Part::FriendPanels);
+        if (std::find(panels.begin(), panels.end(), Panel::Prompt) == panels.end())
+            promptGone();
+        if (view.windowApp.surface.items && !asking) window = element(window, Part::AIPanels);
         for (const auto panel : panels) {
             switch (panel) {
                 case Panel::Board: sprint(window); break;
@@ -2646,12 +2701,12 @@ struct Builder {
                     if (type == view.windowApp.types.end()) break;
                     for (std::size_t i = 0; i < model.tab_count(); ++i) {
                         const auto& service = model.tab(i);
-                        if (service.kind == TabKind::Friend && service.name == type->second.service &&
+                        if (service.kind == TabKind::AI && service.name == type->second.service &&
                                 !service.transcript.empty()) {
                             const auto& result = service.transcript.back();
-                            if (result.kind == EntryKind::Friend || (result.kind == EntryKind::Notice && look.transcriptStyle.showNotices))
+                            if (result.kind == EntryKind::AI || (result.kind == EntryKind::Notice && look.transcriptStyle.showNotices))
                                 caption(element(window, Part::ReplyRow), result.text, textStyle(PrKitTextRole_Body,
-                                    result.kind == EntryKind::Notice ? kNoticeTone : kChatTone));
+                                    static_cast<PrKitTone>(result.kind == EntryKind::Notice ? kNoticeTone : kChatTone)));
                             break;
                         }
                     }
@@ -2721,8 +2776,8 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps, float opacity,
     type(kAccountRole, kBodySize, kLinePitch);
     theme.types[kAccountRole].weight = card.unselectedWeight;
     type(PrKitTextRole_Strong, kBodySize, kLinePitch);
-    theme.types[PrKitTextRole_Strong].weight = static_cast<int>(card.emailWeight);
-    type(PrKitTextRole_BodySmall, kLabelSize, 1.2f * kLabelSize);    // the notice when there are no friends
+    theme.types[PrKitTextRole_Strong].weight = static_cast<float>(static_cast<int>(card.emailWeight));
+    type(PrKitTextRole_BodySmall, kLabelSize, 1.2f * kLabelSize);    // the notice when there are no AIs
     type(PrKitTextRole_Meta, kMetaSize, 1.3f * kMetaSize);           // "queued"
     type(PrKitTextRole_Mono, kToolSize, kToolPitch, true);           // a tool line
     return theme;
@@ -2788,7 +2843,7 @@ std::string cutLine(std::size_t given, std::size_t kept) {
 
 std::size_t promptRoom(const View& view, PrUi* ui) {
     const Model& model = *view.model;
-    if (model.tab_count() == 0 || model.tab(model.active()).kind != TabKind::Friend) {
+    if (model.tab_count() == 0 || model.tab(model.active()).kind != TabKind::AI) {
         return 0;
     }
     const std::size_t used = model.tab(model.active()).draft.size();

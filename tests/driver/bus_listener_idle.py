@@ -15,9 +15,9 @@ def test(wrapper):
         server.bind(path)
         server.listen(1)
         server.settimeout(3)
-        env = dict(os.environ, NEXUS_BUS_FRIEND="friend", NEXUS_BUS_LISTENER=path)
+        env = dict(os.environ, NEXUS_BUS_AI="ai", NEXUS_BUS_LISTENER=path)
         cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN)
-        child = subprocess.Popen([wrapper, "hook", "--as", "friend"], stdin=subprocess.DEVNULL,
+        child = subprocess.Popen([wrapper, "hook", "--as", "ai"], stdin=subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, env=env)
         try:
             conn, _ = server.accept()

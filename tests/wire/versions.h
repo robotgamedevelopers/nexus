@@ -19,7 +19,7 @@ struct Read {
     int unknown = 0;            // fields, enum values and union arms the reader skipped because it does not know them
     bool damaged = false;
     bool refused = false;
-    std::string friendName;     // the first session's info
+    std::string aiName;     // the first session's info
     std::string instance;
     bool titlePresent = false;  // the later version's added field (a reader of this version never sees it)
     std::string title;
@@ -42,7 +42,7 @@ struct ReadActions {
     std::uint64_t start = 0;
     std::vector<std::string> kinds;     // by name
     std::vector<std::uint64_t> sessions;
-    std::vector<std::string> friends;
+    std::vector<std::string> ais;
     std::vector<std::string> texts;
     std::vector<std::uint64_t> requests;
     std::vector<std::string> secrets;

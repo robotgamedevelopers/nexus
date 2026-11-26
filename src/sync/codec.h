@@ -51,22 +51,22 @@ struct SessionChange {
     std::optional<std::vector<std::string>> busSenders{};
 };
 
-// A sessions diff: every session of the state, in id order, then the open secret requests, then the server's friends
-// when this diff carries them (friendsSent: they changed from the state diffed from), whether it holds a list
-// (friendsKnown) and the list, and then the live sign-in flows as this link's window sees them (format 5 on; none in
+// A sessions diff: every session of the state, in id order, then the open secret requests, then the server's AIs
+// when this diff carries them (aisSent: they changed from the state diffed from), whether it holds a list
+// (aisKnown) and the list, and then the live sign-in flows as this link's window sees them (format 5 on; none in
 // formats 1 to 4).
 struct SessionsChange {
     std::vector<SessionChange> sessions;
     std::vector<SecretRequest> requests;
-    bool friendsSent = false;
-    bool friendsKnown = false;
-    std::vector<ServerFriend> friends;
+    bool aisSent = false;
+    bool aisKnown = false;
+    std::vector<ServerAI> ais;
     std::vector<SignInOffer> offers;
     std::uint64_t nextAction = 0;
 };
 
 // Formats 1 to 3. A format that lacks a field does not write it (activity before 2, the instance before 2, the
-// requests before 3, the friends in every one of them: read, friendsKnown is false), and writes a Tool entry as Friend
+// requests before 3, the AIs in every one of them: read, aisKnown is false), and writes a Tool entry as AI
 // in format 1. Reading throws BadDiff on malformed bytes.
 std::string writeLegacy(const SessionsChange& change, std::uint32_t format);
 SessionsChange readLegacy(const std::string& diff, std::uint32_t format);
@@ -105,7 +105,7 @@ void checkReadSize(std::size_t diffBytes, std::int64_t need, const char* what);
 // quarter of both link limits for those other fields. Check the generated representation near the limits.
 constexpr std::size_t kRosterWireBytes = kMaxDiffBytes * 3 / 4;
 constexpr std::size_t kRosterReadBytes = kMaxReadBytes * 3 / 4;
-bool rosterFits(std::vector<ServerFriend> friends);
+bool rosterFits(std::vector<ServerAI> ais);
 
 std::string writeTables(const SessionsChange& change, std::uint32_t format);
 SessionsChange readTables(const std::string& diff, int* unknown);

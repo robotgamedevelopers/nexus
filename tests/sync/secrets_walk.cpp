@@ -11,7 +11,7 @@
 // both the hand-written codec and schema's tables carry the values the model checks.
 //
 // The pieces are the real ones, wired as nexus-server and the windows wire them: Drivers over an in-memory fake
-// harness (Drivers::Host) starting a driver per friend session, writing `server` (`features: ["secrets"]`) after each
+// harness (Drivers::Host) starting a driver per AI session, writing `server` (`features: ["secrets"]`) after each
 // `hello`, reading `ask-secret` from the driver's standard output in Drivers::serve, holding `secret` answers while the
 // step's batch is held (Drivers::hold) and flushing them to the driver's standard input on Drivers::release; the hub's
 // askSecret, apply, expireSecrets, retrySecrets and dropSecrets (a restart ends the old Drivers and Hub and starts new
@@ -171,7 +171,7 @@ struct AskOrigin {
     std::uint64_t requestId = 0;
 };
 
-// In-memory stand-in for the friend sessions' driver processes (Drivers::Host): each spawned driver writes `hello` on
+// In-memory stand-in for the AI sessions' driver processes (Drivers::Host): each spawned driver writes `hello` on
 // its standard output, checks that `server` (`features: ["secrets"]`) arrives on its standard input before `send`,
 // writes `ask-secret` lines when the walk asks as that session, and decodes every line arriving on its standard input
 // with driver::LineReader and decodeServerMessage.
@@ -540,7 +540,7 @@ struct Walk {
             w.got.setFormat(w.old ? 2 : walkFormat);
             windows.push_back(std::move(w));
         }
-        // Two friends' sessions, whose AIs ask through their drivers.
+        // Two AIs' sessions, whose AIs ask through their drivers.
         {
             sync::Hub bootstrap(store);
             for (const char* f : {"f", "g"}) {
@@ -548,7 +548,7 @@ struct Walk {
                 sync::Action a;
                 a.num = ++num;
                 a.kind = sync::ActionKind::Ensure;
-                a.friendName = f;
+                a.aiName = f;
                 bootstrap.apply(a, &why, "walk");
             }
         }
@@ -569,7 +569,7 @@ struct Walk {
         drivers.reset();
     }
 
-    // The server's start: Drivers and Hub over the store, with accounts, the secret dialog, and each friend session's
+    // The server's start: Drivers and Hub over the store, with accounts, the secret dialog, and each AI session's
     // driver started past its `hello` and `server` (`features: ["secrets"]`) into an open turn.
     void start() {
         server::Drivers::Options opts;
@@ -582,8 +582,8 @@ struct Walk {
         opts.quiet = true;
         opts.readTable = [](std::string* text, std::string*) {
             *text = "driver claude /fake/driver\n"
-                    "friend f claude /work/f\n"
-                    "friend g claude /work/g\n";
+                    "ai f claude /work/f\n"
+                    "ai g claude /work/g\n";
             return true;
         };
         drivers = std::make_unique<server::Drivers>(store, std::move(opts));
@@ -626,9 +626,9 @@ struct Walk {
         for (const std::string& a : kAccts) {
             r.accounts.push_back(accounts::Account{a, "claude"});
         }
-        // Both friends linked to both accounts: their AIs may ask for either.
+        // Both AIs linked to both accounts: their AIs may ask for either.
         for (const char* f : {"f", "g"}) {
-            r.friends.push_back(accounts::Friend{f, kAccts, kAccts[0]});
+            r.ais.push_back(accounts::AI{f, kAccts, kAccts[0]});
         }
         hub->useAccounts(r, nullptr);
         if (echoFault) {
@@ -688,7 +688,7 @@ struct Walk {
                            ", outcome |-> " + q(r.stored ? "stored" : "refused") + ", reason |-> " +
                            orToken(r.reason, r.stored ? kNone : r.reason) + "]");
         }
-        // Friend session asks (sessions 1 and 2): built exclusively from the `secret` lines decoded off each driver's
+        // AI session asks (sessions 1 and 2): built exclusively from the `secret` lines decoded off each driver's
         // standard input pipe.
         for (const DriverAnswer& ans : harness.takeAnswers()) {
             const AskOrigin origin = harness.lookupAsk(ans.pid, ans.ask);
@@ -936,7 +936,7 @@ int main(int argc, char** argv) {
             }
             const std::vector<sync::SessionId> askers{0, 1, 2};
             const sync::SessionId asker = askers[pick(askers.size())];
-            // A friend's AI with an ask not yet answered (open, or its value held) is refused before any request is
+            // An AI with an ask not yet answered (open, or its value held) is refused before any request is
             // made (Hub::askSecret, SecretDesk::waiting), which the model leaves out: the walk asks only from an
             // asker with none waiting.
             if (asker != 0 && w.hub->secrets().waiting(asker)) {

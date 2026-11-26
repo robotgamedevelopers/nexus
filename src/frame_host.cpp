@@ -96,31 +96,31 @@ void FrameHost::restoreLayout() {
     if (model->tab_count()) view->selectedId = model->tab(model->active()).id;
 }
 
-void FrameHost::takeFriends(const sync::Sessions& state) {
+void FrameHost::takeAIs(const sync::Sessions& state) {
     std::function<void(sync::Action)> ensure;
     if (link != nullptr) {
         ensure = [this](sync::Action a) { link->send(std::move(a)); };
     }
-    sync::StripTake changes = sync::takeFriends(strip, *model, mirror, state, ensure);
+    sync::StripTake changes = sync::takeAIs(strip, *model, mirror, state, ensure);
     if (!changes.ran) {
         return;
     }
-    if (rosterKnown != state.friendsKnown()) savedLayoutRevision = ~std::uint64_t{};
-    rosterKnown = state.friendsKnown();
+    if (rosterKnown != state.aisKnown()) savedLayoutRevision = ~std::uint64_t{};
+    rosterKnown = state.aisKnown();
     restoreLayout();
-    // A tab the friends selected (the saved one arriving, or another after the one that showed went) is no choice of
+    // A tab the AIs selected (the saved one arriving, or another after the one that showed went) is no choice of
     // the person's: the view's next round must not take it for one (view.h selected), so it is neither saved nor ends
     // the saved tab's wait.
     if (view != nullptr && model->tab_count() != 0) {
         view->selectedId = model->tab(model->active()).id;
     }
     for (const std::string& name : changes.dropped) {
-        std::fprintf(stderr, "nexus: %s sent the friend \"%s\", which is not a friend's name (1 to 64 letters, digits, "
+        std::fprintf(stderr, "nexus: %s sent the AI \"%s\", which is not an AI's name (1 to 64 letters, digits, "
             "'-', '_' or '.', not starting with '.' or '-'): it has no tab\n", host.c_str(), loggable(name).c_str());
     }
     if (changes.past != 0) {
-        std::fprintf(stderr, "nexus: %s sent %zu friends past the %zu a window shows (the most friends.json holds): "
-            "they have no tab\n", host.c_str(), changes.past, sync::kMaxFriendTabs);
+        std::fprintf(stderr, "nexus: %s sent %zu AIs past the %zu a window shows (the most ais.json holds): "
+            "they have no tab\n", host.c_str(), changes.past, sync::kMaxAITabs);
     }
     if (changes.keptChanged && keep && keptStore != nullptr && keptServer(host)) {
         std::string error;
@@ -128,11 +128,11 @@ void FrameHost::takeFriends(const sync::Sessions& state) {
             std::fprintf(stderr, "nexus: %s\n", error.c_str());
         }
     }
-    const bool friends = strip.hasFriends();
-    if (friends) {
+    const bool ais = strip.hasAIs();
+    if (ais) {
         view->notice.clear();
-    } else if (state.friendsKnown()) {
-        view->notice = host + " has no AIs configured: add one to ~/.nexus/server/nexus-config/friends.json there "
+    } else if (state.aisKnown()) {
+        view->notice = host + " has no AIs configured: add one to ~/.nexus/server/nexus-config/ais.json there "
             "(docs/accounts.md), then run `nexus-server config reload`.";
     } else {
         view->notice = host + " sends no list of AIs (a nexus-server before it), and holds no session to show an "
@@ -267,7 +267,7 @@ bool onThisMachine(const sync::SignInOffer& offer, const void* context) {
 } // namespace
 
 void LinkSignIn::step() {
-    if (port == nullptr) {
+    if (port == nullptr || locked) {
         return;
     }
     // The gate's flow left the state (it ended, or another window took it), or the link was lost: the gate closes.
@@ -349,33 +349,56 @@ void FrameHost::finishUpload() {
     view->problem = std::move(result.error);
 }
 
+void FrameHost::showCut(const std::vector<std::uint64_t>& cut) {
+    std::size_t restored = 0;
+    for (const std::uint64_t number : cut) {
+        auto bubble = std::find_if(view->outgoing.begin(), view->outgoing.end(),
+            [&](const auto& b) { return b.action == number; });
+        if (bubble == view->outgoing.end()) continue;
+        for (std::size_t i = 0; i < model->tab_count(); ++i)
+            if (model->tab(i).id == bubble->tab) model->restore_held(i, bubble->text);
+        view->outgoing.erase(bubble);
+        ++restored;
+    }
+    const std::size_t n = cut.size();
+    view->problem = "The link to the server ended before the server acknowledged " + std::to_string(n) +
+        (n == 1 ? " action" : " actions") + " from this window; " + (n == 1 ? "it" : "they") +
+        " may not have arrived and " + (n == 1 ? "was" : "were") + " not sent again.";
+    if (restored > 0)
+        view->problem += restored == n ? (n == 1 ? " The message is back in its tab: check the conversation, then "
+            "press Enter to send it." : " The messages are back in their tabs: check each conversation, then press "
+            "Enter to send them.") : " The messages among them are back in their tabs: check each conversation, then "
+            "press Enter to send them.";
+}
+
 void FrameHost::pollLink() {
     finishUpload();
     LinkState s;
     if (link == nullptr || !link->poll(&s))
         return;
-    // The friends first, so that a friend's new tab shows its session in this same state.
+    if (!s.cut.empty()) showCut(s.cut);
+    // The AIs first, so that an AI's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
         for (const auto& [name, claim] : pendingClaims_) {
             const auto needed = [&](const sync::Sessions& state) -> std::optional<bool> {
                 const auto* primary = state.first(kPrimaryChat);
                 if (primary && primary->info.primaryAccount && primary->info.primaryAccount->name == name)
                     return primary->info.primaryAccount->needsSignIn;
-                for (const auto& f : state.friends())
+                for (const auto& f : state.ais())
                     for (const auto& choice : f.accounts)
                         if (choice.name == name) return choice.needsSignIn;
                 return {};
             };
-            if (needed(accountState_) == true && needed(s.sessions) == false && view->playChirp)
-                view->playChirp(view->windowApp.surface.readyChirp);
+            if (needed(accountState_) == true && needed(s.sessions) == false)
+                view->chirp(view->windowApp.surface.readyChirp);
         }
-        if (phase == sync::LinkPhase::Connected && view->playChirp) {
+        if (phase == sync::LinkPhase::Connected) {
             for (const auto& session : s.sessions.sessions()) {
                 const auto* previous = accountState_.find(session->id);
                 if (!previous) continue;
                 for (auto index = std::max(previous->total(), session->first); index < session->total(); ++index) {
                     if (session->entries[index - session->first]->kind == EntryKind::Person)
-                        view->playChirp(view->windowApp.surface.sendChirp);
+                        view->chirp(view->windowApp.surface.sendChirp);
                 }
             }
         }
@@ -391,7 +414,7 @@ void FrameHost::pollLink() {
             return !session || session->info.limitRequest != pending.second.request ||
                 s.sessions.nextAction() > pending.second.action;
         });
-        takeFriends(s.sessions);
+        takeAIs(s.sessions);
     }
     mirror.apply(*model, s.sessions);
     if (s.phase == sync::LinkPhase::Connected) {
@@ -506,13 +529,13 @@ void LinkSecrets::cancel() {
     }
 }
 
-const sync::ServerFriend* FrameHost::activeAccountRoster() const {
-    if (!model->tab_count() || model->tab(model->active()).kind != TabKind::Friend)
+const sync::ServerAI* FrameHost::activeAccountRoster() const {
+    if (!model->tab_count() || model->tab(model->active()).kind != TabKind::AI)
         return nullptr;
     const auto& name = model->tab(model->active()).name;
-    const auto& friends = accountState_.friends();
-    const auto it = std::find_if(friends.begin(), friends.end(), [&](const auto& f) { return f.name == name; });
-    return it == friends.end() || it->accounts.empty() ? nullptr : &*it;
+    const auto& ais = accountState_.ais();
+    const auto it = std::find_if(ais.begin(), ais.end(), [&](const auto& f) { return f.name == name; });
+    return it == ais.end() || it->accounts.empty() ? nullptr : &*it;
 }
 
 const sync::AccountChoice* FrameHost::activeChoice() const {
@@ -539,9 +562,9 @@ const sync::SignInOffer* FrameHost::offerFor(const std::string& account) const {
 
 void FrameHost::selectSignInAccount() {
     // Servers from before the account roster used a show of the overlay to claim a flow.
-    const auto& friends = accountState_.friends();
+    const auto& ais = accountState_.ais();
     if (!accountState_.first(kPrimaryChat) &&
-        !std::any_of(friends.begin(), friends.end(), [](const auto& f) { return !f.accounts.empty(); })) {
+        !std::any_of(ais.begin(), ais.end(), [](const auto& f) { return !f.accounts.empty(); })) {
         signIn.activeAccount.reset();
         return;
     }
@@ -689,7 +712,7 @@ std::optional<AccountPicker> FrameHost::previewAccounts(int direction) const {
 LimitOffer FrameHost::currentLimit() const {
     if (!model->tab_count()) return {};
     const auto& tab = model->tab(model->active());
-    if (tab.kind != TabKind::Friend) return {};
+    if (tab.kind != TabKind::AI) return {};
     const auto* session = accountState_.find(mirror.session(tab.id));
     if (!session || !session->info.limitRequest) return {};
     const auto& info = session->info;
@@ -703,9 +726,9 @@ void FrameHost::wire() {
     view->resolveLimit = [this](const LimitOffer& shown, const std::string& choice) {
         if (!link || !shown.connected || !shown.request || shown.waiting || shown != currentLimit()) return;
         sync::Action action;
-        if (choice == "account") action.friendName = shown.account;
-        else if (choice == "model") action.friendName = shown.model;
-        if (action.friendName.empty()) return;
+        if (choice == "account") action.aiName = shown.account;
+        else if (choice == "model") action.aiName = shown.model;
+        if (action.aiName.empty()) return;
         action.kind = sync::ActionKind::ResolveLimit;
         action.session = shown.session;
         action.request = shown.request;
@@ -735,7 +758,7 @@ void FrameHost::wire() {
             picker->highlighted = static_cast<std::size_t>(option - picker->options.begin());
             view->accountPicker = std::move(picker);
         } else if (op == "select" || op == "sign_in") {
-            if (view->playChirp) view->playChirp(view->windowApp.surface.confirmChirp);
+            view->chirp(view->windowApp.surface.confirmChirp);
             view->accountPicker.reset();
             if (target != picker->current) {
                 setAccount(picker->session, target);
@@ -748,7 +771,7 @@ void FrameHost::wire() {
     view->previewAccounts = [this](int direction) { return previewAccounts(direction); };
     view->pickerCommand = [this](const std::string& command) { pickerCommand(command); };
     view->chooseAccount = [this](const std::string& account) { chooseAccount(account); };
-    view->dismissFriend = [this](const Tab& tab) {
+    view->dismissAI = [this](const Tab& tab) {
         strip.dismiss(tab);
         mirror.forget(tab.id);
         if (!tab.draft.empty() && keep && keptStore && keptServer(host)) {
@@ -831,7 +854,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         if (text.empty() || text.size() > sync::Limits{}.text)
             return "The service takes nonempty text of up to 32 KiB. The buffer is kept.";
         for (std::size_t i = 0; i < model->tab_count(); ++i) {
-            if (model->tab(i).kind != TabKind::Friend || model->tab(i).name != service) continue;
+            if (model->tab(i).kind != TabKind::AI || model->tab(i).name != service) continue;
             const auto id = sync::sessionOf(*model, i, mirror);
             if (!id) break;
             sync::Action request;
@@ -891,10 +914,10 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         }
         std::string text;
         std::string why;
-        // The session the tab shows, the window's own choice; none until the server's state has one of the friend's
+        // The session the tab shows, the window's own choice; none until the server's state has one of the AI's
         // (the window ensured one as the tab was added), and until then the draft stays.
         const sync::SessionId session = sync::sessionOf(*model, i, mirror);
-        if (session == 0 && i < model->tab_count() && model->tab(i).kind == TabKind::Friend) {
+        if (session == 0 && i < model->tab_count() && model->tab(i).kind == TabKind::AI) {
             why = "No session with " + std::string(model->tab(i).displayName()) + " yet: the prompt is kept.";
         } else if (sync::takePrompt(*model, i, sync::Limits{}.text, &text, &why)) {
             view->problem.clear();
@@ -914,17 +937,17 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
                 } else link->send(std::move(action));
                 return;
             }
-            const auto friendName = model->tab(i).name;
+            const auto aiName = model->tab(i).name;
             const auto instance = current ? current->info.instance : "";
             view->outgoing.push_back({tabId, 0, action.text});
             std::promise<UploadResult> ready;
             upload_ = ready.get_future();
             uploadWorker_ = std::async(std::launch::async, [action = std::move(action), files = std::move(files),
-                    target = host, tabId, friendName, instance, wake = uploadWake, ready = std::move(ready)]() mutable {
+                    target = host, tabId, aiName, instance, wake = uploadWake, ready = std::move(ready)]() mutable {
                 UploadResult result{std::move(action), tabId, {}, {}};
                 result.original = result.action.text;
                 for (const auto& file : files) {
-                    const std::string header = friendName + "\n" + instance + "\n" + file.name + "\n" +
+                    const std::string header = aiName + "\n" + instance + "\n" + file.name + "\n" +
                         std::to_string(file.bytes->size()) + "\n";
                     Command command{"ssh", {"-T", "-o", "BatchMode=yes", "--", target, "exec \"$HOME/.local/bin/nexus-receive\""}, "attachment upload"};
                     auto reply = runCommandWithInput(command, 120, header + *file.bytes);
@@ -952,7 +975,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
     };
     // Command-Escape: a stop of the session the tab shows, sent whatever the window shows and whether or not the link
     // is up (it waits in order with the other actions); the server decides what it stops. Before any state has held a
-    // session of the friend there is no session to name, and nothing is sent.
+    // session of the AI there is no session to name, and nothing is sent.
     view->stop = [this] {
         sync::SessionId session = 0;
         if (sync::stopTarget(*model, model->active(), mirror, &session)) {
@@ -962,14 +985,14 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
             link->send(std::move(action));
         }
     };
-    // The friend tabs, and a session with each, come with the server's state (takeFriends).
+    // The AI tabs, and a session with each, come with the server's state (takeAIs).
     view->notice.clear();
     wire();
 }
 
 void FrameHost::showState(const sync::Sessions& state, bool lost) {
     accountState_ = state;
-    takeFriends(state);
+    takeAIs(state);
     mirror.apply(*model, state);
     phase = sync::LinkPhase::Connected;
     refreshPicker();
@@ -1010,6 +1033,8 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
             if (!choice) signIn.activeAccount->clear();
             else if (*signIn.activeAccount != choice->name) *signIn.activeAccount = choice->name;
         }
+        if (view->lockScreen && !signIn.locked) signIn.lock();
+        else if (!view->lockScreen) signIn.unlock();
         signIn.step();
         if (!signIn.problem.empty()) {
             view->problem = std::move(signIn.problem);
@@ -1027,6 +1052,9 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
 }
 
 bool FrameHost::stageFile(std::string name, std::string bytes) {
+    // Nothing is staged while locked (View::lockScreen): a clipboard file or image read that finishes after the lock
+    // starts, before the next frame takes the prompt away, lands nowhere.
+    if (view->lockScreen) return false;
     if (!ui || view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt ||
         (view->secrets && view->secrets->showing()) || !model->tab_count()) return false;
     if (name.empty() || name == "." || name == ".." || name.size() > 255 ||
@@ -1056,8 +1084,72 @@ bool FrameHost::stageFile(std::string name, std::string bytes) {
     return true;
 }
 
+bool isInputEvent(const PrAppEvent& e) {
+    switch (e.kind) {
+    case PrAppEventKind_PointerMove:
+    case PrAppEventKind_PointerDown:
+    case PrAppEventKind_PointerUp:
+    case PrAppEventKind_PointerCancel:
+    case PrAppEventKind_PointerEnter:
+    case PrAppEventKind_PointerLeave:
+    case PrAppEventKind_Scroll:
+    case PrAppEventKind_Gesture:
+    case PrAppEventKind_TrackpadTouches:
+    case PrAppEventKind_KeyDown:
+    case PrAppEventKind_KeyUp:
+    case PrAppEventKind_Text:
+    case PrAppEventKind_Paste:
+    case PrAppEventKind_CompositionUpdate:
+    case PrAppEventKind_CompositionEnd:
+    case PrAppEventKind_DragEnter:
+    case PrAppEventKind_DragOver:
+    case PrAppEventKind_DragLeave:
+    case PrAppEventKind_Drop:
+    case PrAppEventKind_DragEnd:
+    case PrAppEventKind_DragPromise:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool lockScreenTakes(const PrAppEvent& e) {
+    switch (e.kind) {
+    case PrAppEventKind_PointerMove:
+    case PrAppEventKind_PointerDown:
+    case PrAppEventKind_PointerUp:
+    case PrAppEventKind_PointerCancel:
+    case PrAppEventKind_PointerEnter:
+    case PrAppEventKind_PointerLeave:
+        return true;
+    case PrAppEventKind_KeyDown:
+    case PrAppEventKind_KeyUp:
+        return (e.modifiers & ~PrAppModifierFlag_CapsLock) == 0 &&
+            (e.keyboard.key == PrAppKey_Enter || e.keyboard.key == PrAppKey_Escape);
+    default:
+        return false;
+    }
+}
+
+bool resetsIdle(const PrAppEvent& e) {
+    switch (e.kind) {
+    case PrAppEventKind_KeyDown:
+    case PrAppEventKind_Text:
+    case PrAppEventKind_PointerDown:
+    case PrAppEventKind_Scroll:
+    case PrAppEventKind_Paste:
+    case PrAppEventKind_Drop:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool FrameHost::event(const PrAppEvent& e) {
     HitchScope scope(hitch, Phase::Input);
+    // While locked (View::lockScreen) no input reaches anything but the lock screen: no key reaches a terminal's shell,
+    // the Dashboard's page or the prompt, and nothing is pasted or dropped. What is not input (a resize, a timer) passes.
+    if (view->lockScreen && isInputEvent(e)) return !lockScreenTakes(e);
     // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
     // reaches the sprint tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {

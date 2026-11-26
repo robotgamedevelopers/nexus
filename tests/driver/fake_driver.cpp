@@ -1,5 +1,5 @@
 // A driver that speaks the protocol (src/driver/protocol.h) from a script instead of a harness: the stand-in the
-// server's functional tests start as a friend's driver.
+// server's functional tests start as an AI's driver.
 //
 //   nexus-fake-driver --cwd <dir> [--resume <session id>] [--account <name>] [--limit cwd] --script <file>
 //
@@ -38,6 +38,11 @@
 //   record-send <path>   in a send block: append to <path> `send <turn>:`, a newline, the send's prompt and a newline
 //   count-starts <path>  count this start in the file <path> (which holds the count of earlier starts, or is absent)
 //   on-start <n> <step>  run <step> only on the <n>th start, as counted by an earlier count-starts
+//   await-steer          in a send block: read until a steer or follow-up of this turn is taken (its queue written),
+//                        or a stop of this turn arrives (settled, aborted, written), then go on with the block
+//   boundary             in a send block: a tool-call boundary: every steer pending goes in (the queue written)
+//   settle               in a send block: the turn's model runs end: the steers pending go in, then each follow-up,
+//                        one per run (the queue written after each), then settled (to a driver that names it)
 //   option <name>        anywhere in the script, for the whole run:
 //                          ignore-eof          when standard input ends, wait to be killed instead of exiting
 //                          ignore-sigterm      ignore SIGTERM, so that only a stronger signal ends it
@@ -51,6 +56,12 @@
 //                                              harness that logs what it reads would
 //                          cycle               once the send blocks are used up, answer the next send with the first
 //                                              again, and so on, so that the driver answers any number of prompts
+//
+// Steering (docs/driver-protocol.md, "Steering a turn") is src/driver/steering.h, named by the hello the script emits:
+// a steer or follow-up is taken (and the queue written) wherever the fake reads the server's lines, ignored when it is
+// not for the open turn, and refused as any line it cannot accept when the hello did not name its kind, its turn was
+// never opened or its id does not go up. A done the script emits for the open turn, from a driver that names settled,
+// is preceded by the settle step when the script wrote none, so a reply script keeps the protocol unchanged.
 //
 // By default it keeps the protocol's rules: it acts on a stop only for the open turn; it refuses any line it cannot
 // accept (malformed, a known kind with a bad or missing field, a send whose turn is not above the last it saw or that
@@ -82,6 +93,7 @@
 #include <vector>
 
 #include "driver/protocol.h"
+#include "driver/steering.h"
 #include "pr/json.h"
 
 // The process's environment, for record-env (POSIX declares it; not every header does).
@@ -140,7 +152,8 @@ struct Script {
 };
 
 const std::set<std::string> kSteps = {"emit", "raw", "tail", "flood", "await-stop", "await-secret", "hang", "exit",
-    "signal", "stderr", "record", "record-env", "record-send", "count-starts", "stream", "pause"};
+    "signal", "stderr", "record", "record-env", "record-send", "count-starts", "stream", "pause", "await-steer",
+    "boundary", "settle"};
 const std::set<std::string> kOptions = {"ignore-eof", "ignore-sigterm", "stop-any-turn", "accept-bad-input",
     "done-without-cause", "echo-input", "cycle"};
 
@@ -348,6 +361,8 @@ public:
             }
             if (const Send* send = std::get_if<Send>(&*input->message))
                 answer(*send);
+            else
+                steeringLine(*input->message);
             // a stop with no turn open, and any unknown kind: nothing
         }
         return 0;
@@ -379,6 +394,7 @@ private:
             badSend(send, "does not follow turn " + std::to_string(lastTurn_));
         lastTurn_ = send.turn;
         lastPrompt_ = send.prompt;
+        steering_.send(send);       // its checks are the fake's own above (accept-bad-input answers past them)
         if (const auto keyed = script_.prompts.find(send.prompt); keyed != script_.prompts.end()) {
             play(keyed->second, send.turn);
             return;
@@ -389,7 +405,9 @@ private:
             if (!option("done-without-cause"))
                 emit(Error{"the script has no reply for send " + std::to_string(nextBlock_ + 1), "add a send block "
                     "to the fake driver's script", send.turn, ErrorCode::Other});
+            beforeDone(send.turn);
             emit(Done{send.turn, Outcome::Error, std::nullopt, std::nullopt});
+            steering_.done();
             return;
         }
         play(script_.sends[nextBlock_++], send.turn);
@@ -413,7 +431,27 @@ private:
 
     void run(const Step& step, std::uint64_t turn) {
         if (step.op == "emit") {
-            writeOut(withTurn(step, step.arg, turn));
+            const std::string line = withTurn(step, step.arg, turn);
+            const Decoded<DriverMessage> d = decodeDriverMessage(std::string_view(line).substr(0, line.size() - 1));
+            const Done* done = std::get_if<Done>(&*d.message);
+            if (const Hello* hello = std::get_if<Hello>(&*d.message)) {
+                steering_.name(hello->features);
+            } else if (done != nullptr && done->turn == steering_.turn()) {
+                beforeDone(done->turn);
+            }
+            writeOut(line);
+            if (done != nullptr && done->turn == steering_.turn()) {
+                steering_.done();
+            }
+        } else if (step.op == "await-steer") {
+            awaitSteer(turn);
+        } else if (step.op == "boundary") {
+            const Steering::Given g = steering_.boundary();
+            if (g.report) {
+                emit(*g.report);
+            }
+        } else if (step.op == "settle") {
+            settle();
         } else if (step.op == "raw") {
             writeOut(step.arg + "\n");
         } else if (step.op == "tail") {
@@ -510,19 +548,27 @@ private:
                 continue;
             }
             if (const Stop* stop = std::get_if<Stop>(&*item->message)) {
-                if (stop->turn == turn || option("stop-any-turn"))
+                if (stop->turn == turn || option("stop-any-turn")) {
+                    stopped(Stop{turn});
                     return true;
+                }
             } else if (const Send* send = std::get_if<Send>(&*item->message)) {
                 badSend(*send, "arrived while turn " + std::to_string(turn) + " is open");
+            } else {
+                steeringLine(*item->message);
             }
         }
     }
 
-    // A stopped turn's end: its open text block's text-end, if one is open, then done outcome stopped (rule 7).
+    // A stopped turn's end: its open text block's text-end, if one is open, then done outcome stopped (rule 7). The
+    // stop already settled the turn (waitOrStop), so steering closes it with the done.
     void endStopped(std::uint64_t turn, bool blockOpen) {
         if (blockOpen)
             emit(TextEnd{turn});
         emit(Done{turn, Outcome::Stopped, std::nullopt, std::nullopt});
+        if (turn == steering_.turn()) {
+            steering_.done();
+        }
         stopped_ = true;
     }
 
@@ -533,13 +579,90 @@ private:
                 continue;
             }
             if (const Stop* stop = std::get_if<Stop>(&*item->message)) {
-                if (stop->turn == turn || option("stop-any-turn"))
+                if (stop->turn == turn || option("stop-any-turn")) {
+                    stopped(Stop{turn});
                     return;
+                }
             } else if (const Send* send = std::get_if<Send>(&*item->message)) {
                 badSend(*send, "arrived while turn " + std::to_string(turn) + " is open");
+            } else {
+                steeringLine(*item->message);
             }
         }
         std::exit(0);
+    }
+
+    // Reads until a steer or follow-up of `turn` is taken, or a stop of `turn` arrives.
+    void awaitSteer(std::uint64_t turn) {
+        while (std::optional<Input> item = in_.next()) {
+            if (!item->message) {
+                badLine(*item);
+                continue;
+            }
+            if (const Stop* stop = std::get_if<Stop>(&*item->message)) {
+                if (stop->turn == turn) {
+                    stopped(*stop);
+                    return;
+                }
+            } else if (const Send* send = std::get_if<Send>(&*item->message)) {
+                badSend(*send, "arrived while turn " + std::to_string(turn) + " is open");
+            } else if (steeringLine(*item->message)) {
+                return;
+            }
+        }
+        std::exit(0);
+    }
+
+    // A steer or follow-up from the server: taken (its queue written), ignored, or refused. True when it was taken.
+    bool steeringLine(const ServerMessage& message) {
+        Steering::Took took;
+        std::uint64_t turn = 0;     // the line's turn, which a refusal carries (rule 4)
+        if (const Steer* steer = std::get_if<Steer>(&message)) {
+            took = steering_.take(*steer);
+            turn = steer->turn;
+        } else if (const FollowUp* follow = std::get_if<FollowUp>(&message)) {
+            took = steering_.take(*follow);
+            turn = follow->turn;
+        } else {
+            return false;
+        }
+        if (took.what == Steering::Took::What::Refused) {
+            refuse(Error{"the server sent a line the driver refused: " + took.why, "the server must write a steer or "
+                "follow-up only into the open turn of a driver that names it (docs/driver-protocol.md, \"Steering a "
+                "turn\")", turn != 0 ? std::optional<std::uint64_t>(turn) : std::nullopt, ErrorCode::Protocol});
+            return false;
+        }
+        if (took.report) {
+            emit(*took.report);
+        }
+        return took.what == Steering::Took::What::Taken;
+    }
+
+    // A stop of the open turn: settled, aborted, to a driver that names it; the script writes the done.
+    void stopped(const Stop& stop) {
+        const Steering::Took took = steering_.stop(stop);
+        if (took.settled) {
+            emit(*took.settled);
+        }
+    }
+
+    // The turn's model runs end: what is pending goes in, then settled.
+    void settle() {
+        for (Steering::Given g = steering_.runEnd(); !g.items.empty(); g = steering_.runEnd()) {
+            if (g.report) {
+                emit(*g.report);
+            }
+        }
+        if (const std::optional<Settled> settled = steering_.settle()) {
+            emit(*settled);
+        }
+    }
+
+    // Before the open turn's done: settle, if the script has not, so that settled comes first.
+    void beforeDone(std::uint64_t turn) {
+        if (turn == steering_.turn() && steering_.phase() == Steering::Phase::Running) {
+            settle();
+        }
     }
 
     // Each line read written to `path` as it came, until a secret's answer, or a stop of `turn`, arrives.
@@ -558,8 +681,10 @@ private:
             if (std::holds_alternative<SecretAnswer>(*item->message)) {
                 return;
             }
+            steeringLine(*item->message);
             if (const Stop* stop = std::get_if<Stop>(&*item->message)) {
                 if (stop->turn == turn || option("stop-any-turn")) {
+                    stopped(Stop{turn});
                     return;
                 }
             } else if (const Send* send = std::get_if<Send>(&*item->message)) {
@@ -611,6 +736,7 @@ private:
     Script script_;
     Arguments arguments_;
     Reader in_;
+    Steering steering_;
     std::uint64_t lastTurn_ = 0;
     std::string lastPrompt_;    // the prompt of the send being answered, for record-send
     std::size_t nextBlock_ = 0;

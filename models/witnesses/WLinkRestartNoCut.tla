@@ -1,5 +1,5 @@
 --------------------------- MODULE WLinkRestartNoCut ---------------------------
-\* Reversed witness: a restart drops the friend's open entry without the notice that cuts its turn, so a window that
+\* Reversed witness: a restart drops the AI's open entry without the notice that cuts its turn, so a window that
 \* showed the text growing holds text the server no longer has anywhere. LiveSound must reject it.
 EXTENDS MCLink
 

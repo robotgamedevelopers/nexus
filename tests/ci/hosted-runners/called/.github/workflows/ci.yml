@@ -1,0 +1,10 @@
+# Planted: the per-commit workflow is clean, the one it calls is hosted; refused.
+name: ci
+on:
+  push:
+jobs:
+  build:
+    runs-on: [self-hosted, nexus-pr, Linux]
+    steps: [{run: "true"}]
+  called:
+    uses: ./.github/workflows/called.yml

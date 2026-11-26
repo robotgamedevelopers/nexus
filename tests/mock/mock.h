@@ -29,8 +29,8 @@ inline const char* const kSignInAccount = "mock-unsigned";
 // session runs here whatever the host is called.
 inline const char* const kMachine = "mock";
 
-// The most AIs the mock makes: the most a server's friends.json holds.
-constexpr std::size_t kMaxAis = accounts::kMaxFriends;
+// The most AIs the mock makes: the most a server's ais.json holds.
+constexpr std::size_t kMaxAis = accounts::kMaxAIs;
 
 // What `nexus-mock start` was asked for.
 struct Options {

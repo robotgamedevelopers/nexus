@@ -28,7 +28,7 @@ std::string readFile(const fs::path& path) {
 
 void filtered(const fs::path& server) {
     fs::create_directory(server);
-    const std::string address = "127.0.0.1:6379", recipient = "friend";
+    const std::string address = "127.0.0.1:6379", recipient = "ai";
     const fs::path archive = server / "bus-filtered";
     BusMessage msg{"999-1", "writer", "990-0", "a subject\nwith a second line", "short"};
     const auto pathFor = [&](const std::string& endpoint, const std::string& inbox) {
@@ -86,14 +86,14 @@ void run(const fs::path& workspace) {
     // Count bytes at the exact boundary, including multibyte UTF-8 and trailing newlines.
     std::string text(4093, 'a');
     text += "中";
-    CHECK(prepareBusBody({}, "friend", "124-0", text, out, why));
+    CHECK(prepareBusBody({}, "ai", "124-0", text, out, why));
     CHECK(out.displayBody == text && out.promptBody == text);
     CHECK(!fs::exists(workspace / "incoming"));
     text += '\n';
     const auto deliver = [&](const fs::path& dir, const std::string& who, const std::string& id) {
         return prepareBusBody(dir.string(), who, id, text, out, why);
     };
-    CHECK(deliver(workspace, "friend", "124-0"));
+    CHECK(deliver(workspace, "ai", "124-0"));
     if (out.promptBody.empty()) return;
     const auto first = out.promptBody;
     CHECK(out.displayBody == "[message.txt (4097 bytes)]");
@@ -101,33 +101,33 @@ void run(const fs::path& workspace) {
     CHECK(readFile(workspace / first) == text);
     struct stat st{};
     CHECK(::stat((workspace / first).c_str(), &st) == 0 && (st.st_mode & 0777) == 0600);
-    CHECK(deliver(workspace, "friend", "124-0") && out.promptBody == first);
+    CHECK(deliver(workspace, "ai", "124-0") && out.promptBody == first);
     CHECK(deliver(workspace, "other", "124-0") && out.promptBody != first);
-    CHECK(deliver(workspace, "friend", "124-1") && out.promptBody != first);
+    CHECK(deliver(workspace, "ai", "124-1") && out.promptBody != first);
     // A retry reconciles a partial left behind by an interrupted write and never consumes modified bytes.
     const auto partial = (workspace / first).parent_path() / ".message.partial";
     fs::remove(workspace / first);
     std::ofstream(partial) << "partial";
-    CHECK(deliver(workspace, "friend", "124-0") && out.promptBody == first);
+    CHECK(deliver(workspace, "ai", "124-0") && out.promptBody == first);
     CHECK(!fs::exists(partial) && readFile(workspace / first) == text);
     std::ofstream(workspace / first) << "a file modified by its owner";
-    CHECK(!deliver(workspace, "friend", "124-0") && !why.empty() && out.promptBody.empty());
+    CHECK(!deliver(workspace, "ai", "124-0") && !why.empty() && out.promptBody.empty());
     CHECK(readFile(workspace / first) == "a file modified by its owner");
     const auto outside = workspace.parent_path() / "outside";
     fs::create_directory(outside);
     const auto targets = workspace.parent_path() / "link-workspace";
     fs::create_directory_symlink(outside, targets);
-    CHECK(!deliver(targets, "friend", "123-0") && !why.empty());
-    CHECK(!deliver(workspace / ".." / "outside", "friend", "123-0"));
+    CHECK(!deliver(targets, "ai", "123-0") && !why.empty());
+    CHECK(!deliver(workspace / ".." / "outside", "ai", "123-0"));
     const auto other = workspace.parent_path() / "other";
     fs::create_directory(other);
     fs::create_directory_symlink(outside, other / "incoming");
-    CHECK(!deliver(other, "friend", "123-0"));
+    CHECK(!deliver(other, "ai", "123-0"));
     fs::remove(workspace / first);
     fs::create_symlink(outside / "absent.txt", workspace / first);
-    CHECK(!deliver(workspace, "friend", "124-0"));
+    CHECK(!deliver(workspace, "ai", "124-0"));
     CHECK(fs::is_empty(outside));
-    CHECK(!prepareBusBody(workspace.string(), "friend", "124-2", std::string(kBusAttachmentBytes + 1, 'a'), out, why));
+    CHECK(!prepareBusBody(workspace.string(), "ai", "124-2", std::string(kBusAttachmentBytes + 1, 'a'), out, why));
 }
 } // namespace
 

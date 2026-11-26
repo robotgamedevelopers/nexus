@@ -4,6 +4,9 @@
 // as None. It is frozen: it changes only if what format 4 shipped is found to be wrong. Its package is its own only so
 // that both versions link into one test program; a package name is not on the table wire.
 
+// Each `| was = "..."` names the first wire name of a field, table or value renamed since (the friend names became
+// ai): its id stays the hash of that first name, so the bytes are exactly those this version wrote, and the word
+// stays in this file only there.
 package nexuswireprev
 
 // Sent first on a link, each way, before any state (src/link/bootstrap.h): the protocol this end speaks (its state
@@ -21,12 +24,12 @@ table Hello
 enum EntryKind
 {
     Person,
-    Friend,
+    AI | was = "Friend",
     Notice,
     Tool
 }
 
-// What a session's friend is doing. Absent (a writer that never sent it) reads Idle, which claims least; an unknown
+// What a session's AI is doing. Absent (a writer that never sent it) reads Idle, which claims least; an unknown
 // value (a later server's) reads None, which the window shows as busy.
 enum Activity
 {
@@ -35,12 +38,12 @@ enum Activity
     Down
 }
 
-// What a session is (sync::SessionInfo, store::Info): its friend, harness, account, model and effort, and which of
-// its friend's instances it belongs to. Empty account, model or effort: the harness's default; empty instance: the
-// friend's default.
+// What a session is (sync::SessionInfo, store::Info): its AI, harness, account, model and effort, and which of
+// its AI's instances it belongs to. Empty account, model or effort: the harness's default; empty instance: the
+// AI's default.
 table SessionInfo
 {
-    friend_name *string
+    ai_name *string | was = "friend_name"
     harness     *string
     account     *string
     model       *string
@@ -76,7 +79,7 @@ table SessionChange
 }
 
 // An open secret request as every window that can take one receives it (sync/secrets.h): its id, its account, the file
-// asked for, the asker's session (0: nexus itself) and friend, and the asker's one-line reason. Never a value.
+// asked for, the asker's session (0: nexus itself) and AI, and the asker's one-line reason. Never a value.
 table SecretRequest
 {
     id         uint64
@@ -110,7 +113,7 @@ enum ActionKind
     SetEffort,
     AddAccount,
     RemoveAccount,
-    AddFriend,
+    AddAI | was = "AddFriend",
     LinkAccount,
     UnlinkAccount,
     SetDefault,
@@ -118,14 +121,14 @@ enum ActionKind
     SecretCancel
 }
 
-// One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's friend,
+// One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's AI,
 // its text, an account action's account, and a secret answer's or cancel's request and an answer's value (bytes as
 // the person pasted them, never text). Its number is the diff's `start` plus its place in the list.
 table Action
 {
     kind        ActionKind
     session     uint64
-    friend_name *string
+    ai_name *string | was = "friend_name"
     text        *string
     account     *string
     request     uint64

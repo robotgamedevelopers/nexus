@@ -275,7 +275,7 @@ struct LiveServer {
         std::uint64_t sid = openStore->next_session();
         store::Change mk;
         mk.kind = store::Change::Kind::SetInfo;
-        mk.info.friend_name = "friend-" + std::to_string(sid);
+        mk.info.ai_name = "ai-" + std::to_string(sid);
         mk.info.harness = "claude";
         store::Change app;
         app.kind = store::Change::Kind::Append;
@@ -881,7 +881,7 @@ int main(int argc, char** argv) {
         }
         store::Change mk;
         mk.kind = store::Change::Kind::SetInfo;
-        mk.info.friend_name = "legacy-friend";
+        mk.info.ai_name = "legacy-ai";
         mk.info.harness = "claude";
         store::Change app;
         app.kind = store::Change::Kind::Append;

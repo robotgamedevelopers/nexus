@@ -1,4 +1,4 @@
-// Unit tests of the accounts and friends (src/accounts/registry.h) and of the hub's decisions about them
+// Unit tests of the accounts and AIs (src/accounts/registry.h) and of the hub's decisions about them
 // (src/sync/hub.h, models/Accounts.tla): the files' layout and every refusal with its line, the version rule, the
 // consistency rules, the accounts the server picks, and the hub's actions, sets, creates, reloads and rotations over a
 // MemoryStore with a keeper that records what it is given. Logic only: no time, no sockets, no network, no files.
@@ -42,7 +42,7 @@ bool has(const std::vector<std::string>& lines, const std::string& part) {
 Registry sample() {
     Registry r;
     r.accounts = {{"work", "claude"}, {"home", "claude"}, {"cx", "codex"}};
-    r.friends = {{"ada", {"work", "home", "cx"}, "work"}, {"bo", {"home"}, ""}};
+    r.ais = {{"ada", {"work", "home", "cx"}, "work"}, {"bo", {"home"}, ""}};
     return r;
 }
 
@@ -55,7 +55,7 @@ const char* const kAccountsV1 =
 void layout() {
     const Registry r = sample();
     const std::string a = accounts::accountsText(r);
-    const std::string f = accounts::friendsText(r);
+    const std::string f = accounts::aisText(r);
     CHECK(a ==
         "{\n  \"version\": 2,\n  \"accounts\": [\n    {\n      \"name\": \"work\",\n      \"provider\": \"claude\",\n"
         "      \"billing\": \"subscription\"\n    },\n    {\n      \"name\": \"home\",\n      \"provider\": \"claude\",\n"
@@ -66,11 +66,11 @@ void layout() {
     CHECK(f.back() == '\n');
     Registry back;
     CHECK(accounts::readAccounts(a, "accounts.json", &back).ok);
-    CHECK(accounts::readFriends(f, "friends.json", &back).ok);
+    CHECK(accounts::readAIs(f, "ais.json", &back).ok);
     CHECK(back == r);
     // Writing what was read gives the same text: a save never reshuffles the lists.
     CHECK(accounts::accountsText(back) == a);
-    CHECK(accounts::friendsText(back) == f);
+    CHECK(accounts::aisText(back) == f);
     Registry labeled = r;
     auto& account = labeled.accounts.front();
     account.label = "Work";
@@ -87,9 +87,9 @@ void layout() {
     CHECK(accounts::readAccounts(accounts::accountsText(none), "a", &back).ok && back.accounts.empty());
     // A string with a quote and a backslash survives.
     Registry odd;
-    odd.friends = {{"x", {}, ""}};
+    odd.ais = {{"x", {}, ""}};
     odd.accounts = {{"a", "claude"}};
-    CHECK(accounts::readFriends(accounts::friendsText(odd), "f", &back).ok && back.friends == odd.friends);
+    CHECK(accounts::readAIs(accounts::aisText(odd), "f", &back).ok && back.ais == odd.ais);
 }
 
 void refusals() {
@@ -119,21 +119,21 @@ void refusals() {
     CHECK(!rd.ok && has(rd.errors, "the file is a list, not an object"));
     rd = accounts::readAccounts("{\"accounts\": []}", "a", &r);
     CHECK(!rd.ok && has(rd.errors, "has no \"version\""));
-    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"accounts\": \"work\"}]}", "f", &r);
+    rd = accounts::readAIs("{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"accounts\": \"work\"}]}", "f", &r);
     CHECK(!rd.ok && has(rd.errors, "\"accounts\" is a string, not a list"));
-    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"accounts\": [1]}]}", "f", &r);
+    rd = accounts::readAIs("{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"accounts\": [1]}]}", "f", &r);
     CHECK(!rd.ok && has(rd.errors, "holds a number, not an account's name"));
-    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"default\": 3}]}", "f", &r);
+    rd = accounts::readAIs("{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"default\": 3}]}", "f", &r);
     CHECK(!rd.ok && has(rd.errors, "\"default\" is a number"));
-    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"name\": \"b\"}]}", "f", &r);
+    rd = accounts::readAIs("{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"name\": \"b\"}]}", "f", &r);
     CHECK(!rd.ok && has(rd.errors, "has the field \"name\" twice"));
     // Every error is found, not only the first.
     rd = accounts::readAccounts("{\"version\": 1, \"accounts\": [{\"name\": 1, \"provider\": \"claude\"}, "
                                 "{\"name\": \"b\", \"provider\": 2}]}", "a", &r);
     CHECK(rd.errors.size() == 2);
     // An empty or missing file is none.
-    CHECK(accounts::readFriends("", "f", &r).ok && r.friends.empty());
-    CHECK(accounts::readFriends(" \n", "f", &r).ok);
+    CHECK(accounts::readAIs("", "f", &r).ok && r.ais.empty());
+    CHECK(accounts::readAIs(" \n", "f", &r).ok);
 }
 
 void versions() {
@@ -164,10 +164,10 @@ void versions() {
 void consistency() {
     CHECK(accounts::problems(sample()).empty());
     Registry r = sample();
-    r.friends[0].accounts.push_back("gone");
+    r.ais[0].accounts.push_back("gone");
     CHECK(has(accounts::problems(r), "links to the account \"gone\", which accounts.json does not set up"));
     r = sample();
-    r.friends[1].preferred = "work";
+    r.ais[1].preferred = "work";
     CHECK(has(accounts::problems(r), "\"default\" is \"work\", which is not in its \"accounts\""));
     // A name or provider starting with '-' would read as an option where it reaches an argv (--account <name>).
     CHECK(!accounts::isName("-x") && !accounts::isName("--account") && accounts::isName("a-") && accounts::isName("_a"));
@@ -179,74 +179,74 @@ void consistency() {
     r.accounts.push_back({"work", "claude"});
     CHECK(has(accounts::problems(r), "the account \"work\" is there twice"));
     r = sample();
-    r.friends[0].accounts.push_back("work");
+    r.ais[0].accounts.push_back("work");
     CHECK(has(accounts::problems(r), "links to the account \"work\" twice"));
     r = sample();
-    r.friends.push_back({"bo", {}, ""});
-    CHECK(has(accounts::problems(r), "the friend \"bo\" is there twice"));
+    r.ais.push_back({"bo", {}, ""});
+    CHECK(has(accounts::problems(r), "the AI \"bo\" is there twice"));
 }
 
-// A friend's instances: the friend on a machine, in a directory. Read, written in the one layout, checked, and told
+// An AI's instances: the AI on a machine, in a directory. Read, written in the one layout, checked, and told
 // apart in a reload's report.
 void instances() {
     Registry r = sample();
-    r.friends[0].instances = {{"studio", "studio", "/Volumes/nova/ai/rowan"}, {"rocketnet", "studio", "/work/rocketnet"},
+    r.ais[0].instances = {{"studio", "studio", "/Volumes/nova/ai/rowan"}, {"rocketnet", "studio", "/work/rocketnet"},
                               {"laptop", "macbook.local", "/Users/me"}};
     CHECK(accounts::problems(r).empty());
-    const std::string f = accounts::friendsText(r);
+    const std::string f = accounts::aisText(r);
     CHECK(f.find("      \"instances\": [\n        {\n          \"name\": \"studio\",\n          \"machine\": \"studio\",\n"
                  "          \"dir\": \"/Volumes/nova/ai/rowan\"\n        },") != std::string::npos);
     CHECK(f.find("\"default\": null,\n      \"instances\": []\n    }") != std::string::npos);   // bo has none
     Registry back;
-    CHECK(accounts::readFriends(f, "friends.json", &back).ok && back.friends == r.friends);
-    CHECK(accounts::friendsText(back) == f);
-    CHECK(r.friends[0].instance("rocketnet") != nullptr && r.friends[0].instance("nope") == nullptr);
+    CHECK(accounts::readAIs(f, "ais.json", &back).ok && back.ais == r.ais);
+    CHECK(accounts::aisText(back) == f);
+    CHECK(r.ais[0].instance("rocketnet") != nullptr && r.ais[0].instance("nope") == nullptr);
     // A file without "instances" (as before them) reads as none.
-    CHECK(accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\"}]}", "f", &back).ok &&
-          back.friends[0].instances.empty());
+    CHECK(accounts::readAIs("{\"version\": 1, \"ais\": [{\"name\": \"ada\"}]}", "f", &back).ok &&
+          back.ais[0].instances.empty());
 
     // Refusals, with the file's line.
-    accounts::Read rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"instances\": "
+    accounts::Read rd = accounts::readAIs("{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"instances\": "
         "{}}]}", "f", &back);
     CHECK(!rd.ok && has(rd.errors, "\"instances\" is an object, not a list"));
-    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"instances\": [\"studio\"]}]}",
+    rd = accounts::readAIs("{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"instances\": [\"studio\"]}]}",
                                "f", &back);
     CHECK(!rd.ok && has(rd.errors, "holds a string, not an instance"));
-    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"instances\": [\n"
-        "{\"name\": \"s\", \"machine\": \"studio\", \"dir\": \"relative/path\"}]}]}", "/h/friends.json", &back);
-    CHECK(!rd.ok && has(rd.errors, "/h/friends.json:2: the friend \"ada\"'s instance \"s\"'s dir \"relative/path\" is "
+    rd = accounts::readAIs("{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"instances\": [\n"
+        "{\"name\": \"s\", \"machine\": \"studio\", \"dir\": \"relative/path\"}]}]}", "/h/ais.json", &back);
+    CHECK(!rd.ok && has(rd.errors, "/h/ais.json:2: the AI \"ada\"'s instance \"s\"'s dir \"relative/path\" is "
                         "not an absolute path"));
-    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"instances\": ["
+    rd = accounts::readAIs("{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"instances\": ["
         "{\"name\": \"s\", \"machine\": \"me@studio:22\", \"dir\": \"/w\"}]}]}", "f", &back);
     CHECK(!rd.ok && has(rd.errors, "machine \"me@studio:22\" is not a host name"));
-    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"instances\": ["
+    rd = accounts::readAIs("{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"instances\": ["
         "{\"name\": \"s\", \"machine\": \"studio\"}]}]}", "f", &back);
     CHECK(!rd.ok && has(rd.errors, "has no \"dir\""));
-    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"instances\": ["
+    rd = accounts::readAIs("{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"instances\": ["
         "{\"name\": \"s\", \"machine\": \"studio\", \"dir\": \"/w\", \"host\": \"x\"}]}]}", "f", &back);
     CHECK(!rd.ok && has(rd.errors, "has a field \"host\""));
     CHECK(!accounts::isMachine("-studio") && !accounts::isMachine("a b") && accounts::isMachine("studio.local"));
     CHECK(!accounts::isDir("") && !accounts::isDir("~/x") && !accounts::isDir("/a\nb") && accounts::isDir("/"));
 
-    // Consistency: each named once within its friend; the same name in two friends is fine.
+    // Consistency: each named once within its AI; the same name in two AIs is fine.
     Registry twice = r;
-    twice.friends[0].instances.push_back({"studio", "studio", "/elsewhere"});
-    CHECK(has(accounts::problems(twice), "the friend \"ada\"'s instance \"studio\" is there twice"));
+    twice.ais[0].instances.push_back({"studio", "studio", "/elsewhere"});
+    CHECK(has(accounts::problems(twice), "the AI \"ada\"'s instance \"studio\" is there twice"));
     twice = r;
-    twice.friends[1].instances = {{"studio", "studio", "/x"}};
+    twice.ais[1].instances = {{"studio", "studio", "/x"}};
     CHECK(accounts::problems(twice).empty());
-    twice.friends[1].instances[0].machine = "-x";
+    twice.ais[1].instances[0].machine = "-x";
     CHECK(has(accounts::problems(twice), "has the machine \"-x\", which is not a host name"));
 
     // A reload's report.
     Registry moved = r;
-    moved.friends[0].instances[1].dir = "/work/rocketnet-2";
-    moved.friends[0].instances.pop_back();
-    moved.friends[0].instances.push_back({"mini", "mini-m5", "/w"});
+    moved.ais[0].instances[1].dir = "/work/rocketnet-2";
+    moved.ais[0].instances.pop_back();
+    moved.ais[0].instances.push_back({"mini", "mini-m5", "/w"});
     const std::vector<std::string> lines = accounts::changes(r, moved);
-    CHECK(has(lines, "friend ada's instance rocketnet moved: studio /work/rocketnet -> studio /work/rocketnet-2"));
-    CHECK(has(lines, "friend ada's instance laptop removed"));
-    CHECK(has(lines, "friend ada's instance mini set up, on mini-m5 in /w"));
+    CHECK(has(lines, "AI ada's instance rocketnet moved: studio /work/rocketnet -> studio /work/rocketnet-2"));
+    CHECK(has(lines, "AI ada's instance laptop removed"));
+    CHECK(has(lines, "AI ada's instance mini set up, on mini-m5 in /w"));
 }
 
 void picks() {
@@ -267,12 +267,12 @@ void picks() {
     CHECK(accounts::landing(r, {}, "ada").empty());
     CHECK(accounts::landing(r, up, "bo") == "home");
     const std::vector<std::string> c = accounts::changes(Registry{}, r);
-    CHECK(has(c, "account work set up (claude)") && has(c, "friend ada set up, accounts [work, home, cx], default work"));
+    CHECK(has(c, "account work set up (claude)") && has(c, "AI ada set up, accounts [work, home, cx], default work"));
     Registry less = r;
-    less.friends[0].accounts.pop_back();
+    less.ais[0].accounts.pop_back();
     less.accounts.pop_back();
     CHECK(has(accounts::changes(r, less), "account cx removed"));
-    CHECK(has(accounts::changes(r, less), "friend ada's accounts [work, home, cx] -> [work, home]"));
+    CHECK(has(accounts::changes(r, less), "AI ada's accounts [work, home, cx] -> [work, home]"));
 }
 
 // The keeper: records what it is given; refuses while `refuse` is set.
@@ -292,9 +292,9 @@ public:
     std::string refuse;
 };
 
-sync::Action act(std::uint64_t num, sync::ActionKind kind, std::string friendName, std::string account,
+sync::Action act(std::uint64_t num, sync::ActionKind kind, std::string aiName, std::string account,
                  std::string text = std::string(), sync::SessionId session = 0) {
-    return sync::Action{num, kind, session, std::move(friendName), std::move(text), std::move(account)};
+    return sync::Action{num, kind, session, std::move(aiName), std::move(text), std::move(account)};
 }
 
 std::string lastNotice(const sync::SessionStore& store, sync::SessionId id) {
@@ -324,15 +324,15 @@ void hubActions() {
     CHECK(has({why}, "already set up"));
     CHECK(!hub.apply(act(n++, sync::ActionKind::AddAccount, "", "bad name", "claude"), &why, "w"));
     CHECK(!hub.apply(act(n++, sync::ActionKind::LinkAccount, "ada", "work"), &why, "w"));
-    CHECK(has({why}, "no friend ada"));
-    CHECK(hub.apply(act(n++, sync::ActionKind::AddFriend, "ada", ""), &why, "w"));
+    CHECK(has({why}, "no AI ada"));
+    CHECK(hub.apply(act(n++, sync::ActionKind::AddAI, "ada", ""), &why, "w"));
     CHECK(hub.apply(act(n++, sync::ActionKind::LinkAccount, "ada", "work"), &why, "w"));
     CHECK(hub.apply(act(n++, sync::ActionKind::LinkAccount, "ada", "cx"), &why, "w"));
     CHECK(!hub.apply(act(n++, sync::ActionKind::LinkAccount, "ada", "nope"), &why, "w"));
     CHECK(!hub.apply(act(n++, sync::ActionKind::SetDefault, "ada", "nope"), &why, "w"));
     CHECK(hub.apply(act(n++, sync::ActionKind::SetDefault, "ada", "work"), &why, "w"));
     CHECK(store.applied("w") == n - 1);
-    CHECK(hub.accounts()->friendNamed("ada")->accounts == (std::vector<std::string>{"work", "cx"}));
+    CHECK(hub.accounts()->aiNamed("ada")->accounts == (std::vector<std::string>{"work", "cx"}));
     CHECK(keeper.kept.back() == *hub.accounts());
     CHECK(has(keeper.messages, "asked by the window w"));
     // A keeper that refuses (hand edits pending) changes nothing.
@@ -342,7 +342,7 @@ void hubActions() {
     CHECK(has({why}, "hand edits pending") && *hub.accounts() == before && store.applied("w") == n - 1);
     keeper.refuse.clear();
 
-    // A create takes the friend's default, and runs its provider's harness.
+    // A create takes the AI's default, and runs its provider's harness.
     CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Create, 0, "ada", "", ""}, &why, "w"));
     CHECK(store.find(1)->info.account == "work" && store.find(1)->info.autoAccount && store.find(1)->info.harness == "claude");
     // Repeated key presses resolve against the server's latest account, in link order, wrapping both ways.
@@ -362,18 +362,18 @@ void hubActions() {
     CHECK(hub.apply(act(n++, sync::ActionKind::SetAccount, "", "", "", 1), &why, "w"));
     CHECK(store.find(1)->info.account.empty() && store.find(1)->info.harness == "codex");
     CHECK(hub.apply(act(n++, sync::ActionKind::SetAccount, "", "", "work", 1), &why, "w"));
-    // A create copying a session takes its account when linked to the new session's friend, else the default.
-    CHECK(hub.apply(act(n++, sync::ActionKind::AddFriend, "bo", ""), &why, "w"));
+    // A create copying a session takes its account when linked to the new session's AI, else the default.
+    CHECK(hub.apply(act(n++, sync::ActionKind::AddAI, "bo", ""), &why, "w"));
     CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Create, 1, "bo", "", ""}, &why, "w"));
     CHECK(store.find(2)->info.account.empty() && store.find(2)->info.harness == "claude");
     CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Create, 1, "ada", "", ""}, &why, "w"));
     CHECK(store.find(3)->info.account == "work");
 
-    // Unlinking moves the friend's sessions on it, each told; with nothing signed in, to none.
+    // Unlinking moves the AI's sessions on it, each told; with nothing signed in, to none.
     CHECK(hub.apply(act(n++, sync::ActionKind::UnlinkAccount, "ada", "work"), &why, "w"));
     CHECK(store.find(1)->info.account.empty() && store.find(3)->info.account.empty());
     CHECK(has({lastNotice(store, 1)}, "The account work is no longer one of ada's accounts"));
-    CHECK(hub.accounts()->friendNamed("ada")->preferred.empty());
+    CHECK(hub.accounts()->aiNamed("ada")->preferred.empty());
     // With cx signed in, a move lands on it.
     CHECK(hub.apply(act(n++, sync::ActionKind::LinkAccount, "ada", "work"), &why, "w"));
     CHECK(hub.apply(act(n++, sync::ActionKind::SetAccount, "", "", "work", 1), &why, "w"));
@@ -381,7 +381,7 @@ void hubActions() {
     CHECK(hub.apply(act(n++, sync::ActionKind::RemoveAccount, "", "work"), &why, "w"));
     CHECK(store.find(1)->info.account == "cx" && store.find(1)->info.harness == "codex");
     CHECK(hub.accounts()->account("work") == nullptr);
-    CHECK(hub.accounts()->friendNamed("ada")->accounts == (std::vector<std::string>{"cx"}));
+    CHECK(hub.accounts()->aiNamed("ada")->accounts == (std::vector<std::string>{"cx"}));
     // A sign-in for an account not set up is ignored; an account removed and set up again needs sign-in again.
     hub.reportSignedIn("work", true);
     CHECK(hub.signedIn().count("work") == 0);
@@ -435,23 +435,23 @@ void hubReloadAndRotate() {
 
     // A reload of an inconsistent edit is refused whole.
     Registry bad = *hub.accounts();
-    bad.friends[0].preferred = "nope";
+    bad.ais[0].preferred = "nope";
     CHECK(!hub.applyAccounts(bad, "reload", &report));
-    CHECK(has(report, "\"default\" is \"nope\"") && hub.accounts()->friendNamed("ada")->preferred == "work");
+    CHECK(has(report, "\"default\" is \"nope\"") && hub.accounts()->aiNamed("ada")->preferred == "work");
     // A reload that changes cx's provider: the session takes the new harness, told.
     Registry edit = *hub.accounts();
     edit.accounts[2].provider = "claude";
     CHECK(hub.applyAccounts(edit, "reload", &report));
     CHECK(has(report, "account cx's provider codex -> claude"));
     CHECK(store.find(1)->info.harness == "claude" && has({lastNotice(store, 1)}, "provider is now claude"));
-    // A reload that drops the friend: its session is kept as it is (its account too), told once.
+    // A reload that drops the AI: its session is kept as it is (its account too), told once.
     const Registry withAda = edit;
     const std::size_t entries = store.find(1)->transcript.size();
-    edit.friends.erase(edit.friends.begin());
+    edit.ais.erase(edit.ais.begin());
     CHECK(hub.applyAccounts(edit, "reload", &report));
-    CHECK(has(report, "friend ada removed") && has(report, "session 1 (ada): its friend was removed"));
+    CHECK(has(report, "AI ada removed") && has(report, "session 1 (ada): its AI was removed"));
     CHECK(store.find(1)->info.account == "cx" && store.find(1)->transcript.size() == entries + 1);
-    CHECK(has({lastNotice(store, 1)}, "ada was taken out of friends.json"));
+    CHECK(has({lastNotice(store, 1)}, "ada was taken out of ais.json"));
     CHECK(has({lastNotice(store, 1)}, "its queued prompts are kept"));
     // A reload while it is out changes nothing of it; one that puts it back settles it: cx is still linked, so it stays.
     CHECK(hub.applyAccounts(edit, "reload again", &report));
@@ -470,8 +470,8 @@ void hubAutoSubscriptions() {
     Registry fleet = sample();
     fleet.accounts[0].billing = accounts::Billing::Api;
     fleet.accounts[1].name = "auto";
-    fleet.friends[0].accounts = {"work", "auto", "cx"};
-    fleet.friends[1].accounts.clear();
+    fleet.ais[0].accounts = {"work", "auto", "cx"};
+    fleet.ais[1].accounts.clear();
     hub.probeSignInWith([](const accounts::Account& a) { return a.name != "auto"; });
     CHECK(hub.useAccounts(fleet, &keeper).empty());
     std::uint64_t n = 0;
@@ -496,11 +496,11 @@ void hubAutoSubscriptions() {
     hub.reportSignedIn("auto", true);
     CHECK(hub.nextSubscription(1, {}, why) == "auto" && store.find(1)->info.account == "cx");
     CHECK(hub.rotate(1, &why) && store.find(1)->info.account == "auto");
-    fleet.friends[0].accounts = {"work", "cx"};
+    fleet.ais[0].accounts = {"work", "cx"};
     std::vector<std::string> report;
     CHECK(hub.applyAccounts(fleet, "reload", &report));
     CHECK(!store.find(1)->info.autoAccount && store.find(1)->info.account == "cx");
-    CHECK(!hub.state().friends().front().canAutoAccount && !set(sync::kAutoAccountTarget));
+    CHECK(!hub.state().ais().front().canAutoAccount && !set(sync::kAutoAccountTarget));
 }
 
 // A memory store that fails from a chosen step on, as a disk that stops taking writes: that step and every later one
@@ -540,12 +540,12 @@ void hubStoreFails() {
     CHECK(hub.apply(act(2, sync::ActionKind::SetAccount, "", "", "work", 1), &why, "w"));
     // A reload that unlinks work: committed, then the store fails while the session moves.
     Registry edit = sample();
-    edit.friends[0].accounts = {"home", "cx"};
-    edit.friends[0].preferred = "home";
+    edit.ais[0].accounts = {"home", "cx"};
+    edit.ais[0].preferred = "home";
     store.failing = true;
     std::vector<std::string> report;
     CHECK(hub.applyAccounts(edit, "reload", &report));
-    CHECK(has(report, "friend ada's accounts") && has(report, "the store failed while the sessions were moved"));
+    CHECK(has(report, "AI ada's accounts") && has(report, "the store failed while the sessions were moved"));
     CHECK(*hub.accounts() == edit && keeper.kept.back() == edit && hub.failed());
     // An account action: committed and taken, then the store fails as it is counted.
     FailingStore store2;
@@ -558,8 +558,8 @@ void hubStoreFails() {
     CHECK(hub2.accounts()->account("new") != nullptr && keeper2.kept.size() == 1);
 }
 
-// After accounts.json was made from the drivers file: each session on no account whose friend has a default takes
-// it, told; one already on an account, or whose friend has none, stays.
+// After accounts.json was made from the drivers file: each session on no account whose AI has a default takes
+// it, told; one already on an account, or whose AI has none, stays.
 void hubAdoptDefaults() {
     sync::MemoryStore store;
     sync::Hub hub(store);
@@ -570,7 +570,7 @@ void hubAdoptDefaults() {
     CHECK(hub.apply(sync::Action{3, sync::ActionKind::Ensure, 0, "cy", "", ""}, &why, "w"));
     Registry r;
     r.accounts = {{"work", "claude"}};
-    r.friends = {{"ada", {"work"}, "work"}, {"bo", {"work"}, ""}};
+    r.ais = {{"ada", {"work"}, "work"}, {"bo", {"work"}, ""}};
     CHECK(hub.useAccounts(r, nullptr).empty());
     const std::vector<std::string> report = hub.adoptDefaults();
     CHECK((report == std::vector<std::string>{"session 1 (ada): account none -> work, as the drivers file ran it"}));
@@ -587,7 +587,7 @@ void hubAdoptDefaults() {
         CHECK(first.apply(sync::Action{1, sync::ActionKind::Ensure, 0, "ada", "", ""}, &why, "w"));
         CHECK(first.apply(sync::Action{2, sync::ActionKind::Ensure, 0, "bo", "", ""}, &why, "w"));
         Registry both = r;
-        both.friends[1].preferred = "work";
+        both.ais[1].preferred = "work";
         CHECK(first.useAccounts(both, nullptr).empty());
         failing.okLeft = 1;
         CHECK(first.adoptDefaults().size() == 1 && first.failed());
@@ -629,15 +629,15 @@ void hubProbe() {
     CHECK(hub.signedIn() == (std::set<std::string>{"cx", "new"}));
 }
 
-// The hub and instances: a create takes the instance of the session it copies when that is the same friend's, else
-// the friend's first; a session whose instance goes moves to the first, told; a friend with none gives none.
+// The hub and instances: a create takes the instance of the session it copies when that is the same AI's, else
+// the AI's first; a session whose instance goes moves to the first, told; an AI with none gives none.
 void hubInstances() {
     sync::MemoryStore store;
     sync::Hub hub(store);
     Keeper keeper;
     std::string why;
     Registry r = sample();
-    r.friends[0].instances = {{"studio", "studio", "/a"}, {"rocketnet", "studio", "/b"}};
+    r.ais[0].instances = {{"studio", "studio", "/a"}, {"rocketnet", "studio", "/b"}};
     CHECK(hub.useAccounts(r, &keeper).empty());
     CHECK(hub.apply(sync::Action{1, sync::ActionKind::Create, 0, "ada", "", ""}, &why, "w"));
     CHECK(store.find(1)->info.instance == "studio");
@@ -645,24 +645,24 @@ void hubInstances() {
     CHECK(store.find(2)->info.instance.empty());
     // Copying: put session 1 on rocketnet (an edit that drops studio moves it there), then copy it.
     Registry edit = r;
-    edit.friends[0].instances.erase(edit.friends[0].instances.begin());
+    edit.ais[0].instances.erase(edit.ais[0].instances.begin());
     std::vector<std::string> report;
     CHECK(hub.applyAccounts(edit, "reload", &report));
-    CHECK(has(report, "friend ada's instance studio removed"));
+    CHECK(has(report, "AI ada's instance studio removed"));
     CHECK(has(report, "session 1 (ada): instance studio -> rocketnet"));
     CHECK(store.find(1)->info.instance == "rocketnet");
     CHECK(has({lastNotice(store, 1)}, "The instance studio is no longer one of ada's"));
-    edit.friends[0].instances.insert(edit.friends[0].instances.begin(), {"studio", "studio", "/a"});
+    edit.ais[0].instances.insert(edit.ais[0].instances.begin(), {"studio", "studio", "/a"});
     CHECK(hub.applyAccounts(edit, "reload", &report));
     CHECK(store.find(1)->info.instance == "rocketnet");     // its instance is still there: it stays
     CHECK(hub.apply(sync::Action{3, sync::ActionKind::Create, 1, "ada", "", ""}, &why, "w"));
     CHECK(store.find(3)->info.instance == "rocketnet");
     CHECK(hub.apply(sync::Action{4, sync::ActionKind::Create, 1, "bo", "", ""}, &why, "w"));
-    CHECK(store.find(4)->info.instance.empty());            // another friend's: never copied
+    CHECK(store.find(4)->info.instance.empty());            // another AI's: never copied
     // An instance moved in place (its directory edited, its name kept): every session on it is told, and stays on it.
     const std::size_t notices1 = store.find(1)->transcript.size();
     const std::size_t notices2 = store.find(2)->transcript.size();
-    edit.friends[0].instances[1].dir = "/c";
+    edit.ais[0].instances[1].dir = "/c";
     CHECK(hub.applyAccounts(edit, "reload", &report));
     CHECK(has(report, "session 1 (ada): instance rocketnet moved, on studio in /b -> on studio in /c"));
     CHECK(has(report, "session 3 (ada): instance rocketnet moved"));
@@ -670,14 +670,14 @@ void hubInstances() {
     CHECK(has({lastNotice(store, 1)}, "ada's instance rocketnet moved"));
     CHECK(has({lastNotice(store, 1)}, "is now on studio in /c"));
     CHECK(store.find(2)->transcript.size() == notices2);    // bo's: not told
-    // A friend's first instance: its sessions on none take it, told (a session belongs to one of its friend's
+    // An AI's first instance: its sessions on none take it, told (a session belongs to one of its AI's
     // instances while it has any).
-    edit.friends[1].instances = {{"laptop", "laptop", "/home/bo"}};
+    edit.ais[1].instances = {{"laptop", "laptop", "/home/bo"}};
     CHECK(hub.applyAccounts(edit, "reload", &report));
     CHECK(store.find(2)->info.instance == "laptop" && store.find(4)->info.instance == "laptop");
     CHECK(has(report, "session 2 (bo): instance none -> laptop"));
     CHECK(has({lastNotice(store, 2)}, "bo's default instance, laptop (on laptop in /home/bo)"));
-    // The same at a start: a session on none whose friend has instances takes the default.
+    // The same at a start: a session on none whose AI has instances takes the default.
     {
         sync::MemoryStore store2;
         sync::Hub hub2(store2);
@@ -687,60 +687,60 @@ void hubInstances() {
         CHECK(has(hub2.useAccounts(edit, &keeper2), "session 1 (bo): instance none -> laptop"));
         CHECK(store2.find(1)->info.instance == "laptop");
     }
-    // The friend dropped: its sessions keep their instance while it is out, told that it was taken out.
+    // The AI dropped: its sessions keep their instance while it is out, told that it was taken out.
     const Registry withAda = edit;
-    edit.friends.erase(edit.friends.begin());
+    edit.ais.erase(edit.ais.begin());
     CHECK(hub.applyAccounts(edit, "reload", &report));
     CHECK(store.find(1)->info.instance == "rocketnet" && store.find(3)->info.instance == "rocketnet");
-    CHECK(has(report, "session 3 (ada): its friend was removed"));
+    CHECK(has(report, "session 3 (ada): its AI was removed"));
     // Put back without rocketnet: settled as any other, moved to its first instance, told.
     Registry back = withAda;
-    back.friends.front().instances.pop_back();
+    back.ais.front().instances.pop_back();
     CHECK(hub.applyAccounts(back, "reload", &report));
     CHECK(store.find(1)->info.instance == "studio" && has(report, "session 1 (ada): instance rocketnet -> studio"));
 }
 
-// The cap on friends: a friends.json of kMaxFriends friends reads; one more is refused whole, in one line with the
-// count, the cap and what to do, in version 1 (before any upgrade) and in version 2 alike; a window's AddFriend at the
+// The cap on AIs: an ais.json of kMaxAIs AIs reads; one more is refused whole, in one line with the
+// count, the cap and what to do, in version 1 (before any upgrade) and in version 2 alike; a window's AddAI at the
 // cap is refused and changes nothing.
-void friendsCap() {
+void aisCap() {
     for (int version : {1, 2}) {
-        std::string text = "{\"version\": " + std::to_string(version) + ", \"friends\": [";
-        for (std::size_t i = 0; i <= accounts::kMaxFriends; ++i) {
+        std::string text = "{\"version\": " + std::to_string(version) + ", \"ais\": [";
+        for (std::size_t i = 0; i <= accounts::kMaxAIs; ++i) {
             text += std::string(i == 0 ? "" : ", ") + "{\"name\": \"f" + std::to_string(i) + "\"}";
         }
         Registry r;
-        accounts::Read rd = accounts::readFriends(text + "]}", "friends.json", &r);
-        CHECK(!rd.ok && rd.errors.size() == 1 && r.friends.empty());
-        CHECK(has(rd.errors, "holds 257 friends, and nexus-server takes at most 256"));
+        accounts::Read rd = accounts::readAIs(text + "]}", "ais.json", &r);
+        CHECK(!rd.ok && rd.errors.size() == 1 && r.ais.empty());
+        CHECK(has(rd.errors, "holds 257 AIs, and nexus-server takes at most 256"));
     }
     auto file = [](std::size_t n) {
-        std::string text = "{\"version\": 1, \"friends\": [";
+        std::string text = "{\"version\": 1, \"ais\": [";
         for (std::size_t i = 0; i < n; ++i) {
             text += std::string(i == 0 ? "" : ", ") + "{\"name\": \"f" + std::to_string(i) + "\"}";
         }
         return text + "]}";
     };
     Registry r;
-    accounts::Read rd = accounts::readFriends(file(accounts::kMaxFriends), "friends.json", &r);
-    CHECK(rd.ok && r.friends.size() == accounts::kMaxFriends);
-    rd = accounts::readFriends(file(accounts::kMaxFriends + 1), "friends.json", &r);
-    CHECK(!rd.ok && rd.errors.size() == 1 && r.friends.empty());
-    CHECK(has(rd.errors, "friends.json:1: \"friends\" holds 257 friends, and nexus-server takes at most 256; take "
-                         "friends out until it holds 256 or fewer; nothing was changed"));
+    accounts::Read rd = accounts::readAIs(file(accounts::kMaxAIs), "ais.json", &r);
+    CHECK(rd.ok && r.ais.size() == accounts::kMaxAIs);
+    rd = accounts::readAIs(file(accounts::kMaxAIs + 1), "ais.json", &r);
+    CHECK(!rd.ok && rd.errors.size() == 1 && r.ais.empty());
+    CHECK(has(rd.errors, "ais.json:1: \"ais\" holds 257 AIs, and nexus-server takes at most 256; take "
+                         "AIs out until it holds 256 or fewer; nothing was changed"));
 
     sync::MemoryStore store;
     sync::Hub hub(store);
     Keeper keeper;
     std::string why;
-    CHECK(accounts::readFriends(file(accounts::kMaxFriends), "friends.json", &r).ok);
+    CHECK(accounts::readAIs(file(accounts::kMaxAIs), "ais.json", &r).ok);
     CHECK(hub.useAccounts(r, &keeper).empty());
-    CHECK(!hub.apply(act(1, sync::ActionKind::AddFriend, "one-more", ""), &why, "w"));
-    CHECK(has({why}, "friends.json holds 256 friends, the most it may (256); take one out to add one-more"));
-    CHECK(hub.accounts()->friends.size() == accounts::kMaxFriends && keeper.kept.empty());
+    CHECK(!hub.apply(act(1, sync::ActionKind::AddAI, "one-more", ""), &why, "w"));
+    CHECK(has({why}, "ais.json holds 256 AIs, the most it may (256); take one out to add one-more"));
+    CHECK(hub.accounts()->ais.size() == accounts::kMaxAIs && keeper.kept.empty());
 }
 
-// Repeating valid labels across friends used to publish a roster that every window refused.
+// Repeating valid labels across AIs used to publish a roster that every window refused.
 void pickerBudget() {
     Registry roster;
     std::vector<std::string> links;
@@ -750,8 +750,8 @@ void pickerBudget() {
         links.push_back(name);
         roster.accounts.push_back({name, "fake"});
     }
-    for (std::size_t i = 0; i < accounts::kMaxFriends; ++i) {
-        roster.friends.push_back({"friend" + std::to_string(i), links, ""});
+    for (std::size_t i = 0; i < accounts::kMaxAIs; ++i) {
+        roster.ais.push_back({"ai" + std::to_string(i), links, ""});
     }
     sync::MemoryStore store;
     sync::Hub hub(store);
@@ -759,8 +759,8 @@ void pickerBudget() {
     CHECK(hub.useAccounts(roster, &keeper).empty()); // all 25,600 choices fit without the labels
     sync::Sessions window;
     window.apply_string(hub.state().init_diff());
-    CHECK(window.friends() == hub.state().friends());
-    CHECK(window.friends().size() == accounts::kMaxFriends && window.friends().back().accounts.size() == 100);
+    CHECK(window.ais() == hub.state().ais());
+    CHECK(window.ais().size() == accounts::kMaxAIs && window.ais().back().accounts.size() == 100);
     for (const auto& [label, email] : {std::pair{51, 0}, std::pair{25, 26}, std::pair{0, 254}}) {
         // At 51 added bytes the strings fit and framing pushes the roster over. At 254 bytes,
         // the emails alone exceed the limit before the server expands the repeated choices.
@@ -772,38 +772,38 @@ void pickerBudget() {
         CHECK(!hub.applyAccounts(roster, "oversized edit", &report));
         CHECK(has(report, "linked account choices exceed the window roster budget"));
         CHECK(keeper.kept.empty() && hub.accounts()->accounts.front().label.empty() && hub.accounts()->accounts.front().email.empty());
-        CHECK(window.friends() == hub.state().friends());
+        CHECK(window.ais() == hub.state().ais());
     }
 }
 
-// A friend's "limit" and an account's "billing" (docs/accounts.md): the defaults by version, the migration of a
+// An AI's "limit" and an account's "billing" (docs/accounts.md): the defaults by version, the migration of a
 // version 1 file, the refusals with their line, the always-limited rule for an API-billed account, the decision at a
-// session's start (limitedFor), and the hub's reload of a limit, which tells the friend's sessions.
+// session's start (limitedFor), and the hub's reload of a limit, which tells the AI's sessions.
 void limits() {
     Registry r;
-    // Version 2: a friend with no "limit" is limited; one may say false. An account with no "billing" is a
+    // Version 2: an AI with no "limit" is limited; one may say false. An account with no "billing" is a
     // subscription's.
-    accounts::Read rd = accounts::readFriends("{\"version\": 2, \"friends\": [{\"name\": \"ada\"}, "
+    accounts::Read rd = accounts::readAIs("{\"version\": 2, \"ais\": [{\"name\": \"ada\"}, "
         "{\"name\": \"admin\", \"limit\": false}]}", "f", &r);
-    CHECK(rd.ok && !rd.upgraded && r.friends.size() == 2 && r.friends[0].limit && !r.friends[1].limit);
+    CHECK(rd.ok && !rd.upgraded && r.ais.size() == 2 && r.ais[0].limit && !r.ais[1].limit);
     rd = accounts::readAccounts("{\"version\": 2, \"accounts\": [{\"name\": \"w\", \"provider\": \"claude\"}, "
         "{\"name\": \"fleet\", \"provider\": \"claude\", \"billing\": \"api\"}]}", "a", &r);
     CHECK(rd.ok && r.accounts[0].billing == accounts::Billing::Subscription &&
           r.accounts[1].billing == accounts::Billing::Api);
-    // Version 1, from before the field: every friend reads as it ran then, unlimited, and is written explicitly from
+    // Version 1, from before the field: every AI reads as it ran then, unlimited, and is written explicitly from
     // then on (the upgrade, or the next applied change), so nothing changes under the person silently.
-    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\"}, {\"name\": \"bo\", \"limit\": "
+    rd = accounts::readAIs("{\"version\": 1, \"ais\": [{\"name\": \"ada\"}, {\"name\": \"bo\", \"limit\": "
         "true}]}", "f", &r);
-    CHECK(rd.ok && rd.upgraded && !r.friends[0].limit && r.friends[1].limit);
-    const std::string written = accounts::friendsText(r);
+    CHECK(rd.ok && rd.upgraded && !r.ais[0].limit && r.ais[1].limit);
+    const std::string written = accounts::aisText(r);
     CHECK(written.find("\"version\": 2,") != std::string::npos);
     CHECK(written.find("\"name\": \"ada\",\n      \"limit\": false,") != std::string::npos);
     Registry back;
-    CHECK(accounts::readFriends(written, "f", &back).ok && back.friends == r.friends);
+    CHECK(accounts::readAIs(written, "f", &back).ok && back.ais == r.ais);
     // Refusals, with the file's line and the fix.
-    rd = accounts::readFriends("{\"version\": 2, \"friends\": [\n{\"name\": \"ada\", \"limit\": \"yes\"}]}",
-                               "/h/friends.json", &r);
-    CHECK(!rd.ok && has(rd.errors, "/h/friends.json:2: the friend \"ada\"'s \"limit\" is a string, not true or false"));
+    rd = accounts::readAIs("{\"version\": 2, \"ais\": [\n{\"name\": \"ada\", \"limit\": \"yes\"}]}",
+                               "/h/ais.json", &r);
+    CHECK(!rd.ok && has(rd.errors, "/h/ais.json:2: the AI \"ada\"'s \"limit\" is a string, not true or false"));
     CHECK(has(rd.errors, "write true or false, without quotes"));
     rd = accounts::readAccounts("{\"version\": 2, \"accounts\": [\n{\"name\": \"w\", \"provider\": \"claude\", "
         "\"billing\": \"API\"}]}", "/h/accounts.json", &r);
@@ -815,54 +815,54 @@ void limits() {
     // The fixture: an API-billed account, as a fleet worker's would be.
     Registry fleet;
     fleet.accounts = {{"work", "claude"}, {"fleet", "claude", accounts::Billing::Api}};
-    fleet.friends = {{"ada", {"work"}, "work"}, {"worker", {"fleet"}, "fleet"}};
-    fleet.friends[0].limit = false;
+    fleet.ais = {{"ada", {"work"}, "work"}, {"worker", {"fleet"}, "fleet"}};
+    fleet.ais[0].limit = false;
     CHECK(accounts::problems(fleet).empty());
     CHECK(accounts::accountsText(fleet).find("\"name\": \"fleet\",\n      \"provider\": \"claude\",\n      "
                                              "\"billing\": \"api\"") != std::string::npos);
-    // Setting limit false for a friend on an API-billed account is refused, with the reason.
+    // Setting limit false for an AI on an API-billed account is refused, with the reason.
     Registry bad = fleet;
-    bad.friends[1].limit = false;
-    CHECK(has(accounts::problems(bad), "the friend \"worker\" has \"limit\": false and links to the account \"fleet\", "
+    bad.ais[1].limit = false;
+    CHECK(has(accounts::problems(bad), "the AI \"worker\" has \"limit\": false and links to the account \"fleet\", "
                                        "which accounts.json bills at API rate"));
     CHECK(has(accounts::problems(bad), "always limited"));
     bad = fleet;
-    bad.friends[0].accounts.push_back("fleet");     // an unlimited friend linked to it: the same refusal
-    CHECK(has(accounts::problems(bad), "the friend \"ada\" has \"limit\": false"));
+    bad.ais[0].accounts.push_back("fleet");     // an unlimited AI linked to it: the same refusal
+    CHECK(has(accounts::problems(bad), "the AI \"ada\" has \"limit\": false"));
     bad = fleet;
-    bad.accounts[0].billing = accounts::Billing::Api;   // an account an unlimited friend runs on, made API-billed
+    bad.accounts[0].billing = accounts::Billing::Api;   // an account an unlimited AI runs on, made API-billed
     CHECK(has(accounts::problems(bad), "links to the account \"work\", which accounts.json bills at API rate"));
 
     // The decision at a session's start.
     CHECK(!accounts::limitedFor(&fleet, "ada", "work"));
     CHECK(!accounts::limitedFor(&fleet, "ada", ""));
     CHECK(accounts::limitedFor(&fleet, "worker", "fleet"));
-    CHECK(accounts::limitedFor(&fleet, "nobody", "work"));      // a friend nexus does not hold: limited
-    CHECK(accounts::limitedFor(nullptr, "ada", "work"));        // no accounts and friends held: limited
+    CHECK(accounts::limitedFor(&fleet, "nobody", "work"));      // an AI nexus does not hold: limited
+    CHECK(accounts::limitedFor(nullptr, "ada", "work"));        // no accounts and AIs held: limited
     CHECK(accounts::limitedFor(&fleet, "ada", "gone"));        // an account the files do not hold: limited
     // Even where the files' rule were bypassed, an API-billed account's session is limited (the rule at the start).
     bad = fleet;
-    bad.friends[0].accounts.push_back("fleet");
+    bad.ais[0].accounts.push_back("fleet");
     CHECK(accounts::limitedFor(&bad, "ada", "fleet") && !accounts::limitedFor(&bad, "ada", "work"));
-    CHECK(has(accounts::changes(fleet, bad), "friend ada's accounts [work] -> [work, fleet]"));
+    CHECK(has(accounts::changes(fleet, bad), "AI ada's accounts [work] -> [work, fleet]"));
     Registry flipped = fleet;
-    flipped.friends[0].limit = true;
+    flipped.ais[0].limit = true;
     flipped.accounts[0].billing = accounts::Billing::Api;
-    CHECK(has(accounts::changes(fleet, flipped), "friend ada's limit false -> true"));
+    CHECK(has(accounts::changes(fleet, flipped), "AI ada's limit false -> true"));
     CHECK(has(accounts::changes(fleet, flipped), "account work's billing subscription -> api"));
 
-    // The hub: a friend made by a window is limited; linking an API-billed account to an unlimited friend is
-    // refused, changing nothing; a reload that sets limit false there is refused whole; a reload that changes a
-    // friend's limit tells each of its sessions.
+    // The hub: an AI made by a window is limited; linking an API-billed account to an unlimited AI is
+    // refused, changing nothing; a reload that sets limit false there is refused whole; a reload that changes an
+    // AI's limit tells each of its sessions.
     sync::MemoryStore store;
     sync::Hub hub(store);
     Keeper keeper;
     CHECK(hub.useAccounts(fleet, &keeper).empty());
     std::string why;
     std::uint64_t n = 1;
-    CHECK(hub.apply(act(n++, sync::ActionKind::AddFriend, "cy", ""), &why, "w"));
-    CHECK(hub.accounts()->friendNamed("cy")->limit);
-    CHECK(has(keeper.messages, "friend cy set up, accounts [], default none, instances [], limit true"));
+    CHECK(hub.apply(act(n++, sync::ActionKind::AddAI, "cy", ""), &why, "w"));
+    CHECK(hub.accounts()->aiNamed("cy")->limit);
+    CHECK(has(keeper.messages, "AI cy set up, accounts [], default none, instances [], limit true"));
     const Registry held = *hub.accounts();
     CHECK(!hub.apply(act(n++, sync::ActionKind::LinkAccount, "ada", "fleet"), &why, "w"));
     CHECK(has({why}, "fleet is billed at API rate") && has({why}, "ada has \"limit\": false"));
@@ -872,46 +872,53 @@ void limits() {
     CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Create, 0, "worker", "", ""}, &why, "w"));
     std::vector<std::string> report;
     Registry edit = *hub.accounts();
-    edit.friendNamed("worker")->limit = false;
+    edit.aiNamed("worker")->limit = false;
     const Registry before = *hub.accounts();
     CHECK(!hub.applyAccounts(edit, "reload", &report));
-    CHECK(has(report, "the friend \"worker\" has \"limit\": false") && *hub.accounts() == before);
+    CHECK(has(report, "the AI \"worker\" has \"limit\": false") && *hub.accounts() == before);
     edit = *hub.accounts();
-    edit.friendNamed("ada")->limit = true;
+    edit.aiNamed("ada")->limit = true;
     CHECK(hub.applyAccounts(edit, "reload", &report));
-    CHECK(has(report, "friend ada's limit false -> true") && has(report, "session 1 (ada): limit false -> true"));
+    CHECK(has(report, "AI ada's limit false -> true") && has(report, "session 1 (ada): limit false -> true"));
     CHECK(has({lastNotice(store, 1)}, "ada is now limited to its directory"));
-    CHECK(lastNotice(store, 2).empty());   // worker's session: its friend's limit did not change
+    CHECK(lastNotice(store, 2).empty());   // worker's session: its AI's limit did not change
     CHECK(accounts::limitedFor(hub.accounts(), "ada", "work"));
 }
 
-// friends.json's "limit_keeps_out" (docs/accounts.md): absent is none; each entry an absolute directory other than the
+// ais.json's "limit_keeps_out" (docs/accounts.md): absent is none; each entry an absolute directory other than the
 // root, there once, refused with its line otherwise; written back only when it holds one, after "version"; a change is
 // one report line, and a reload tells each limited session and no unlimited one.
 void keepsOut() {
     Registry r;
-    accounts::Read rd = accounts::readFriends("{\"version\": 2, \"friends\": []}", "f", &r);
-    CHECK(rd.ok && r.keepsOut.empty());
-    CHECK(accounts::friendsText(r).find("limit_keeps_out") == std::string::npos);
-    rd = accounts::readFriends("{\"version\": 2, \"limit_keeps_out\": [\"/data\", \"/mnt/net\"], \"friends\": "
+    accounts::Read rd = accounts::readAIs("{\"version\": 2, \"ais\": []}", "f", &r);
+    CHECK(rd.ok && r.keepsOut.empty() && !rd.upgraded);
+    // A file from before the friend names became AI: its list under the old key reads, as an upgrade; "ais" beside it
+    // leaves the old key unknown, refused.
+    rd = accounts::readAIs("{\"version\": 2, \"friends\": [{\"name\": \"ada\"}]}", "f", &r);
+    CHECK(rd.ok && rd.upgraded && r.ais.size() == 1 && r.ais[0].name == "ada");
+    CHECK(accounts::aisText(r).find("\"ais\": [") != std::string::npos);
+    rd = accounts::readAIs("{\"version\": 2, \"ais\": [], \"friends\": []}", "f", &r);
+    CHECK(!rd.ok);
+    CHECK(accounts::aisText(r).find("limit_keeps_out") == std::string::npos);
+    rd = accounts::readAIs("{\"version\": 2, \"limit_keeps_out\": [\"/data\", \"/mnt/net\"], \"ais\": "
         "[{\"name\": \"ada\"}]}", "f", &r);
     CHECK(rd.ok && (r.keepsOut == std::vector<std::string>{"/data", "/mnt/net"}));
-    const std::string written = accounts::friendsText(r);
+    const std::string written = accounts::aisText(r);
     CHECK(written.find("  \"version\": 2,\n  \"limit_keeps_out\": [\n    \"/data\",\n    \"/mnt/net\"\n  ],\n"
-                       "  \"friends\": [") != std::string::npos);
+                       "  \"ais\": [") != std::string::npos);
     Registry back;
-    CHECK(accounts::readFriends(written, "f", &back).ok && back == r);
+    CHECK(accounts::readAIs(written, "f", &back).ok && back == r);
     // Refusals, with the line and the fix.
-    rd = accounts::readFriends("{\"version\": 2,\n\"limit_keeps_out\": \"/data\", \"friends\": []}", "/h/friends.json",
+    rd = accounts::readAIs("{\"version\": 2,\n\"limit_keeps_out\": \"/data\", \"ais\": []}", "/h/ais.json",
                                &r);
-    CHECK(!rd.ok && has(rd.errors, "/h/friends.json:2: \"limit_keeps_out\" is a string, not a list"));
-    rd = accounts::readFriends("{\"version\": 2, \"limit_keeps_out\": [\n\"data\",\n\"/\",\n1,\n\"/d\",\n\"/d\"], "
-        "\"friends\": []}", "/h/friends.json", &r);
-    CHECK(!rd.ok && has(rd.errors, "/h/friends.json:2: \"limit_keeps_out\" holds \"data\", which is not an absolute "
+    CHECK(!rd.ok && has(rd.errors, "/h/ais.json:2: \"limit_keeps_out\" is a string, not a list"));
+    rd = accounts::readAIs("{\"version\": 2, \"limit_keeps_out\": [\n\"data\",\n\"/\",\n1,\n\"/d\",\n\"/d\"], "
+        "\"ais\": []}", "/h/ais.json", &r);
+    CHECK(!rd.ok && has(rd.errors, "/h/ais.json:2: \"limit_keeps_out\" holds \"data\", which is not an absolute "
                                    "directory other than \"/\""));
-    CHECK(has(rd.errors, "/h/friends.json:3: \"limit_keeps_out\" holds \"/\", which is not"));
-    CHECK(has(rd.errors, "/h/friends.json:4: \"limit_keeps_out\" holds a number, not a directory"));
-    CHECK(has(rd.errors, "/h/friends.json:6: \"limit_keeps_out\" holds \"/d\" twice"));
+    CHECK(has(rd.errors, "/h/ais.json:3: \"limit_keeps_out\" holds \"/\", which is not"));
+    CHECK(has(rd.errors, "/h/ais.json:4: \"limit_keeps_out\" holds a number, not a directory"));
+    CHECK(has(rd.errors, "/h/ais.json:6: \"limit_keeps_out\" holds \"/d\" twice"));
     // The consistency check, for a registry not read from a file (the window's edits).
     Registry bad;
     bad.keepsOut = {"/", "rel", "/d", "/d"};
@@ -926,8 +933,8 @@ void keepsOut() {
     // The hub: a reload that changes the list tells each limited session, and no unlimited one.
     Registry fleet;
     fleet.accounts = {{"work", "claude"}};
-    fleet.friends = {{"ada", {"work"}, "work"}, {"bo", {"work"}, "work"}};
-    fleet.friends[1].limit = false;
+    fleet.ais = {{"ada", {"work"}, "work"}, {"bo", {"work"}, "work"}};
+    fleet.ais[1].limit = false;
     sync::MemoryStore store;
     sync::Hub hub(store);
     Keeper keeper;
@@ -946,27 +953,27 @@ void keepsOut() {
     CHECK(hub.accounts()->keepsOut == std::vector<std::string>{"/data"});
 }
 
-// The state the windows receive carries the registry's friends, in its order (sync/hub.h stateFriends): none known
-// before the hub holds a registry; set when it takes one; changed by a reload that adds or drops a friend and by a
-// window's AddFriend; and kept across the state's rebuilds (a session made).
-void hubFriends() {
-    using Names = std::vector<sync::ServerFriend>;
+// The state the windows receive carries the registry's AIs, in its order (sync/hub.h stateAIs): none known
+// before the hub holds a registry; set when it takes one; changed by a reload that adds or drops an AI and by a
+// window's AddAI; and kept across the state's rebuilds (a session made).
+void hubAIs() {
+    using Names = std::vector<sync::ServerAI>;
     sync::MemoryStore store;
     sync::Hub hub(store);
     Keeper keeper;
-    CHECK(!hub.state().friendsKnown() && hub.state().friends().empty());
+    CHECK(!hub.state().aisKnown() && hub.state().ais().empty());
     Registry edit = sample();
     edit.accounts[0].label = "Work";
     edit.accounts[0].email = "dev+work@example.test";
     edit.accounts.push_back({"unused", "fake", accounts::Billing::Subscription, "", false, "unlinked@example.test"});
-    sync::ServerFriend ada{"ada", {{"work", "Work", false, "dev+work@example.test"}, {"home"}, {"cx"}}};
+    sync::ServerAI ada{"ada", {{"work", "Work", false, "dev+work@example.test"}, {"home"}, {"cx"}}};
     ada.canAutoAccount = true;
-    const sync::ServerFriend bo{"bo", {{"home"}}};
+    const sync::ServerAI bo{"bo", {{"home"}}};
     CHECK(hub.useAccounts(edit, &keeper).empty());
-    CHECK(hub.state().friendsKnown() && (hub.state().friends() == Names{ada, bo}));
+    CHECK(hub.state().aisKnown() && (hub.state().ais() == Names{ada, bo}));
     sync::Sessions window;
     window.apply_string(hub.state().init_diff());
-    CHECK((window.friends() == Names{ada, bo}));
+    CHECK((window.ais() == Names{ada, bo}));
     CHECK(hub.state().init_diff().find("unlinked@example.test") == std::string::npos);
     const auto before = hub.state();
     edit.accounts[0].email = "replacement@example.test";
@@ -974,25 +981,25 @@ void hubFriends() {
     CHECK(hub.applyAccounts(edit, "email edited", &report));
     window.apply_string(hub.state().diff_from(before));
     ada.accounts[0].email = edit.accounts[0].email;
-    CHECK((window.friends() == Names{ada, bo}));
-    // A session made rebuilds the state: the friends stay.
+    CHECK((window.ais() == Names{ada, bo}));
+    // A session made rebuilds the state: the AIs stay.
     std::string why;
     std::uint64_t n = 1;
     CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Ensure, 0, "ada", "", ""}, &why, "w"));
-    CHECK(hub.state().sessions().size() == 1 && (hub.state().friends() == Names{ada, bo}));
+    CHECK(hub.state().sessions().size() == 1 && (hub.state().ais() == Names{ada, bo}));
     // A reload that drops bo and adds cy.
     edit.accounts[0].label = "dev@example.test";
     ada.accounts[0].label = edit.accounts[0].label;
-    edit.friends.erase(edit.friends.begin() + 1);
-    edit.friends.push_back(accounts::Friend{"cy", {}, ""});
+    edit.ais.erase(edit.ais.begin() + 1);
+    edit.ais.push_back(accounts::AI{"cy", {}, ""});
     CHECK(hub.applyAccounts(edit, "reload", &report));
-    CHECK(hub.state().friendsKnown() && (hub.state().friends() == Names{ada, {"cy"}}));
-    // A window's AddFriend.
-    CHECK(hub.apply(act(n++, sync::ActionKind::AddFriend, "di", ""), &why, "w"));
-    CHECK((hub.state().friends() == Names{ada, {"cy"}, {"di"}}));
-    // A registry with no friends: known, and none.
+    CHECK(hub.state().aisKnown() && (hub.state().ais() == Names{ada, {"cy"}}));
+    // A window's AddAI.
+    CHECK(hub.apply(act(n++, sync::ActionKind::AddAI, "di", ""), &why, "w"));
+    CHECK((hub.state().ais() == Names{ada, {"cy"}, {"di"}}));
+    // A registry with no AIs: known, and none.
     CHECK(hub.applyAccounts(Registry{sample().accounts, {}}, "reload", &report));
-    CHECK(hub.state().friendsKnown() && hub.state().friends().empty());
+    CHECK(hub.state().aisKnown() && hub.state().ais().empty());
 }
 
 struct Group {
@@ -1016,8 +1023,8 @@ const Group kGroups[] = {
     {"hub_instances", hubInstances},
     {"limits", limits},
     {"keeps_out", keepsOut},
-    {"hub_friends", hubFriends},
-    {"friends_cap", [] { friendsCap(); pickerBudget(); }},
+    {"hub_ais", hubAIs},
+    {"ais_cap", [] { aisCap(); pickerBudget(); }},
 };
 
 } // namespace

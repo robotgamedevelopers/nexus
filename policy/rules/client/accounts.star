@@ -2,7 +2,7 @@
 
 def describe(window, state, config):
     ui = state.get("ui", {})
-    if state["tab"] != "friend":
+    if state["tab"] != "ai":
         return window
 
     appearance = {

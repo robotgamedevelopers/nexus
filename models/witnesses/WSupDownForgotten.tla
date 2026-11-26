@@ -1,6 +1,6 @@
 -------------------------- MODULE WSupDownForgotten --------------------------
 \* Reversed witness: the state cursor's activity shows a failed driver as down only while it is being ended, so once
-\* it is collected the friend shows idle, with no prompt, no hello and no restart. DownLeavesByWork must reject it.
+\* it is collected the AI shows idle, with no prompt, no hello and no restart. DownLeavesByWork must reject it.
 EXTENDS MCSupervisor
 
 BrokenActivity(x) ==

@@ -328,10 +328,42 @@ void oldServerSaysSo() {
     CHECK(near.port.sent.size() == 1 && near.port.sent.back().kind == sync::ActionKind::SignInOpened);
 }
 
+// The client lock (window_lock.h): locking takes back the claim a show allowed, and while locked no step claims, opens
+// or sends anything; unlocking alone allows nothing until the owner's next show.
+void lockedClaimsNothing() {
+    Fixture f("studio.local", "studio");
+    f.signIn.received(offering("", "", "studio"));
+    f.signIn.shown();
+    f.signIn.lock();
+    f.signIn.step();
+    CHECK(f.port.sent.empty());
+    f.signIn.unlock();
+    f.signIn.step();
+    CHECK(f.port.sent.empty());     // the show before the lock allows nothing after it
+    f.signIn.shown();
+    f.signIn.lock();                // shown while locked (the overlay's lock screen): still nothing
+    f.signIn.step();
+    CHECK(f.port.sent.empty());
+    f.signIn.unlock();
+    f.signIn.shown();
+    f.signIn.step();
+    CHECK(f.port.sent.size() == 1 && f.port.sent[0].kind == sync::ActionKind::SignInClaim);
+    // An offer this window holds is not opened while locked.
+    Fixture g("localhost", "laptop");
+    g.signIn.received(offering("tokWindowA1", kUrl, "laptop"));
+    g.signIn.lock();
+    g.signIn.step();
+    CHECK(g.opened.empty() && g.port.sent.empty());
+    g.signIn.unlock();
+    g.signIn.step();
+    CHECK(g.opened.size() == 1);
+}
+
 } // namespace
 
 int main() {
     claimsOnceShown();
+    lockedClaimsNothing();
     opensOnOneMachine();
     gatesAcrossMachines();
     leavesAnotherWindowsFlow();

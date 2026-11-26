@@ -47,7 +47,7 @@ execute_process(COMMAND "${CHECK}" "${ROOT}/live.json" "${ROOT}/activated/policy
 
 file(MAKE_DIRECTORY "${ROOT}/centered")
 file(COPY_FILE "${RULES}/client.star" "${ROOT}/rules/client.star")
-file(WRITE "${ROOT}/rules/config.json" [[{"centered_account_menu":true,"sign_in_on_select":true,"hold_on_enter":true,"prompt_style":{"width":98},"transcript_style":{"glyph_peak":3,"glyph_seconds":0.4,"glyph_stagger":0.055,"person_bold":true,"person_flash_peak":3,"person_flash_seconds":0.45},"nova_friends":{"providers":{"codex":"ChatGPT"}},"message_card":{"side_extension":20},"account_picker_shortcuts":{"ArrowDown":"next","Command+ArrowDown":"next"}}]])
+file(WRITE "${ROOT}/rules/config.json" [[{"centered_account_menu":true,"sign_in_on_select":true,"hold_on_enter":true,"prompt_style":{"width":98},"transcript_style":{"glyph_peak":3,"glyph_seconds":0.4,"glyph_stagger":0.055,"person_bold":true,"person_flash_peak":3,"person_flash_seconds":0.45},"nova_ais":{"providers":{"codex":"ChatGPT"}},"message_card":{"side_extension":20},"account_picker_shortcuts":{"ArrowDown":"next","Command+ArrowDown":"next"}}]])
 execute_process(COMMAND "${TOOL}" apply client "${ROOT}/rules" "${ROOT}/centered" COMMAND_ERROR_IS_FATAL ANY)
 file(MAKE_DIRECTORY "${ROOT}/alternative")
 file(WRITE "${ROOT}/rules/client.star" [=[
@@ -56,7 +56,7 @@ def handle(event, state, config):
     if event == "overlay":
         return {"code":"KeyJ","modifiers":"Command+Shift"}
     window = base(event, state, config)
-    if event == "window" and state["tab"] == "friend":
+    if event == "window" and state["tab"] == "ai":
         window["tab_style"] = {"fill":"#112233","selected_fill":"#f08050","selected_opacity":0.75,"selected_weight":500,"gap":6}
         window["prompt_style"] = {"fill":"#221144","width":72,"show_plus":False,"caret_height":18,"caret_aspect":0.75,"caret_seconds":2,"caret_curve":[[0,0],[0.2,0],[0.7,1],[1,0]]}
         window["transcript_style"] = {"scanner_gap":8,"scanner_offset":4,"scanner_curve":[[0,1],[0.3,1],[1,0]]}
@@ -76,7 +76,7 @@ file(WRITE "${ROOT}/rules/config.json" "${config}")
 # Exercise the fixture's server application with its own config under the test root.
 file(COPY "${RULES}/server" DESTINATION "${ROOT}/rules")
 file(COPY_FILE "${CMAKE_CURRENT_LIST_DIR}/fixtures/plugins/server.star" "${ROOT}/rules/server.star")
-file(WRITE "${ROOT}/message.json" [=[{"friend":"word-count","text":"one two three","intent":"send"}]=])
+file(WRITE "${ROOT}/message.json" [=[{"ai":"word-count","text":"one two three","intent":"send"}]=])
 execute_process(COMMAND "${TOOL}" preview server "${ROOT}/rules" app.message INPUT_FILE "${ROOT}/message.json"
     OUTPUT_VARIABLE reply OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
 string(JSON words GET "${reply}" 0 text)
@@ -102,7 +102,7 @@ if(NOT choice STREQUAL "\"b\"")
     message(FATAL_ERROR "wrapped account command returned ${choice}")
 endif()
 
-file(WRITE "${ROOT}/new-session.json" [[{"friend":"friend","source":null,"defaults":{"account":"","instance":"","model":"","effort":""},"roster":{"linked":["a","b"],"preferred":"b","instances":[]}}]])
+file(WRITE "${ROOT}/new-session.json" [[{"ai":"ai","source":null,"defaults":{"account":"","instance":"","model":"","effort":""},"roster":{"linked":["a","b"],"preferred":"b","instances":[]}}]])
 foreach(mode preferred first)
     if(mode STREQUAL "first")
         string(JSON config SET "${config}" account_default [["first"]])

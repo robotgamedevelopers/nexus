@@ -33,23 +33,23 @@ enum class ActionKind : std::uint8_t {
     Unknown = 0,    // read, never written: a kind from a later window, which the server counts and does not apply
     Send = 1,       // a prompt sent in a session: it goes in the transcript
     Queue = 2,      // a prompt queued in a session, for later
-    Stop = 3,       // stop the friend's work in a session (no text): applied at once, never queued behind anything
-    Create = 4,     // a new session with a friend (friendName): its account, model and effort copied from `session`,
-                    // or, with session 0, the friend's defaults
-    Ensure = 5,     // a session with a friend (friendName) only if the friend has none: what a window sends for each
-                    // friend it shows, so that each has a session to show
+    Stop = 3,       // stop the AI's work in a session (no text): applied at once, never queued behind anything
+    Create = 4,     // a new session with an AI (aiName): its account, model and effort copied from `session`,
+                    // or, with session 0, the AI's defaults
+    Ensure = 5,     // a session with an AI (aiName) only if the AI has none: what a window sends for each
+                    // AI it shows, so that each has a session to show
     // A SetAccount text beginning with "+" names a command in server account policy. Real account IDs cannot
     // start with "+". A window sends these commands only when the server advertises linked accounts.
     SetAccount = 6, // the session's account, model or effort becomes `text` (empty: the harness's default), from its
     SetModel = 7,   // next turn on
     SetEffort = 8,
-    // The accounts and friends (accounts/registry.h, docs/accounts.md), decided by the server against its own:
+    // The accounts and AIs (accounts/registry.h, docs/accounts.md), decided by the server against its own:
     AddAccount = 9,     // an account (`account`) set up with its provider (`text`)
     RemoveAccount = 10, // an account (`account`) removed: every link to it goes, and its sessions move off it
-    AddFriend = 11,     // a friend (friendName) set up, with no accounts
-    LinkAccount = 12,   // the friend (friendName) may run on the account (`account`), after those it has
-    UnlinkAccount = 13, // the friend no longer runs on the account: its sessions on it move off it
-    SetDefault = 14,    // the friend's default account becomes `account` (empty: none)
+    AddAI = 11,     // an AI (aiName) set up, with no accounts
+    LinkAccount = 12,   // the AI (aiName) may run on the account (`account`), after those it has
+    UnlinkAccount = 13, // the AI no longer runs on the account: its sessions on it move off it
+    SetDefault = 14,    // the AI's default account becomes `account` (empty: none)
     // The secret dialog (sync/secrets.h), from format 3:
     SecretAnswer = 15,  // the value the person pasted (`secret`) for request `request`
     SecretCancel = 16,  // the person cancelled request `request` (Escape)
@@ -60,7 +60,7 @@ enum class ActionKind : std::uint8_t {
     SignInOpened = 18,  // the window holding flow `request` (`text`, its claim token) opened its URL in the browser
     SignInCallback = 19,// the window's gate took flow `request`'s callback: its query (`secret`), from `text`'s window
     SignOut = 20,       // Claude logout, only when session still selects the exact named account
-    ResolveLimit = 21, // accept a paused turn's offered target (friendName) for account, request and choice kind (text)
+    ResolveLimit = 21, // accept a paused turn's offered target (aiName) for account, request and choice kind (text)
     // The code a vendor's sign-in page showed (`secret`), pasted into the window holding flow `request` (`text`, its
     // claim token), from the tab of session `session` (sync/signin.h signsInByPastedCode). A server from before it
     // reads it as Unknown and counts it; nothing of it is kept.
@@ -74,7 +74,7 @@ struct Action {
     std::uint64_t num = 0;  // its place in the list, from 1, never reused
     ActionKind kind = ActionKind::Send;
     SessionId session = 0;  // the session it names; a create's to copy from (0: none); an ensure's is 0
-    std::string friendName; // a create's and an ensure's friend; empty for the rest
+    std::string aiName; // a create's and an ensure's AI; empty for the rest
     std::string text;
     std::string account;    // the account an account action names; empty for the rest (and not on the wire for them)
     std::uint64_t request = 0;  // a secret answer's or cancel's request id; 0 for the rest

@@ -39,7 +39,7 @@ void BusInbox::refresh(const std::string& driversFile, const accounts::Registry*
     workspaces_.clear();
     std::map<std::string, std::string> addresses;
     for (const auto& [inbox, address] : grants_.addresses()) {
-        const auto* owner = registry ? registry->friendNamed(inbox) : nullptr;
+        const auto* owner = registry ? registry->aiNamed(inbox) : nullptr;
         if (!owner) continue;
         if (owner->instances.empty()) {
             const auto driver = resolveDriver(table, inbox, driversFile);

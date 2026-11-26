@@ -169,7 +169,7 @@ std::string tailOf(const std::string& text, std::size_t bytes) {
 // oldest first, within kSummaryBytes, each said whose it is. Only the turns before `prompt`: the transcript already
 // ends with it (the person's entry, shown when it left the queue, and what followed it), and the send carries it
 // after.
-std::string summaryOf(const std::string& friendName, const sync::StoredSession& session,
+std::string summaryOf(const std::string& aiName, const sync::StoredSession& session,
                       const std::string& prompt, const std::vector<std::string>* waiting = nullptr) {
     const auto& transcript = session.transcript;
     using Position = std::vector<sync::EntryRef>::const_reverse_iterator;
@@ -220,7 +220,7 @@ std::string summaryOf(const std::string& friendName, const sync::StoredSession& 
             }
         }
         const char* who = (*it)->kind == EntryKind::Person ? "The person" :
-            (*it)->kind == EntryKind::Friend ? "You" : (*it)->kind == EntryKind::Tool ? "Tool activity" :
+            (*it)->kind == EntryKind::AI ? "You" : (*it)->kind == EntryKind::Tool ? "Tool activity" :
             (*it)->kind == EntryKind::Bus ? "Message bus" : "nexus";
         std::size_t& left = waiting != nullptr && (*it)->kind == EntryKind::Tool ? toolsLeft : textLeft;
         std::string part = std::string(who) + ": ";
@@ -234,7 +234,7 @@ std::string summaryOf(const std::string& friendName, const sync::StoredSession& 
         left -= part.size();
         parts.push_back(std::move(part));
     }
-    std::string text = "[nexus: this conversation with " + friendName + " continues in a fresh harness session. "
+    std::string text = "[nexus: this conversation with " + aiName + " continues in a fresh harness session. "
         "Its newest entries so far, oldest first:]\n";
     for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
         text += *it;
@@ -304,26 +304,26 @@ Drivers::~Drivers() {
     }
 }
 
-std::string Drivers::friendOf(sync::SessionId id) const {
+std::string Drivers::aiOf(sync::SessionId id) const {
     const sync::StoredSession* stored = store_.find(id);
-    return stored == nullptr ? std::string() : stored->info.friendName;
+    return stored == nullptr ? std::string() : stored->info.aiName;
 }
 
-// With no registry held (the committed files did not read at the start) no friend is known to be in friends.json, so
+// With no registry held (the committed files did not read at the start) no AI is known to be in ais.json, so
 // none is listed: the deny direction, as limitedFor reads no registry as limited (models/Supervisor.tla NoSendUnknown).
 bool Drivers::listed(sync::SessionId id) const {
     const accounts::Registry* registry = hub_ != nullptr ? hub_->accounts() : nullptr;
-    return (hub_ && hub_->isPrimary(id)) || (registry && registry->friendNamed(friendOf(id)));
+    return (hub_ && hub_->isPrimary(id)) || (registry && registry->aiNamed(aiOf(id)));
 }
 
-// The session's driver: its friend's line of the drivers file. The supervisor binds any `--account` argument at
+// The session's driver: its AI's line of the drivers file. The supervisor binds any `--account` argument at
 // process start. A command that takes an account starts for a session with one only: a session on no account (one
-// whose friend had no signed-in account left when its own was unlinked) gets the reason and how to link one. A session
-// using a provider other than its friend's configured harness needs an account on that harness.
+// whose AI had no signed-in account left when its own was unlinked) gets the reason and how to link one. A session
+// using a provider other than its AI's configured harness needs an account on that harness.
 ResolvedDriver Drivers::resolve(sync::SessionId id) const {
-    const std::string friendName = friendOf(id);
+    const std::string aiName = aiOf(id);
     DriverTable table;
-    ResolvedDriver r = resolveFriend(friendName, &table);
+    ResolvedDriver r = resolveAI(aiName, &table);
     const sync::StoredSession* stored = store_.find(id);
     const bool primary = hub_ && hub_->isPrimary(id);
     if (primary && stored) {
@@ -346,16 +346,16 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
         r.command.clear();
         return r;
     };
-    // The session's instance (none named: its friend's default): its machine must be this server's (a driver on another
+    // The session's instance (none named: its AI's default): its machine must be this server's (a driver on another
     // machine is roadmap work, docs/roadmap.sexp), and its directory is where the driver works.
     if (const accounts::Instance* in = instanceOf(info)) {
         if (!sameMachine(in->machine, options_.machine, options_.hostName)) {
             const std::string here = options_.machine.empty() ? std::string("a machine with no name (gethostname "
                 "failed, and the server's config sets no machine)") : options_.machine;
-            return refuse("Session " + std::to_string(id) + " belongs to " + friendName + "'s instance " + in->name +
+            return refuse("Session " + std::to_string(id) + " belongs to " + aiName + "'s instance " + in->name +
                 ", on the machine " + in->machine + ", and this server runs on " + here + "; nexus-server does not "
                 "yet start a driver on another machine, so the prompt was not sent. Make a session of an instance of " +
-                friendName + " on this machine, or add one in friends.json (docs/accounts.md)" +
+                aiName + " on this machine, or add one in ais.json (docs/accounts.md)" +
                 (options_.machine.empty() ? std::string(", and set `machine <name>` in the server's config") : "") +
                 ".");
         }
@@ -363,9 +363,9 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
     }
     if (info.account.empty()) {
         if (takesAccount && hub_ != nullptr && hub_->accounts() != nullptr) {
-            return refuse("Session " + std::to_string(id) + " with " + friendName + " runs on no account, and " +
-                friendName + "'s driver needs one, so the prompt was not sent. Link an account to " + friendName +
-                " in friends.json (its \"accounts\", and its \"default\") and run `nexus-server config reload`, then "
+            return refuse("Session " + std::to_string(id) + " with " + aiName + " runs on no account, and " +
+                aiName + "'s driver needs one, so the prompt was not sent. Link an account to " + aiName +
+                " in ais.json (its \"accounts\", and its \"default\") and run `nexus-server config reload`, then "
                 "set this session to it; docs/accounts.md says how.");
         }
         return r;
@@ -373,13 +373,13 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
     // The account's provider, where the server holds accounts (before them, an account is any name, of no provider).
     const accounts::Account* held = hub_ != nullptr && hub_->accounts() != nullptr ?
         hub_->accounts()->account(info.account) : nullptr;
-    auto line = table.friends.find(friendName);
-    const std::string harness = primary ? info.harness : line == table.friends.end() ? std::string() : line->second.harness;
+    auto line = table.ais.find(aiName);
+    const std::string harness = primary ? info.harness : line == table.ais.end() ? std::string() : line->second.harness;
     if (held != nullptr && held->provider != harness) {
         return refuse("Session " + std::to_string(id) + " runs on the account " + info.account + ", whose provider is " +
-            held->provider + ", but " + friendName + "'s driver in " + options_.table + " is " + harness + "'s, and "
+            held->provider + ", but " + aiName + "'s driver in " + options_.table + " is " + harness + "'s, and "
             "nexus-server has no " + held->provider + " driver for it yet, so the prompt was not sent. Set the "
-            "session to one of " + friendName + "'s " + harness + " accounts.");
+            "session to one of " + aiName + "'s " + harness + " accounts.");
     }
     if (held != nullptr && held->requiresVerifiedEmail()) {
         if (!takesAccount || options_.verifiedHelper.empty() || options_.authClaude.empty()) {
@@ -392,12 +392,12 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
     return r;
 }
 
-// The instance a session belongs to, as the hub holds its friend: the one it names, or its friend's default (its
-// first) when it names none. Null when the hub holds no accounts, the friend has no instances, or (until the hub settles
+// The instance a session belongs to, as the hub holds its AI: the one it names, or its AI's default (its
+// first) when it names none. Null when the hub holds no accounts, the AI has no instances, or (until the hub settles
 // it) the one named is gone.
 const accounts::Instance* Drivers::instanceOf(const sync::SessionInfo& info) const {
-    const accounts::Friend* fr = hub_ != nullptr && hub_->accounts() != nullptr ?
-        hub_->accounts()->friendNamed(info.friendName) : nullptr;
+    const accounts::AI* fr = hub_ != nullptr && hub_->accounts() != nullptr ?
+        hub_->accounts()->aiNamed(info.aiName) : nullptr;
     if (fr == nullptr) {
         return nullptr;
     }
@@ -407,13 +407,13 @@ const accounts::Instance* Drivers::instanceOf(const sync::SessionInfo& info) con
     return fr->instance(info.instance);
 }
 
-// Whether the session's driver starts limited to its directory: the server decides, from the accounts and friends it
-// holds (accounts::limitedFor: the friend's "limit", always for an API-billed account, and limited when it holds none).
+// Whether the session's driver starts limited to its directory: the server decides, from the accounts and AIs it
+// holds (accounts::limitedFor: the AI's "limit", always for an API-billed account, and limited when it holds none).
 bool Drivers::limitedOf(const sync::SessionInfo& info) const {
-    return accounts::limitedFor(hub_ != nullptr ? hub_->accounts() : nullptr, info.friendName, info.account);
+    return accounts::limitedFor(hub_ != nullptr ? hub_->accounts() : nullptr, info.aiName, info.account);
 }
 
-// The directories a limited driver keeps out on top of its own (friends.json "limit_keeps_out"); none without files.
+// The directories a limited driver keeps out on top of its own (ais.json "limit_keeps_out"); none without files.
 std::vector<std::string> Drivers::keepsOut() const {
     return hub_ != nullptr && hub_->accounts() != nullptr ? hub_->accounts()->keepsOut : std::vector<std::string>{};
 }
@@ -442,7 +442,7 @@ std::optional<sync::AccountRoutes> Drivers::accountRoutes() const {
     const DriverTable table = readDriverTable(problem);
     sync::AccountRoutes routes;
     if (problem.empty()) {
-        for (const auto& [name, row] : table.friends) {
+        for (const auto& [name, row] : table.ais) {
             const auto driver = table.drivers.find(row.harness);
             if (driver != table.drivers.end() &&
                     std::find(driver->second.begin(), driver->second.end(), "--account") != driver->second.end())
@@ -452,7 +452,7 @@ std::optional<sync::AccountRoutes> Drivers::accountRoutes() const {
     return routes;
 }
 
-ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable* table) const {
+ResolvedDriver Drivers::resolveAI(const std::string& aiName, DriverTable* table) const {
     std::string problem;
     DriverTable parsed = readDriverTable(problem);
     if (!problem.empty()) {
@@ -460,22 +460,22 @@ ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable
         r.problem = std::move(problem);
         return r;
     }
-    ResolvedDriver r = resolveDriver(parsed, friendName, options_.table);
+    ResolvedDriver r = resolveDriver(parsed, aiName, options_.table);
     if (table != nullptr) {
         *table = std::move(parsed);
     }
     return r;
 }
 
-sync::SessionInfo Drivers::defaults(const std::string& friendName) const {
+sync::SessionInfo Drivers::defaults(const std::string& aiName) const {
     // A server without a roster uses the legacy harness default. A named account supplies its own provider.
-    return sync::SessionInfo{friendName, sync::kDefaultHarness, {}, {}, {}};
+    return sync::SessionInfo{aiName, sync::kDefaultHarness, {}, {}, {}};
 }
 
 Config Drivers::config(sync::SessionId id, const ResolvedDriver& driver) const {
     Config c;
     const sync::StoredSession* stored = store_.find(id);
-    c.name = friendOf(id);
+    c.name = aiOf(id);
     if (stored != nullptr) {
         c.model = stored->info.model;
         c.effort = stored->info.effort;
@@ -519,14 +519,14 @@ bool Drivers::start(Millis now) {
         if (state.openTurn == 0 && state.waiting.empty() && state.continuationPrompt.empty() &&
             (stored->queue.empty() || !r.problem.empty() || !listed(id))) {
             // Nothing to run, or only queued prompts and no driver to give them (they stay queued, as they are): the
-            // session shows idle, or down when its friend has no driver configured or is not in friends.json.
+            // session shows idle, or down when its AI has no driver configured or is not in ais.json.
             showResolved(id, r);
             continue;
         }
         std::string dropped;
         if (!r.problem.empty() && !state.waiting.empty()) {
             dropped = std::to_string(state.waiting.size()) + " prompt" + (state.waiting.size() == 1 ? "" : "s") +
-                " waiting for " + stored->info.friendName + " when nexus-server stopped could not be sent: " +
+                " waiting for " + stored->info.aiName + " when nexus-server stopped could not be sent: " +
                 r.problem;
             state.waiting.clear();
         }
@@ -549,8 +549,8 @@ Supervisor& Drivers::pending(sync::SessionId id, const ResolvedDriver& driver, M
     auto it = slots_.find(id);
     if (it != slots_.end()) {
         pendingSup_ = it->second.sup;
-        // A friend whose driver no longer resolves has none: what is queued stays queued until it has one again. Its
-        // directory stays the session's: a driver that does not resolve, or whose friend is out of friends.json (so
+        // An AI whose driver no longer resolves has none: what is queued stays queued until it has one again. Its
+        // directory stays the session's: a driver that does not resolve, or whose AI is out of ais.json (so
         // its instances are not read), names none, and a driver already running or waiting there is not moved by it.
         const bool none = !driver.problem.empty();
         const bool keepCwd = none || !listed(id);
@@ -578,8 +578,8 @@ std::vector<sync::SessionChange> Drivers::preparePrompt(sync::SessionId id, cons
     const Millis now = options_.clock();
     pendingSup_.reset();
     pendingOut_ = Output{};
-    // A friend with no driver gets that notice first (what to fix in the drivers file); one with a driver but out of
-    // friends.json gets the notice that says how to put it back.
+    // An AI with no driver gets that notice first (what to fix in the drivers file); one with a driver but out of
+    // ais.json gets the notice that says how to put it back.
     const ResolvedDriver r = resolve(id);
     if (!r.problem.empty()) {
         if (busRefusal) {
@@ -591,17 +591,17 @@ std::vector<sync::SessionChange> Drivers::preparePrompt(sync::SessionId id, cons
     }
     if (!listed(id)) {
         if (busRefusal) {
-            *busRefusal = "The message bus recipient is not in the current friend roster.";
+            *busRefusal = "The message bus recipient is not in the current AI roster.";
             return {};
         }
-        const std::string name = friendOf(id);
+        const std::string name = aiOf(id);
         const bool none = hub_ == nullptr || hub_->accounts() == nullptr;
         return {sync::SessionChange{entry(EntryKind::Person, prompt), {}}, sync::SessionChange{entry(EntryKind::Notice,
-            none ? "nexus-server holds no friends list (its committed accounts.json and friends.json did not read "
+            none ? "nexus-server holds no AIs list (its committed accounts.json and ais.json did not read "
                 "when it started; server.log says why), so it does not know whether " + name + " is in it, and the "
                 "prompt was not sent. Fix the files and run `nexus-server config reload` (docs/accounts.md); this "
                 "session and its queued prompts are kept." :
-            name + " is not in friends.json, so the prompt was not sent. Add " + name + " to friends.json and run "
+            name + " is not in ais.json, so the prompt was not sent. Add " + name + " to ais.json and run "
             "`nexus-server config reload` (docs/accounts.md); this session and its queued prompts are kept."), {}}};
     }
     Supervisor& sup = pending(id, r, now);
@@ -627,7 +627,7 @@ std::vector<sync::SessionChange> Drivers::queue(sync::SessionId id, const std::s
     std::vector<sync::SessionChange> out = {sync::SessionChange{nullptr, prompt}};
     const ResolvedDriver r = resolve(id);
     if ((!r.problem.empty() || !listed(id)) && slots_.find(id) == slots_.end()) {
-        return out;     // no driver to give it to, or its friend not in friends.json: it stays queued until then
+        return out;     // no driver to give it to, or its AI not in ais.json: it stays queued until then
     }
     Supervisor& sup = pending(id, r, now);
     append(pendingOut_, sup.queued(prompt, now));
@@ -638,11 +638,13 @@ std::vector<sync::SessionChange> Drivers::queue(sync::SessionId id, const std::s
 }
 
 // A stop of an open turn changes nothing in the store: its stop line is written once the hub has counted the action.
-std::string Drivers::friendInfo(const std::string& name) const {
+std::string Drivers::aiInfo(const std::string& name) const {
     if (name.empty() || name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-") != std::string::npos)
         return {};
-    const auto file = std::filesystem::path(options_.table).parent_path() / "friend-info" / (name + ".json");
-    std::ifstream input(file, std::ios::binary);
+    const auto dir = std::filesystem::path(options_.table).parent_path();
+    std::ifstream input(dir / "ai-info" / (name + ".json"), std::ios::binary);
+    // friend-info: where a launcher from before the friend names became AI still writes it. The word stays here only.
+    if (!input) input.open(dir / "friend-info" / (name + ".json"), std::ios::binary);
     if (!input) return {};
     std::string data(16385, '\0');
     input.read(data.data(), static_cast<std::streamsize>(data.size()));
@@ -738,9 +740,9 @@ Output Drivers::syncSlot(sync::SessionId id, Supervisor& sup, Millis now) {
         here = sameMachine(in->machine, options_.machine, options_.hostName);
         dir = in->dir;
     } else {
-        // No instance (its friend has none now): the drivers file's directory, on this machine, so that a session
+        // No instance (its AI has none now): the drivers file's directory, on this machine, so that a session
         // whose instance was elsewhere is never left not here.
-        const ResolvedDriver line = resolveFriend(s->info.friendName, nullptr);
+        const ResolvedDriver line = resolveAI(s->info.aiName, nullptr);
         dir = line.problem.empty() ? line.cwd : sup.cwd();
     }
     Output out;
@@ -793,7 +795,7 @@ bool Drivers::refreshSandbox(const std::set<std::string>& unsandboxed) {
     for (auto& [id, slot] : slots_) {
         const auto* session = store_.find(id);
         if (!session) continue;
-        const auto& name = session->info.friendName;
+        const auto& name = session->info.aiName;
         const bool enabled = unsandboxed.contains(name);
         if (enabled != unsandboxed_.contains(name) &&
             !run(id, slot.sup.refreshSandbox(!enabled, now), now, false)) return false;
@@ -830,10 +832,10 @@ void Drivers::signedIn(const std::string& account) {
     }
 }
 
-// The hub has committed the notice of a friend taken out, or settled a session whose friend is back: its supervisor is
+// The hub has committed the notice of an AI taken out, or settled a session whose AI is back: its supervisor is
 // told (stopping what runs, or letting what waits go on). Put back, it first takes the settings, account, command,
-// limit, directories kept out and place that the session and the friend's record say now, which may differ from those
-// it held when the friend was taken out, so that the next driver starts under them. With none, a session put back with
+// limit, directories kept out and place that the session and the AI's record say now, which may differ from those
+// it held when the AI was taken out, so that the next driver starts under them. With none, a session put back with
 // prompts queued gets one, which reads them as it starts and takes the oldest; otherwise only what it shows changes.
 void Drivers::present(sync::SessionId id, bool present) {
     auto it = slots_.find(id);
@@ -843,8 +845,8 @@ void Drivers::present(sync::SessionId id, bool present) {
     }
     const Millis now = options_.clock();
     if (it->second.sup.present() != present) {
-        log(id, present ? "its friend is in friends.json again: what waits goes on" :
-            "its friend was taken out of friends.json: what runs is stopped and its driver ended");
+        log(id, present ? "its AI is in ais.json again: what waits goes on" :
+            "its AI was taken out of ais.json: what runs is stopped and its driver ended");
     }
     Output out;
     if (present) {
@@ -867,9 +869,9 @@ void Drivers::tellSecret(sync::SessionId id, const std::string& line) {
 }
 
 // A session's driver as the drivers file now says, for what the window shows of it: a session with no supervisor
-// shows down when its friend has none configured, idle otherwise (nothing runs in it); one with a supervisor is told,
+// shows down when its AI has none configured, idle otherwise (nothing runs in it); one with a supervisor is told,
 // and shows what that makes of it (Supervisor::activity).
-// It is read again each kResolveMs while the friend has none (serve()). False when the store did not take a step.
+// It is read again each kResolveMs while the AI has none (serve()). False when the store did not take a step.
 bool Drivers::showResolved(sync::SessionId id, const ResolvedDriver& driver) {
     if (driver.problem.empty()) {
         unresolved_.erase(id);
@@ -945,7 +947,7 @@ std::vector<sync::SessionChange> Drivers::changes(const Output& out, const Super
     return changes;
 }
 
-// The friend's text still growing, as the session's open entry, and what the friend is doing (the window's state
+// The AI's text still growing, as the session's open entry, and what the AI is doing (the window's state
 // cursor): in memory only, never in the store. True when either changed.
 bool Drivers::showOpen(sync::SessionId id, const Slot& t) {
     const bool open = hub_->setOpen(id, t.sup.gathered());
@@ -1298,7 +1300,7 @@ bool Drivers::serve(Millis now, bool* changed) {
         }
     }
     // What the drivers said of their accounts, once every slot is served: the hub's sign-in state, and a session
-    // whose account reached its usage limit moved to its friend's next signed-in account (a rotation changes the
+    // whose account reached its usage limit moved to its AI's next signed-in account (a rotation changes the
     // session's settings, which reach its supervisor through configured()).
     for (const Report& r : reports) {
         if (hub_ == nullptr) {
@@ -1343,7 +1345,7 @@ bool Drivers::serve(Millis now, bool* changed) {
             break;
         }
         std::string refused;
-        const bool asked = hub_->askSecret(sync::SecretAsker{a.id, a.ask.ask, friendOf(a.id)}, a.ask.account,
+        const bool asked = hub_->askSecret(sync::SecretAsker{a.id, a.ask.ask, aiOf(a.id)}, a.ask.account,
                                            a.ask.what, a.ask.why, &refused);
         if (changed != nullptr) {
             *changed = true;

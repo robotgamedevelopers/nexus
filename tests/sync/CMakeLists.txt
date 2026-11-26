@@ -85,12 +85,12 @@ tlc_test(tlc_reconnect_trace_faulty_no_reset_rejected ReconnectTrace ReconnectTr
          RECONNECTWALK SEED 1 STEPS 1000 FAULTY no-reset)
 
 # TLC (tlc_test is tests/model's): Link.tla on six instances, all properties (states and times on four workers in a
-# login session on the studio). MCLink.cfg is two windows sharing one friend's session, one send, queue or stop each,
-# with an open entry and a restart (37,306 states, 15 s); MCLinkOne.cfg one window over two friends' sessions with
+# login session on the studio). MCLink.cfg is two windows sharing one AI's session, one send, queue or stop each,
+# with an open entry and a restart (37,306 states, 15 s); MCLinkOne.cfg one window over two AIs' sessions with
 # longer ranges (15,680 states, 6 s); MCLinkGrow.cfg one window, one session, two actions, an open entry grown twice
 # and a restart (19,050 states, 4 s); MCLinkTabs.cfg one window over two sessions, open entries in both (58,128
-# states, 18 s); MCLinkSessions.cfg one window, friend a's session at the start and none for b, creates and ensures
-# among two actions of any kind (6,331 states, 2 s); MCLinkEnsure.cfg two windows ensuring the one friend's session
+# states, 18 s); MCLinkSessions.cfg one window, AI a's session at the start and none for b, creates and ensures
+# among two actions of any kind (6,331 states, 2 s); MCLinkEnsure.cfg two windows ensuring the one AI's session
 # from none and sending in what they show (70,191 states, 28 s).
 # Nightly: MCLinkStops.cfg, two windows sharing a session, two actions each (736,080 states, 2 min 27 s on eight
 # workers); MCLinkWide.cfg, two windows over two sessions, one action each, an open entry grown once and a restart

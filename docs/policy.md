@@ -126,7 +126,7 @@ and keeps the text for later.
 The live Nova Tools directory supplies provider display names. On Studio a login service runs
 `nova-config friend watch --output ~/.nexus/client/nova-friends.json` with the fleet’s read-only
 database connection. It publishes the current AIs and provider labels on connection and on committed
-registry edits. The client policy receives the snapshot as `config["nova_friends"]`. Set a shared
+registry edits. The client policy receives the snapshot as `config["nova_ais"]`. Set a shared
 label with `nova-config harness set codex --display_name ChatGPT`. The account’s provider identifies
 the service the user will authenticate with. Each row shows the configured email, falling back to
 the account label if the roster has no email. Bind `ArrowUp` and `ArrowDown` in
@@ -187,6 +187,10 @@ while hidden. Return a physical key code and modifiers, for example
 Use UI Events physical codes such as `Backquote`, `KeyJ` and `F8`. In-window shortcuts
 continue to use logical key names. Applying a client profile updates the global binding.
 
+The client lock's idle timeout is the `lock` event's answer, `{"idle_minutes": N}`: the stock rule reads
+`lock_idle_minutes`, 10 unless set. N is a whole number of minutes from 1 to 240; nothing turns the lock off, and
+any other answer is the default with a logged reason (`docs/security.md`).
+
 Type `/help` in an AI tab to show overlay, terminal, tab and account shortcuts alongside the slash-command reference. It works while signed out. A fork can add descriptions to the client config’s `command_help` map or replace the help handler in Starlark.
 
 The fork can return `prompt_command` for a draft that should bypass the account reminder.
@@ -227,7 +231,7 @@ In the client's `window` event, `limit_offer` is present for an interrupted turn
 |---|---|---|
 | Client `text_zoom` | Integer `current` text scale step, signed key `delta`, inclusive `min` and `max` supported by the renderer | An integer in range. On an invalid answer the window keeps the current scale and reports the error. |
 | Server `account_after_limit` | `current` account name, `linked` names in configuration order, and `eligible` names of other signed-in linked subscriptions that have not exhausted this request | An eligible name, or `None` to stay. An invalid answer keeps the session on its current account and adds a notice. |
-| Server `model_after_limit` | `friend`, concrete `account`, current `model` after a Claude Fable limit | The model to offer on the same account, or `None` to omit this choice. Stock policy reads `fable_fallback_model`, defaulting to the Claude `opus` alias. The server resumes only when the person selects an available option. |
+| Server `model_after_limit` | `ai`, concrete `account`, current `model` after a Claude Fable limit | The model to offer on the same account, or `None` to omit this choice. Stock policy reads `fable_fallback_model`, defaulting to the Claude `opus` alias. The server resumes only when the person selects an available option. |
 
 The shipped client advances a tab by the key's delta. A server-side relative account command uses the linked accounts in order.
 The server reads a bundle at the decision and reuses the compiled module while its contents are the same. The window reads and compiles updates off its frame thread. The
@@ -298,18 +302,18 @@ Preview application events with an `app.` prefix. The Starlark `handle` function
 the prefix. For example:
 
 ```sh
-echo '{"tab":"friend","type":"","prompt_open":true,"has_status":false}' |
+echo '{"tab":"ai","type":"","prompt_open":true,"has_status":false}' |
   build/nexus-policy preview client policy/rules app.window
-echo '{"friend":"reviewer","intent":"send","text":"hello","model":"","queued":0,"busy":false}' |
+echo '{"ai":"reviewer","intent":"send","text":"hello","model":"","queued":0,"busy":false}' |
   build/nexus-policy preview server policy/rules app.message
 ```
 
 | Event | State and return value |
 |---|---|
 | Client `window` | Receives the active tab kind, registered type ID, prompt availability and presence of link status. Returns the ordered panel list, keyboard shortcuts, and optional tab registrations and label. The window caches this description until its state changes or it observes an applied revision during a frame. |
-| Client `prompt_key` | Receives `key` (`Enter` or `Command+Enter`), `text`, `friend`, `model`, queue length `queued`, and displayed `busy` state. Returns a command list. |
+| Client `prompt_key` | Receives `key` (`Enter` or `Command+Enter`), `text`, `ai`, `model`, queue length `queued`, and displayed `busy` state. Returns a command list. |
 | Server `message` | Receives the same text and session fields with `intent` (`send` or `queue`) and server-side `busy` (an open turn). Returns a command list. |
-| Server `new_session` | Receives `friend`, driver `defaults`, an optional `source` session, and an optional `roster` with `linked`, `preferred`, `instances` and `can_auto_account`. Returns optional boolean `auto_account` (default false) and string fields `account`, `instance`, `model` and `effort`. The host validates these before creating the session. |
+| Server `new_session` | Receives `ai`, driver `defaults`, an optional `source` session, and an optional `roster` with `linked`, `preferred`, `instances` and `can_auto_account`. Returns optional boolean `auto_account` (default false) and string fields `account`, `instance`, `model` and `effort`. The host validates these before creating the session. |
 
 Message command lists accept up to 16 operations. Each operation is a dictionary with an `op` field. A `notice`
 carries `text`. A client `draft` replaces the current draft. A final `send` or `queue` can supply replacement
@@ -331,7 +335,7 @@ A minimal profile is in [policy/example](../policy/example).
 
 | Input | Meaning |
 |---|---|
-| `context["friend"]` | The profile name assigned to this driver binding |
+| `context["ai"]` | The profile name assigned to this driver binding |
 | `context["provider"]` | `claude` for this hook |
 | `context["account"]` | The account name selected by the server |
 | `context["resuming"]` | Whether the server is passing a prior harness session to the driver |
@@ -342,11 +346,11 @@ of up to 64 characters. `effort` is one of `low`, `medium`, `high`, `xhigh` or `
 wins over a profile default. The server continues to send explicit session settings over the driver protocol.
 
 For example, this policy uses less effort for a fresh conversation with a designated AI. The person supplies
-`quick_friend` in their own JSON.
+`quick_ai` in their own JSON.
 
 ```python
 def driver_start(context, config):
-    if context["friend"] == config.get("quick_friend") and not context["resuming"]:
+    if context["ai"] == config.get("quick_ai") and not context["resuming"]:
         return {"effort": "low"}
     return {}
 ```
@@ -356,7 +360,7 @@ deadline. The hook has no host I/O functions or module loader. A policy error pr
 and leaves the prompt unsent to the provider. Correct the profile, preview it, and retry. A change takes effect on
 the next start. A driver already answering a turn continues with its current settings.
 
-<a id="friend-identity-at-startup"></a>
+<a id="ai-identity-at-startup"></a>
 
 ## AI identity at startup
 
@@ -376,11 +380,11 @@ including local edits. It records the base commit and a digest of the exact star
 read-only registry connection. The optional arguments following the `nova_config` program can select
 its store. Keep credentials out of the profile.
 
-The server substitutes `{friend}` and `{harness}` when either occupies an entire driver argument.
+The server substitutes `{ai}` and `{harness}` when either occupies an entire driver argument.
 For example, one command can serve all AIs using an installed Claude adapter:
 
 ```text
-driver claude /opt/nexus/venv/bin/python -I -m nexus_policy friend-driver /srv/nexus/profile {friend} {harness} /usr/bin/node /opt/nexus/drivers/claude/dist/src/main.js --account work
+driver claude /opt/nexus/venv/bin/python -I -m nexus_policy ai-driver /srv/nexus/profile {ai} {harness} /usr/bin/node /opt/nexus/drivers/claude/dist/src/main.js --account work
 ```
 
 The launcher verifies the selected harness against the registry before running the driver. The configured
@@ -398,6 +402,18 @@ named by `--startup-context-fd`. It consumes and closes the descriptor before la
 The shipped Claude adapter appends the text to the Claude Code system prompt on new and resumed queries.
 Codex, Antigravity, Grok and Muse consume the same descriptor through the [RPC adapters](../drivers/rpc/README.md).
 An identity profile alone does not install a driver or add an AI to the roster.
+
+<a id="names-before-ai"></a>
+
+## Names before AI
+
+Before nexus called its AIs "AI" (2026-11-25), a policy saw them as `"friend"`: the tab kind (`state["tab"]`,
+`t["kind"]`, a group's `"types"`), the key of the AI's name (`state["friend"]`, `context["friend"]`, a session's
+`source["friend"]`, the sign-in account's `"friend"`), and the directory `config["nova_friends"]`. They are `"ai"` and
+`config["nova_ais"]` now, with the stock group `"ais"`. Applying or loading a policy whose sources or `config.json` still
+say `"friend"` or `"nova_friends"` is refused, naming the file, the line and the new name, rather than loaded to match
+nothing. Rename them in your fork and apply it again. The server's launcher command `nexus_policy friend-driver` and a
+drivers file's `friend <name> <harness>` lines and `{friend}` argument still read as `ai-driver`, `ai` and `{ai}`.
 
 ## Install and use
 
@@ -417,7 +433,7 @@ command. Use absolute paths without spaces in this file. For example:
 
 ```text
 driver claude /home/me/.nexus/server/policy-runtime/bin/python -I -m nexus_policy driver /home/me/nexus/policy/example reviewer /usr/bin/node /home/me/.nexus/server/current/drivers/claude/dist/src/main.js --account work
-friend reviewer claude ~/work
+ai reviewer claude ~/work
 ```
 
 The label after the profile path selects the AI's policy. Give AIs with different labels separate driver
@@ -428,7 +444,7 @@ already has permission to edit. Preview changes with `check` and replace files a
 profile. To move to another server, copy those two files, point its driver binding at the profile and connect its
 own account. The policy host needs installing only once per server.
 
-To carry the AI roster too, copy the applied `accounts.json` and `friends.json` from the directory reported by
+To carry the AI roster too, copy the applied `accounts.json` and `ais.json` from the directory reported by
 `nexus-server config path` into your profile. These files contain the account names and links. On a new machine,
 adapt the instance machine and directory, install the driver binding, then use the normal `config check` and
 `config reload` workflow for the two files. An exported roster is a snapshot. Changes to those two copies take

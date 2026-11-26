@@ -86,11 +86,11 @@ EntryRef entry(nexus::EntryKind kind, const std::string& t, bool closed = true) 
     return std::make_shared<const SessionEntry>(SessionEntry{kind, t, closed});
 }
 
-SessionRef session(SessionId id, const std::string& friendName, Activity activity, std::vector<EntryRef> entries,
+SessionRef session(SessionId id, const std::string& aiName, Activity activity, std::vector<EntryRef> entries,
                    std::vector<std::string> queue = {}) {
     auto v = std::make_shared<SessionView>();
     v->id = id;
-    v->info.friendName = friendName;
+    v->info.aiName = aiName;
     v->info.harness = "claude";
     v->info.instance = "studio";
     v->activity = activity;
@@ -116,7 +116,7 @@ void test_sessions() {
     CHECK(window.sessions().size() == 2);
     if (window.sessions().size() == 2) {
         const SessionView& a = *window.sessions()[0];
-        CHECK(a.id == 7 && a.info.friendName == "rowan" && a.info.instance == "studio");
+        CHECK(a.id == 7 && a.info.aiName == "rowan" && a.info.instance == "studio");
         CHECK(a.activity == Activity::Busy);
         CHECK(a.entries.size() == 3);
         if (a.entries.size() == 3) {
@@ -126,7 +126,7 @@ void test_sessions() {
         }
         CHECK((a.queue == Names{"later"}));
         const SessionView& b = *window.sessions()[1];
-        CHECK(b.id == 8 && b.info.friendName == "stella");
+        CHECK(b.id == 8 && b.info.aiName == "stella");
         CHECK(b.activity == Activity::Busy);    // Waiting, which this build does not know, shows as busy
         CHECK(b.entries.size() == 1);
     }
@@ -141,19 +141,19 @@ void test_sessions() {
     // This build's server's diffs, read by a later window: a first diff, then one that grows an open entry.
     const Sessions empty;
     const Sessions first({session(7, "rowan", Activity::Busy,
-                                  {entry(nexus::EntryKind::Person, "hi"), entry(nexus::EntryKind::Friend, "hel", false)},
+                                  {entry(nexus::EntryKind::Person, "hi"), entry(nexus::EntryKind::AI, "hel", false)},
                                   {"later"})});
     const std::string firstDiff = first.diff_from(empty);
     const wiretest::Read r1 = wiretest::nextReadSessions(bytes(firstDiff));
     CHECK(r1.loaded && !r1.damaged && !r1.refused && r1.unknown == 0);
-    CHECK(r1.friendName == "rowan" && r1.instance == "studio" && !r1.titlePresent);
-    CHECK((r1.kinds == Names{"Person", "Friend"}));
+    CHECK(r1.aiName == "rowan" && r1.instance == "studio" && !r1.titlePresent);
+    CHECK((r1.kinds == Names{"Person", "AI"}));
     CHECK((r1.queue == Names{"later"}));
     const Sessions grown({session(7, "rowan", Activity::Idle,
-                                  {entry(nexus::EntryKind::Person, "hi"), entry(nexus::EntryKind::Friend, "hello")})});
+                                  {entry(nexus::EntryKind::Person, "hi"), entry(nexus::EntryKind::AI, "hello")})});
     const wiretest::Read r2 = wiretest::nextReadSessions(bytes(grown.diff_from(first)));
     CHECK(r2.loaded && !r2.damaged && !r2.refused && r2.unknown == 0);
-    CHECK((r2.kinds == Names{"Friend"}));       // only the entry that grew
+    CHECK((r2.kinds == Names{"AI"}));       // only the entry that grew
     // And this build reads its own the same, nothing unknown.
     Sessions own;
     own.apply_string(firstDiff);
@@ -199,7 +199,7 @@ void test_actions() {
     Action create;
     create.kind = ActionKind::Create;
     create.session = 7;
-    create.friendName = "stella";
+    create.aiName = "stella";
     window.add(create);
     Action answer;
     answer.kind = ActionKind::SecretAnswer;
@@ -211,7 +211,7 @@ void test_actions() {
     CHECK(r.start == 3);
     CHECK((r.kinds == Names{"Send", "Create", "SecretAnswer"}));
     CHECK((r.texts == Names{"hi", "", ""}));
-    CHECK((r.friends == Names{"", "stella", ""}));
+    CHECK((r.ais == Names{"", "stella", ""}));
     CHECK((r.sessions == std::vector<std::uint64_t>{7, 7, 0}));
     CHECK((r.requests == std::vector<std::uint64_t>{0, 0, 4}));
     CHECK((r.secrets == Names{"", "", "test-value"}));
@@ -270,15 +270,15 @@ void test_signin() {
     const wiretest::Read skipped = wiretest::prevReadSessions(bytes(server.init_diff()));
     CHECK(skipped.loaded && !skipped.damaged && !skipped.refused);
     CHECK(skipped.unknown == 2);    // the skipped field counts once for each flow it holds (measured: 1 for one flow)
-    CHECK(skipped.sessions == 1 && skipped.friendName == "rowan" && (skipped.kinds == Names{"Person"}));
+    CHECK(skipped.sessions == 1 && skipped.aiName == "rowan" && (skipped.kinds == Names{"Person"}));
     CHECK((skipped.requests == Ids{3}));
     // An older reader which predates the roster still loads the transcript and requests when
     // the new server includes nested named account choices, labels and configured email.
     Sessions withRoster = server;
-    withRoster.setFriends({{"rowan", {{"work", "Writing", true, "writing@example.test"}, {"home", ""}}}});
+    withRoster.setAIs({{"rowan", {{"work", "Writing", true, "writing@example.test"}, {"home", ""}}}});
     const auto earlier = wiretest::prevReadSessions(bytes(withRoster.init_diff()));
     CHECK(earlier.loaded && !earlier.damaged && !earlier.refused);
-    CHECK(earlier.sessions == skipped.sessions && earlier.friendName == skipped.friendName);
+    CHECK(earlier.sessions == skipped.sessions && earlier.aiName == skipped.aiName);
     CHECK(earlier.requests == skipped.requests && earlier.kinds == skipped.kinds);
     // What this server sends on the link of 4: no flows at all, so nothing unknown; the requests as before.
     Sessions onLink = server;

@@ -13,12 +13,12 @@ below says what the binding covers, and what it does not yet.
 
 ## The flow
 
-1. An **asker** asks `nexus-server` for a secret for an account: a friend's AI, through its driver (below), or the
+1. An **asker** asks `nexus-server` for a secret for an account: an AI, through its driver (below), or the
    server itself (a login for an account whose provider has no in-app sign-in; a claude account signs in in the
    browser instead, "Sign-in" below).
 2. The server refuses the ask outright (below: no request, no id) unless the account and what is asked are each a name
-   (letters, digits, `-`, `_` and `.`, at most 64), the account exists, the asker's friend is linked to it in
-   `friends.json` (an AI asks only for the accounts its friend may use; nexus itself may ask for any), the account's
+   (letters, digits, `-`, `_` and `.`, at most 64), the account exists, the asker's AI is linked to it in
+   `ais.json` (an AI asks only for the accounts it may use; nexus itself may ask for any), the account's
    provider documents the file, and the reason is one line of plain text. It refuses at once, answering the asker
    `refused` (`busy`), when a request is already open for that account, when the same asker has one of its own open
    already, or when it has asked 5 times in the last minute (a guess, not a measurement: enough for a person to fix
@@ -72,7 +72,7 @@ Every way an ask ends, by whose it is:
 | `no-client` | neither: no value exists yet | refused at the ask, no window can take it; nothing was pasted |
 | `cancelled` | the person's | they pressed Escape: nothing was pasted |
 | `timeout` | the person's | nobody pasted in 10 minutes. An answer that crossed the deadline is stored (step 8) |
-| `malformed` | the person's input | told why (never what); asked again: nexus's own asks at once, a friend's AI by its own ask |
+| `malformed` | the person's input | told why (never what); asked again: nexus's own asks at once, an AI by its own ask |
 | file cannot be written | ours | held and written again until durable; never refused (the old `unwritable`) |
 | durability not confirmed | ours | held and written again until durable (the old `stored` with `unconfirmed`) |
 | late: another window stored it | neither | already stored; nothing lost |
@@ -115,7 +115,7 @@ credential starts its driver for the prompt waiting, without a restart (`Supervi
 ## The dialog
 
 - It belongs to the overlay, like any pop-up, on whatever tab shows. It names the account, what is asked and who asks
-  (a friend and session, or nexus itself), with the asker's one-line reason shown as quoted text: it is data, never an
+  (an AI and session, or nexus itself), with the asker's one-line reason shown as quoted text: it is data, never an
   instruction to the person.
 - nexus never shows itself for a request (the launch rule: only the hotkey shows the overlay). A request that arrives
   while the overlay is hidden waits for the next show.
@@ -152,7 +152,7 @@ mosh transport (encrypted with the session's key). Nothing else on the wire, in 
 
 - **Server to window.** The sessions state gains the open requests, after the sessions: each one framed by its
   length (`docs/formats.md` rule 1) and holding the request id, the account, what is asked, the asker (a session id,
-  or 0 for nexus itself), the asker's friend, and the asker's one-line reason. Never a value. In format 3 the list is
+  or 0 for nexus itself), the asker's AI, and the asker's one-line reason. Never a value. In format 3 the list is
   always there (a count, 0 for none), so a state cut short before it is refused rather than read as none. This is a
   new state format (3), agreed when the window connects as today; a window that agrees an older format receives no
   requests, and the server counts it as unable to take one.
@@ -192,7 +192,7 @@ and that each driver keeps the harness's own tools out of `~/.nexus/server/accou
 the token to the harness on a descriptor, never in an environment, and walls the directory off from every tool its AI
 has ("The token wall", below).
 
-An `ask-secret` with an account or a `what` that is not a name, an account not set up, an account the asker's friend
+An `ask-secret` with an account or a `what` that is not a name, an account not set up, an account the asker's AI
 is not linked to, a `what` the account's provider does not document, or a `why` that is not one line of at most 200
 bytes of UTF-8 text is refused as a malformed line: no request is made, no id is minted, and the driver is ended, as
 for any line the server refuses. A `why` may hold no control character (C0, DEL or C1), no bidirectional control (such
@@ -445,7 +445,7 @@ model's do).
 the real `AccountFiles` (over the in-memory filesystem, at every write), the real `SecretLines` (the server's encoder
 of each driver line and each `server.log` line) and the real `Drivers` (over an in-memory `Drivers::Host` harness, with
 `Drivers::hold` and `Drivers::release` around each step) at random, and TLC checks each trace against
-`models/SecretsTrace.tla` with every safety property. Each friend session's fake driver checks that `server`
+`models/SecretsTrace.tla` with every safety property. Each AI session's fake driver checks that `server`
 (`features: ["secrets"]`) arrives on its standard input before `send`, writes `ask-secret` lines on its standard output
 for `Drivers::serve` to read, and decodes every `secret` line arriving on its standard input with `driver::LineReader`
 and `decodeServerMessage`. Each record of the code's state is built from the bytes each sink received: for a session
@@ -688,7 +688,7 @@ What it costs:
   reaches this machine's sshd as the person, outside the sandbox. The test's ssh-out probe sees the fleet refuse the
   way back today; that is the fleet's configuration, not the wall. An option that closes it: deny the sandbox reading
   the person's private keys in `~/.ssh` (a deny-read rule beside the accounts'). Its cost: the AI cannot ssh, or use git
-  over ssh, with the person's keys at all, only with keys of its own. A limited friend (below) has exactly that: it
+  over ssh, with the person's keys at all, only with keys of its own. A limited AI (below) has exactly that: it
   reads nothing in `~/.ssh`. An unlimited one keeps the route open.
 - *Every OS: descriptor 3 is Claude's to close* (layer 1). A substituted Claude executable that ignores it leaves the
   token on a descriptor its tools inherit.
@@ -725,19 +725,19 @@ What it costs:
   neither: from reading the token file until Claude has it, the token is in the driver's memory, and a core file of it
   or a process of the same user allowed to trace it could hold or read it.
 
-### A limited friend
+### A limited AI
 
-A friend with `"limit": true` in friends.json (docs/accounts.md, "limit"; the default for a friend added, and always for
+An AI with `"limit": true` in ais.json (docs/accounts.md, "limit"; the default for an AI added, and always for
 one on an account billed at API rate) runs with the wall above and, on top of it, kept to its directory. The server
 passes the driver `--limit cwd` at every start of such a session and ends, before any prompt, a driver whose hello does
-not list the `limit` feature (so an older or third-party driver never runs a limited friend unlimited; a third-party
+not list the `limit` feature (so an older or third-party driver never runs a limited AI unlimited; a third-party
 driver must enforce the option itself). The Claude driver resolves the working directory once, and that one path is
 the one it checks, the one the limit allows and the one Claude works in; it adds the limit from what Claude and the
 machine already have (`wall.ts` `limitOf`), nothing of nexus's own:
 
 1. *The shell* (Claude's sandbox, as layer 2). Reads are denied in the home directory and the platform's data roots
    (macOS `/Users`, `/Volumes` and their `/System/Volumes/Data` forms; Linux and WSL2 `/home`, `/root`, `/mnt`,
-   `/media`, `/run/media`, `/srv`, those that exist, and any more friends.json's `"limit_keeps_out"` names
+   `/media`, `/run/media`, `/srv`, those that exist, and any more ais.json's `"limit_keeps_out"` names
    (docs/accounts.md; the server gives each to the driver as `--keep-out <dir>`: a second volume, a network mount, a
    WSL2 automount root moved off `/mnt`), and allowed again (`allowRead`) only for the working directory; the parts
    of the account's Claude state the shell reads (its shell snapshots, its session environment, and the project's memory folder, all inside `~/.nexus`); the programs nexus runs (node, with its
@@ -798,7 +798,7 @@ caches there: point such a tool's cache into the working directory or the tempor
 `GOMODCACHE`, `npm_config_cache`). On macOS a program that keeps a cache in the user's temporary folder (`cc`'s
 xcrun cache) warns and runs. Claude's own state is the account's, outside the sandbox, so its memory and transcripts work.
 
-**What stays open to a limited friend.** The limit is best effort like the wall: the AI's own user account is the
+**What stays open to a limited AI.** The limit is best effort like the wall: the AI's own user account is the
 person's, and a sandboxed VM or container (`real-isolation`, the roadmap; candidates below) is the real isolation. Open:
 
 - Everything outside the data roots and HOME, readable to its shell as to any program of the user: the system's
@@ -808,16 +808,16 @@ person's, and a sandboxed VM or container (`real-isolation`, the roadmap; candid
 - Mounts outside the listed roots: on macOS a network share or disk image mounted somewhere other than `/Volumes`; on
   Linux an NFS or SMB mount, `/net`, `/data`, `/opt` or `/var` mounts, `/run/user/<id>` (the user's runtime folder: its
   `gvfs` mounts and sockets); on WSL2 an automount root moved off `/mnt` by `/etc/wsl.conf`, and the Windows drives
-  then wherever it says. Name each in friends.json's `"limit_keeps_out"` to close it (docs/accounts.md).
+  then wherever it says. Name each in ais.json's `"limit_keeps_out"` to close it (docs/accounts.md).
 - A PATH folder inside HOME or inside another project (`~/.local/bin`, `~/go/bin`, a project's `node_modules/.bin`):
   readable, as that folder alone (measured above), so whatever is kept in it.
 - The shell start-up files (`.bashrc`, `.zshrc`, `.profile` and the rest above): readable, and people often export
-  tokens in them. Keep tokens out of them on a machine with limited friends.
-- The account's shell-snapshot and session-environment folders: per account, shared by every friend on that account,
-  unlimited ones included; what one friend's shell left there, another reads.
-- The temporary folders (the session's `TMPDIR` and `/tmp`): readable **and writable**, and shared: a limited friend can
-  read what another program left there, and plant a file an unlimited friend (or the person) later runs or reads.
-- The network is the wall's: unchanged, every other machine reachable through the driver's proxy, so a limited friend
+  tokens in them. Keep tokens out of them on a machine with limited AIs.
+- The account's shell-snapshot and session-environment folders: per account, shared by every AI on that account,
+  unlimited ones included; what one AI's shell left there, another reads.
+- The temporary folders (the session's `TMPDIR` and `/tmp`): readable **and writable**, and shared: a limited AI can
+  read what another program left there, and plant a file an unlimited AI (or the person) later runs or reads.
+- The network is the wall's: unchanged, every other machine reachable through the driver's proxy, so a limited AI
   still fetches, pushes over https with credentials of its own, and reaches services on other machines.
 - A driver other than the Claude driver: it is given `--limit cwd` and must honour it itself; the server only requires
   it to say so (the `limit` feature in its hello).
@@ -829,12 +829,12 @@ of its runner's own, one run at a time); nexus does not yet.
 
 ## Real isolation: candidates
 
-Later, not built. The token wall and the limit are a process sandbox, best effort. Real isolation runs a friend, a
+Later, not built. The token wall and the limit are a process sandbox, best effort. Real isolation runs an AI, a
 fleet worker on API billing or a CI worker inside a virtual machine or a container, so nothing it runs reaches the
 machine's own files, logins or services. These are candidates, listed generously, to try and to review or reject
 later; none is chosen. All but Tart are open source and
 may be built in or bundled where their size allows; Tart runs as a separate program only, because its licence is
-source-available, not open source, so its code is never taken into this repository. Day-to-day friends on a Mac stay
+source-available, not open source, so its code is never taken into this repository. Day-to-day AIs on a Mac stay
 on the process sandbox, because they need the GPU and Xcode natively.
 
 Mac hosts, for CI runners and hostile-code work that must run on a Mac:
@@ -863,9 +863,9 @@ Linux and WSL2 hosts:
 
 Any host, on our own machines or on GCP or AWS:
 
-- Kubernetes itself, running friends, workers and CI in isolated pods or virtual machines; the agent-sandbox resource
+- Kubernetes itself, running AIs, workers and CI in isolated pods or virtual machines; the agent-sandbox resource
   type and a runner controller are the pieces to look at.
-- Virtual machines on GCP or AWS, with friends and workers started there.
+- Virtual machines on GCP or AWS, with AIs and workers started there.
 
 The process-level baseline, for comparison: bubblewrap, which Claude's sandbox already uses on Linux and WSL2 (with
 Seatbelt on macOS), and nsjail, a comparable process jail.

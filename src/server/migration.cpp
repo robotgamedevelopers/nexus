@@ -128,7 +128,7 @@ Status cleanStagingIn(Fs& fs, const std::string& d) {
     return Status::ok();
 }
 
-// Minimal RFC-8259 top-level object scanner to extract `"version": <uint>` from accounts.json / friends.json without
+// Minimal RFC-8259 top-level object scanner to extract `"version": <uint>` from accounts.json / ais.json without
 // pulling Prax into nexus_builds. Skips nested objects, arrays and escaped strings so inner `"version"` keys are
 // ignored.
 bool parseTopJsonVersion(const std::string& text, std::uint32_t* version) {
@@ -724,7 +724,8 @@ Status readDiskFormats(Fs& fs, const std::string& serverDir, builds::DiskFormats
     out->storeRecordSeq = sr.record_seq;
     out->storeSnapshotReader = sr.snapshot_reader;
 
-    for (const char* name : {"accounts.json", "friends.json"}) {
+    // friends.json: ais.json's name before the friend names became AI, in a server directory not yet started since.
+    for (const char* name : {"accounts.json", "ais.json", "friends.json"}) {
         const std::string path = serverDir + "/nexus-config/" + name;
         Bytes bytes;
         s = fs.read_all(path, bytes);

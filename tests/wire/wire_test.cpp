@@ -106,7 +106,7 @@ Bytes helloBytes() {
 }
 
 void fillInfo(TableWorker& w, SessionInfo& info, const std::string& tag) {
-    setText(w, info.friend_name, "friend-" + tag);
+    setText(w, info.ai_name, "ai-" + tag);
     setText(w, info.harness, "claude");
     setText(w, info.account, "account-" + tag);
     setText(w, info.model, "model-" + tag);
@@ -115,7 +115,7 @@ void fillInfo(TableWorker& w, SessionInfo& info, const std::string& tag) {
 }
 
 void checkInfo(const SessionInfo& info, const std::string& tag) {
-    CHECK(textOf(info.friend_name) == "friend-" + tag);
+    CHECK(textOf(info.ai_name) == "ai-" + tag);
     CHECK(textOf(info.harness) == "claude");
     CHECK(textOf(info.account) == "account-" + tag);
     CHECK(textOf(info.model) == "model-" + tag);
@@ -137,7 +137,7 @@ Bytes sessionsBytes() {
     s->activity = Activity::Down;
     s->first = 40;
     s->keep_from = 41;
-    const EntryKind kinds[] = {EntryKind::Person, EntryKind::Friend, EntryKind::Notice, EntryKind::Tool};
+    const EntryKind kinds[] = {EntryKind::Person, EntryKind::AI, EntryKind::Notice, EntryKind::Tool};
     for (EntryKind k : kinds) {
         EntryChange* e = SessionChangeEntriesAdd(b.main, s->entries);
         e->kind = k;
@@ -145,7 +145,7 @@ Bytes sessionsBytes() {
         setText(b.main, e->tail, std::string("text of ") + EnumName(k));
     }
     EntryChange* grew = SessionChangeEntriesAdd(b.main, s->entries);
-    grew->kind = EntryKind::Friend;
+    grew->kind = EntryKind::AI;
     grew->closed = false;
     grew->offset = 1234;
     setText(b.main, grew->tail, "");
@@ -165,7 +165,7 @@ Bytes actionsBytes() {
         Action* a = ActionsDiffActionsAdd(b.main, d->actions);
         a->kind = static_cast<ActionKind>(k);
         a->session = static_cast<std::uint64_t>(100 + k);
-        setText(b.main, a->friend_name, "friend " + std::to_string(k));
+        setText(b.main, a->ai_name, "AI " + std::to_string(k));
         setText(b.main, a->text, "text " + std::to_string(k));
         setText(b.main, a->account, "account " + std::to_string(k));
     }
@@ -220,7 +220,7 @@ Bytes snapshotBytes() {
         fillInfo(b.main, x->info, tag);
         for (int i = 0; i < 3; ++i) {
             StoreEntry* e = StoreSessionTranscriptAdd(b.main, x->transcript);
-            e->kind = i == 0 ? EntryKind::Person : EntryKind::Friend;
+            e->kind = i == 0 ? EntryKind::Person : EntryKind::AI;
             e->closed = i != 2;
             setText(b.main, e->text, "entry " + tag + "." + std::to_string(i));
         }
@@ -291,7 +291,7 @@ void roundtripSessions() {
     const SessionChange& kept = d->sessions[0];
     CHECK(kept.id == 1);
     CHECK(!kept.changed);
-    CHECK(absent(kept.info.friend_name));
+    CHECK(absent(kept.info.ai_name));
     CHECK(kept.activity == Activity::Idle);
     CHECK(kept.entries.size() == 0);
     CHECK(!kept.queue_changed);
@@ -304,7 +304,7 @@ void roundtripSessions() {
     CHECK(s.keep_from == 41);
     CHECK(s.entries.size() == 5);
     if (s.entries.size() == 5) {
-        const EntryKind kinds[] = {EntryKind::Person, EntryKind::Friend, EntryKind::Notice, EntryKind::Tool};
+        const EntryKind kinds[] = {EntryKind::Person, EntryKind::AI, EntryKind::Notice, EntryKind::Tool};
         for (int32_t i = 0; i < 4; ++i) {
             const EntryChange& e = s.entries[i];
             CHECK(e.kind == kinds[i]);
@@ -313,7 +313,7 @@ void roundtripSessions() {
             CHECK(textOf(e.tail) == std::string("text of ") + EnumName(kinds[i]));
         }
         const EntryChange& grew = s.entries[4];
-        CHECK(grew.kind == EntryKind::Friend);
+        CHECK(grew.kind == EntryKind::AI);
         CHECK(!grew.closed);
         CHECK(grew.offset == 1234);
         CHECK(!absent(grew.tail));
@@ -348,7 +348,7 @@ void roundtripActions() {
         const Action& a = d->actions[i];
         CHECK(a.kind == static_cast<ActionKind>(k));
         CHECK(a.session == static_cast<std::uint64_t>(100 + k));
-        CHECK(textOf(a.friend_name) == "friend " + std::to_string(k));
+        CHECK(textOf(a.ai_name) == "AI " + std::to_string(k));
         CHECK(textOf(a.text) == "text " + std::to_string(k));
         CHECK(textOf(a.account) == "account " + std::to_string(k));
     }
@@ -430,7 +430,7 @@ void roundtripSnapshot() {
         CHECK(x.transcript.size() == 3);
         for (int32_t i = 0; i < x.transcript.size(); ++i) {
             const StoreEntry& e = x.transcript[i];
-            CHECK(e.kind == (i == 0 ? EntryKind::Person : EntryKind::Friend));
+            CHECK(e.kind == (i == 0 ? EntryKind::Person : EntryKind::AI));
             CHECK(e.closed == (i != 2));
             CHECK(textOf(e.text) == "entry " + tag + "." + std::to_string(i));
         }
@@ -464,7 +464,7 @@ void roundtripDefaults() {
         const SessionChange& x = d->sessions[0];
         CHECK(x.id == 1 && !x.changed && x.first == 0 && x.keep_from == 0 && !x.queue_changed);
         CHECK(x.activity == Activity::Idle);
-        CHECK(absent(x.info.friend_name) && absent(x.info.instance));
+        CHECK(absent(x.info.ai_name) && absent(x.info.instance));
         CHECK(x.entries.size() == 0 && x.queue.size() == 0);
     }
 
@@ -513,7 +513,7 @@ Bytes currentSessions() {
     SessionChange* s = SessionsDiffSessionsAdd(b.main, b.GetRoot()->sessions);
     s->id = 7;
     s->changed = true;
-    setText(b.main, s->info.friend_name, "rowan");
+    setText(b.main, s->info.ai_name, "rowan");
     setText(b.main, s->info.harness, "claude");
     setText(b.main, s->info.instance, "studio");
     s->activity = Activity::Busy;
@@ -565,7 +565,7 @@ Read currentReadSessions(const Bytes& bytes) {
         return out;
     }
     const SessionChange& s = d->sessions[0];
-    out.friendName = textOf(s.info.friend_name);
+    out.aiName = textOf(s.info.ai_name);
     out.instance = textOf(s.info.instance);
     for (const EntryChange& e : s.entries) {
         out.kinds.push_back(EnumName(e.kind));
@@ -621,7 +621,7 @@ void test_versions() {
     const Read oldReadsNew = currentReadSessions(newSessions);
     CHECK(clean(oldReadsNew));
     CHECK(oldReadsNew.unknown == 3);    // the title, the Image kind and the second session's Waiting activity
-    CHECK(oldReadsNew.friendName == "rowan");
+    CHECK(oldReadsNew.aiName == "rowan");
     CHECK(oldReadsNew.instance == "studio");
     CHECK((oldReadsNew.kinds == Names{"Person", "None", "Tool"}));
     CHECK((oldReadsNew.queue == Names{"later"}));
@@ -632,7 +632,7 @@ void test_versions() {
     CHECK(clean(newReadsOld));
     CHECK(newReadsOld.unknown == 0);
     CHECK(!newReadsOld.titlePresent);
-    CHECK(newReadsOld.friendName == "rowan");
+    CHECK(newReadsOld.aiName == "rowan");
     CHECK(newReadsOld.instance == "studio");
     CHECK((newReadsOld.kinds == Names{"Person", "Tool"}));
     CHECK((newReadsOld.queue == Names{"later"}));

@@ -180,6 +180,12 @@ Command bootstrapCommand(const Bootstrap& b) {
     }
     const std::string line = remoteLine(command);
     Command c;
+    if (b.local) {
+        c.program = "/bin/sh";
+        c.arguments = {"-c", line};
+        c.shown = "sh -c " + line;
+        return c;
+    }
     c.program = b.ssh;
     c.arguments = {"-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", b.host, "--", line};
     c.shown = b.ssh + " " + b.host + " " + line;

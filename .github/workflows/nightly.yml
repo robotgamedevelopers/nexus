@@ -81,14 +81,14 @@ jobs:
             run: '^tlc_supervisor_signin_temporal_1$'
           - shard: supervisor-signin-2
             run: '^tlc_supervisor_signin_temporal_2$'
-          - shard: supervisor-friend-1
-            run: '^tlc_supervisor_friend_temporal_1$'
-          - shard: supervisor-friend-2
-            run: '^tlc_supervisor_friend_temporal_2$'
+          - shard: supervisor-ai-1
+            run: '^tlc_supervisor_ai_temporal_1$'
+          - shard: supervisor-ai-2
+            run: '^tlc_supervisor_ai_temporal_2$'
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
             build: supervisor_walk
-            skip: '^tlc_supervisor_(switch_|place_|signin_|friend_)?temporal_[0-9]+$'
+            skip: '^tlc_supervisor_(switch_|place_|signin_|ai_)?temporal_[0-9]+$'
           - shard: link-ensure
             prebuilt: true
             run: '^tlc_link_ensure$'
@@ -186,6 +186,12 @@ jobs:
           - shard: glide-overlay
             run: '^tlc_(glide|overlay|watch)_'
             build: overlay_walk glide_walk watch_walk
+          # The Apple Watch client (watch/models, docs/watch.md): the voice turn, the relay to the phone and the
+          # account switch, their witnesses, and the code's walks against them with each planted fault rejected (short
+          # tests).
+          - shard: watch-app
+            run: '^tlc_watchapp_'
+            build: watch_voice_walk watch_relay_walk
           # The Tailscale shim's node lifecycle (models/Tailscale.tla): the three liveness instances (47,169 to 74,329
           # states) each in a shard of their own on eight workers, then the witnesses, recorded orders and Go walks.
           - shard: tailscale-spec
@@ -197,12 +203,12 @@ jobs:
           - shard: tailscale-rest
             run: '^tlc_tailscale_'
             skip: '^tlc_tailscale_spec(_keys|_certs)?$'
-          # The window's friends from the server's list (MCWindowFriends, 39,465 states on four workers), alone: in the
+          # The window's AIs from the server's list (MCWindowAIs, 39,465 states on four workers), alone: in the
           # window shard it ran past its 60 s.
-          - shard: window-friends
-            run: '^tlc_spec_friends$'
-          # The friend strip's shared-file instance (MCFriendStripShared, 150,016 states) in its own shard on eight
-          # workers, then its single-window spec and its code's walks against FriendStripTrace.tla, and their faults.
+          - shard: window-ais
+            run: '^tlc_spec_ais$'
+          # The AI strip's shared-file instance (MCAIStripShared, 150,016 states) in its own shard on eight
+          # workers, then its single-window spec and its code's walks against AIStripTrace.tla, and their faults.
           - shard: strip-shared
             run: '^tlc_spec_strip_shared$'
           - shard: strip-rest
@@ -230,6 +236,10 @@ jobs:
           - shard: reconnect
             run: '^tlc_reconnect'
             build: reconnect_walk
+          # The native window's relays in WSL2 (models/RelayLife.tla): spec, witnesses and the code's walks.
+          - shard: relay
+            run: '^tlc_relay'
+            build: relay_walk
           # One pass of nexus-server's loop (models/LoopPass.tla): its temporal instance in loop-pass-spec (no walk
           # build), and its two-window instance, eleven reversed witnesses, five seeded code walks and five faulty
           # walks in loop-pass-rest.
@@ -242,12 +252,17 @@ jobs:
             run: '^tlc_loop_pass_'
             skip: '^tlc_loop_pass_spec$'
             build: pass_walk
+          # The client lock (models/ClientLock.tla): its spec and witnesses, and its code's walks (lock_walk) against
+          # ClientLockTrace.tla, and their faults.
+          - shard: client-lock
+            run: '^tlc_client_lock_'
+            build: lock_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.
           - shard: window
             run: ''
             build: trace_walk service_process_functional
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass|bus_delivery)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_ais$|signin|reconnect|relay|loop_pass|bus_delivery|client_lock)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang
@@ -442,6 +457,36 @@ jobs:
             bash .github/ctest.sh --test-dir build -L '^model$' -R "^tlc_${family}" -j "$TEST_JOBS" --output-on-failure || exit 1
           done
 
+  # The watch's speech test (watch/tests/speech.cmake): recordings spoken by `say`, through the recognizer the phone
+  # uses (SpeechTranscriber, on device, as nexus-watch-relay --transcribe) and the shared name matcher, and silence
+  # refused with its reason; with its planted twin, which must fail. nexus-watch-relay links the link, so this is the
+  # full configure (ci.yml's macOS Debug, from its cache: hosted-caches and nexus-build, which bring Ninja, protobuf and
+  # the pinned Rust) on a runner with Xcode. Never the studio (Glenn's screen); the fleet's only other Mac, mini-m5, has
+  # no Xcode and no runner label apart from the studio's, so this runs on GitHub's hosted macOS (macos-26) until a
+  # fleet Mac off the studio carries Xcode.
+  watch-speech:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: mac-debug
+          require: "false"
+          brew: ninja protobuf
+          brew-keep: protobuf abseil
+      - name: Build the relay and the matcher
+        uses: ./.github/actions/nexus-build
+        with:
+          config: mac-debug
+          targets: nexus_watch_relay_host watch_match
+      - name: Speech
+        run: bash .github/ctest.sh --test-dir build -R '^watch_speech(_planted)?$' --output-on-failure
+
   # Windows' functional tests, inside WSL2: on Windows the overlay stays native and everything else (nexus-server, the
   # link, the drivers and their tests) runs as the Linux build inside WSL2 (AGENTS.md, platform targets). So these run
   # on captain's WSL2 runners (label wsl2: Linux runners inside captain's WSL2 distro, from the fleet's record), with
@@ -502,6 +547,12 @@ jobs:
         run: cmake --build build --parallel "$JOBS"
       - name: nexus-server is built
         run: test -x build/nexus-server
+      # The link's functional tests reach this machine over `ssh localhost` (tests/link/CMakeLists.txt); the runner's
+      # login has no ssh login of its own here, so the job starts an sshd of its own on 127.0.0.1 and the tests reach
+      # it through NEXUS_E2E_SSH (.github/ssh-localhost.sh). The protobuf libraries mosh links come with the distro
+      # (libprotobuf-dev, protobuf-compiler: present on captain's WSL2, checked 2026-11-26).
+      - name: ssh localhost, through this job's own sshd
+        run: bash .github/ssh-localhost.sh "$RUNNER_TEMP/ssh-localhost"
       - name: Functional tests
         run: bash .github/ctest.sh --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure
       - name: ccache hits in this job
@@ -628,10 +679,11 @@ jobs:
           flock "$HOME/.cache/nexus-ci/claude-wall.lock" npm run test:functional
           [ "$ssh_out" = ran ]
 
-  # The WSL2 terminal test (wsl2-terminal below), built with MSVC on a GitHub-hosted Windows runner as ci.yml's windows
-  # job builds it (.github/actions/windows-build, from cache-warm's cache when there is one; no limit here).
+  # The WSL2 terminal and link tests (wsl2-terminal and wsl2-link below), built with MSVC on a fleet Windows runner
+  # (captain's Windows side) as ci.yml's windows job builds them (.github/actions/windows-build, the runner's own build
+  # directory; no limit here).
   windows-wsl2-test:
-    runs-on: windows-2025
+    runs-on: [self-hosted, nexus-pr, Windows, X64]
     timeout-minutes: 60
     defaults:
       run:
@@ -640,10 +692,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Caches, configure and build
+      - name: Build directory, configure and build
         uses: ./.github/actions/windows-build
-        with:
-          require: "false"
       - name: Keep the WSL2 terminal test for wsl2-terminal
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -651,10 +701,18 @@ jobs:
           path: ${{ env.NEXUS_BUILD }}\tests\window\Release\nexus_wsl2_terminal_tests.exe
           if-no-files-found: error
           retention-days: 1
+      # The window's link across the WSL2 boundary (tests/relay/wsl2_link.cpp), for wsl2-link to run.
+      - name: Keep the WSL2 link test for wsl2-link
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wsl2-link-test
+          path: ${{ env.NEXUS_BUILD }}\tests\relay\Release\nexus_wsl2_link_tests.exe
+          if-no-files-found: error
+          retention-days: 1
 
   # A Windows terminal tab's shell for real (tests/window/test_wsl2_terminal.cpp, ctest wsl2_terminal): the probe through
   # wsl.exe, then the launch line on a Windows pseudoconsole through Prax's lib/process, as a terminal tab starts it; the
-  # shell's prompt, TERM, home directory, Escape and exit. windows-wsl2-test builds it with MSVC on a GitHub-hosted runner; it runs here, on captain's
+  # shell's prompt, TERM, home directory, Escape and exit. windows-wsl2-test builds it with MSVC on a fleet Windows runner; it runs here, on captain's
   # WSL2 runners, through WSL interop, which starts it on Windows as the user whose WSL2 distribution that is. It cannot
   # run in the windows job: those runners run as NETWORK SERVICE, which has no WSL2 distribution.
   wsl2-terminal:
@@ -686,6 +744,68 @@ jobs:
           set -euo pipefail
           chmod +x "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"
           "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"
+
+  # The native window's link across the WSL2 boundary for real (tests/relay/wsl2_link.cpp, run by
+  # tests/relay/wsl2_link.sh): windows-wsl2-test builds the test with MSVC on a fleet Windows runner, and it runs here,
+  # on captain's WSL2 runners, through WSL interop, as the user whose WSL2 distribution that is. This job builds the
+  # Linux side it reaches, inside WSL2 with clang and the runner's ccache: nexus-link-relay, nexus-server and the fake
+  # driver. The test's port starts the relay through wsl.exe; the relay bootstraps a nexus-server with a home of its own
+  # under /tmp (--local, no ssh) and keeps mosh's session to it; the test ensures ada's session, sends a prompt and
+  # reads it and ada's reply back from the server's state, then queues six and finds each once.
+  wsl2-link:
+    needs: windows-wsl2-test
+    runs-on: [self-hosted, nexus-nightly, Linux, X64, wsl2]
+    timeout-minutes: 30
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Inside WSL2, with interop to Windows, and caches outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          kernel=$(cat /proc/sys/kernel/osrelease)
+          case "$kernel" in
+            *microsoft*WSL2*|*WSL2*) echo "WSL2 kernel $kernel${WSL_DISTRO_NAME:+, distro $WSL_DISTRO_NAME}" ;;
+            *) echo "::error::$(hostname -s) is not inside WSL2 (kernel $kernel): the wsl2 label belongs only to runners in captain's WSL2 distro"; exit 1 ;;
+          esac
+          if [ ! -e /proc/sys/fs/binfmt_misc/WSLInterop ]; then
+            echo "::error::WSL interop is off on $(hostname -s) (no /proc/sys/fs/binfmt_misc/WSLInterop): Windows programs cannot start from here; turn it on in /etc/wsl.conf ([interop] enabled=true)"
+            exit 1
+          fi
+          caches="$HOME/.cache/nexus-ci"
+          mkdir -p "$caches/ccache" "$caches/lto" "$caches/$RUNNER_NAME/prax-downloads"
+          {
+            echo "NEXUS_CACHES=$caches"
+            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+            echo "CCACHE_DIR=$caches/ccache"
+            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+            echo "CCACHE_MAXSIZE=4G"
+            echo "JOBS=$(sh .github/job-cores.sh)"
+          } >> "$GITHUB_ENV"
+      - name: Build the relay, nexus-server and the fake driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNEXUS_SANDBOX_TOOLS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto" > /dev/null
+          cmake --build build --parallel "$JOBS" --target nexus-link-relay nexus-server nexus_fake_driver
+      - name: The test windows-wsl2-test built
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wsl2-link-test
+          path: ${{ runner.temp }}/wsl2-link
+      - name: wsl2_link (functional)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x "$RUNNER_TEMP/wsl2-link/nexus_wsl2_link_tests.exe"
+          tests/relay/wsl2_link.sh "$RUNNER_TEMP/wsl2-link/nexus_wsl2_link_tests.exe" build/nexus-link-relay \
+            build/nexus-server build/tests/driver/nexus-fake-driver "/tmp/nexus-wsl2-link-$RUNNER_NAME"
 
   # The frame budget (docs/frame-budget.md): the frame thread timed on the real clock, against budgets set on the fleet's
   # Macs, so on a fleet Mac (a shared 3-core hosted VM is not that machine; ci.yml says so). Built Release with the
@@ -776,27 +896,27 @@ jobs:
           - part: walks
             half: 1
             targets: >-
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
+              migration_walk takeover_walk steering_walk
           - part: walks
             half: 2
             targets: >-
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
+              migration_walk takeover_walk steering_walk
           - part: walks
             half: 3
             targets: >-
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
+              migration_walk takeover_walk steering_walk
           - part: walks
             half: 4
             targets: >-
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
+              migration_walk takeover_walk steering_walk
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -894,18 +1014,18 @@ jobs:
           for fault in --faulty-aba --faulty-stale; do
             walk build/tests/model/watch_walk 1 1000 "$fault"
           done
-          for friends in 0 1 2 3; do
+          for ais in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
-              walk build/tests/model/trace_walk "$seed" 1000 "$friends"
+              walk build/tests/model/trace_walk "$seed" 1000 "$ais"
             done
-            walk build/tests/model/trace_walk 1 1000 "$friends" --no-sprint
+            walk build/tests/model/trace_walk 1 1000 "$ais" --no-sprint
           done
           for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             walk build/tests/model/trace_walk 1 1000 3 "$fault"
           done
-          walk build/tests/model/trace_walk 10 1000 3 --friends-churn
-          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn
-          walk build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend
+          walk build/tests/model/trace_walk 10 1000 3 --ais-churn
+          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --ais-churn
+          walk build/tests/model/trace_walk 1 300 3 --ais-churn --faulty-remove-ai
           for seed in 1 2 3; do
             walk build/tests/model/strip_walk "$seed" 400 2
           done
@@ -926,6 +1046,12 @@ jobs:
           done
           for fault in --faulty-cached --faulty-no-reset; do
             walk build/tests/sync/reconnect_walk 1 1000 "$fault"
+          done
+          for seed in 1 2 3 4; do
+            walk build/tests/relay/relay_walk "$seed" 1000
+          done
+          for fault in --faulty-resend --faulty-early-end --faulty-ack-delivered; do
+            walk build/tests/relay/relay_walk 1 1000 "$fault"
           done
           for seed in 1 2 3 4 5 6 7 8; do
             walk build/tests/sync/secrets_walk "$seed" 2000
@@ -951,11 +1077,18 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             walk build/tests/server/supervisor_walk 1 1000 "$fault"
           done
-          for seed in 13 14 15; do
-            walk build/tests/server/supervisor_walk "$seed" 600 --friends-churn
+          # steering a turn: the supervisor and the driver's side, every feature set, and the planted faults
+          for seed in 1 2 3 4 5 6 7 8 1000 1001 1002 1003; do
+            walk build/tests/driver/steering_walk "$seed" 2000 ok
           done
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown
+          walk build/tests/driver/steering_walk 4 600 silent
+          walk build/tests/driver/steering_walk 4 600 early-follow
+          walk build/tests/driver/steering_walk 1 2000 write-settled
+          for seed in 13 14 15; do
+            walk build/tests/server/supervisor_walk "$seed" 600 --ais-churn
+          done
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-remove
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-unknown
           for seed in 1 2 3 4 5 6 7 8; do
             walk build/tests/server/pass_walk "$seed" 250
           done
@@ -1057,7 +1190,7 @@ jobs:
   # Claude executable the pinned SDK ships (so npm ci with the optional per-platform package here), on a fake token,
   # against a fake Messages API on 127.0.0.1, in the OS sandbox, trying every way an AI could read its login. Spends
   # nothing and reaches no outside service. The test's runs in three jobs (NEXUS_WALL_RUN): the whole
-  # wall, the wall without its hook, and together a friend limited to its directory with the hook and without it (two
+  # wall, the wall without its hook, and together an AI limited to its directory with the hook and without it (two
   # short runs in one job: the setup is the cost).
   claude-driver-wall-macos:
     strategy:
@@ -1127,10 +1260,11 @@ jobs:
       - name: Unit tests
         run: bash .github/ctest.sh --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
       # The link's functional tests reach this machine over `ssh localhost` as the runner's login, which this Mac allows.
+      # The watch's speech test runs in watch-speech, on hosted macOS, never here.
       - name: Functional tests
         run: >-
           bash .github/ctest.sh --test-dir build -L functional
-          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional)$'
+          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional|watch_speech|watch_speech_planted)$'
           -j "$TEST_JOBS" --output-on-failure
       # The paced injected hitch measures Release's frame budgets (tests/window/CMakeLists.txt, unchanged), so it runs
       # here in the Release build rather than in ci.yml's Debug build; alone, so no other test shares the clock. A run
@@ -1146,7 +1280,8 @@ jobs:
   # macos-release, server-lock).
   #
   # macOS Debug, as a pull request builds it (asserts on), on the fleet Mac. The link's tests reach this machine over
-  # `ssh localhost` as the runner's login, which this Mac allows.
+  # `ssh localhost` as the runner's login, which this Mac allows. The watch's speech test runs in watch-speech,
+  # on hosted macOS, never here.
   macos-debug:
     runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
     steps:
@@ -1167,7 +1302,7 @@ jobs:
       - name: The tier_nightly tests
         run: >-
           bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
-          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional)$'
+          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional|watch_speech|watch_speech_planted)$'
           -j "$TEST_JOBS" --output-on-failure
 
   # Linux, as ci.yml's build-linux builds it, on hosted Ubuntu.
@@ -1185,6 +1320,7 @@ jobs:
         uses: ./.github/actions/hosted-caches
         with:
           name: linux-release
+          require: "false"
           apt: libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev openssh-server
       - name: Configure and build
         uses: ./.github/actions/nexus-build
@@ -1215,10 +1351,10 @@ jobs:
           bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
           -E '^server_lock_functional$' -j "$TEST_JOBS" --output-on-failure
 
-  # Windows, as ci.yml's windows job builds it, on hosted Windows: the unit tests too slow for a pull request. The WSL2
+  # Windows, as ci.yml's windows job builds it, on a fleet Windows runner: the unit tests too slow for a pull request. The WSL2
   # terminal test needs a WSL2 distribution, which hosted Windows lacks: wsl2-terminal runs it on captain.
   windows-nightly:
-    runs-on: windows-2025
+    runs-on: [self-hosted, nexus-pr, Windows, X64]
     defaults:
       run:
         shell: pwsh
@@ -1400,6 +1536,7 @@ jobs:
         uses: ./.github/actions/hosted-caches
         with:
           name: linux-asan
+          require: "false"
           apt: ""
       - name: Configure and build the programs the parts run
         uses: ./.github/actions/nexus-build
@@ -1409,9 +1546,9 @@ jobs:
             model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
             store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
             nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
-            overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+            overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
             journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-            migration_walk takeover_walk
+            migration_walk takeover_walk steering_walk
       - name: Share the build tree
         uses: ./.github/actions/build-share
         with:
@@ -1538,19 +1675,19 @@ jobs:
           for fault in --faulty-aba --faulty-stale; do
             walk build/tests/model/watch_walk 1 1000 "$fault"
           done
-          for friends in 0 1 2 3; do
+          for ais in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
-              walk build/tests/model/trace_walk "$seed" 1000 "$friends"
+              walk build/tests/model/trace_walk "$seed" 1000 "$ais"
             done
-            walk build/tests/model/trace_walk 1 1000 "$friends" --no-sprint
+            walk build/tests/model/trace_walk 1 1000 "$ais" --no-sprint
           done
           for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             walk build/tests/model/trace_walk 1 1000 3 "$fault"
           done
-          # the friends coming and going, and the friend strip's walks and faults
-          walk build/tests/model/trace_walk 10 1000 3 --friends-churn
-          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn
-          walk build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend
+          # the AIs coming and going, and the AI strip's walks and faults
+          walk build/tests/model/trace_walk 10 1000 3 --ais-churn
+          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --ais-churn
+          walk build/tests/model/trace_walk 1 300 3 --ais-churn --faulty-remove-ai
           for seed in 1 2 3; do
             walk build/tests/model/strip_walk "$seed" 400 2
           done
@@ -1572,6 +1709,12 @@ jobs:
           done
           for fault in --faulty-cached --faulty-no-reset; do
             walk build/tests/sync/reconnect_walk 1 1000 "$fault"
+          done
+          for seed in 1 2 3 4; do
+            walk build/tests/relay/relay_walk "$seed" 1000
+          done
+          for fault in --faulty-resend --faulty-early-end --faulty-ack-delivered; do
+            walk build/tests/relay/relay_walk 1 1000 "$fault"
           done
           # the secret dialog's walks, each failing if a value's bytes reach anything but the keeper
           for seed in 1 2 3 4 5 6 7 8; do
@@ -1608,12 +1751,19 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             walk build/tests/server/supervisor_walk 1 1000 "$fault"
           done
-          # the friend taken out of friends.json and put back, and a start holding no friends list, and their faults
-          for seed in 13 14 15; do
-            walk build/tests/server/supervisor_walk "$seed" 600 --friends-churn
+          # steering a turn: the supervisor and the driver's side, every feature set, and the planted faults
+          for seed in 1 2 3 4 5 6 7 8 1000 1001 1002 1003; do
+            walk build/tests/driver/steering_walk "$seed" 2000 ok
           done
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown
+          walk build/tests/driver/steering_walk 4 600 silent
+          walk build/tests/driver/steering_walk 4 600 early-follow
+          walk build/tests/driver/steering_walk 1 2000 write-settled
+          # the AI taken out of ais.json and put back, and a start holding no AIs list, and their faults
+          for seed in 13 14 15; do
+            walk build/tests/server/supervisor_walk "$seed" 600 --ais-churn
+          done
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-remove
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-unknown
           # placement's walks on real files (each in walk-files beside its trace) and their faults, at the seeds the
           # trace checks use (tests/server/CMakeLists.txt)
           for seed in 1 2 3; do

@@ -110,7 +110,7 @@ bool Mirror::apply(Model& model, const Sessions& state) {
     bool changed = false;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
         const Tab& tab = model.tab(i);
-        if (tab.kind != TabKind::Friend) {
+        if (tab.kind != TabKind::AI) {
             continue;
         }
         const SessionView* view = nullptr;
@@ -118,7 +118,7 @@ bool Mirror::apply(Model& model, const Sessions& state) {
         if (shows != session_.end()) {
             view = state.find(shows->second);
         } else if ((view = state.first(tab.name)) != nullptr) {
-            session_[tab.id] = view->id;     // the friend's first session, from now on
+            session_[tab.id] = view->id;     // the AI's first session, from now on
         }
         if (view == nullptr) {
             // The session is gone from the state: nothing of it is held, its open entry included, so no text of it
