@@ -26,6 +26,8 @@
 #
 # Each configuration is built once per run (build-macos, build-linux), and its build tree is shared
 # with the jobs that run its tests (.github/actions/build-share, build-fetch): those download it and only run tests.
+# Every build job here builds tier_pr_build, the targets the tier_pr tests run and nothing else (cmake/tiers.cmake), so
+# a change that relinks every program relinks only those; the nightly and cache-warm build everything.
 
 name: ci
 
@@ -66,6 +68,7 @@ jobs:
         uses: ./.github/actions/nexus-build
         with:
           config: mac-debug
+          targets: tier_pr_build
       - name: Share the build tree
         uses: ./.github/actions/build-share
         with:
@@ -244,6 +247,7 @@ jobs:
         uses: ./.github/actions/nexus-build
         with:
           config: linux-release
+          targets: tier_pr_build
       - name: Share the build tree
         uses: ./.github/actions/build-share
         with:
@@ -392,6 +396,8 @@ jobs:
           persist-credentials: false
       - name: Caches, configure and build
         uses: ./.github/actions/windows-build
+        with:
+          target: tier_pr_build
       # The fast unit tests (tests/tiers.txt); the slower ones run in the nightly's windows-nightly.
       - name: The tier_pr tests
         run: |

@@ -25,6 +25,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "watchOS")
     include(cmake/watchos.cmake)
     return()
 endif()
+# What each test runs, recorded from here on, so the pull request tier builds its own targets alone (tier_pr_build,
+# cmake/tiers.cmake). Before the first add_test.
+include(cmake/test_targets.cmake)
 # The app's platform layer (src/platform_mac.mm) is Objective-C++.
 if(APPLE)
     enable_language(OBJCXX)

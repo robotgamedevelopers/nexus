@@ -18,6 +18,9 @@ description: Restore caches, configure and build nexus's native Windows part on 
 inputs:
   require:
     default: "true"
+  target:
+    description: the one target to build (empty for all; ci.yml gives tier_pr_build)
+    default: ""
 outputs:
   key:
     value: ${{ steps.key.outputs.key }}
@@ -173,6 +176,10 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
     - name: Build
       shell: pwsh
+      env:
+        TARGET: ${{ inputs.target }}
       run: |
-        cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS
+        $only = @()
+        if ($env:TARGET) { $only = @("--target", $env:TARGET) }
+        cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS @only
         if ($LASTEXITCODE -ne 0) { throw "cmake --build exited $LASTEXITCODE" }

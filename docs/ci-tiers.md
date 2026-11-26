@@ -26,6 +26,12 @@ So a test the table names cannot quietly drop out of its tier. `.github/tiers-se
 
 A unit test stays per pull request only while it is fast. One that takes 1 s or more on a hosted runner moves to the nightly, by a row in the table. It is never skipped.
 
+## What a pull request builds
+
+The per-pull-request build jobs (`build-macos`, `build-linux`, `windows`) build `tier_pr_build` alone: the targets the `tier_pr` tests run, and nothing else. A change that relinks every program (the policy runtime's archive after a `policy/rules` edit, say) then relinks only those. The nightly and cache-warm build everything.
+
+`cmake/test_targets.cmake` wraps `add_test` and records each test's command line; at the end of the configure `cmake/tiers.cmake` makes `tier_pr_build` depend on, for each `tier_pr` test, the target its command names and every target an argument names with `$<TARGET_FILE:...>` (or `_FILE_DIR`, `_LINKER_FILE`, `_BUNDLE_DIR`). A program a test starts by a path of its own goes in the test's `NEXUS_NEEDS` property. The configure fails for a `tier_pr` test registered before the wrapper, or one whose command is a build-tree file that no target makes. A program the list still misses fails its test, never skips it (`.github/ctest.sh`). `.github/tiers-selftest.sh` checks both against planted cases.
+
 ## Who runs what
 
 Per pull request (`ci.yml`), with `-L '^tier_pr$'`:
