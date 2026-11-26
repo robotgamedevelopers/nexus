@@ -43,24 +43,36 @@ runs:
         $cargoHome = "$root\cargo"
         $env:RUSTUP_HOME = $rustupHome
         $env:CARGO_HOME = $cargoHome
-        $rustup = "$cargoHome\bin\rustup.exe"
-        if (-not (Test-Path $rustup)) {
-          $url = 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
-          $init = "$root\tools\rustup-init-$runner.exe"
-          curl.exe -fsSL --retry 3 -o $init $url
-          if ($LASTEXITCODE -ne 0) { throw "curl of rustup-init exited $LASTEXITCODE" }
-          $want = ((curl.exe -fsSL --retry 3 "$url.sha256") -split '\s+')[0].ToLower()
-          if ($LASTEXITCODE -ne 0 -or $want -notmatch '^[0-9a-f]{64}$') { throw "no sha256 for rustup-init at $url.sha256" }
-          $got = (Get-FileHash -Algorithm SHA256 $init).Hash.ToLower()
-          if ($got -ne $want) { Remove-Item -Force $init; throw "rustup-init has sha256 $got, and rustup publishes $want" }
-          & $init -y --no-modify-path --default-toolchain none --profile minimal
-          if ($LASTEXITCODE -ne 0) { throw "rustup-init exited $LASTEXITCODE" }
-          Remove-Item -Force $init
-        }
-        $toolchain = '1.98.1-x86_64-pc-windows-msvc'
-        if (-not (Test-Path "$rustupHome\toolchains\$toolchain\bin\cargo.exe")) {
-          & $rustup toolchain install $toolchain --profile minimal --no-self-update
-          if ($LASTEXITCODE -ne 0) { throw "Cannot prepare Rust $toolchain" }
+        # The machine's runners share rustup and the toolchain: one installs at a time (a named mutex; two installs
+        # at once break each other), and a toolchain left half installed is installed again.
+        $mutex = New-Object System.Threading.Mutex($false, 'Global\nexus-ci-rustup')
+        try { $null = $mutex.WaitOne() } catch [System.Threading.AbandonedMutexException] { Write-Output "the last holder of the Rust lock ended without releasing it; taking it" }
+        try {
+          $rustup = "$cargoHome\bin\rustup.exe"
+          if (-not (Test-Path $rustup)) {
+            $url = 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
+            $init = "$root\tools\rustup-init-$runner.exe"
+            curl.exe -fsSL --retry 3 -o $init $url
+            if ($LASTEXITCODE -ne 0) { throw "curl of rustup-init exited $LASTEXITCODE" }
+            $want = ((curl.exe -fsSL --retry 3 "$url.sha256") -split '\s+')[0].ToLower()
+            if ($LASTEXITCODE -ne 0 -or $want -notmatch '^[0-9a-f]{64}$') { throw "no sha256 for rustup-init at $url.sha256" }
+            $got = (Get-FileHash -Algorithm SHA256 $init).Hash.ToLower()
+            if ($got -ne $want) { Remove-Item -Force $init; throw "rustup-init has sha256 $got, and rustup publishes $want" }
+            & $init -y --no-modify-path --default-toolchain none --profile minimal
+            if ($LASTEXITCODE -ne 0) { throw "rustup-init exited $LASTEXITCODE" }
+            Remove-Item -Force $init
+          }
+          $toolchain = '1.98.1-x86_64-pc-windows-msvc'
+          & $rustup run $toolchain cargo --version *> $null
+          if ($LASTEXITCODE -ne 0) {
+            & $rustup toolchain uninstall $toolchain *> $null
+            & $rustup toolchain install $toolchain --profile minimal --no-self-update
+            if ($LASTEXITCODE -ne 0) { throw "Cannot prepare Rust $toolchain" }
+          }
+          & $rustup run $toolchain cargo --version
+          if ($LASTEXITCODE -ne 0) { throw "Rust $toolchain has no working cargo" }
+        } finally {
+          $mutex.ReleaseMutex()
         }
         "$cargoHome\bin" >> $env:GITHUB_PATH
         "RUSTUP_HOME=$rustupHome" >> $env:GITHUB_ENV
