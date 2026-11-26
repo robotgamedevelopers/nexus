@@ -1,8 +1,9 @@
 # The Tailscale shim on Windows (docs/tailscale.md, layer 0): tailscale.yml's job for Windows, in a workflow of its own
-# because no per-commit workflow runs it: restoring its primed cache alone took 83 s on the hosted Windows image, which
-# does not fit a per-commit job's 2 minutes. Called by nightly.yml and cache-warm.yml, with no 2-minute limit.
-# tailscale.yml says what the commit status tailscale-windows means, and how the caches and the primed key directory
-# are kept.
+# because no per-commit workflow runs it (restoring its primed cache alone took 83 s on the hosted Windows image it used
+# to run on, which does not fit a per-commit job's 2 minutes). Called by nightly.yml, with no 2-minute limit, on
+# captain's Windows runners. tailscale.yml says what the commit status tailscale-windows means, and how the caches and
+# the primed key directory are kept: here the key directory is the runner machine's own, kept between runs, as on the
+# fleet's Linux and macOS runners; nothing is restored or saved through GitHub's cache.
 
 name: tailscale-windows
 
@@ -17,10 +18,6 @@ on:
         description: the commit to check out, build and test (empty for the caller's)
         type: string
         default: ""
-      save:
-        description: with prime, save the primed key directory as the cache per-commit jobs restore
-        type: boolean
-        default: false
       status:
         description: set the commit status tailscale-<os> on that commit to the result
         type: boolean
@@ -43,7 +40,7 @@ jobs:
   # On captain's Windows runners with MSVC: the DLL (whose C parts llvm-mingw compiles), its import library, and the
   # test program with the Windows 10 manifest.
   tailscale-windows:
-    runs-on: windows-2025
+    runs-on: [self-hosted, nexus-pr, Windows, X64]
     timeout-minutes: ${{ inputs.prime && 30 || 2 }}
     strategy:
       fail-fast: false
@@ -63,20 +60,17 @@ jobs:
           ref: ${{ inputs.sha || github.sha }}
       # Refresh files already present in a prepared checkout with their pinned LF attributes.
       - run: git checkout-index --force -- src/tailscale/pins.cmake src/tailscale/go.mod src/tailscale/go.sum
-      # Go for the shim's build where the hosted image has none (macOS), at the shim's pin, so Go fetches no other.
-      # The Linux and Windows images carry a Go, which fetches the pinned toolchain into the cached module cache.
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        if: runner.os == 'macOS'
-        with:
-          go-version: '1.27.4'
-          cache: false
-      # The pins' key directory, from the cache cache-warm saved on main (a hosted runner starts empty).
-      - name: Restore the cache for these pins
-        id: restore
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~\AppData\Local\nexus-ci-tailscale
-          key: tailscale-windows-v2-${{ hashFiles('src/tailscale/pins.cmake', 'src/tailscale/go.mod', 'src/tailscale/go.sum') }}
+      # Go from the runner's machine (captain's, under C:\Program Files\Go), which fetches the toolchain go.mod pins into
+      # the key directory's module cache.
+      - name: Go from the runner's machine
+        run: |
+          $go = Get-Command go -ErrorAction SilentlyContinue
+          if (-not $go) {
+            Write-Output "::error::no go on ${env:COMPUTERNAME}'s runner PATH: Go is a runner tool there, put in place through the fleet (nova-fleet windows-runners)"
+            exit 1
+          }
+          & $go.Source version
+          if ($LASTEXITCODE -ne 0) { throw "go version exited $LASTEXITCODE" }
       - name: Caches for these pins
         id: caches
         env:
@@ -194,12 +188,6 @@ jobs:
       - name: Primed
         if: ${{ steps.caches.outputs.build == 'true' && !(inputs.prime && inputs.cold) }}
         run: Set-Content -Path "${{ steps.caches.outputs.dir }}\primed" -Value ''
-      - name: Save the cache for these pins (cache-warm only)
-        if: ${{ inputs.prime && inputs.save && !(inputs.cold) && steps.restore.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~\AppData\Local\nexus-ci-tailscale
-          key: ${{ steps.restore.outputs.cache-primary-key }}
       - name: Status (the result of this job's build and tests)
         if: ${{ always() && inputs.status }}
         env:

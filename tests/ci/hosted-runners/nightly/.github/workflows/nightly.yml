@@ -1,0 +1,9 @@
+# Planted: a scheduled workflow, not per-commit, with a hosted runner; refused all the same.
+name: nightly
+on:
+  schedule:
+    - cron: "0 3 * * *"
+jobs:
+  hosted:
+    runs-on: ubuntu-24.04
+    steps: [{run: "true"}]

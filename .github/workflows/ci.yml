@@ -1,7 +1,7 @@
 # Every job here runs on the fleet's own runners, never GitHub-hosted ones (Glenn, 2026-10-18: "all CI runs on our
 # fleet's self-hosted runners"; restored for this workflow 2026-11-26: "Yes, fleet runners"), for every pull request and
-# every push to main; no job needs a secret. .github/hosted-runners-check.sh refuses a GitHub-hosted runs-on in this
-# workflow and in every workflow and action it uses. The runners are nexus's own (registered to this repository only,
+# every push to main; no job needs a secret. .github/hosted-runners-check.sh refuses a GitHub-hosted runs-on in every
+# workflow under .github/workflows, the nightly's included. The runners are nexus's own (registered to this repository only,
 # label nexus-pr, from the fleet's machine records): Linux on amd-3 and intel, macOS on the macbook, Windows on captain.
 # A pull request from a fork runs only after a maintainer approves it (the repository's Actions setting), since it runs
 # on our machines. The nightly (.github/workflows/nightly.yml) runs from main on its own runner group.
@@ -41,7 +41,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # No workflow or action here names a GitHub-hosted runner (ubuntu-*, macos-*, windows-*).
+  # No workflow here names a GitHub-hosted runner (ubuntu-*, macos-*, windows-*), the nightly's included.
   runners:
     runs-on: [self-hosted, nexus-pr, Linux, X64]
     timeout-minutes: 2
@@ -272,6 +272,9 @@ jobs:
       # (link_e2e_loopback, link_e2e_signin).
       - name: The tier_pr tests
         run: bash .github/ctest.sh --test-dir "$NEXUS_BUILD" -L '^tier_pr$' -j "$TEST_JOBS" --output-on-failure
+      - name: Stop this job's sshd
+        if: always()
+        run: bash .github/ssh-localhost.sh --stop "$RUNNER_TEMP/ssh-localhost"
 
   # The code generated from schema/Nexus.schema (and the tests' later version) is checked in; this regenerates it with
   # schema's compiler at the pinned commit (cmake/schema.cmake) and fails on any difference, so the checked-in code is
