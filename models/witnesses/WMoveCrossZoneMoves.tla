@@ -8,7 +8,7 @@ BrokenMove(from, to) ==
     THEN /\ order' = Moved(order, from, to)
          /\ active' = MovedIndex(active, from, to)
          /\ last' = DidMove(from, to, Zone(At(from)) = Zone(At(to)))
-         /\ UNCHANGED <<friends, transcript, draft, queue, nextId>>
+         /\ UNCHANGED <<ais, transcript, draft, queue, nextId>>
     ELSE /\ last' = DidMove(from, to, FALSE)
          /\ UNCHANGED model
 

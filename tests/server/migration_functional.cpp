@@ -144,7 +144,7 @@ void seedOldLayout(const fs::path& homeDir) {
         CHECK(ds.commit(1, {mk, u1}, "win-1", 1, &why));
 
         const sync::SessionChange a1{
-            std::make_shared<const sync::SessionEntry>(sync::SessionEntry{EntryKind::Friend, "old reply", true}), ""};
+            std::make_shared<const sync::SessionEntry>(sync::SessionEntry{EntryKind::AI, "old reply", true}), ""};
         const sync::SessionChange q1{nullptr, "queued follow-up"};
         CHECK(ds.commit(1, {a1, q1}, "win-1", 2, &why));
     }
@@ -153,7 +153,7 @@ void seedOldLayout(const fs::path& homeDir) {
 
     writeFile(top / "drivers",
               "driver claude /usr/bin/node /opt/drivers/claude/main.js --account main\n"
-              "friend ada claude ~/work\n",
+              "ai ada claude ~/work\n",
               false, 0600);
     writeFile(top / "config", "# migrated server config\n", false, 0600);
     writeFile(top / "server.log", "old server log line\n", false, 0600);
@@ -201,7 +201,7 @@ void caseOldToNew() {
         const sync::StoredSession* ses = ds.find(1);
         CHECK(ses != nullptr);
         if (ses != nullptr) {
-            CHECK(ses->info.friendName == "ada" && ses->info.account == "main");
+            CHECK(ses->info.aiName == "ada" && ses->info.account == "main");
             CHECK(ses->transcript.size() == 2);
             CHECK(ses->transcript[0]->text == "hello from old");
             CHECK(ses->transcript[1]->text == "old reply");
@@ -209,7 +209,7 @@ void caseOldToNew() {
         }
     }
 
-    // ConfigRepo seeds accounts.json and friends.json from the migrated `drivers` file, just as Server::restore() does.
+    // ConfigRepo seeds accounts.json and ais.json from the migrated `drivers` file, just as Server::restore() does.
     {
         ConfigRepo repo(serverDir + "/nexus-config");
         CHECK(repo.open(&why));
@@ -223,7 +223,7 @@ void caseOldToNew() {
         std::vector<std::string> report;
         CHECK(repo.committed(&committed, &report, false));
         CHECK(committed.accounts.size() == 1 && committed.accounts[0].name == "main");
-        CHECK(committed.friends.size() == 1 && committed.friends[0].name == "ada");
+        CHECK(committed.ais.size() == 1 && committed.ais[0].name == "ada");
     }
 
     // Second start is an immediate fast-path no-op.

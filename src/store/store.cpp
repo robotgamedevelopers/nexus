@@ -9,7 +9,7 @@ namespace nexus::store {
 
 namespace {
 
-// The entry kinds the unframed formats had: Person 0, Friend 1, Notice 2. A later kind (Tool 3) comes only in a framed
+// The entry kinds the unframed formats had: Person 0, AI 1, Notice 2. A later kind (Tool 3) comes only in a framed
 // format, and a framed format may hold kinds this build does not know: they are kept as they are, and the server shows
 // them as notices (server/durable.cpp).
 constexpr std::uint8_t kUnframedKinds = 3;
@@ -77,7 +77,7 @@ void get_driver(Reader& r, Driver& d) {
 }
 
 void put_info(Writer& w, const Info& i) {
-    w.str(i.friend_name);
+    w.str(i.ai_name);
     w.str(i.harness);
     w.str(i.account);
     w.str(i.model);
@@ -85,7 +85,7 @@ void put_info(Writer& w, const Info& i) {
 }
 
 void get_info(Reader& r, Info& i) {
-    i.friend_name = r.str();
+    i.ai_name = r.str();
     i.harness = r.str();
     i.account = r.str();
     i.model = r.str();
@@ -94,7 +94,7 @@ void get_info(Reader& r, Info& i) {
 
 // What the framed formats append, at the end of a frame (store.h): a driver's summary flag and its session's directory,
 // and an info's instance. A frame written before they were has none of them, and each reads as its default: no
-// summary owed, the directory unknown (the driver resumes its session), and the friend's default instance.
+// summary owed, the directory unknown (the driver resumes its session), and the AI's default instance.
 void put_driver_tail(Writer& w, const Driver& d) {
     w.u8(d.summary ? 1 : 0);
     w.str(d.session_dir);
@@ -277,7 +277,7 @@ Status Store::open(Fs& fs, const std::string& dir, const StoreOptions& options, 
     // reading the older one again.
     if (s->legacy_read_) {
         if (!(st = s->journal_.compact(s->encode_snapshot())).is_ok()) {
-            return Status::failed("store " + dir + ": its friend tabs were read as sessions, but writing them in the "
+            return Status::failed("store " + dir + ": its AI tabs were read as sessions, but writing them in the "
                                   "sessions format failed (" + st.message() + "); the store is as it was, so run "
                                   "nexus-server again once the disk takes writes");
         }
@@ -568,7 +568,7 @@ Status Store::flush() {
     return Status::ok();
 }
 
-// The session an older format's friend tab became; with `make`, a tab not seen before becomes the next session.
+// The session an older format's AI tab became; with `make`, a tab not seen before becomes the next session.
 std::uint64_t Store::legacy_session(const std::string& tab, bool make) {
     auto it = legacy_.find(tab);
     if (it != legacy_.end()) {
@@ -579,7 +579,7 @@ std::uint64_t Store::legacy_session(const std::string& tab, bool make) {
     }
     const std::uint64_t id = next_session_++;
     Session& s = sessions_[id];
-    s.info.friend_name = tab;
+    s.info.ai_name = tab;
     s.info.harness = options_.legacy_harness;
     legacy_[tab] = id;
     ++migrated_;
@@ -673,7 +673,7 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
         ++skipped_;
     }
     if (format == 1) {
-        // A friend tab's record: its tab is a session, made (as the next) if no snapshot or record named it before.
+        // An AI tab's record: its tab is a session, made (as the next) if no snapshot or record named it before.
         legacy_read_ = true;
         if (!changes.empty() && tab.empty()) {
             return unreadable(dir_, what);

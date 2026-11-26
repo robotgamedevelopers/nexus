@@ -9,7 +9,7 @@ import { encode, kProtocolVersion, type DriverMessage } from './protocol.js';
 import { verifiedAccess } from './verified.js';
 import { kDataRoots, limitRefusal } from './wall.js';
 
-/** Where the driver runs, for a limited friend's checks: HOME, the platform, and how a path resolves. */
+/** Where the driver runs, for a limited AI's checks: HOME, the platform, and how a path resolves. */
 export interface Place {
     home: string;
     platform: string;
@@ -19,7 +19,7 @@ export interface Place {
 const kHere: Place = { home: process.env['HOME'] ?? '', platform: process.platform, realpath: (p) => realpathSync(p) };
 
 /**
- * Why a limited friend (--limit cwd) cannot start here, or undefined: the limit is enforced or the session does not
+ * Why a limited AI (--limit cwd) cannot start here, or undefined: the limit is enforced or the session does not
  * start (fail closed). Only on the platforms whose sandbox nexus has measured it on (kDataRoots), only on the Claude
  * executable the driver ships (another's settings are not known to hold it), and never in a directory that would
  * hold what the limit keeps out (limitRefusal).
@@ -29,21 +29,21 @@ export function limitedStartRefusal(args: Arguments, place: Place): string | und
         return undefined;
     }
     if (kDataRoots[place.platform] === undefined) {
-        return `this friend is limited to its directory, and nexus cannot limit it on ${place.platform}`;
+        return `this AI is limited to its directory, and nexus cannot limit it on ${place.platform}`;
     }
     if (args.claudePath !== undefined) {
-        return 'this friend is limited to its directory, which holds only on the Claude the driver ships, and the drivers '
+        return 'this AI is limited to its directory, which holds only on the Claude the driver ships, and the drivers '
             + `file names another (--claude ${args.claudePath})`;
     }
     if (place.home === '') {
-        return 'this friend is limited to its directory, and HOME is not set, so the driver cannot tell what to keep it from';
+        return 'this AI is limited to its directory, and HOME is not set, so the driver cannot tell what to keep it from';
     }
     const why = limitRefusal(args.cwd, place.home, place.realpath);
-    return why === undefined ? undefined : `this friend is limited to its directory, and ${why}`;
+    return why === undefined ? undefined : `this AI is limited to its directory, and ${why}`;
 }
 
 /**
- * The working directory a limited friend works in: resolved once, here, and that one path is the one checked
+ * The working directory a limited AI works in: resolved once, here, and that one path is the one checked
  * (limitRefusal), given to the sandbox and the file tools (limitOf) and given to Claude. Undefined when it does not
  * resolve (a limited session then does not start).
  */
@@ -100,27 +100,27 @@ export function prepare(argv: readonly string[], isDir: (path: string) => boolea
             }
         } catch {
             return { refusal: [hello, { kind: 'error', code: 'other',
-                cause: args.primarySession ? 'Could not read the initial session context' : 'Could not read the friend startup context',
+                cause: args.primarySession ? 'Could not read the initial session context' : 'Could not read the AI startup context',
                 fix: args.primarySession ? 'Check the initial session launcher on the Nexus server.'
-                    : 'Check the friend definition and its configured home files on the Nexus server.' }] };
+                    : 'Check the AI definition and its configured home files on the Nexus server.' }] };
         }
     }
     if (!isDir(args.cwd)) {
         return { refusal: [hello, { kind: 'error', cause: `cannot work in ${args.cwd}: it is not a directory`,
-            fix: 'give the friend a working directory that exists, in nexus-server\'s drivers file', code: 'other' }] };
+            fix: 'give the AI a working directory that exists, in nexus-server\'s drivers file', code: 'other' }] };
     }
     if (args.limit !== undefined) {
         const resolved = resolvedCwd(args.cwd, place);
         if (resolved === undefined) {
-            return { refusal: [hello, { kind: 'error', cause: `this friend is limited to its directory, and ${args.cwd} `
-                + 'does not resolve', fix: 'give this instance a working directory that exists, in friends.json (docs/accounts.md, "limit")', code: 'other' }] };
+            return { refusal: [hello, { kind: 'error', cause: `this AI is limited to its directory, and ${args.cwd} `
+                + 'does not resolve', fix: 'give this instance a working directory that exists, in ais.json (docs/accounts.md, "limit")', code: 'other' }] };
         }
         args.cwd = resolved;
     }
     const unlimitable = limitedStartRefusal(args, place);
     if (unlimitable !== undefined) {
         return { refusal: [hello, { kind: 'error', cause: unlimitable,
-            fix: 'give this instance a directory of its own in friends.json, or, for a friend on no API-billed account, '
+            fix: 'give this instance a directory of its own in ais.json, or, for an AI on no API-billed account, '
                 + 'set its "limit" to false there (docs/accounts.md, "limit")', code: 'other' }] };
     }
     if (tools !== undefined) {

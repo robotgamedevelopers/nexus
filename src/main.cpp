@@ -4,7 +4,7 @@
 #include "pr/draw_select.h"
 #include "pr/compress_select.h"
 #include "pr/image_select.h"
-// nexus: one person and several AIs ("friends") in one window. Layer 1 is the window only: tabs, transcripts and the
+// nexus: one person and several AIs ("ais") in one window. Layer 1 is the window only: tabs, transcripts and the
 // prompt, with nothing connected to any AI yet.
 //
 // main() is the composition root: it makes the model, and either runs the window as a Prax Studio
@@ -22,31 +22,31 @@
 // each a new login shell in the directory its shell last worked in (tab_order.h).
 //
 // The first tab is always the sprint tab: nova-sprint's served board (board.h), at the address in the sprint's record
-// (sprint.h) or the client config's sprint-url (client_home.h). The friend tabs are the server's friends (frame_host.h
-// takeFriends), in the order the person last left them. The window opens on the tab selected when it last quit
+// (sprint.h) or the client config's sprint-url (client_home.h). The AI tabs are the server's AIs (frame_host.h
+// takeAIs), in the order the person last left them. The window opens on the tab selected when it last quit
 // (tab_order.h), or the sprint tab if that tab is gone or nothing is saved; --tab N opens tab N, and a screenshot
 // without --tab shows the sprint tab. The text scale (Command-plus and Command-minus) is saved as it changes and comes
 // back at launch.
 // --backdrop draws the screenshot see-through,
 // as the overlay is, over coloured stripes in place of the screen behind it.
 //
-// --server HOST gives the window its friends and their sessions: the window runs `nexus-server new` on HOST over ssh,
-// takes a tab for each friend in the server's list, as friends come and go, asks for a session with each (the server
-// makes one for a friend that has none), and keeps in step with it over
-// mosh's transport (link/client.h). Each friend tab shows its friend's first session, the window's own choice. A prompt
+// --server HOST gives the window its AIs and their sessions: the window runs `nexus-server new` on HOST over ssh,
+// takes a tab for each AI in the server's list, as AIs come and go, asks for a session with each (the server
+// makes one for an AI that has none), and keeps in step with it over
+// mosh's transport (link/client.h). Each AI tab shows its AI's first session, the window's own choice. A prompt
 // goes to that session, and the transcripts and queues show what the server holds (sync/mirror.h). Until the server is
 // first heard there is no prompt, only the line that says the window is connecting (or why it could not); afterwards
 // nothing is drawn around the prompt, and the state cursor under the last text says what the server's state is
-// (cursor.h, client.h cursorOf): busy, idle, down, or grey while the window has lost the server. The friend's open
+// (cursor.h, client.h cursorOf): busy, idle, down, or grey while the window has lost the server. The AI's open
 // entry is drawn as it grows, tool calls as one compact line each, and Command-Escape sends a stop the server decides.
 // --server-command WORDS (or the config's server-command) is what the window runs there in place of `nexus-server new`:
 // the mock's command, which reaches a server of fake AIs (docs/mock.md).
 //
-// --state FILE draws the screenshot's friend tabs from a server's state file (sync/sessions.h stateFile; the friends
+// --state FILE draws the screenshot's AI tabs from a server's state file (sync/sessions.h stateFile; the AIs
 // layer's functional test writes them from the fake driver: tests/server/drivers_functional.cpp, case window), as the
 // window shows it once the server is heard; --lost draws it as the window does once it has lost the server. It draws
-// from the file alone: no home, no config, no saved tab order, and no sprint board; the friend tabs are the state's
-// friends (sync/client.h friendsOf: its list, or the friends of its sessions in order of session id).
+// from the file alone: no home, no config, no saved tab order, and no sprint board; the AI tabs are the state's
+// AIs (sync/client.h aisOf: its list, or the AIs of its sessions in order of session id).
 //
 // Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]
 //              [--state FILE [--lost]]] [--bench FRAMES] [--print-window-config] [--server HOST]
@@ -194,7 +194,7 @@ constexpr uint64_t kPolicyCheckTag = 3;
 // prAppWindowFocus, so this only has to outlast the frames that report it (a guess, as the earlier code's was).
 constexpr double kKeyCheckSeconds = 0.5;
 #if NEXUS_LINK
-// How long a --tab past the launch's tabs waits for the server's friends. Not measured: the link's bootstrap (ssh, then
+// How long a --tab past the launch's tabs waits for the server's AIs. Not measured: the link's bootstrap (ssh, then
 // nexus-server's start) takes a few seconds on the fleet, and this leaves room for a slow one.
 constexpr int kTabWaitSeconds = 20;
 #endif
@@ -858,11 +858,11 @@ void seedDemo(Model& model, std::size_t tab) {
     model.append(0, Entry{EntryKind::Person,
         "I'd like the transcript to keep up with a long conversation, so here is a message long enough to wrap onto a "
         "second line and show how a bubble grows when it runs past most of the column."});
-    model.append(0, Entry{EntryKind::Friend,
+    model.append(0, Entry{EntryKind::AI,
         "Sure. The bubble is laid out by Prax, so it wraps at the column's width and keeps its corners however many "
         "lines it takes."});
     model.append(0, Entry{EntryKind::Notice, "read 3 files"});
-    model.append(0, Entry{EntryKind::Friend, "Anything else before I start?"});
+    model.append(0, Entry{EntryKind::AI, "Anything else before I start?"});
     model.set_draft(tab, "Can you look at why the nightly build went red?");
     model.send(tab);
     model.set_draft(tab, "After that, review the open PR");
@@ -1007,8 +1007,8 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // The friends are the server's (AGENTS.md "Friend tabs"): none until its state arrives over the link, or, for a
-    // screenshot of a state file, the file's (sync/client.h friendsOf).
+    // The AIs are the server's (AGENTS.md "AI tabs"): none until its state arrives over the link, or, for a
+    // screenshot of a state file, the file's (sync/client.h aisOf).
     const bool fromState = state != nullptr;
 #if NEXUS_LINK
     sync::Sessions held;
@@ -1035,7 +1035,7 @@ int main(int argc, char** argv) {
         else
             std::fprintf(stderr, "nexus: %s\n", machines.error.c_str());
     }
-    // The order the person last left the friend tabs in (tab_order.h), which the server's friends take as they arrive.
+    // The order the person last left the AI tabs in (tab_order.h), which the server's AIs take as they arrive.
     // The stores of what the window keeps across launches are each a file in its home, which a screenshot of a state
     // file never reads. They are read here, before the window shows, and written by the writer's thread, so that no
     // frame waits on the disk; the writer makes every waiting write before nexus exits.
@@ -1058,7 +1058,7 @@ int main(int argc, char** argv) {
         savedOrder = loadTabOrderNames(order, &orderWarning);
         if (!orderWarning.empty())
             std::fprintf(stderr, "nexus: %s\n", orderWarning.c_str());
-        // The drafts kept for this window's server only: a draft goes back to a friend of that name on that server.
+        // The drafts kept for this window's server only: a draft goes back to an AI of that name on that server.
         if (server != nullptr && keptServer(server)) {
             std::string keptWarning;
             kept = loadKeptDrafts(keptDrafts, server, &keptReadable, &keptWarning);
@@ -1066,14 +1066,14 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "nexus: %s\n", keptWarning.c_str());
         } else if (server != nullptr) {
             std::fprintf(stderr, "nexus: the server \"%s\" holds a space or a control character, so the drafts of "
-                "friends taken off it are kept in this window only, until it quits\n", loggable(server).c_str());
+                "AIs taken off it are kept in this window only, until it quits\n", loggable(server).c_str());
         }
     }
-    // The sprint tab first, and no friends yet.
+    // The sprint tab first, and no AIs yet.
     static Model model({}, fromState || clientConfig().sprintEnabled);
 #if NEXUS_LINK
     if (fromState) {
-        sync::FriendStrip{}.take(model, held);
+        sync::AIStrip{}.take(model, held);
         if (!tabGiven) tab = model.active() + 1;
     }
 #endif
@@ -1151,9 +1151,9 @@ int main(int argc, char** argv) {
         if (haveLayout && !tabGiven) tab = model.active() + 1;
     }
     // The window opens on the tab --tab names; without it, on the tab selected when nexus last quit, found by who it is
-    // or, for a terminal, by its place among the terminals (tab_order.h), or the sprint tab. A saved friend's tab is
-    // selected once the server's friends arrive (sync/friend_strip.h). A --tab past the tabs there at launch, with a
-    // server, is judged once the server's friends have arrived (below, after the link starts). A screenshot without
+    // or, for a terminal, by its place among the terminals (tab_order.h), or the sprint tab. A saved AI's tab is
+    // selected once the server's AIs arrive (sync/ai_strip.h). A --tab past the tabs there at launch, with a
+    // server, is judged once the server's AIs have arrived (below, after the link starts). A screenshot without
     // --tab uses the state file's primary chat when present, or the sprint tab.
     SavedTab savedTab;
     bool savedSelection = haveLayout && !a.host.layout.saved().selected.empty();
@@ -1164,7 +1164,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "nexus: %s\n", selectionWarning.c_str());
         tab = savedTabPosition(model, savedTab) + 1;
     }
-    const bool tabWaits = sync::tabWaitsForFriends(tabGiven, server != nullptr, tab, model.tab_count());
+    const bool tabWaits = sync::tabWaitsForAIs(tabGiven, server != nullptr, tab, model.tab_count());
     if ((model.tab_count() != 0 || tabGiven) && !tabWaits) {
         if (tab < 1 || !model.select_tab(tab - 1)) {
             std::fprintf(stderr, "nexus: no tab %zu (there are %zu)\n", tab, model.tab_count());
@@ -1182,7 +1182,7 @@ int main(int argc, char** argv) {
     // Escape hides the overlay, as the hotkey does; a normal window has nothing to hide.
     if (a.overlay)
         a.view.hide = [&a] { carryOut(a, a.rules.escape(overlayVisible(a))); };
-    // The friends' order is saved as the person moves a tab, once the server's friends are in the strip: a move before
+    // The AIs' order is saved as the person moves a tab, once the server's AIs are in the strip: a move before
     // them (a terminal's) leaves the saved order as it was.
     if (!fromState) {
         a.view.moved = [&a] {
@@ -1197,10 +1197,10 @@ int main(int argc, char** argv) {
     }
     // Each change of the selected tab, and of the terminal tabs, is saved as it happens, so a quit of any kind leaves
     // them saved. A screenshot saves nothing.
-    // A saved friend's tab is selected when the server's friends arrive; until then nothing overwrites it. The drafts
-    // kept for friends without a tab are saved as they change, unless their file did not read (tab_order.h).
-    const bool waitForSaved = live && server != nullptr && savedTab.kind == TabKind::Friend;
-    a.host.strip = sync::FriendStrip(std::move(savedOrder), waitForSaved ? savedTab.name : std::string(),
+    // A saved AI's tab is selected when the server's AIs arrive; until then nothing overwrites it. The drafts
+    // kept for AIs without a tab are saved as they change, unless their file did not read (tab_order.h).
+    const bool waitForSaved = live && server != nullptr && savedTab.kind == TabKind::AI;
+    a.host.strip = sync::AIStrip(std::move(savedOrder), waitForSaved ? savedTab.name : std::string(),
         std::move(kept));
     if (tabGiven || (savedSelection && !waitForSaved)) a.host.strip.personSelected();
     if (live) {
@@ -1245,7 +1245,7 @@ int main(int argc, char** argv) {
         a.host.uploadWake = options.wake;
         a.link = std::make_unique<link::ClientPort>(std::move(options));
         a.host.connect(a.link.get(), server);
-        // A --tab past the tabs at launch names a friend's tab, perhaps, that the server's friends bring: the window
+        // A --tab past the tabs at launch names an AI's tab, perhaps, that the server's AIs bring: the window
         // waits for them, up to kTabWaitSeconds or until the link fails, before it judges the tab, and opens on it.
         if (tabWaits) {
             const auto nowMs = [] {
@@ -1259,7 +1259,7 @@ int main(int argc, char** argv) {
             }
             if (tab < 1 || !model.select_tab(tab - 1)) {
                 std::fprintf(stderr, "nexus: no tab %zu (there are %zu%s)\n", tab, model.tab_count(),
-                    a.host.strip.taken() ? "" : ", and the server's friends did not arrive in time");
+                    a.host.strip.taken() ? "" : ", and the server's AIs did not arrive in time");
                 return 2;
             }
             a.view.selectedId = model.tab(model.active()).id;
@@ -1272,8 +1272,8 @@ int main(int argc, char** argv) {
         a.findBoard = [] { return SprintBoardAddress{"", "a screenshot of a state file shows no sprint board"}; };
     }
 #endif
-    // --demo: sample entries after what the state file holds, in the active tab if it is a friend's.
-    if (demo && model.tab_count() != 0 && model.tab(model.active()).kind == TabKind::Friend) {
+    // --demo: sample entries after what the state file holds, in the active tab if it is an AI's.
+    if (demo && model.tab_count() != 0 && model.tab(model.active()).kind == TabKind::AI) {
         seedDemo(model, model.active());
     }
     a.bench = bench;

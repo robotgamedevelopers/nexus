@@ -8,7 +8,7 @@ BrokenQueue(i) ==
     THEN /\ queue' = [queue EXCEPT ![At(i)] = <<draft[At(i)]>> \o @]
          /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("queue", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active, transcript>>
+         /\ UNCHANGED <<ais, order, active, transcript>>
     ELSE /\ last' = Did("queue", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

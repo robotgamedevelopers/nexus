@@ -8582,7 +8582,7 @@ struct Hello
 // member initializers (docs/SPEC-TABLES.md)
 struct SessionInfo
 {
-    TableRef friend_name; // *string — a byte buffer at its used size, null until assigned
+    TableRef ai_name; // *string — a byte buffer at its used size, null until assigned
     TableRef harness; // *string — a byte buffer at its used size, null until assigned
     TableRef account; // *string — a byte buffer at its used size, null until assigned
     TableRef model; // *string — a byte buffer at its used size, null until assigned
@@ -8648,7 +8648,7 @@ struct Action
 {
     ActionKind kind = ActionKind::None;
     uint64_t session = 0;
-    TableRef friend_name; // *string — a byte buffer at its used size, null until assigned
+    TableRef ai_name; // *string — a byte buffer at its used size, null until assigned
     TableRef text; // *string — a byte buffer at its used size, null until assigned
     TableRef account; // *string — a byte buffer at its used size, null until assigned
     uint64_t request = 0;
@@ -8803,7 +8803,7 @@ inline bool TableEnumRef( TableIds & ids, EntryKind value, uint64_t & ref )
         case EntryKind::Person:
             ref = ids.ref_at( 21, 0x40d76f1f51639ec0ull );
             return true;
-        case EntryKind::Friend:
+        case EntryKind::AI:
             ref = ids.ref_at( 53, 0x9f57a2661b8a7e2dull );
             return true;
         case EntryKind::Notice:
@@ -8825,7 +8825,7 @@ inline bool TableEnumRef( TableRetainIds & ids, EntryKind value, uint64_t & ref 
         case EntryKind::Person:
             ref = ids.ref_at( 21, 0x40d76f1f51639ec0ull );
             return true;
-        case EntryKind::Friend:
+        case EntryKind::AI:
             ref = ids.ref_at( 53, 0x9f57a2661b8a7e2dull );
             return true;
         case EntryKind::Notice:
@@ -8843,7 +8843,7 @@ inline bool TableEnumNamed( EntryKind value )
     {
         case EntryKind::None: return true;
         case EntryKind::Person: return true;
-        case EntryKind::Friend: return true;
+        case EntryKind::AI: return true;
         case EntryKind::Notice: return true;
         case EntryKind::Tool: return true;
         default: return false;
@@ -8858,7 +8858,7 @@ inline bool TableEnumSlot( EntryKind value, uint64_t & slot )
             return true;
         case EntryKind::Person:
             return false; // outside the message closure: no slot
-        case EntryKind::Friend:
+        case EntryKind::AI:
             return false; // outside the message closure: no slot
         case EntryKind::Notice:
             return false; // outside the message closure: no slot
@@ -8877,7 +8877,7 @@ inline bool TableEnumId( EntryKind value, uint64_t & id )
         case EntryKind::Person:
             id = 0x40d76f1f51639ec0ull;
             return true;
-        case EntryKind::Friend:
+        case EntryKind::AI:
             id = 0x9f57a2661b8a7e2dull;
             return true;
         case EntryKind::Notice:
@@ -8897,7 +8897,7 @@ inline bool TableEnumValue( uint64_t id, EntryKind & out )
             out = EntryKind::Person;
             return true;
         case 0x9f57a2661b8a7e2dull:
-            out = EntryKind::Friend;
+            out = EntryKind::AI;
             return true;
         case 0x9117fb5195e75151ull:
             out = EntryKind::Notice;
@@ -9063,7 +9063,7 @@ inline bool TableEnumRef( TableIds & ids, ActionKind value, uint64_t & ref )
         case ActionKind::RemoveAccount:
             ref = ids.ref_at( 24, 0x49d09394f5773664ull );
             return true;
-        case ActionKind::AddFriend:
+        case ActionKind::AddAI:
             ref = ids.ref_at( 87, 0xf7368f51997e9bccull );
             return true;
         case ActionKind::LinkAccount:
@@ -9121,7 +9121,7 @@ inline bool TableEnumRef( TableRetainIds & ids, ActionKind value, uint64_t & ref
         case ActionKind::RemoveAccount:
             ref = ids.ref_at( 24, 0x49d09394f5773664ull );
             return true;
-        case ActionKind::AddFriend:
+        case ActionKind::AddAI:
             ref = ids.ref_at( 87, 0xf7368f51997e9bccull );
             return true;
         case ActionKind::LinkAccount:
@@ -9157,7 +9157,7 @@ inline bool TableEnumNamed( ActionKind value )
         case ActionKind::SetEffort: return true;
         case ActionKind::AddAccount: return true;
         case ActionKind::RemoveAccount: return true;
-        case ActionKind::AddFriend: return true;
+        case ActionKind::AddAI: return true;
         case ActionKind::LinkAccount: return true;
         case ActionKind::UnlinkAccount: return true;
         case ActionKind::SetDefault: return true;
@@ -9193,7 +9193,7 @@ inline bool TableEnumSlot( ActionKind value, uint64_t & slot )
             return false; // outside the message closure: no slot
         case ActionKind::RemoveAccount:
             return false; // outside the message closure: no slot
-        case ActionKind::AddFriend:
+        case ActionKind::AddAI:
             return false; // outside the message closure: no slot
         case ActionKind::LinkAccount:
             return false; // outside the message closure: no slot
@@ -9245,7 +9245,7 @@ inline bool TableEnumId( ActionKind value, uint64_t & id )
         case ActionKind::RemoveAccount:
             id = 0x49d09394f5773664ull;
             return true;
-        case ActionKind::AddFriend:
+        case ActionKind::AddAI:
             id = 0xf7368f51997e9bccull;
             return true;
         case ActionKind::LinkAccount:
@@ -9301,7 +9301,7 @@ inline bool TableEnumValue( uint64_t id, ActionKind & out )
             out = ActionKind::RemoveAccount;
             return true;
         case 0xf7368f51997e9bccull:
-            out = ActionKind::AddFriend;
+            out = ActionKind::AddAI;
             return true;
         case 0xff7b88c2ff4bff78ull:
             out = ActionKind::LinkAccount;
@@ -9351,7 +9351,7 @@ inline void HelloReset( Hello & value )
 
 inline void SessionInfoReset( SessionInfo & value )
 {
-    value.friend_name.value = 0; // *string — null
+    value.ai_name.value = 0; // *string — null
     value.harness.value = 0; // *string — null
     value.account.value = 0; // *string — null
     value.model.value = 0; // *string — null
@@ -9413,7 +9413,7 @@ inline void ActionReset( Action & value )
 {
     value.kind = ActionKind::None;
     value.session = 0;
-    value.friend_name.value = 0; // *string — null
+    value.ai_name.value = 0; // *string — null
     value.text.value = 0; // *string — null
     value.account.value = 0; // *string — null
     value.request = 0;
@@ -10139,16 +10139,16 @@ inline int64_t SessionInfoMeasureBody( const Ctx & ctx, const TableNumbering & n
     (void) numbering;
     int64_t bytes = 1; // the ZERO REFERENCE that ends the body
     {
-        const TableBlob * blob_friend_name = TableBlobAt( ctx, value.friend_name ); // *string
+        const TableBlob * blob_ai_name = TableBlobAt( ctx, value.ai_name ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
         // §3.1): the header and the index here, the bytes themselves as a
         // record in the node table. Null is elided and a non-null blob always
         // rides, even at length zero — null and empty are two values.
-        if ( blob_friend_name != NULL )
+        if ( blob_ai_name != NULL )
         {
-            uint64_t index_friend_name = 0;
-            if ( !TableNumberingIndex( numbering, (const void *) blob_friend_name, index_friend_name ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ) ) + 1 + TableLebBytes( index_friend_name );
+            uint64_t index_ai_name = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_ai_name, index_ai_name ) ) { return -1; }
+            bytes += TableLebBytes( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ) ) + 1 + TableLebBytes( index_ai_name );
         }
     }
     {
@@ -10225,13 +10225,13 @@ inline bool SessionInfoSaveBodyFields( const Ctx & ctx, const TableNumbering & n
     (void) ctx;
     (void) numbering;
     {
-        const TableBlob * blob_friend_name = TableBlobAt( ctx, value.friend_name ); // *string
-        if ( blob_friend_name != NULL )
+        const TableBlob * blob_ai_name = TableBlobAt( ctx, value.ai_name ); // *string
+        if ( blob_ai_name != NULL )
         {
-            uint64_t index_friend_name = 0;
-            if ( !TableNumberingIndex( numbering, (const void *) blob_friend_name, index_friend_name ) ) { return false; }
-            w.header( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ), 17 ); // friend_name — a NODE INDEX into the flat node table
-            w.putleb( index_friend_name );
+            uint64_t index_ai_name = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_ai_name, index_ai_name ) ) { return false; }
+            w.header( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ), 17 ); // ai_name — a NODE INDEX into the flat node table
+            w.putleb( index_ai_name );
         }
     }
     {
@@ -10337,7 +10337,7 @@ inline bool SessionInfoLoadBody( TableReader & r, const TableNodeMap & nodes, Se
         }
         switch ( field_id )
         {
-            case 0x2bcee2fac7bb6eb5ull: // friend_name
+            case 0x2bcee2fac7bb6eb5ull: // ai_name
             {
                 if ( kind != 17 )
                 {
@@ -10362,7 +10362,7 @@ inline bool SessionInfoLoadBody( TableReader & r, const TableNodeMap & nodes, Se
                         r.report->damaged = true;
                         return false;
                     }
-                    TableNodeResolve( nodes, value.friend_name, node_index, kTableStringTypeId, r.report ); // *string
+                    TableNodeResolve( nodes, value.ai_name, node_index, kTableStringTypeId, r.report ); // *string
                 }
                 break;
             }
@@ -12494,16 +12494,16 @@ inline int64_t ActionMeasureBody( const Ctx & ctx, const TableNumbering & number
     }
     if ( value.session != 0 ) { bytes += TableLebBytes( ids.ref_at( 19, 0x3ca2c49553a457d7ull ) ) + 1 + 8; } // session
     {
-        const TableBlob * blob_friend_name = TableBlobAt( ctx, value.friend_name ); // *string
+        const TableBlob * blob_ai_name = TableBlobAt( ctx, value.ai_name ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
         // §3.1): the header and the index here, the bytes themselves as a
         // record in the node table. Null is elided and a non-null blob always
         // rides, even at length zero — null and empty are two values.
-        if ( blob_friend_name != NULL )
+        if ( blob_ai_name != NULL )
         {
-            uint64_t index_friend_name = 0;
-            if ( !TableNumberingIndex( numbering, (const void *) blob_friend_name, index_friend_name ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ) ) + 1 + TableLebBytes( index_friend_name );
+            uint64_t index_ai_name = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_ai_name, index_ai_name ) ) { return -1; }
+            bytes += TableLebBytes( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ) ) + 1 + TableLebBytes( index_ai_name );
         }
     }
     {
@@ -12568,13 +12568,13 @@ inline bool ActionSaveBodyFields( const Ctx & ctx, const TableNumbering & number
         w.put64( uint64_t( value.session ) );
     }
     {
-        const TableBlob * blob_friend_name = TableBlobAt( ctx, value.friend_name ); // *string
-        if ( blob_friend_name != NULL )
+        const TableBlob * blob_ai_name = TableBlobAt( ctx, value.ai_name ); // *string
+        if ( blob_ai_name != NULL )
         {
-            uint64_t index_friend_name = 0;
-            if ( !TableNumberingIndex( numbering, (const void *) blob_friend_name, index_friend_name ) ) { return false; }
-            w.header( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ), 17 ); // friend_name — a NODE INDEX into the flat node table
-            w.putleb( index_friend_name );
+            uint64_t index_ai_name = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_ai_name, index_ai_name ) ) { return false; }
+            w.header( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ), 17 ); // ai_name — a NODE INDEX into the flat node table
+            w.putleb( index_ai_name );
         }
     }
     {
@@ -12732,7 +12732,7 @@ inline bool ActionLoadBody( TableReader & r, const TableNodeMap & nodes, Action 
                 value.session = decoded_v;
                 break;
             }
-            case 0x2bcee2fac7bb6eb5ull: // friend_name
+            case 0x2bcee2fac7bb6eb5ull: // ai_name
             {
                 if ( kind != 17 )
                 {
@@ -12757,7 +12757,7 @@ inline bool ActionLoadBody( TableReader & r, const TableNodeMap & nodes, Action 
                         r.report->damaged = true;
                         return false;
                     }
-                    TableNodeResolve( nodes, value.friend_name, node_index, kTableStringTypeId, r.report ); // *string
+                    TableNodeResolve( nodes, value.ai_name, node_index, kTableStringTypeId, r.report ); // *string
                 }
                 break;
             }
@@ -18099,7 +18099,7 @@ template <typename Ctx>
 inline bool SessionInfoNumber( const Ctx & ctx, TableNumbering & numbering, const SessionInfo & value )
 {
     {
-        const TableBlob * blob = TableBlobAt( ctx, value.friend_name ); // friend_name: a byte buffer
+        const TableBlob * blob = TableBlobAt( ctx, value.ai_name ); // ai_name: a byte buffer
         if ( blob != NULL )
         {
             bool taken = false;
@@ -18240,7 +18240,7 @@ inline bool SessionInfoCycleSlots( const Ctx & ctx, TableCycle & cycle, const Se
     (void) ctx;
     (void) cycle;
     (void) value;
-    // friend_name: a byte buffer reaches nothing
+    // ai_name: a byte buffer reaches nothing
     // harness: a byte buffer reaches nothing
     // account: a byte buffer reaches nothing
     // model: a byte buffer reaches nothing
@@ -18258,7 +18258,7 @@ inline int64_t SessionInfoPackMeasure( const Ctx & ctx, TablePackMap & seen, con
 {
     int64_t bytes = 0;
     {
-        const TableBlob * blob = TableBlobAt( ctx, value.friend_name ); // friend_name: a byte buffer, packed at its used size
+        const TableBlob * blob = TableBlobAt( ctx, value.ai_name ); // ai_name: a byte buffer, packed at its used size
         if ( blob != NULL )
         {
             bool taken = false;
@@ -18377,8 +18377,8 @@ template <typename Ctx>
 inline bool SessionInfoPackEdges( const Ctx & ctx, TablePackMap & seen, const SessionInfo & src, SessionInfo & dst, uint8_t * base, int64_t capacity, int64_t & used )
 {
     {
-        dst.friend_name.value = 0; // friend_name: a byte buffer
-        const TableBlob * blob = TableBlobAt( ctx, src.friend_name );
+        dst.ai_name.value = 0; // ai_name: a byte buffer
+        const TableBlob * blob = TableBlobAt( ctx, src.ai_name );
         if ( blob != NULL )
         {
             int64_t at = TableAlignUp64( used ); // where it WOULD land, if this is its first visit
@@ -18388,7 +18388,7 @@ inline bool SessionInfoPackEdges( const Ctx & ctx, TablePackMap & seen, const Se
             if ( entry == NULL ) { return false; } // the map could not grow
             if ( !taken )
             {
-                dst.friend_name.value = (int64_t) ( ( base + entry->offset ) - (const uint8_t *) &dst.friend_name ); // the one body it already has
+                dst.ai_name.value = (int64_t) ( ( base + entry->offset ) - (const uint8_t *) &dst.ai_name ); // the one body it already has
             }
             else
             {
@@ -18396,7 +18396,7 @@ inline bool SessionInfoPackEdges( const Ctx & ctx, TablePackMap & seen, const Se
                 if ( at + storage > capacity ) { return false; }
                 memcpy( base + at, (const void *) blob, (size_t) ( kTableBlobHeader + (int64_t) blob->length ) );
                 used = at + storage;
-                dst.friend_name.value = (int64_t) ( ( base + at ) - (const uint8_t *) &dst.friend_name );
+                dst.ai_name.value = (int64_t) ( ( base + at ) - (const uint8_t *) &dst.ai_name );
                 TablePackMapClose( seen, (const void *) blob, slot );
             }
         }
@@ -19319,7 +19319,7 @@ template <typename Ctx>
 inline bool ActionNumber( const Ctx & ctx, TableNumbering & numbering, const Action & value )
 {
     {
-        const TableBlob * blob = TableBlobAt( ctx, value.friend_name ); // friend_name: a byte buffer
+        const TableBlob * blob = TableBlobAt( ctx, value.ai_name ); // ai_name: a byte buffer
         if ( blob != NULL )
         {
             bool taken = false;
@@ -19416,7 +19416,7 @@ inline bool ActionCycleSlots( const Ctx & ctx, TableCycle & cycle, const Action 
     (void) ctx;
     (void) cycle;
     (void) value;
-    // friend_name: a byte buffer reaches nothing
+    // ai_name: a byte buffer reaches nothing
     // text: a byte buffer reaches nothing
     // account: a byte buffer reaches nothing
     // secret: a byte buffer reaches nothing
@@ -19432,7 +19432,7 @@ inline int64_t ActionPackMeasure( const Ctx & ctx, TablePackMap & seen, const Ac
 {
     int64_t bytes = 0;
     {
-        const TableBlob * blob = TableBlobAt( ctx, value.friend_name ); // friend_name: a byte buffer, packed at its used size
+        const TableBlob * blob = TableBlobAt( ctx, value.ai_name ); // ai_name: a byte buffer, packed at its used size
         if ( blob != NULL )
         {
             bool taken = false;
@@ -19521,8 +19521,8 @@ template <typename Ctx>
 inline bool ActionPackEdges( const Ctx & ctx, TablePackMap & seen, const Action & src, Action & dst, uint8_t * base, int64_t capacity, int64_t & used )
 {
     {
-        dst.friend_name.value = 0; // friend_name: a byte buffer
-        const TableBlob * blob = TableBlobAt( ctx, src.friend_name );
+        dst.ai_name.value = 0; // ai_name: a byte buffer
+        const TableBlob * blob = TableBlobAt( ctx, src.ai_name );
         if ( blob != NULL )
         {
             int64_t at = TableAlignUp64( used ); // where it WOULD land, if this is its first visit
@@ -19532,7 +19532,7 @@ inline bool ActionPackEdges( const Ctx & ctx, TablePackMap & seen, const Action 
             if ( entry == NULL ) { return false; } // the map could not grow
             if ( !taken )
             {
-                dst.friend_name.value = (int64_t) ( ( base + entry->offset ) - (const uint8_t *) &dst.friend_name ); // the one body it already has
+                dst.ai_name.value = (int64_t) ( ( base + entry->offset ) - (const uint8_t *) &dst.ai_name ); // the one body it already has
             }
             else
             {
@@ -19540,7 +19540,7 @@ inline bool ActionPackEdges( const Ctx & ctx, TablePackMap & seen, const Action 
                 if ( at + storage > capacity ) { return false; }
                 memcpy( base + at, (const void *) blob, (size_t) ( kTableBlobHeader + (int64_t) blob->length ) );
                 used = at + storage;
-                dst.friend_name.value = (int64_t) ( ( base + at ) - (const uint8_t *) &dst.friend_name );
+                dst.ai_name.value = (int64_t) ( ( base + at ) - (const uint8_t *) &dst.ai_name );
                 TablePackMapClose( seen, (const void *) blob, slot );
             }
         }
@@ -34931,16 +34931,16 @@ inline int64_t SessionInfoMeasureBodyRetain( const Ctx & ctx, const TableNumberi
     (void) numbering;
     int64_t bytes = 1; // the ZERO REFERENCE that ends the body
     {
-        const TableBlob * blob_friend_name = TableBlobAt( ctx, value.friend_name ); // *string
+        const TableBlob * blob_ai_name = TableBlobAt( ctx, value.ai_name ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
         // §3.1): the header and the index here, the bytes themselves as a
         // record in the node table. Null is elided and a non-null blob always
         // rides, even at length zero — null and empty are two values.
-        if ( blob_friend_name != NULL )
+        if ( blob_ai_name != NULL )
         {
-            uint64_t index_friend_name = 0;
-            if ( !TableNumberingIndex( numbering, (const void *) blob_friend_name, index_friend_name ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ) ) + 1 + TableLebBytes( index_friend_name );
+            uint64_t index_ai_name = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_ai_name, index_ai_name ) ) { return -1; }
+            bytes += TableLebBytes( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ) ) + 1 + TableLebBytes( index_ai_name );
         }
     }
     {
@@ -35018,13 +35018,13 @@ inline bool SessionInfoSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
     (void) ctx;
     (void) numbering;
     {
-        const TableBlob * blob_friend_name = TableBlobAt( ctx, value.friend_name ); // *string
-        if ( blob_friend_name != NULL )
+        const TableBlob * blob_ai_name = TableBlobAt( ctx, value.ai_name ); // *string
+        if ( blob_ai_name != NULL )
         {
-            uint64_t index_friend_name = 0;
-            if ( !TableNumberingIndex( numbering, (const void *) blob_friend_name, index_friend_name ) ) { return false; }
-            w.header( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ), 17 ); // friend_name — a NODE INDEX into the flat node table
-            w.putleb( index_friend_name );
+            uint64_t index_ai_name = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_ai_name, index_ai_name ) ) { return false; }
+            w.header( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ), 17 ); // ai_name — a NODE INDEX into the flat node table
+            w.putleb( index_ai_name );
         }
     }
     {
@@ -35136,7 +35136,7 @@ inline bool SessionInfoLoadBodyRetain( TableReader & r, const TableNodeMap & nod
         }
         switch ( field_id )
         {
-            case 0x2bcee2fac7bb6eb5ull: // friend_name
+            case 0x2bcee2fac7bb6eb5ull: // ai_name
             {
                 if ( kind != 17 )
                 {
@@ -35161,7 +35161,7 @@ inline bool SessionInfoLoadBodyRetain( TableReader & r, const TableNodeMap & nod
                         r.report->damaged = true;
                         return false;
                     }
-                    TableNodeResolve( nodes, value.friend_name, node_index, kTableStringTypeId, r.report ); // *string
+                    TableNodeResolve( nodes, value.ai_name, node_index, kTableStringTypeId, r.report ); // *string
                 }
                 break;
             }
@@ -37323,16 +37323,16 @@ inline int64_t ActionMeasureBodyRetain( const Ctx & ctx, const TableNumbering & 
     }
     if ( value.session != 0 ) { bytes += TableLebBytes( ids.ref_at( 19, 0x3ca2c49553a457d7ull ) ) + 1 + 8; } // session
     {
-        const TableBlob * blob_friend_name = TableBlobAt( ctx, value.friend_name ); // *string
+        const TableBlob * blob_ai_name = TableBlobAt( ctx, value.ai_name ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
         // §3.1): the header and the index here, the bytes themselves as a
         // record in the node table. Null is elided and a non-null blob always
         // rides, even at length zero — null and empty are two values.
-        if ( blob_friend_name != NULL )
+        if ( blob_ai_name != NULL )
         {
-            uint64_t index_friend_name = 0;
-            if ( !TableNumberingIndex( numbering, (const void *) blob_friend_name, index_friend_name ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ) ) + 1 + TableLebBytes( index_friend_name );
+            uint64_t index_ai_name = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_ai_name, index_ai_name ) ) { return -1; }
+            bytes += TableLebBytes( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ) ) + 1 + TableLebBytes( index_ai_name );
         }
     }
     {
@@ -37398,13 +37398,13 @@ inline bool ActionSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
         w.put64( uint64_t( value.session ) );
     }
     {
-        const TableBlob * blob_friend_name = TableBlobAt( ctx, value.friend_name ); // *string
-        if ( blob_friend_name != NULL )
+        const TableBlob * blob_ai_name = TableBlobAt( ctx, value.ai_name ); // *string
+        if ( blob_ai_name != NULL )
         {
-            uint64_t index_friend_name = 0;
-            if ( !TableNumberingIndex( numbering, (const void *) blob_friend_name, index_friend_name ) ) { return false; }
-            w.header( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ), 17 ); // friend_name — a NODE INDEX into the flat node table
-            w.putleb( index_friend_name );
+            uint64_t index_ai_name = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_ai_name, index_ai_name ) ) { return false; }
+            w.header( ids.ref_at( 16, 0x2bcee2fac7bb6eb5ull ), 17 ); // ai_name — a NODE INDEX into the flat node table
+            w.putleb( index_ai_name );
         }
     }
     {
@@ -37568,7 +37568,7 @@ inline bool ActionLoadBodyRetain( TableReader & r, const TableNodeMap & nodes, A
                 value.session = decoded_v;
                 break;
             }
-            case 0x2bcee2fac7bb6eb5ull: // friend_name
+            case 0x2bcee2fac7bb6eb5ull: // ai_name
             {
                 if ( kind != 17 )
                 {
@@ -37593,7 +37593,7 @@ inline bool ActionLoadBodyRetain( TableReader & r, const TableNodeMap & nodes, A
                         r.report->damaged = true;
                         return false;
                     }
-                    TableNodeResolve( nodes, value.friend_name, node_index, kTableStringTypeId, r.report ); // *string
+                    TableNodeResolve( nodes, value.ai_name, node_index, kTableStringTypeId, r.report ); // *string
                 }
                 break;
             }
@@ -48412,7 +48412,7 @@ inline bool HelloCookBody( const Ctx & ctx, const TableCookRegion & region, uint
 template <typename Ctx>
 inline bool SessionInfoCookBody( const Ctx & ctx, const TableCookRegion & region, uint8_t * at, const SessionInfo & value, TableByteOrder order )
 {
-    if ( !table_cook_ref( region, at + 0, (const void *) TableBlobAt( ctx, value.friend_name ), order ) ) { return false; } // friend_name
+    if ( !table_cook_ref( region, at + 0, (const void *) TableBlobAt( ctx, value.ai_name ), order ) ) { return false; } // ai_name
     if ( !table_cook_ref( region, at + 8, (const void *) TableBlobAt( ctx, value.harness ), order ) ) { return false; } // harness
     if ( !table_cook_ref( region, at + 16, (const void *) TableBlobAt( ctx, value.account ), order ) ) { return false; } // account
     if ( !table_cook_ref( region, at + 24, (const void *) TableBlobAt( ctx, value.model ), order ) ) { return false; } // model
@@ -48488,7 +48488,7 @@ inline bool ActionCookBody( const Ctx & ctx, const TableCookRegion & region, uin
 {
     table_cook_put( at + 0, (uint64_t) value.kind, 1, order );
     table_cook_put( at + 8, (uint64_t) value.session, 8, order );
-    if ( !table_cook_ref( region, at + 16, (const void *) TableBlobAt( ctx, value.friend_name ), order ) ) { return false; } // friend_name
+    if ( !table_cook_ref( region, at + 16, (const void *) TableBlobAt( ctx, value.ai_name ), order ) ) { return false; } // ai_name
     if ( !table_cook_ref( region, at + 24, (const void *) TableBlobAt( ctx, value.text ), order ) ) { return false; } // text
     if ( !table_cook_ref( region, at + 32, (const void *) TableBlobAt( ctx, value.account ), order ) ) { return false; } // account
     table_cook_put( at + 40, (uint64_t) value.request, 8, order );
@@ -51923,7 +51923,7 @@ static_assert( offsetof( Hello, proto ) == 0, "Hello's field proto moved: the bu
 static_assert( offsetof( Hello, min_peer ) == 4, "Hello's field min_peer moved: the build version was taken over offset 4 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( sizeof( SessionInfo ) == 48, "SessionInfo's sizeof moved: the build version was taken over 48, so a cook of it would not be this build's file (docs/SPEC-TABLES.md §20.3)" );
 static_assert( alignof( SessionInfo ) == 8, "SessionInfo's alignof moved: the build version was taken over 8 (docs/SPEC-TABLES.md §20.3)" );
-static_assert( offsetof( SessionInfo, friend_name ) == 0, "SessionInfo's field friend_name moved: the build version was taken over offset 0 (docs/SPEC-TABLES.md §20.3)" );
+static_assert( offsetof( SessionInfo, ai_name ) == 0, "SessionInfo's field ai_name moved: the build version was taken over offset 0 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( SessionInfo, harness ) == 8, "SessionInfo's field harness moved: the build version was taken over offset 8 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( SessionInfo, account ) == 16, "SessionInfo's field account moved: the build version was taken over offset 16 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( SessionInfo, model ) == 24, "SessionInfo's field model moved: the build version was taken over offset 24 (docs/SPEC-TABLES.md §20.3)" );
@@ -51965,7 +51965,7 @@ static_assert( sizeof( Action ) == 56, "Action's sizeof moved: the build version
 static_assert( alignof( Action ) == 8, "Action's alignof moved: the build version was taken over 8 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( Action, kind ) == 0, "Action's field kind moved: the build version was taken over offset 0 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( Action, session ) == 8, "Action's field session moved: the build version was taken over offset 8 (docs/SPEC-TABLES.md §20.3)" );
-static_assert( offsetof( Action, friend_name ) == 16, "Action's field friend_name moved: the build version was taken over offset 16 (docs/SPEC-TABLES.md §20.3)" );
+static_assert( offsetof( Action, ai_name ) == 16, "Action's field ai_name moved: the build version was taken over offset 16 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( Action, text ) == 24, "Action's field text moved: the build version was taken over offset 24 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( Action, account ) == 32, "Action's field account moved: the build version was taken over offset 32 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( Action, request ) == 40, "Action's field request moved: the build version was taken over offset 40 (docs/SPEC-TABLES.md §20.3)" );
@@ -52079,7 +52079,7 @@ inline const TableTypeInfo HelloTableInfo = { "Hello", (uint32_t) sizeof( Hello 
 inline const TableTypeInfo * HelloTableType() { return &HelloTableInfo; }
 
 inline const TableFieldInfo SessionInfoTableFields[] = {
-    { "friend_name", "friend_name", "string", 0x2bcee2fac7bb6eb5ull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( SessionInfo, friend_name ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
+    { "ai_name", "ai_name", "string", 0x2bcee2fac7bb6eb5ull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( SessionInfo, ai_name ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
     { "harness", "harness", "string", 0x211fcbbafe5331abull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( SessionInfo, harness ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
     { "account", "account", "string", 0xa23fd2965dc429bcull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( SessionInfo, account ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
     { "model", "model", "string", 0x9de543933e6e703aull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( SessionInfo, model ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
@@ -52139,7 +52139,7 @@ inline const TableTypeInfo * SessionsDiffTableType() { return &SessionsDiffTable
 inline const TableFieldInfo ActionTableFields[] = {
     { "kind", "kind", "ActionKind", 0xef9c96d721673243ull, 30, false, false, NULL, NULL, false, false, 0, (uint32_t) offsetof( Action, kind ), (uint32_t) sizeof( Action::kind ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, 16, +[]( uint64_t v ) { return EnumName( ActionKind( v ) ); }, +[]( uint64_t v ) -> uint64_t { uint64_t id = 0; TableEnumId( ActionKind( v ), id ); return id; }, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
     { "session", "session", "uint64", 0x3ca2c49553a457d7ull, 9, false, false, NULL, NULL, false, false, 0, (uint32_t) offsetof( Action, session ), (uint32_t) sizeof( Action::session ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
-    { "friend_name", "friend_name", "string", 0x2bcee2fac7bb6eb5ull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( Action, friend_name ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
+    { "ai_name", "ai_name", "string", 0x2bcee2fac7bb6eb5ull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( Action, ai_name ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
     { "text", "text", "string", 0xfa04f4ef1995407eull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( Action, text ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
     { "account", "account", "string", 0xa23fd2965dc429bcull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( Action, account ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
     { "request", "request", "uint64", 0x6f4743b8bc5b4eb2ull, 9, false, false, NULL, NULL, false, false, 0, (uint32_t) offsetof( Action, request ), (uint32_t) sizeof( Action::request ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },

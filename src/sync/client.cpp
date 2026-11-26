@@ -53,7 +53,7 @@ CursorState cursorOf(LinkPhase phase, std::uint64_t heardMsAgo, const Mirror& mi
 }
 
 bool takePrompt(Model& model, std::size_t i, std::size_t limit, std::string* text, std::string* why) {
-    if (i >= model.tab_count() || model.tab(i).kind != TabKind::Friend)
+    if (i >= model.tab_count() || model.tab(i).kind != TabKind::AI)
         return false;
     const std::string& draft = model.tab(i).draft;
     if (blankText(draft))
@@ -70,28 +70,28 @@ bool takePrompt(Model& model, std::size_t i, std::size_t limit, std::string* tex
 }
 
 SessionId sessionOf(const Model& model, std::size_t i, const Mirror& mirror) {
-    if (i >= model.tab_count() || model.tab(i).kind != TabKind::Friend) {
+    if (i >= model.tab_count() || model.tab(i).kind != TabKind::AI) {
         return 0;
     }
     return mirror.session(model.tab(i).id);
 }
 
-std::vector<std::string> friendsToEnsure(const Model& model) {
+std::vector<std::string> aisToEnsure(const Model& model) {
     std::vector<std::string> out;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
-        if (model.tab(i).kind == TabKind::Friend && !model.tab(i).primaryChat()) {
+        if (model.tab(i).kind == TabKind::AI && !model.tab(i).primaryChat()) {
             out.push_back(model.tab(i).name);
         }
     }
     return out;
 }
 
-bool friendNameShown(std::string_view name) {
+bool aiNameShown(std::string_view name) {
     return accounts::isName(name);
 }
 
-std::vector<FriendInfo> friendsOf(const Sessions& state, std::vector<std::string>* dropped, std::size_t* past) {
-    std::vector<FriendInfo> out;
+std::vector<AIInfo> aisOf(const Sessions& state, std::vector<std::string>* dropped, std::size_t* past) {
+    std::vector<AIInfo> out;
     std::unordered_set<std::string_view> named;
     std::unordered_set<std::string_view> refused;
     std::size_t over = 0;
@@ -99,7 +99,7 @@ std::vector<FriendInfo> friendsOf(const Sessions& state, std::vector<std::string
         if (named.count(name) != 0 || refused.count(name) != 0) {
             return;
         }
-        if (!friendNameShown(name)) {
+        if (!aiNameShown(name)) {
             refused.insert(name);
             if (dropped != nullptr) {
                 dropped->push_back(name);
@@ -107,11 +107,11 @@ std::vector<FriendInfo> friendsOf(const Sessions& state, std::vector<std::string
             return;
         }
         named.insert(name);
-        if (out.size() == kMaxFriendTabs) {
+        if (out.size() == kMaxAITabs) {
             ++over;
             return;
         }
-        out.push_back(FriendInfo{name, model});
+        out.push_back(AIInfo{name, model});
     };
     const auto done = [&] {
         if (past != nullptr) {
@@ -119,32 +119,32 @@ std::vector<FriendInfo> friendsOf(const Sessions& state, std::vector<std::string
         }
         return out;
     };
-    if (state.friendsKnown()) {
-        for (const ServerFriend& f : state.friends()) {
+    if (state.aisKnown()) {
+        for (const ServerAI& f : state.ais()) {
             take(f.name, std::string());
         }
         return done();
     }
     for (const SessionRef& s : state.sessions()) {
-        if (s->info.friendName == kPrimaryChat) continue;
-        take(s->info.friendName, s->info.model);
+        if (s->info.aiName == kPrimaryChat) continue;
+        take(s->info.aiName, s->info.model);
     }
     return done();
 }
 
-FriendChanges applyFriends(Model& model, const std::vector<FriendInfo>& friends, bool exact,
+AIChanges applyAIs(Model& model, const std::vector<AIInfo>& ais, bool exact,
         const std::vector<std::string>& savedOrder, KeptDrafts* kept) {
-    FriendChanges changes;
+    AIChanges changes;
     std::unordered_set<std::string_view> listed;
-    for (const FriendInfo& f : friends) {
+    for (const AIInfo& f : ais) {
         listed.insert(f.name);
     }
     if (exact) {
-        changes.removed = model.remove_friends([&](const Tab& tab) {
+        changes.removed = model.remove_ais([&](const Tab& tab) {
             if (tab.primaryChat() || listed.count(tab.name) != 0) {
                 return false;
             }
-            // What the person typed to the friend stays, for when the friend is back.
+            // What the person typed to the AI stays, for when the AI is back.
             if (kept != nullptr && !tab.draft.empty()) {
                 (*kept)[tab.name] = tab.draft;
                 changes.put.emplace_back(tab.name, tab.draft);
@@ -153,20 +153,20 @@ FriendChanges applyFriends(Model& model, const std::vector<FriendInfo>& friends,
             return true;
         });
     }
-    // The friends without a tab: those the saved order names, in its order, then the rest in the list's.
+    // The AIs without a tab: those the saved order names, in its order, then the rest in the list's.
     std::unordered_set<std::string_view> standing;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
-        if (model.tab(i).kind == TabKind::Friend) {
+        if (model.tab(i).kind == TabKind::AI) {
             standing.insert(model.tab(i).name);
         }
     }
-    std::unordered_map<std::string_view, const FriendInfo*> fresh;
-    for (const FriendInfo& f : friends) {
+    std::unordered_map<std::string_view, const AIInfo*> fresh;
+    for (const AIInfo& f : ais) {
         if (standing.count(f.name) == 0) {
             fresh.emplace(f.name, &f);
         }
     }
-    std::vector<FriendInfo> ordered;
+    std::vector<AIInfo> ordered;
     ordered.reserve(fresh.size());
     std::unordered_set<std::string_view> placed;
     for (const std::string& name : savedOrder) {
@@ -175,13 +175,13 @@ FriendChanges applyFriends(Model& model, const std::vector<FriendInfo>& friends,
             ordered.push_back(*at->second);
         }
     }
-    for (const FriendInfo& f : friends) {
+    for (const AIInfo& f : ais) {
         if (fresh.count(f.name) != 0 && placed.insert(f.name).second) {
             ordered.push_back(f);
         }
     }
     std::size_t at = 0;
-    changes.added = model.add_friends(std::move(ordered), &at);
+    changes.added = model.add_ais(std::move(ordered), &at);
     if (kept != nullptr && !kept->empty()) {
         for (std::size_t i = at; i < at + changes.added.size(); ++i) {
             const auto draft = kept->find(model.tab(i).name);

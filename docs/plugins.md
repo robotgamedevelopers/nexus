@@ -6,7 +6,7 @@ a request in Starlark, or pass a message to its normal AI driver.
 
 The [plugin test fixtures](../tests/policy/fixtures/plugins) exercise both registration paths in an isolated configuration.
 Each open tab has its own buffer. Submitting to a service uses the existing conversation transport and requires
-the target friend in the server roster. Tabs targeting the same conversation share its latest result.
+the target AI in the server roster. Tabs targeting the same conversation share its latest result.
 
 ## Registering another type
 
@@ -36,7 +36,7 @@ The stock client reads the ordered `tab_groups` array from the fork's `config.js
 {
   "tab_groups": [
     {"id":"dashboards", "types":["sprint"], "closable":false},
-    {"id":"friends", "types":["friend"], "closable":false},
+    {"id":"ais", "types":["ai"], "closable":false},
     {"id":"terminals", "types":["terminal"], "closable":true}
   ]
 }
@@ -46,7 +46,7 @@ Each type belongs to one group. The array sets the strip order. A plugin can nam
 introduce a group through its registration. Command-W checks the active group's `closable` flag. A plugin
 type can set its own `closable` to `false` to keep its tabs open even in a closable group. A terminal closed
 by the person ends its shell and returns focus to the previously selected tab. A shell that exits independently
-still closes its tab. A fork that enables closing friend tabs dismisses the local tab until the next launch.
+still closes its tab. A fork that enables closing AI tabs dismisses the local tab until the next launch.
 Its server session continues.
 
 Command-Shift-Left and Command-Shift-Right move the selected tab one position, using the same rules as dragging. The fork can rebind these through its `tab_reorder` map. Dragging within a group keeps its members together. A group can opt into receiving tabs from another group
@@ -60,6 +60,6 @@ The client writes the selected tab, tab order, groups and terminal working direc
 On the first launch without a layout file, the client reads the earlier `tab-order.txt`, `selected-tab.txt`
 and `terminals.txt` preferences.
 
-On relaunch, friends return as the server sends its roster. Extension tabs reopen when their type is registered.
+On relaunch, AIs return as the server sends its roster. Extension tabs reopen when their type is registered.
 If the selected tab is still loading, it regains focus unless the person chooses another tab first. The fork’s
 current group order and `accepts_from` rules govern where each restored tab can appear.

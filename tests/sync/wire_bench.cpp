@@ -5,7 +5,7 @@
 //   wire_bench [rounds]     prints, per message and format, its size and the mean ms of one encode and one decode
 //
 // The messages:
-//   typical   one session among four whose open entry grew by 120 bytes: what a streaming friend sends each frame
+//   typical   one session among four whose open entry grew by 120 bytes: what a streaming AI sends each frame
 //   large     sixteen sessions of sixteen 1 KiB entries each (the tail's count), from an empty state: a window's first
 //             state, about the largest diff the link carries
 //   actions   eight sends of 200 bytes each, from an empty state
@@ -33,14 +33,14 @@ EntryRef entry(nexus::EntryKind kind, std::string text, bool closed) {
 SessionRef session(SessionId id, std::size_t entries, std::size_t bytes, std::size_t openBytes) {
     auto v = std::make_shared<SessionView>();
     v->id = id;
-    v->info.friendName = "friend-" + std::to_string(id);
+    v->info.aiName = "ai-" + std::to_string(id);
     v->info.harness = "claude";
     v->info.instance = "studio";
     v->activity = Activity::Busy;
     for (std::size_t i = 0; i < entries; ++i) {
         const bool last = i + 1 == entries;
         const std::size_t n = last && openBytes != 0 ? openBytes : bytes;
-        v->entries.push_back(entry(i % 2 == 0 ? nexus::EntryKind::Person : nexus::EntryKind::Friend,
+        v->entries.push_back(entry(i % 2 == 0 ? nexus::EntryKind::Person : nexus::EntryKind::AI,
             std::string(n, static_cast<char>('a' + i % 26)), !(last && openBytes != 0)));
     }
     v->queue = {"a queued prompt"};

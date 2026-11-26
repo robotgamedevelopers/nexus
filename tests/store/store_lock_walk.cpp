@@ -638,7 +638,7 @@ int main(int argc, char** argv) {
         }
         Change info;
         info.kind = Change::Kind::SetInfo;
-        info.info.friend_name = "ada";
+        info.info.ai_name = "ada";
         info.info.harness = "claude";
         Change queued;
         queued.kind = Change::Kind::Enqueue;

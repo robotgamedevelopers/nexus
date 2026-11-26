@@ -74,7 +74,7 @@ const Format* findFormat(const Formats& formats, const std::string& name);
 bool readFormats(const std::string& text, Formats* out, std::string* why);
 std::string formatsText(const Formats& formats);
 // The formats a switch checks: the store's two (records and snapshots: a build refuses a record or snapshot whose
-// reader is past what it writes) and the config files' (accounts.json and friends.json: a newer version is refused).
+// reader is past what it writes) and the config files' (accounts.json and ais.json: a newer version is refused).
 // The link and the driver protocol are agreed between their two ends at each connection, and not checked.
 inline const std::vector<std::string> kCheckedFormats{"store-record", "store-snapshot", "config"};
 // The rule a switch keeps (current/back): the build made current must read what the current build writes, for every

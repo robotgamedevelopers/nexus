@@ -46,7 +46,7 @@ struct Audio {
     bool operator==(const Audio&) const = default;
 };
 
-// An AI's accounts, as the server lists them (sync::ServerFriend::accounts, sync::AccountChoice), and the one its
+// An AI's accounts, as the server lists them (sync::ServerAI::accounts, sync::AccountChoice), and the one its
 // session runs on now. The watch shows the signed-in ones and switches between them (watch/models/AccountSwitch.tla).
 struct AccountOption {
     std::string name;               // the account's id: what a switch names

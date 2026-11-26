@@ -10,7 +10,7 @@ BrokenClose(i) ==
          /\ history' = Forget(history, order[Count - 1])
          /\ active' = ClosedActive(active, Count - 1, order, Forget(history, order[Count - 1]))
          /\ last' = Did("close", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, transcript, draft, queue, nextId>>
+         /\ UNCHANGED <<ais, transcript, draft, queue, nextId>>
     ELSE /\ last' = Did("close", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

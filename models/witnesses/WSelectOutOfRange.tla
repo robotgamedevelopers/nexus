@@ -7,7 +7,7 @@ BrokenSelect(i) ==
     /\ active' = i
     /\ history' = IF i \in Tabs THEN Touch(history, At(i)) ELSE history
     /\ last' = Did("select", i, "", NoEntry, i \in Tabs)
-    /\ UNCHANGED <<friends, order, transcript, draft, queue>>
+    /\ UNCHANGED <<ais, order, transcript, draft, queue>>
 
 BrokenSpec == Init /\ [][NextWith(BrokenSelect, SetDraft, Send, Queue, AppendEntry, MoveTab)]_vars
 =============================================================================

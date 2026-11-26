@@ -41,7 +41,7 @@ CONSTANTS
     MaxOps,       \* commands each actor starts
     MaxCrashes,   \* machine power-cut crashes
     MaxDeaths,    \* actors killed (SIGKILL)
-    MaxTurns,     \* friend turns opened on the running server
+    MaxTurns,     \* AI turns opened on the running server
     Bug           \* "none", or one reversed witness's break
 
 LegacyBuild == 9

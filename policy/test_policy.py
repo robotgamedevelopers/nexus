@@ -41,7 +41,7 @@ class PersonalPolicy(unittest.TestCase):
                 self.assertEqual(flags, args + (["--limit", "cwd"] if harness in ("claude", "codex") else []))
                 self.assertEqual(mode, "--primary-context-fd")
                 self.assertIn("chatting with the user in Nexus", instructions)
-                self.assertNotRegex(instructions.lower(), "seed|github|friend|repository")
+                self.assertNotRegex(instructions.lower(), "seed|github|new nexus ai|repository")
                 self.assertEqual(list(home.iterdir()), [])
         rejected = subprocess.run([*command, "--startup-context-fd", "0"], capture_output=True, text=True)
         self.assertNotEqual(rejected.returncode, 0)
@@ -58,13 +58,13 @@ class PersonalPolicy(unittest.TestCase):
         original = ["--model", "chosen", "--account", "work", "--limit", "cwd", "--cwd", "/tmp/a b",
                     "--keep-out", "/tmp/keep", "--resume", "session"]
         self.assertEqual(start(), original)
-        (self.profile / "config.json").write_text('{"friends":{"review":{"model":"other","effort":"high"}}}')
+        (self.profile / "config.json").write_text('{"ais":{"review":{"model":"other","effort":"high"}}}')
         self.assertEqual(start(), ["--effort", "high", *original])
         self.write('def driver_start(ctx, config):\n    return {"effort": "low" if ctx["resuming"] else "medium"}\n')
         self.assertEqual(start(), ["--effort", "low", *original])
         self.assertEqual(json.loads(self.check().stdout), {"effort": "medium"})
 
-    def test_friend_identity_reaches_the_selected_driver(self):
+    def test_ai_identity_reaches_the_selected_driver(self):
         root = self.profile.parent
         checkout = root / "home"
         checkout.mkdir()
@@ -75,6 +75,7 @@ class PersonalPolicy(unittest.TestCase):
         git("add", "standing.md")
         git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "home")
         registry = root / "registry"
+        # A nova-config row: its kind is "friend", the one place the word stays.
         fixture = {"result": {"status": "ok"}, "items": [{"kind": "friend", "fields": {
             "name": "review", "harness": "codex", "model": "selected", "enabled": True}}]}
         startup = {"home": str(checkout), "prefix": "open the home", "files": ["standing.md"]}
@@ -88,7 +89,7 @@ class PersonalPolicy(unittest.TestCase):
         capture = root / "driver.py"
         capture.write_text("import json,sys,os\nargs=sys.argv[1:]\n"
                            "print(json.dumps([args,os.fdopen(int(args[-1])).read()]))\n")
-        command = [*self.command, "friend-driver", str(self.profile), "review", "codex", sys.executable,
+        command = [*self.command, "ai-driver", str(self.profile), "review", "codex", sys.executable,
                    str(capture), "--cwd", str(root)]
         for args in ([], ["--resume", "existing"]):
             flags, prompt = json.loads(subprocess.check_output([*command, *args], text=True))
@@ -144,6 +145,7 @@ class PersonalPolicy(unittest.TestCase):
     def test_bus_roster_and_subscription_grants(self):
         root = self.profile.parent
         registry = root / "registry"
+        # nova-config's command is "friend list"; the word stays at this boundary.
         registry.write_text("#!" + sys.executable + "\nimport pathlib,sys\n"
                             "assert sys.argv[1:] == ['friend','list','--json']\n"
                             "with pathlib.Path(__file__).with_name('reads').open('a') as counter: counter.write('1')\n"
@@ -152,6 +154,7 @@ class PersonalPolicy(unittest.TestCase):
         (self.profile / "identities.json").write_text(json.dumps({"nova_config": [str(registry)]}))
 
         def row(name, harness, startup, enabled=True):
+            # A nova-config row: its kind is "friend", the one place the word stays.
             return {"kind": "friend", "fields": {"name": name, "harness": harness,
                     "enabled": enabled, "startup": startup}}
 

@@ -1,12 +1,12 @@
 // Functional tests of the kept drafts' file (tab_order.h KeptDraftsStore, fileKeptDraftsStore): the real file and its
 // lock, in a directory of the test's own, with windows as main.cpp makes them (the drafts for the window's server read
-// at launch into its FriendStrip, each change of a take handed to the store through a StoreWriter).
+// at launch into its AIStrip, each change of a take handed to the store through a StoreWriter).
 //
 //   nexus_kept_drafts_functional <dir> <case>
 //
-// The cases: two_windows (two windows of one server keep drafts, one of them for the same friend, and neither loses the
+// The cases: two_windows (two windows of one server keep drafts, one of them for the same AI, and neither loses the
 // other's; a third gets both back, and the window that gave back only its own leaves the rest), two_servers (a draft
-// kept on one server is not given to a friend of the same name on another), and racing (processes changing the file at
+// kept on one server is not given to an AI of the same name on another), and racing (processes changing the file at
 // once, each through the lock: every draft each kept is there at the end). Each checks that the file and its lock are
 // 0600.
 
@@ -23,7 +23,7 @@
 
 #include "model.h"
 #include "sync/client.h"
-#include "sync/friend_strip.h"
+#include "sync/ai_strip.h"
 #include "sync/sessions.h"
 #include "tab_order.h"
 
@@ -43,21 +43,21 @@ int failures = 0;
 
 sync::Sessions list(const std::vector<std::string>& names) {
     sync::Sessions s;
-    std::vector<sync::ServerFriend> friends;
+    std::vector<sync::ServerAI> ais;
     for (const std::string& n : names) {
-        friends.push_back(sync::ServerFriend{n});
+        ais.push_back(sync::ServerAI{n});
     }
-    s.setFriends(std::move(friends));
+    s.setAIs(std::move(ais));
     return s;
 }
 
-// One window linked to `server`, as main.cpp and FrameHost::takeFriends make it.
+// One window linked to `server`, as main.cpp and FrameHost::takeAIs make it.
 struct Window {
     std::string server;
     StoreWriter writer;
     KeptDraftsStore store;
     Model model{{}, false};
-    sync::FriendStrip strip;
+    sync::AIStrip strip;
 
     Window(const std::string& path, std::string on) : server(std::move(on)) {
         store = writer.wrap(fileKeptDraftsStore(path));
@@ -65,7 +65,7 @@ struct Window {
         std::string warning;
         sync::KeptDrafts kept = loadKeptDrafts(store, server, &readable, &warning);
         CHECK(readable && warning.empty());
-        strip = sync::FriendStrip({}, std::string(), std::move(kept));
+        strip = sync::AIStrip({}, std::string(), std::move(kept));
     }
 
     void take(const std::vector<std::string>& names) {
@@ -137,7 +137,7 @@ void twoWindows(const std::string& dir) {
     CHECK(kept(file, "studio", "bo") == "A typed to bo\n\nB typed to bo");
     CHECK(kept(file, "studio", "cy") == "B typed to cy");
     privateFiles(dir);
-    // A third window, launched now, gets both back when the friends return, and gives them back to the file's no more.
+    // A third window, launched now, gets both back when the AIs return, and gives them back to the file's no more.
     Window c(path, "studio");
     c.take({"ada", "bo", "cy"});
     CHECK(c.draft("bo") == "A typed to bo\n\nB typed to bo" && c.draft("cy") == "B typed to cy");
@@ -146,7 +146,7 @@ void twoWindows(const std::string& dir) {
     b.take({"ada", "bo", "cy"});
     CHECK(b.draft("bo") == "B typed to bo" && b.draft("cy") == "B typed to cy");
     CHECK(fileOf(path).empty());
-    // A draft kept while another window holds an older one for the same friend: the older one, given back, takes only
+    // A draft kept while another window holds an older one for the same AI: the older one, given back, takes only
     // itself (the file then holds the newer).
     a.type("ada", "A to ada");
     a.take({});
@@ -168,7 +168,7 @@ void twoServers(const std::string& dir) {
         studio.type("ada", "for studio's ada");
         studio.take({"bo"});
     }
-    // A window of another server with a friend of the same name: nothing of studio's is given to it, or taken.
+    // A window of another server with an AI of the same name: nothing of studio's is given to it, or taken.
     {
         Window mini(path, "me@mini");
         mini.take({"ada"});

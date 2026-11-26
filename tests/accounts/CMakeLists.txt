@@ -1,4 +1,4 @@
-# Tests of the accounts and friends (src/accounts) and the hub's decisions about them (src/sync/hub.h), with three
+# Tests of the accounts and AIs (src/accounts) and the hub's decisions about them (src/sync/hub.h), with three
 # labels:
 #   unit           accounts_test: the files' layout, every refusal with its line, the version rule, the consistency
 #                  rules, the accounts the server picks, and the hub's actions, sets, creates, reloads and rotations;
@@ -25,21 +25,21 @@ if(NEXUS_SERVER_PARTS)
 endif()
 
 foreach(group layout refusals versions consistency picks hub_actions hub_reload_rotate hub_auto_subscriptions hub_store_fails
-              hub_adopt_defaults hub_probe instances hub_instances limits keeps_out hub_friends friends_cap)
+              hub_adopt_defaults hub_probe instances hub_instances limits keeps_out hub_ais ais_cap)
     add_test(NAME accounts_unit_${group} COMMAND accounts_test ${group})
     set_tests_properties(accounts_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
 
 # TLC (tlc_test is tests/model's): Accounts.tla, all properties (states and times on two workers on a Linux bench).
-# MCAccounts.cfg covers two providers, two accounts, two friends and two sessions. Permuting the two friend names
+# MCAccounts.cfg covers two providers, two accounts, two AIs and two sessions. Permuting the two AI names
 # leaves each safety property unchanged (150,704 distinct states, 22 s on eight workers on an M-series Mac).
 # It runs alone in its CI shard, capped at 80 s. The nightly three-account instance is capped at 15 min.
 tlc_test(tlc_accounts       MCAccounts MCAccounts.cfg      pass WORKERS 8 SHARD)
 tlc_test(tlc_accounts_policy MCAccounts MCAccountsPolicy.cfg pass WORKERS 2)
 tlc_test(tlc_accounts_three MCAccounts MCAccountsThree.cfg pass WORKERS 8 NIGHTLY CAP 900)
-# MCAccountsInstances.cfg: one account, two friends, two instance names, two sessions: the instances' rules.
+# MCAccountsInstances.cfg: one account, two AIs, two instance names, two sessions: the instances' rules.
 tlc_test(tlc_accounts_instances MCAccounts MCAccountsInstances.cfg pass WORKERS 4)
-# MCAccountsLimit.cfg: one friend, two accounts of one provider, two sessions, every limit and billing, and drivers that
+# MCAccountsLimit.cfg: one AI, two accounts of one provider, two sessions, every limit and billing, and drivers that
 # start and end: the limit's rules (docs/accounts.md, "limit") beside every other operation (29,175 distinct states,
 # 6 s on four workers on a loaded Mac, 2026-11-15).
 tlc_test(tlc_accounts_limit MCAccounts MCAccountsLimit.cfg pass WORKERS 4)
@@ -98,14 +98,14 @@ tlc_test(tlc_accounts_witness_add_instance_leaves_none WAccAddInstanceLeavesNone
          invariant PROPERTY InstanceHeld)
 tlc_test(tlc_accounts_witness_move_instance_silent WAccMoveInstanceSilent WAccMoveInstanceSilent.cfg action
          PROPERTY MovedInstanceIsTold)
-tlc_test(tlc_accounts_witness_start_ignores_friend WAccStartIgnoresFriend WAccStartIgnoresFriend.cfg invariant
-         PROPERTY NeverWeakerThanFriend)
+tlc_test(tlc_accounts_witness_start_ignores_ai WAccStartIgnoresAI WAccStartIgnoresAI.cfg invariant
+         PROPERTY NeverWeakerThanAI)
 tlc_test(tlc_accounts_witness_start_ignores_billing WAccStartIgnoresBilling WAccStartIgnoresBilling.cfg invariant
          PROPERTY ApiAlwaysLimited)
 tlc_test(tlc_accounts_witness_link_api_unlimited WAccLinkApiUnlimited WAccLinkApiUnlimited.cfg invariant
          PROPERTY LimitSound)
-tlc_test(tlc_accounts_witness_add_friend_open    WAccAddFriendOpen     WAccAddFriendOpen.cfg     action
-         PROPERTY NewFriendLimited)
+tlc_test(tlc_accounts_witness_add_ai_open    WAccAddAIOpen     WAccAddAIOpen.cfg     action
+         PROPERTY NewAILimited)
 tlc_test(tlc_accounts_witness_limit_silent       WAccLimitSilent       WAccLimitSilent.cfg       action
          PROPERTY LimitChangeIsTold)
 tlc_test(tlc_accounts_witness_drop_moves_sessions WAccDropMovesSessions WAccDropMovesSessions.cfg action
@@ -117,9 +117,9 @@ foreach(seed 1 2 3 4)
     tlc_test(tlc_accounts_trace_seed_${seed} AccountsTrace AccountsTrace.cfg pass ACCWALK SEED ${seed} STEPS 400)
 endforeach()
 
-# The binding can fail: a hub that leaves a session on an account no longer linked to its friend, on its old harness
-# when its account's provider changed, or on an instance its friend no longer has, or a server that starts a limited
-# friend's driver open, must be rejected.
+# The binding can fail: a hub that leaves a session on an account no longer linked to its AI, on its old harness
+# when its account's provider changed, or on an instance its AI no longer has, or a server that starts a limited
+# AI's driver open, must be rejected.
 tlc_test(tlc_accounts_trace_faulty_stay_rejected AccountsTrace AccountsTrace.cfg invariant
          PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY stay)
 tlc_test(tlc_accounts_trace_faulty_harness_rejected AccountsTrace AccountsTrace.cfg invariant

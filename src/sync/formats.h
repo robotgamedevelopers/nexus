@@ -11,7 +11,7 @@
 namespace nexus::sync {
 
 // The sessions state (sync/sessions.h), down from the server to the window, and the actions (sync/actions.h), up.
-//   1  the first: no activity, entry kinds Person, Friend and Notice; nothing framed, so a reader of 1 reads exactly 1.
+//   1  the first: no activity, entry kinds Person, AI and Notice; nothing framed, so a reader of 1 reads exactly 1.
 //      A server that states no format (one before formats were stated) sends 1, and a window that states none reads 1.
 //   2  each changed session and each entry framed by its length, the session's activity after its settings, and entry
 //      kind Tool. A reader of 2 reads any later format, skipping what it does not know.

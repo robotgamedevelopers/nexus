@@ -5,17 +5,17 @@
 (*                                                                         *)
 (* Up: each window's actions are an append-only list, numbered from 1      *)
 (* (src/sync/actions.h): a send, a queue or a stop, each naming a session;  *)
-(* a create, which makes a session for a friend (copying another's         *)
-(* settings, or the friend's defaults); and an ensure, which makes one only *)
-(* if the friend has none. mosh carries the list as a state; what reaches  *)
+(* a create, which makes a session for an AI (copying another's         *)
+(* settings, or the AI's defaults); and an ensure, which makes one only *)
+(* if the AI has none. mosh carries the list as a state; what reaches  *)
 (* the server is a range of it, first..last, that may repeat a range it    *)
 (* had, come after a later one, or (if mosh ever did) start past what the  *)
 (* server has: Deliver takes any range. The server's Applier applies each  *)
 (* number once, in order, and refuses a range that would skip one.         *)
 (*                                                                         *)
-(* The server's sessions (src/sync/hub.h), each by its id: the friend it   *)
+(* The server's sessions (src/sync/hub.h), each by its id: the AI it   *)
 (* is with (an attribute only), the transcript, the queue, and the         *)
-(* friend's entry still growing, the open entry, kept in memory only       *)
+(* AI's entry still growing, the open entry, kept in memory only       *)
 (* (Hub::setOpen). The server mints ids from 1, from a durable counter,    *)
 (* never reusing one; a session is never removed. An action naming a       *)
 (* session the server does not hold changes nothing (it is counted, and    *)
@@ -30,15 +30,15 @@
 (* changes no session: it reaches the session's responder (the driver      *)
 (* supervisor) once, or is refused for a session the server does not hold. *)
 (*                                                                         *)
-(* Down: what the server sends is each session's friend, its transcript's  *)
+(* Down: what the server sends is each session's AI, its transcript's  *)
 (* tail, the newest W entries, then the open entry, which the tail does    *)
 (* not count, and the whole queue (src/sync/sessions.h). Nothing names a   *)
 (* tab. Every change makes a new state, kept in `snaps` in order. mosh is  *)
 (* abstracted to what nexus relies on: a window's receiver eventually holds *)
 (* the newest state; it may skip states between; it never goes back to an *)
 (* older one. Receive(c, j) is the window receiving snaps[j], the same one  *)
-(* again or a later one. Each window has one tab per friend; which session *)
-(* a tab shows is the window's own business (shown): the friend's first    *)
+(* again or a later one. Each window has one tab per AI; which session *)
+(* a tab shows is the window's own business (shown): the AI's first    *)
 (* session, the lowest id, fixed once the window has seen one. The window's *)
 (* mirror (src/sync/mirror.h) adds to the tab's transcript the closed      *)
 (* entries of that session it has not shown, with a notice "N earlier      *)
@@ -60,7 +60,7 @@
 (*                                                                         *)
 (* Entries: a prompt is [k |-> "P", text |-> <<c, n>>], action n of window  *)
 (* c (sent, or queued and delivered); its placeholder reply [k |-> "F",     *)
-(* text |-> <<>>]; the friend's grown text, open [k |-> "O", text |->       *)
+(* text |-> <<>>]; the AI's grown text, open [k |-> "O", text |->       *)
 (* <<g, len>>] and closed [k |-> "G", text |-> <<g, len>>], the g-th the    *)
 (* server made, of len pieces; the notice of a turn cut by a restart, which *)
 (* lost open entry g, [k |-> "X", text |-> <<g>>]; the mirror's notice of m *)
@@ -71,8 +71,8 @@ EXTENDS Integers, Sequences, TLC
 
 CONSTANTS
     Clients,      \* the windows, 1..N
-    Friends,      \* the friends: each window has a tab for each
-    Start,        \* the friends of the sessions the server holds at the start, ids 1..Len(Start) (an older store's)
+    AIs,      \* the AIs: each window has a tab for each
+    Start,        \* the AIs of the sessions the server holds at the start, ids 1..Len(Start) (an older store's)
     MaxSessions,  \* the most sessions the server holds (the hub's limit): ids run 1..MaxSessions
     MaxActions,   \* how many actions each window makes, at most
     W,            \* the tail: how many of a transcript's newest entries a state carries
@@ -83,15 +83,15 @@ CONSTANTS
 ASSUME /\ W >= 1
        /\ Kinds \subseteq {"Send", "Queue", "Stop", "Create", "Ensure"}
        /\ Len(Start) <= MaxSessions
-       /\ \A i \in 1 .. Len(Start) : Start[i] \in Friends
+       /\ \A i \in 1 .. Len(Start) : Start[i] \in AIs
 
 Ids == 1 .. MaxSessions
 
 VARIABLES
-    acts,       \* acts[c]: window c's list, each [kind, sid, friend]; action n is acts[c][n]
+    acts,       \* acts[c]: window c's list, each [kind, sid, ai]; action n is acts[c][n]
     applied,    \* applied[c]: the server's Applier for window c: the last number applied
     done,       \* done[c]: every number the server applied for window c, in the order applied (a ghost)
-    ses,        \* ses[i]: session i as the server holds it (durable): NoSes, or [friend |-> f]
+    ses,        \* ses[i]: session i as the server holds it (durable): NoSes, or [ai |-> f]
     nextSid,    \* the next id the server mints (durable)
     minted,     \* every session minted, in order: [id |-> i, a |-> <<c, n>> the action, or <<0, 0>> at the start]
     skipped,    \* the actions applied that changed nothing, each <<c, n>>: a ghost
@@ -102,8 +102,8 @@ VARIABLES
     made,       \* how many open entries the server has made, and grown, and restarted: [g, grows, restarts]
     snaps,      \* the server's states, oldest first; snaps[1] is the one it starts with
     last,       \* last[c]: the index in snaps of the state window c's receiver holds
-    shown,      \* shown[c][f]: the session window c's tab of friend f shows, 0 for none yet (the window's own)
-    view,       \* view[c][f]: the transcript in window c's tab of friend f
+    shown,      \* shown[c][f]: the session window c's tab of AI f shows, 0 for none yet (the window's own)
+    view,       \* view[c][f]: the transcript in window c's tab of AI f
     vq,         \* vq[c][f]: its queue
     seen,       \* seen[c][f]: its mirror: [next |-> the transcript index it shows through]
     live        \* live[c][f]: the open entry its mirror holds, or None
@@ -114,7 +114,7 @@ server == <<ses, nextSid, minted, skipped, tr, q, op, stops, made, snaps>>
 window == <<last, shown, view, vq, seen, live>>
 
 None == [k |-> "none", text |-> <<>>]
-NoSes == [friend |-> ""]
+NoSes == [ai |-> ""]
 Max(a, b) == IF a > b THEN a ELSE b
 Prompt(c, n) == [k |-> "P", text |-> <<c, n>>]
 Reply == [k |-> "F", text |-> <<>>]
@@ -128,16 +128,16 @@ IsPrefix(a, b) == Len(a) <= Len(b) /\ SubSeq(b, 1, Len(a)) = a
 \* A session the server holds.
 Held(s, i) == i \in Ids /\ s[i] # NoSes
 
-\* What the server sends of its sessions: for each it holds, its friend, its transcript by its newest W entries from
+\* What the server sends of its sessions: for each it holds, its AI, its transcript by its newest W entries from
 \* index `first` (from 0), then the open entry, if any, which the tail does not count; and the whole queue. A session
 \* it does not hold is NoSnap.
-NoSnap == [friend |-> "", first |-> 0, entries |-> <<>>, queue |-> <<>>]
+NoSnap == [ai |-> "", first |-> 0, entries |-> <<>>, queue |-> <<>>]
 OpenOf(ops, i) == IF ops[i] = NoOpen THEN <<>> ELSE << Open(ops[i]) >>
 TailFirst(s) == Max(0, Len(s) - W)
 Snap(sess, trs, qs, ops) ==
     [i \in Ids |-> IF sess[i] = NoSes THEN NoSnap
                    ELSE LET s == trs[i] IN
-                        [friend  |-> sess[i].friend,
+                        [ai  |-> sess[i].ai,
                          first   |-> TailFirst(s),
                          entries |-> SubSeq(s, TailFirst(s) + 1, Len(s)) \o OpenOf(ops, i),
                          queue   |-> qs[i]]]
@@ -147,7 +147,7 @@ Push(sess, trs, qs, ops) ==
     LET s == Snap(sess, trs, qs, ops) IN IF s = snaps[Len(snaps)] THEN snaps ELSE Append(snaps, s)
 
 Empty == [i \in Ids |-> <<>>]
-StartSes == [i \in Ids |-> IF i <= Len(Start) THEN [friend |-> Start[i]] ELSE NoSes]
+StartSes == [i \in Ids |-> IF i <= Len(Start) THEN [ai |-> Start[i]] ELSE NoSes]
 
 Init ==
     /\ acts = [c \in Clients |-> <<>>]
@@ -164,19 +164,19 @@ Init ==
     /\ made = [g |-> 0, grows |-> 0, restarts |-> 0]
     /\ snaps = << Snap(StartSes, Empty, Empty, [i \in Ids |-> NoOpen]) >>
     /\ last = [c \in Clients |-> 1]
-    /\ shown = [c \in Clients |-> [f \in Friends |-> 0]]
-    /\ view = [c \in Clients |-> [f \in Friends |-> <<>>]]
-    /\ vq = [c \in Clients |-> [f \in Friends |-> <<>>]]
-    /\ seen = [c \in Clients |-> [f \in Friends |-> [next |-> 0]]]
-    /\ live = [c \in Clients |-> [f \in Friends |-> None]]
+    /\ shown = [c \in Clients |-> [f \in AIs |-> 0]]
+    /\ view = [c \in Clients |-> [f \in AIs |-> <<>>]]
+    /\ vq = [c \in Clients |-> [f \in AIs |-> <<>>]]
+    /\ seen = [c \in Clients |-> [f \in AIs |-> [next |-> 0]]]
+    /\ live = [c \in Clients |-> [f \in AIs |-> None]]
 
-\* The actions a window may make: a send, a queue or a stop naming any id (held or not); a create for a friend, from
-\* no session (0: the friend's defaults) or any id; an ensure for a friend.
+\* The actions a window may make: a send, a queue or a stop naming any id (held or not); a create for an AI, from
+\* no session (0: the AI's defaults) or any id; an ensure for an AI.
 Targets ==
-    {[kind |-> k, sid |-> i, friend |-> ""] : k \in Kinds \cap {"Send", "Queue", "Stop"}, i \in Ids} \cup
-    {[kind |-> "Create", sid |-> i, friend |-> f] : i \in (IF "Create" \in Kinds THEN 0 .. MaxSessions ELSE {}),
-                                                    f \in Friends} \cup
-    {[kind |-> "Ensure", sid |-> 0, friend |-> f] : f \in (IF "Ensure" \in Kinds THEN Friends ELSE {})}
+    {[kind |-> k, sid |-> i, ai |-> ""] : k \in Kinds \cap {"Send", "Queue", "Stop"}, i \in Ids} \cup
+    {[kind |-> "Create", sid |-> i, ai |-> f] : i \in (IF "Create" \in Kinds THEN 0 .. MaxSessions ELSE {}),
+                                                    f \in AIs} \cup
+    {[kind |-> "Ensure", sid |-> 0, ai |-> f] : f \in (IF "Ensure" \in Kinds THEN AIs ELSE {})}
 
 \* Window c makes an action: the next number in its list.
 Act(c, a) ==
@@ -188,12 +188,12 @@ Act(c, a) ==
 \* The hub applies action n of window c (src/sync/hub.cpp) to the server's state r = [trs, qs, sts, ses, nxt, mint,
 \* skip]: a send puts the prompt and its placeholder reply in the session's transcript, a queue puts the prompt in its
 \* queue, a stop reaches its responder; each only for a session the server holds. A create mints the next id for its
-\* friend, unless the server holds its limit or the session it copies from does not exist; an ensure does the same
-\* only when the friend has no session. Whatever changes nothing is skipped.
+\* AI, unless the server holds its limit or the session it copies from does not exist; an ensure does the same
+\* only when the AI has no session. Whatever changes nothing is skipped.
 Mint(r, f, c, n) ==
-    [r EXCEPT !.ses[r.nxt] = [friend |-> f], !.nxt = @ + 1, !.mint = Append(@, [id |-> r.nxt, a |-> <<c, n>>])]
+    [r EXCEPT !.ses[r.nxt] = [ai |-> f], !.nxt = @ + 1, !.mint = Append(@, [id |-> r.nxt, a |-> <<c, n>>])]
 Skip(r, c, n) == [r EXCEPT !.skip = @ \cup {<<c, n>>}]
-HasSession(s, f) == \E i \in Ids : s[i] # NoSes /\ s[i].friend = f
+HasSession(s, f) == \E i \in Ids : s[i] # NoSes /\ s[i].ai = f
 ApplyOneWith(Mt(_, _, _, _), c, n, r) ==
     LET a == acts[c][n]
         held == Held(r.ses, a.sid)
@@ -202,8 +202,8 @@ ApplyOneWith(Mt(_, _, _, _), c, n, r) ==
     CASE a.kind = "Send"   -> IF held THEN [r EXCEPT !.trs[a.sid] = @ \o << Prompt(c, n), Reply >>] ELSE Skip(r, c, n)
       [] a.kind = "Queue"  -> IF held THEN [r EXCEPT !.qs[a.sid] = Append(@, <<c, n>>)] ELSE Skip(r, c, n)
       [] a.kind = "Stop"   -> [r EXCEPT !.sts[a.sid] = Append(@, [a |-> <<c, n>>, ok |-> held])]
-      [] a.kind = "Create" -> IF full \/ (a.sid # 0 /\ ~held) THEN Skip(r, c, n) ELSE Mt(r, a.friend, c, n)
-      [] OTHER             -> IF full \/ HasSession(r.ses, a.friend) THEN Skip(r, c, n) ELSE Mt(r, a.friend, c, n)
+      [] a.kind = "Create" -> IF full \/ (a.sid # 0 /\ ~held) THEN Skip(r, c, n) ELSE Mt(r, a.ai, c, n)
+      [] OTHER             -> IF full \/ HasSession(r.ses, a.ai) THEN Skip(r, c, n) ELSE Mt(r, a.ai, c, n)
 ApplyOne(c, n, r) == ApplyOneWith(Mint, c, n, r)
 
 RECURSIVE ApplyAll(_, _, _, _)
@@ -247,8 +247,8 @@ DeliverWith(Apply(_, _, _), c, first, lst) ==
 
 Deliver(c, first, lst) == DeliverWith(Applier, c, first, lst)
 
-\* The server's own steps: the friend's text grows (an open entry is made, or grows by a piece) in a session it holds
-\* that has had something sent or queued: a friend replies only to a prompt.
+\* The server's own steps: the AI's text grows (an open entry is made, or grows by a piece) in a session it holds
+\* that has had something sent or queued: an AI replies only to a prompt.
 Grow(i) ==
     /\ made.grows < MaxGrows
     /\ Held(ses, i) /\ (tr[i] # <<>> \/ q[i] # <<>>)
@@ -307,27 +307,27 @@ MirrorTab(v, qv, se, s) ==
         lv == IF next < total THEN s.entries[next - s.first + 1] ELSE None
     IN [view |-> v1 \o closed, vq |-> s.queue, seen |-> [next |-> next], live |-> lv]
 
-\* The friend's first session in state s, the lowest id: 0 when it has none.
+\* The AI's first session in state s, the lowest id: 0 when it has none.
 First(s, f) ==
-    IF \E i \in Ids : s[i].friend = f
-    THEN CHOOSE i \in Ids : s[i].friend = f /\ \A k \in Ids : s[k].friend = f => i <= k
+    IF \E i \in Ids : s[i].ai = f
+    THEN CHOOSE i \in Ids : s[i].ai = f /\ \A k \in Ids : s[k].ai = f => i <= k
     ELSE 0
 
-\* Which session a tab shows: the one it showed, else the friend's first in the state received.
+\* Which session a tab shows: the one it showed, else the AI's first in the state received.
 KeepFirst(cur, s, f) == IF cur # 0 THEN cur ELSE First(s, f)
 
 ReceiveAll(Mirror(_, _, _, _), Show(_, _, _), c, j) ==
     /\ last[c] <= j /\ j <= Len(snaps)
-    /\ LET sh == [f \in Friends |-> Show(shown[c][f], snaps[j], f)]
-           m == [f \in Friends |->
+    /\ LET sh == [f \in AIs |-> Show(shown[c][f], snaps[j], f)]
+           m == [f \in AIs |->
                     IF sh[f] = 0
                     THEN [view |-> view[c][f], vq |-> vq[c][f], seen |-> seen[c][f], live |-> live[c][f]]
                     ELSE Mirror(view[c][f], vq[c][f], seen[c][f], snaps[j][sh[f]])] IN
        /\ shown' = [shown EXCEPT ![c] = sh]
-       /\ view' = [view EXCEPT ![c] = [f \in Friends |-> m[f].view]]
-       /\ vq' = [vq EXCEPT ![c] = [f \in Friends |-> m[f].vq]]
-       /\ seen' = [seen EXCEPT ![c] = [f \in Friends |-> m[f].seen]]
-       /\ live' = [live EXCEPT ![c] = [f \in Friends |-> m[f].live]]
+       /\ view' = [view EXCEPT ![c] = [f \in AIs |-> m[f].view]]
+       /\ vq' = [vq EXCEPT ![c] = [f \in AIs |-> m[f].vq]]
+       /\ seen' = [seen EXCEPT ![c] = [f \in AIs |-> m[f].seen]]
+       /\ live' = [live EXCEPT ![c] = [f \in AIs |-> m[f].live]]
     /\ last' = [last EXCEPT ![c] = j]
     /\ UNCHANGED <<acts, applied, done, server>>
 
@@ -364,7 +364,7 @@ TypeOK ==
     /\ \A c \in Clients :
         /\ applied[c] \in 0 .. Len(acts[c])
         /\ last[c] \in 1 .. Len(snaps)
-        /\ \A f \in Friends : /\ shown[c][f] \in 0 .. MaxSessions
+        /\ \A f \in AIs : /\ shown[c][f] \in 0 .. MaxSessions
                               /\ shown[c][f] # 0 => seen[c][f].next \in 0 .. Len(tr[shown[c][f]])
     /\ \A i \in Ids : op[i] = NoOpen \/ (op[i].g \in 1 .. made.g /\ op[i].len >= 1)
 
@@ -385,7 +385,7 @@ ExactlyOnce ==
 \* Every action applied is on the server exactly once, where its kind puts it, unless it was skipped: a send in its
 \* session's transcript; a queue in its queue or, delivered, in its transcript, never both; a stop among its session's
 \* stops, reaching the responder exactly when the server held the session; a create or an ensure as one session
-\* minted, for its friend. None not applied is.
+\* minted, for its AI. None not applied is.
 RECURSIVE Count(_, _)
 Count(x, s) == IF s = <<>> THEN 0 ELSE (IF Head(s) = x THEN 1 ELSE 0) + Count(x, Tail(s))
 StopsOf(i) == [k \in 1 .. Len(stops[i]) |-> stops[i][k].a]
@@ -403,15 +403,15 @@ ServerHoldsEach ==
                 [] a.kind = "Stop"  -> Count(<<c, n>>, StopsOf(i)) = IF i = a.sid /\ n <= applied[c] THEN 1 ELSE 0
                 [] OTHER            -> TRUE
     /\ \A k \in 1 .. Len(minted) :
-        minted[k].a # <<0, 0>> => ses[minted[k].id].friend = acts[minted[k].a[1]][minted[k].a[2]].friend
+        minted[k].a # <<0, 0>> => ses[minted[k].id].ai = acts[minted[k].a[1]][minted[k].a[2]].ai
 
-\* An ensure makes a session only for a friend that has none: no session it minted shares its friend with one made
+\* An ensure makes a session only for an AI that has none: no session it minted shares its AI with one made
 \* before it.
 EnsureMakesOne ==
     \A k \in 1 .. Len(minted) :
         LET a == minted[k].a IN
         a # <<0, 0>> /\ acts[a[1]][a[2]].kind = "Ensure" =>
-            \A k2 \in 1 .. (k - 1) : ses[minted[k2].id].friend # ses[minted[k].id].friend
+            \A k2 \in 1 .. (k - 1) : ses[minted[k2].id].ai # ses[minted[k].id].ai
 
 \* Each open entry the server makes ends in the transcript at most once: closed, or cut by a restart, never both.
 EachClosedOnce ==
@@ -433,7 +433,7 @@ Expand(v) ==
 \* never one of another session. A tab that shows no session yet shows nothing. Its queue is that session's queue in
 \* the state the window holds.
 ViewMatches ==
-    \A c \in Clients : \A f \in Friends :
+    \A c \in Clients : \A f \in AIs :
         LET x == Expand(view[c][f])
             i == shown[c][f]
         IN IF i = 0
@@ -442,23 +442,23 @@ ViewMatches ==
                 /\ Len(x) <= Len(tr[i])
                 /\ \A k \in 1 .. Len(x) : x[k] = Hole \/ x[k] = tr[i][k]
 QueueMatches ==
-    \A c \in Clients : \A f \in Friends :
+    \A c \in Clients : \A f \in AIs :
         vq[c][f] = IF shown[c][f] = 0 THEN <<>> ELSE snaps[last[c]][shown[c][f]].queue
-\* A tab shows its friend's first session, and only that one, once it has seen it: the window's choice never moves.
+\* A tab shows its AI's first session, and only that one, once it has seen it: the window's choice never moves.
 ShowsFirst ==
-    \A c \in Clients : \A f \in Friends :
-        shown[c][f] # 0 => /\ ses[shown[c][f]].friend = f
-                           /\ \A i \in Ids : ses[i].friend = f => shown[c][f] <= i
+    \A c \in Clients : \A f \in AIs :
+        shown[c][f] # 0 => /\ ses[shown[c][f]].ai = f
+                           /\ \A i \in Ids : ses[i].ai = f => shown[c][f] <= i
 \* No two notices in a row, and none empty: a notice stands for a run of entries the window did not get.
 NoticesSound ==
-    \A c \in Clients : \A f \in Friends : \A k \in 1 .. Len(view[c][f]) :
+    \A c \in Clients : \A f \in AIs : \A k \in 1 .. Len(view[c][f]) :
         view[c][f][k].k = "N" => /\ view[c][f][k].text[1] > 0
                                  /\ k > 1 => view[c][f][k - 1].k # "N"
 
 \* The open entry a window holds is text the server had: the open entry still growing, at least as long, or the
 \* entry it closed into, or the notice of the restart that lost it. A window never shows text the server never had.
 LiveSound ==
-    \A c \in Clients : \A f \in Friends :
+    \A c \in Clients : \A f \in AIs :
         LET e == live[c][f]
             i == shown[c][f]
         IN e # None =>
@@ -486,16 +486,16 @@ QueueStep(i) ==
        /\ tr'[i] = Append(tr[i], Prompt(Head(q[i])[1], Head(q[i])[2]))
 OnlyGrow ==
     [][/\ \A i \in Ids : IsPrefix(tr[i], tr'[i]) /\ QueueStep(i) /\ IsPrefix(stops[i], stops'[i])
-       /\ \A c \in Clients : /\ \A f \in Friends : IsPrefix(view[c][f], view'[c][f])
+       /\ \A c \in Clients : /\ \A f \in AIs : IsPrefix(view[c][f], view'[c][f])
                              /\ last[c] <= last'[c]
                              /\ IsPrefix(done[c], done'[c])]_vars
 
 \* Liveness: once the windows stop acting, the server applies every action and every window shows all of it: each tab
-\* the friend's first session, every closed entry, the open entry, and the queue.
+\* the AI's first session, every closed entry, the open entry, and the queue.
 Settled ==
     \A c \in Clients :
         /\ applied[c] = Len(acts[c])
-        /\ \A f \in Friends :
+        /\ \A f \in AIs :
             LET i == shown[c][f] IN
             /\ i = First(ses, f)
             /\ i # 0 => /\ seen[c][f].next = Len(tr[i])
