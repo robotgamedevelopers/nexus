@@ -56,7 +56,7 @@ A client runs the mock's command on the server's machine in place of `nexus-serv
   pass `--server-command` on to it.
 
 A screenshot needs neither ssh nor a display: `nexus-mock state --out FILE` connects as a client and writes the state
-the server sends, and the window draws it as it shows it (`--tab N` picks the tab; the first is the sprint tab):
+the server sends, and the window draws it as it shows it (`--tab N` picks the tab; the dashboards come first, then the AIs):
 
 ```
 build/tests/mock/nexus-mock state --out /tmp/nexus-mock/state
