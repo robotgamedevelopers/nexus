@@ -68,6 +68,7 @@ jobs:
         with:
           name: mac-release
           brew: ninja protobuf
+          brew-keep: protobuf abseil
       # The link's functional tests reach this machine over `ssh localhost` without a password prompt
       # (tests/link/CMakeLists.txt): a key made here, for this job only, authorized for the runner's own login.
       - name: Passwordless ssh to this machine

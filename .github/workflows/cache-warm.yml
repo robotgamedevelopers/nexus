@@ -50,6 +50,7 @@ jobs:
             os: macos-26
             config: mac-debug
             brew: ninja protobuf
+            brew-keep: protobuf abseil
             targets: ""
           - cache: linux-asan
             os: ubuntu-24.04
@@ -96,10 +97,19 @@ jobs:
           require: "false"
           brew: ${{ matrix.brew }}
           apt: ${{ matrix.apt }}
+          brew-keep: ${{ matrix.brew-keep }}
       # cargo runs only when a policy source is newer than its outputs, so a cache could keep crates built by a Rust the
       # jobs no longer use (the image's, before Rust was pinned), and then every pull request that touches the policy
       # rebuilt all of them (about 100 s on 4 cores, PR #89 on 2026-11-25). Removing the outputs makes cargo run here,
       # with the pinned Rust and the jobs' own environment, so the cached target directory matches what they build.
+      # The Homebrew kegs (hosted-caches' brew-keep), in a cache of their own: saved once per image, kept until the
+      # image's name changes (the key), so a job links the same versions every time.
+      - name: Save the Homebrew kegs
+        if: steps.caches.outputs.brew-key != '' && steps.caches.outputs.brew-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ steps.caches.outputs.brew-paths }}
+          key: ${{ steps.caches.outputs.brew-key }}
       - name: The policy crate built by the pinned Rust
         shell: bash
         run: rm -f build/policy-rust/release/libnexus_policy_runtime.a build/nexus-policy
