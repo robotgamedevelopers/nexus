@@ -904,3 +904,25 @@ if(NOT WIN32)
                           WALK 1 120 --fault ${fault})
     endforeach()
 endif()
+
+# The server's terminals (docs/terminals.md). terminals_unit_*: the book's decisions and refusals, the input modes,
+# the rows painted from a real lib/vterm, the terminals in the sessions state and what a window paints, logic only.
+# terminals_functional_*: shells on real pseudoterminals, each case in a directory of its own under the build tree.
+add_executable(terminals_test terminals_test.cpp)
+target_link_libraries(terminals_test PRIVATE nexus_terminal_host)
+target_compile_options(terminals_test PRIVATE ${warnings})
+foreach(group book modes rows state paint)
+    add_test(NAME terminals_unit_${group} COMMAND terminals_test ${group})
+    set_tests_properties(terminals_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
+endforeach()
+if(NOT WIN32)
+    add_executable(terminals_functional terminals_functional.cpp)
+    target_link_libraries(terminals_functional PRIVATE nexus_terminal_host)
+    target_compile_options(terminals_functional PRIVATE ${warnings})
+    foreach(group create modes resize exit close env owner)
+        add_test(NAME terminals_functional_${group} COMMAND terminals_functional ${group}
+                 ${CMAKE_CURRENT_BINARY_DIR}/terminals_work/${group})
+        set_tests_properties(terminals_functional_${group} PROPERTIES LABELS functional TIMEOUT 30)
+    endforeach()
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/terminals_work)
+endif()

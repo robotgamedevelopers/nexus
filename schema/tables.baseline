@@ -24,6 +24,9 @@ table Action
     field account id=0xa23fd2965dc429bc kind=17 type=string
     field request id=0x6f4743b8bc5b4eb2 kind=9
     field secret id=0xab23f0eec020c951 kind=17 type=bytes
+    field terminal id=0x627e695840765bd1 kind=9
+    field columns id=0x861b700c73cdd49c kind=8
+    field rows id=0xa3a7061ff10a8138 kind=8
 
 table ActionsDiff
     field start id=0xee5d97ad45ad251f kind=9
@@ -108,6 +111,9 @@ table SessionsDiff
     field ais_sent id=0x6b65e9dac83a16e9 kind=1 was=friends_sent
     field signins id=0x5fbecccd50c74838 kind=14 elem=13 type=SignInOffer array=unbounded
     field next_action id=0xd6bdffc29f42fe4f kind=9
+    field terminals_served id=0x2e2b1aafc1b82e3a kind=1
+    field terminal_epoch id=0x86be505f57fa169b kind=9
+    field terminals id=0xd328a2f5891db446 kind=14 elem=13 type=TerminalChange array=unbounded
 
 table SignInOffer
     field id id=0x08b72e07b55c3ac0 kind=9
@@ -135,6 +141,24 @@ table StoreSession
     field queue id=0xb11e8b146c5a21d8 kind=14 elem=12 type=StoreSessionQueueText array=unbounded
     field driver id=0xc85b78e3dea334ff kind=13 type=Driver
 
+table TerminalChange
+    field id id=0x08b72e07b55c3ac0 kind=9
+    field changed id=0xdf38879af614707b kind=1
+    field opener id=0x8a28804a0a9ba5e2 kind=17 type=string
+    field title id=0xda31296c0c1b6029 kind=17 type=string
+    field columns id=0x861b700c73cdd49c kind=8
+    field rows id=0xa3a7061ff10a8138 kind=8
+    field cursor_column id=0x010c807b24453dfa kind=8
+    field cursor_row id=0x905ad98edc46fb14 kind=8
+    field cursor_hidden id=0x2f0cc18c0ae182b4 kind=1
+    field modes id=0x9de526933e6e3ef3 kind=17 type=string
+    field ended id=0x34bb12befe88eb1b kind=17 type=string
+    field lines id=0x5ce3f9a9f1d5001c kind=14 elem=13 type=TerminalLine array=unbounded
+
+table TerminalLine
+    field row id=0x8a0bc1196111ad9b kind=8
+    field text id=0xfa04f4ef1995407e kind=17 type=string
+
 table b0c44bf7b8de9adf.eac9afef1a00b5e8
     field value id=0x7ce4fd9430e80cea kind=12
 
@@ -160,6 +184,10 @@ enum ActionKind
     variant SignInCallback id=0x5c16b9e2e6fb5e04
     variant SignOut id=0x5cdb26887b48e1e8
     variant ResolveLimit id=0x0610706c3ede743e
+    variant TerminalCreate id=0x0bf28b5ee715e361
+    variant TerminalInput id=0x137d5adf533fa567
+    variant TerminalResize id=0x5d7b466226f5100d
+    variant TerminalClose id=0x496bb63b1ddf295f
 
 enum Activity
     variant Idle id=0xc92905d14a9421f3
@@ -221,3 +249,5 @@ union Change
 - SessionsDiff.ais_known: renamed under was = "friends_known", which keeps the wire id and NOT the text key — the JSON key is now "ais_known"; pair json = "friends_known" if an existing text must still read (docs/SPEC-TABLES.md §16.4) [warn]
 - SessionsDiff.ais: renamed under was = "friends", which keeps the wire id and NOT the text key — the JSON key is now "ais"; pair json = "friends" if an existing text must still read (docs/SPEC-TABLES.md §16.4) [warn]
 - SessionsDiff.ais_sent: renamed under was = "friends_sent", which keeps the wire id and NOT the text key — the JSON key is now "ais_sent"; pair json = "friends_sent" if an existing text must still read (docs/SPEC-TABLES.md §16.4) [warn]
+### 2026-11-25 (UTC) — terminals on the server (docs/terminals.md)
+- no compatibility-affecting edits; the wire absorbs the rest

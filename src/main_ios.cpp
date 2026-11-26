@@ -1,8 +1,9 @@
 // nexus on iOS and iPadOS: the window as a UIKit app (Prax's UIKit backend through its Studio app), filling its scene
 // on iPhone and iPad. A second client of nexus-server, a thin portal as the desktop window is (AGENTS.md): it sends the
 // person's input and shows the server's state. There is no overlay and no hotkey (an app's window is the system's to
-// show), and what an iOS app cannot run is left out of this build (platform.h NEXUS_PROCESSES): no terminal tabs and no
-// attachment upload. The sprint tab shows the board at the address the server sends (board.h offer).
+// show), and what an iOS app cannot run is left out of this build (platform.h NEXUS_PROCESSES): no shell of its own (a
+// terminal tab shows one that runs on the server, remote_terminals.h) and no attachment upload. The sprint tab shows
+// the board at the address the server sends (board.h offer).
 //
 // It reaches nexus-server as the desktop window does, over mosh's transport after `nexus-server new` over ssh
 // (link/client.h), with the ssh inside the app (link/inapp_ssh.h): the server is `--server user@host`, the client
@@ -16,8 +17,11 @@
 // `nexus-server new` (link/bootstrap.h serverCommandWords), as on the desktop: the mock's command (docs/mock.md). A
 // device key behind nexus-ios-gate runs only nexus-server new and history-page, so the gate refuses any other.
 //
+// `--ssh-port N` reaches the server's sshd on port N in place of 22: for an sshd of a test's own beside the simulator
+// (the server's machine's port 22 is its own sshd). It is a launch argument only: no URL or other app gives one.
+//
 // Usage (as the simulator or devicectl passes a launch's arguments):
-//   nexus [--server USER@HOST] [--server-command WORDS] | nexus --state FILE [--lost]
+//   nexus [--server USER@HOST [--ssh-port N]] [--server-command WORDS] | nexus --state FILE [--lost]
 
 #include <algorithm>
 #include <atomic>
@@ -26,6 +30,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -62,6 +67,7 @@
 #include "style.h"
 #include "tab_order.h"
 #include "url_opener.h"
+#include "remote_terminals.h"
 #include "view.h"
 
 #if NEXUS_PROCESSES
@@ -88,6 +94,8 @@ struct App {
     TextInputStart textInput;               // whether the frames edit text, for the keyboard's start (keyboard_start.h)
     PrAppInsets safeArea{};                 // the frame's safe area, which Prax pads the window's panel by
     float keyboardRoom = 0;                 // px of content above the on-screen keyboard this frame; 0: none covers it
+    // The terminal tabs, whose shells run on the server (remote_terminals.h), while the window is open and linked.
+    std::unique_ptr<RemoteTerminals> terminals;
     HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
         HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
 };
@@ -147,6 +155,15 @@ struct AskedServer : ServerChoice {
     }
 };
 
+// A token of this launch's, which names the terminals this window asks the server for (TerminalView::opener): random,
+// so that two devices' windows never take each other's new terminal for their own.
+std::string windowToken() {
+    std::random_device random;
+    char token[33];
+    std::snprintf(token, sizeof token, "%08x%08x%08x%08x", random(), random(), random(), random());
+    return std::string("ios-") + token;
+}
+
 App& appOf(void* context) {
     return *static_cast<App*>(context);
 }
@@ -180,6 +197,11 @@ bool open(void* context, PrStudioWindow* window) {
         a.board = std::make_unique<PraxBoard>(board);
         a.view.board = a.board.get();
         a.host.board = a.board.get();
+        a.terminals = std::make_unique<RemoteTerminals>(prStudioWindowApp(window), a.fonts, windowToken());
+        a.terminals->setLink(a.link.get());
+        a.terminals->setKit(prStudioWindowKit(window));
+        a.view.terminals = a.terminals.get();
+        a.view.newTerminalButton = true;
     }
     PrAppDisplayInfo info{};
     a.hitch.setRefreshRate(prAppDisplays(prStudioWindowApp(window), &info, 1) != 0 ? double(info.refreshRate) : 0);
@@ -197,6 +219,8 @@ void closeWindow(void* context, PrStudioWindow*, PrStatus) {
     a.host.board = nullptr;
     a.view.board = nullptr;
     a.board.reset();
+    a.view.terminals = nullptr;
+    a.terminals.reset();
     a.urls.reset();
 }
 
@@ -336,6 +360,7 @@ int main(int argc, char** argv) {
     const char* server = nullptr;
     const char* serverCommand = nullptr;
     bool lost = false;
+    int sshPort = 22;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--state") == 0 && i + 1 < argc) {
             state = argv[++i];
@@ -345,8 +370,16 @@ int main(int argc, char** argv) {
             serverCommand = argv[++i];
         } else if (std::strcmp(argv[i], "--lost") == 0) {
             lost = true;
+        } else if (std::strcmp(argv[i], "--ssh-port") == 0 && i + 1 < argc) {
+            char* end = nullptr;
+            const long n = std::strtol(argv[++i], &end, 10);
+            if (end == argv[i] || *end != '\0' || n < 1 || n > 65535) {
+                std::fprintf(stderr, "nexus: --ssh-port takes a port, 1 to 65535\n");
+                return 2;
+            }
+            sshPort = int(n);
         } else {
-            std::fprintf(stderr, "usage: nexus [--server USER@HOST] [--server-command WORDS] | --state FILE [--lost]\n");
+            std::fprintf(stderr, "usage: nexus [--server USER@HOST [--ssh-port N]] [--server-command WORDS] | --state FILE [--lost]\n");
             return 2;
         }
     }
@@ -391,9 +424,10 @@ int main(int argc, char** argv) {
         std::string why;
         if (!clientHome(&home, &why) || !makeClientHome(home, &why))
             std::fprintf(stderr, "nexus: %s\n", why.c_str());
-        auto startLink = [&a, home, serverWords](const std::string& serverHost) {
+        auto startLink = [&a, home, serverWords, sshPort](const std::string& serverHost) {
             link::InAppSshOptions ssh;
             ssh.dir = home;
+            ssh.port = sshPort;
             if (const char* h = std::getenv("HOME"))
                 ssh.publicCopy = std::string(h) + "/Documents/nexus-ssh-key.pub";
             link::ClientLink::Options options;
@@ -405,6 +439,7 @@ int main(int argc, char** argv) {
                     prAppWake(app);
             };
             a.link = std::make_unique<link::ClientPort>(std::move(options));
+            if (a.terminals) a.terminals->setLink(a.link.get());
             a.host.connect(a.link.get(), serverHost);
         };
         a.linked = true;

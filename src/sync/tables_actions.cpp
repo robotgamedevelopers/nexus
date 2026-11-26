@@ -33,6 +33,10 @@ wire::ActionKind actionOut(ActionKind k) {
         case ActionKind::SignOut: return wire::ActionKind::SignOut;
         case ActionKind::SignInCallback: return wire::ActionKind::SignInCallback;
         case ActionKind::ResolveLimit: return wire::ActionKind::ResolveLimit;
+        case ActionKind::TerminalCreate: return wire::ActionKind::TerminalCreate;
+        case ActionKind::TerminalInput: return wire::ActionKind::TerminalInput;
+        case ActionKind::TerminalResize: return wire::ActionKind::TerminalResize;
+        case ActionKind::TerminalClose: return wire::ActionKind::TerminalClose;
     }
     return wire::ActionKind::None;
 }
@@ -66,6 +70,10 @@ ActionKind actionIn(wire::ActionKind k) {
         case wire::ActionKind::SignOut: return ActionKind::SignOut;
         case wire::ActionKind::SignInCallback: return ActionKind::SignInCallback;
         case wire::ActionKind::ResolveLimit: return ActionKind::ResolveLimit;
+        case wire::ActionKind::TerminalCreate: return ActionKind::TerminalCreate;
+        case wire::ActionKind::TerminalInput: return ActionKind::TerminalInput;
+        case wire::ActionKind::TerminalResize: return ActionKind::TerminalResize;
+        case wire::ActionKind::TerminalClose: return ActionKind::TerminalClose;
         default: return ActionKind::Unknown;
     }
 }
@@ -103,6 +111,9 @@ std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& h
         putText(b.main, x->account, a.account, scratch);
         x->request = a.request;
         putBytes(b.main, x->secret, a.secret.bytes());
+        x->terminal = a.terminal;
+        x->columns = a.columns;
+        x->rows = a.rows;
     }
     return saved(b, [](const wire::ActionsDiffBuilder& x) { return wire::ActionsDiffMeasure(x); },
         [](const wire::ActionsDiffBuilder& x, std::uint8_t* to, int64_t n) { return wire::ActionsDiffSave(x, to, n); },
@@ -153,6 +164,9 @@ std::vector<Action> readActionsTables(const std::string& diff, std::uint32_t for
             a.account = textOf(x.account);
             a.request = x.request;
             a.secret = bytesOf(x.secret);
+            a.terminal = x.terminal;
+            a.columns = x.columns;
+            a.rows = x.rows;
         }
         out.push_back(std::move(a));
     }

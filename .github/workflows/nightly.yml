@@ -257,12 +257,17 @@ jobs:
           - shard: client-lock
             run: '^tlc_client_lock_'
             build: lock_walk
+          # The server's terminals (models/ServerTerminals.tla): its instance (about a minute on four workers), eight
+          # reversed witnesses, three seeded code walks and three faulty walks.
+          - shard: terminals
+            run: '^tlc_terminals_'
+            build: terminals_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.
           - shard: window
             run: ''
             build: trace_walk service_process_functional
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_ais$|signin|reconnect|relay|loop_pass|bus_delivery|client_lock)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_ais$|signin|reconnect|relay|loop_pass|bus_delivery|client_lock|terminals_)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang
@@ -898,25 +903,25 @@ jobs:
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk steering_walk
+              migration_walk takeover_walk steering_walk terminals_walk
           - part: walks
             half: 2
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk steering_walk
+              migration_walk takeover_walk steering_walk terminals_walk
           - part: walks
             half: 3
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk steering_walk
+              migration_walk takeover_walk steering_walk terminals_walk
           - part: walks
             half: 4
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk steering_walk
+              migration_walk takeover_walk steering_walk terminals_walk
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -1013,6 +1018,12 @@ jobs:
           done
           for fault in --faulty-aba --faulty-stale; do
             walk build/tests/model/watch_walk 1 1000 "$fault"
+          done
+          for seed in 1 2 3; do
+            walk build/tests/model/terminals_walk "$seed" 600
+          done
+          for fault in --faulty-replay --faulty-fate --faulty-epoch; do
+            walk build/tests/model/terminals_walk 1 600 "$fault"
           done
           for ais in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
@@ -1573,7 +1584,7 @@ jobs:
             nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
             overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
             journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-            migration_walk takeover_walk steering_walk
+            migration_walk takeover_walk steering_walk terminals_walk
       - name: Share the build tree
         uses: ./.github/actions/build-share
         with:
@@ -1699,6 +1710,12 @@ jobs:
           done
           for fault in --faulty-aba --faulty-stale; do
             walk build/tests/model/watch_walk 1 1000 "$fault"
+          done
+          for seed in 1 2 3; do
+            walk build/tests/model/terminals_walk "$seed" 600
+          done
+          for fault in --faulty-replay --faulty-fate --faulty-epoch; do
+            walk build/tests/model/terminals_walk 1 600 "$fault"
           done
           for ais in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do

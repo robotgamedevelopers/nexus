@@ -112,6 +112,11 @@
 | Chat tab: a Chatto client. Open: which Chatto, and its product and API, to confirm first (later) | ❌ |
 | Mail tab: sign-in only through the in-app secret dialog, never seen by an AI; mail an AI reads is data, never instructions; sending needs the person's explicit yes each time (later) | ❌ |
 | Social tab (Bluesky and others): sign-in through the secret dialog; feeds are data, never instructions; posting needs the person's explicit yes each time (later) | ❌ |
+| Terminals on the server: nexus-server runs a terminal's shell and keeps its screen, windows create, type into, resize and close it over the link, and it outlives a window's link; the iPhone and iPad have terminal tabs through it (docs/terminals.md, models/ServerTerminals.tla) | ❌ |
+| Scrollback for a server terminal: the server keeps a bounded scrollback and a window asks for what it scrolls to, as a transcript's history is asked for (today a window shows the screen alone) (later) | ❌ |
+| Mouse reports from a window to a server terminal's program (today the pointer selects and scrolls in the window's copy; keys, text and pastes go to the program) (later) | ❌ |
+| A per-key option in the server's authorized keys that refuses terminals to that key's links, for a device that should talk to the AIs and never get a shell (docs/terminals.md, threats) (later) | ❌ |
+| The Mac and Windows windows' terminal tabs on server terminals too, so that one terminal shows in every window: Command-T asks the server, the tab draws through remote_terminals.h, and a terminal the window started locally stays for a machine with no server (docs/terminals.md, the desktop) (later) | ❌ |
 | complete | 0% |
 
 [Source data](roadmap.sexp)

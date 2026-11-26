@@ -46,6 +46,7 @@
 #include "server/signin_runner.h"
 #include "server/start_order.h"
 #include "server/supervise_state.h"
+#include "server/terminal_host.h"
 #include "store/fs.h"
 #include "store/store.h"
 #include "sync/formats.h"
@@ -334,6 +335,10 @@ struct Link {
     std::string client;     // empty: a session that did not name its client
     std::unique_ptr<link::ServerSession> link;
     std::string signIn;     // the claim token its window claims sign-ins by (sync/signin.h): its state carries their URLs
+    // Made by the server's owner: true only when the `new` that asked for it came over the control socket from a
+    // process of the server's own user (control() checks the peer's credentials and refuses every other request). A
+    // terminal runs a shell as that user, so its actions are taken only from such a link (server/terminal_book.h).
+    bool owner = false;
 };
 
 // A test seam, set only by tests/link/server_lock.cpp: the start's wait for a lock held by a writer that does not
@@ -429,6 +434,9 @@ private:
     DurableStore store_;
     std::unique_ptr<Drivers> drivers_;
     std::unique_ptr<sync::Hub> hub_;
+    // The terminals' shells (server/terminal_host.h, docs/terminals.md), from the start to the stop.
+    std::unique_ptr<TerminalHost> terminals_;
+    void publishTerminals() { hub_->setTerminals(true, terminals_->epoch(), terminals_->views()); }
     std::unique_ptr<BusInbox> bus_;
     Millis nextBusRefresh_ = 0;
     std::unique_ptr<ConfigRepo> config_;
@@ -506,6 +514,8 @@ bool Server::restoreAll(std::string* why) {
     drivers_->attach(*hub_);
     // The dashboards every window shows a tab for, from this server's config (home.h).
     hub_->setDashboards(settings_.dashboards);
+    terminals_ = std::make_unique<TerminalHost>(newEpoch(), loginShell(environ));
+    publishTerminals();
     bus_ = std::make_unique<BusInbox>(paths_.home, paths_.self, machine, host, dirFd_);
     bus_->listeners.setLauncher(settings_.busLauncher);
     // The secret dialog (docs/secrets.md): a value goes to its account's file, durable before the asker hears
@@ -981,7 +991,8 @@ void Server::control(int fd) {
         // window that stated one.
         const std::uint32_t format = sync::linkFormat(helloOf(client).proto, sync::kStateFormat);
         Link s{nextId_++, client.id,
-            std::make_unique<link::ServerSession>(hub_->state(), applied, client.next, format), std::string()};
+            std::make_unique<link::ServerSession>(hub_->state(), applied, client.next, format), std::string(),
+            uid == getuid()};
         const std::string line = link::connectLine(s.link->port(), s.link->key(),
             client.format == 0 && !client.hasHello ? 0 : format,
             client.hasHello ? sync::helloText(sync::kHello) : std::string());
@@ -1221,6 +1232,11 @@ PassOrder::Outcome Server::wait(std::string* why) {
     }
     // The drivers' pipes last: serve() below looks at every driver, so their events need no owner.
     pass_.linkFds = pass_.fds.size();
+    // The terminals' pseudoterminals: serve() reads every one without blocking, so they need no owner either.
+    for (const pollfd& p : terminals_->fds())
+        pass_.fds.push_back(p);
+    if (const int termWait = terminals_->waitMs(); termWait >= 0)
+        waitMs = std::min(waitMs, termWait);
     for (const pollfd& p : drivers_->fds())
         pass_.fds.push_back(p);
     if (!drain_.draining()) {
@@ -1308,6 +1324,8 @@ PassOrder::Outcome Server::apply(std::string* why) {
         nextLoginCheck_ = nowMs() + kLoginCheckMs;
         changed = true;
     }
+    // The terminals' shells: their output into their screens, their input that waited, their ends.
+    bool terminalsChanged = terminals_->serve();
     std::string linkWhy;
     for (std::size_t k = 1; k < pass_.linkFds; ++k) {
         if (!(pass_.fds[k].revents & POLLIN))
@@ -1330,6 +1348,22 @@ PassOrder::Outcome Server::apply(std::string* why) {
                 std::fprintf(stderr, "nexus-server: leaky witness build: callback %s\n", a.secret.bytes().c_str());
             }
 #endif
+            // A terminal's action goes to the terminals: counted first, in this pass's batch, so that one a window
+            // sends again after a reconnect is skipped (the Applier), then applied. Its refusal names the terminal
+            // and never holds its input (sync::describe).
+            if (sync::isTerminal(a.kind)) {
+                if (hub_->countAction(a, &refused, s.client)) {
+                    refused = terminals_->apply(a, s.owner);
+                    terminalsChanged = true;
+                }
+                changed = true;
+                if (!refused.empty())
+                    std::fprintf(stderr, "nexus-server: link %llu, %s: %s\n", static_cast<unsigned long long>(s.id),
+                        sync::describe(a).c_str(), refused.c_str());
+                if (hub_->failed())
+                    break;
+                continue;
+            }
             // The claim token a window claims by names its link: that link's state carries the URLs it holds.
             if (a.kind == sync::ActionKind::SignInClaim && sync::isClaimToken(a.text) && s.signIn != a.text) {
                 hub_->signInWindowGone(s.signIn);
@@ -1358,6 +1392,10 @@ PassOrder::Outcome Server::apply(std::string* why) {
                 problem.c_str());
         if (hub_->failed())
             break;
+    }
+    if (terminalsChanged) {
+        publishTerminals();
+        changed = true;
     }
     if (hub_->failed()) {
         // What reached the disk is unknown: stop before acknowledging anything more. A restart reopens the store from
@@ -1545,6 +1583,9 @@ int Server::run() {
     // Every sign-in is dropped and its process ended.
     hub_->dropSignIns();
     signIns_.reset();
+    // Every terminal's shell ends with the server: a window that links to the next run finds its terminals ended by
+    // the restart (sync/terminal_state.h TerminalFate::Restarted).
+    terminals_.reset();
     // After the control socket closes, so no window sends a prompt to a driver being ended.
     if (!endDrivers() && status == 0) {
         std::fprintf(stderr, "nexus-server: the store failed while the drivers were ended; their turns are cut when "

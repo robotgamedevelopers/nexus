@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "sync/actions.h"
@@ -51,6 +52,24 @@ struct SessionChange {
     std::optional<std::vector<std::string>> busSenders{};
 };
 
+// One terminal of a diff (sync/terminal_state.h). Unchanged: the state diffed from holds it as it is, and only its id is
+// set. Changed: all of it but its rows, and the rows that differ from the state diffed from, by index; each other row
+// is that state's.
+struct TerminalChange {
+    TerminalId id = 0;
+    bool changed = false;
+    std::string opener;
+    std::string title;
+    std::uint32_t columns = 0;
+    std::uint32_t rows = 0;
+    std::uint32_t cursorColumn = 0;
+    std::uint32_t cursorRow = 0;
+    bool cursorHidden = false;
+    std::string modes;
+    std::string ended;
+    std::vector<std::pair<std::uint32_t, std::string>> lines;
+};
+
 // A sessions diff: every session of the state, in id order, then the open secret requests, then the server's AIs
 // when this diff carries them (aisSent: they changed from the state diffed from), whether it holds a list
 // (aisKnown) and the list, and then the live sign-in flows as this link's window sees them (format 5 on; none in
@@ -64,6 +83,10 @@ struct SessionsChange {
     std::vector<SignInOffer> offers;
     std::uint64_t nextAction = 0;
     std::vector<Dashboard> dashboards;  // the dashboards the server offers, in order (format 4 on; none before)
+    // The server's terminals (format 4 on; none in formats 1 to 3): whether it runs them, its run's epoch, and each.
+    bool terminalsServed = false;
+    std::uint64_t terminalEpoch = 0;
+    std::vector<TerminalChange> terminals;
 };
 
 // Formats 1 to 3. A format that lacks a field does not write it (activity before 2, the instance before 2, the

@@ -168,6 +168,9 @@ Bytes actionsBytes() {
         setText(b.main, a->ai_name, "AI " + std::to_string(k));
         setText(b.main, a->text, "text " + std::to_string(k));
         setText(b.main, a->account, "account " + std::to_string(k));
+        a->terminal = (std::uint64_t(7) << 32) | std::uint64_t(k);
+        a->columns = static_cast<std::uint32_t>(80 + k);
+        a->rows = static_cast<std::uint32_t>(24 + k);
     }
     return saved(b, [](const ActionsDiffBuilder& x) { return ActionsDiffMeasure(x); },
         [](const ActionsDiffBuilder& x, std::uint8_t* out, int64_t n) { return ActionsDiffSave(x, out, n); });
@@ -341,7 +344,7 @@ void roundtripActions() {
     }
     CHECK(d->start == 9);
     const int kinds = static_cast<int>(ActionKind::Max);
-    CHECK(kinds == 21);     // through SignOut (20) and ResolveLimit (21)
+    CHECK(kinds == 25);     // through SignOut (20), ResolveLimit (21) and the terminals' four (22 to 25)
     CHECK(d->actions.size() == kinds);
     for (int32_t i = 0; i < d->actions.size(); ++i) {
         const int k = i + 1;
@@ -351,6 +354,9 @@ void roundtripActions() {
         CHECK(textOf(a.ai_name) == "AI " + std::to_string(k));
         CHECK(textOf(a.text) == "text " + std::to_string(k));
         CHECK(textOf(a.account) == "account " + std::to_string(k));
+        CHECK(a.terminal == ((std::uint64_t(7) << 32) | std::uint64_t(k)));
+        CHECK(a.columns == static_cast<std::uint32_t>(80 + k));
+        CHECK(a.rows == static_cast<std::uint32_t>(24 + k));
     }
 }
 

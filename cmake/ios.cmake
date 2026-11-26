@@ -118,13 +118,15 @@ function(nexus_ios_targets)
         prax::url_quickjs prax::dom prax::fetch prax::net prax::tls prax::http prax::image_select prax::compress_select
         prax::text prax::font prax::draw prax::layout prax::ui prax::studio_kit prax::app prax::core_cpp)
 
-    # What the window does around the view each frame (frame_host.h), with the board and without terminals or uploads
-    # (NEXUS_PROCESSES is 0 here, platform.h), and its offscreen frame (offscreen.h).
-    add_library(nexus_ios_frame STATIC src/frame_host.cpp src/url_opener.cpp src/offscreen.cpp src/state_window.cpp)
+    # What the window does around the view each frame (frame_host.h), with the board, without uploads or terminals of
+    # its own (NEXUS_PROCESSES is 0 here, platform.h), with the server's terminals (remote_terminals.h, Prax's terminal
+    # view with no program), and its offscreen frame (offscreen.h).
+    add_library(nexus_ios_frame STATIC src/frame_host.cpp src/url_opener.cpp src/offscreen.cpp src/state_window.cpp
+        src/remote_terminals.cpp)
     target_include_directories(nexus_ios_frame PUBLIC src)
     target_compile_options(nexus_ios_frame PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_ios_frame PUBLIC nexus_ios_view nexus_ios_board nexus_sync nexus_hitch nexus_signin_gate
-        prax::image_select prax::compress_select prax::gpu_select prax::draw_select Threads::Threads)
+        prax::studio_terminal prax::vterm prax::image_select prax::compress_select prax::gpu_select prax::draw_select Threads::Threads)
 
     # The link to nexus-server (src/link/client.h), the desktop's sources, with the in-app ssh in place of
     # /usr/bin/ssh. Apart from the window, so that another front (a watch's, say) links it alone.

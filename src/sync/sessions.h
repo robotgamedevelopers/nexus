@@ -35,6 +35,7 @@
 #include "sync/formats.h"
 #include "sync/secrets.h"
 #include "sync/signin.h"
+#include "sync/terminal_state.h"
 
 namespace nexus::sync {
 
@@ -177,6 +178,15 @@ public:
     // On a table link (format 4 on); a link of 1 to 3 carries none, and a window then reads none.
     const std::vector<Dashboard>& dashboards() const { return dashboards_; }
     void setDashboards(std::vector<Dashboard> list) { dashboards_ = std::move(list); }
+    // The server's terminals (sync/terminal_state.h, docs/terminals.md), after the sign-in flows: from format 4 on the
+    // wire (schema's SessionsDiff.terminals). terminalsServed() is false in a state from a server before them, which
+    // runs none and offers none to make; terminalEpoch() names the run of the server whose terminals these are.
+    const std::vector<TerminalRef>& terminals() const { return *terminals_; }
+    bool terminalsServed() const { return terminalsServed_; }
+    std::uint64_t terminalEpoch() const { return terminalEpoch_; }
+    // In id order, no two with one id and none with id 0; throws std::logic_error otherwise.
+    void setTerminals(bool served, std::uint64_t epoch, std::vector<TerminalRef> terminals);
+    const TerminalView* findTerminal(TerminalId id) const;
     const SessionView* find(SessionId id) const;
     // The AI's first session: the one with the lowest id. Null when the AI has none.
     const SessionView* first(const std::string& aiName) const;
@@ -213,6 +223,9 @@ private:
     std::shared_ptr<const std::vector<ServerAI>> ais_;
     bool aisKnown_ = false;
     std::shared_ptr<const std::vector<SignInOffer>> offers_;
+    std::shared_ptr<const std::vector<TerminalRef>> terminals_;
+    bool terminalsServed_ = false;
+    std::uint64_t terminalEpoch_ = 0;
     std::uint32_t format_ = kStateFormat;
     int unknown_ = 0;
     std::uint64_t nextAction_ = 0;
