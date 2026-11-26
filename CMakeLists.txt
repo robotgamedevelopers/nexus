@@ -20,6 +20,11 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CXX_COMPILER AND NOT DE
 endif()
 
 project(nexus VERSION 0.2.2 LANGUAGES C CXX)
+# Apple Watch builds the watch app alone, without Prax or the desktop's parts (cmake/watchos.cmake, docs/watch.md).
+if(CMAKE_SYSTEM_NAME STREQUAL "watchOS")
+    include(cmake/watchos.cmake)
+    return()
+endif()
 # The app's platform layer (src/platform_mac.mm) is Objective-C++.
 if(APPLE)
     enable_language(OBJCXX)
@@ -540,6 +545,10 @@ if(NEXUS_LINK)
 endif()
 if(NEXUS_TAILSCALE)
     add_subdirectory(tests/tailscale)
+endif()
+# The watch's core, its tests and models, and on macOS with the link the phone's relay host (watch/CMakeLists.txt).
+if(NOT WIN32)
+    add_subdirectory(watch)
 endif()
 # Each test's tier (tier_pr or tier_nightly, cmake/tiers.cmake and tests/tiers.txt), given once every test above is
 # registered.

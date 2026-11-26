@@ -108,6 +108,57 @@ jobs:
       - name: The tier_pr tests
         run: bash .github/ctest.sh --test-dir build -L '^tier_pr$' -j "$TEST_JOBS" --output-on-failure
 
+  # The Apple Watch app (watch/, docs/watch.md): its core alone (cmake -S watch: no Prax, no link) with its unit tests,
+  # then the watchOS app built warning-free for the simulator and for a watch (arm64_32, signed ad hoc). Swift needs
+  # Ninja and Xcode's watchOS SDKs. Per-PR CI runs on GitHub's hosted macOS (macos-26, with Xcode), never the studio:
+  # the studio is Glenn's screen ("GitHub per-PR, fleet nightly"). Its models run nightly (nightly.yml, shard
+  # watch-app); its speech test is nightly.yml's watch-speech job.
+  watch:
+    runs-on: macos-26
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Ninja and the watchOS SDKs
+        shell: bash
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+        run: |
+          set -euo pipefail
+          if ! command -v ninja >/dev/null; then
+            brew install ninja
+          fi
+          if ! command -v ninja >/dev/null; then
+            echo "::error::no ninja on $(hostname -s)'s runner PATH after brew install ninja"
+            exit 1
+          fi
+          for sdk in watchos watchsimulator; do
+            if ! xcrun --sdk "$sdk" --show-sdk-path >/dev/null; then
+              echo "::error::no $sdk SDK in $(xcode-select -p) on $(hostname -s)"
+              exit 1
+            fi
+          done
+          echo "JOBS=$(sh .github/job-cores.sh)" >> "$GITHUB_ENV"
+      - name: The core and its unit tests
+        run: |
+          cmake -S watch -B build-watch -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-watch --parallel "$JOBS" --target watch_core_test
+          bash .github/ctest.sh --test-dir build-watch -L unit --output-on-failure
+      - name: The app, for the simulator
+        run: |
+          cmake -S . -B build-watch-sim -G Ninja -DCMAKE_SYSTEM_NAME=watchOS -DCMAKE_OSX_SYSROOT=watchsimulator \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-watch-sim --parallel "$JOBS"
+          cmake -DAPP=build-watch-sim/watch/nexus.app/nexus -P watch/tests/no_test_options.cmake
+      - name: The app, for a watch
+        run: |
+          cmake -S . -B build-watch-device -G Ninja -DCMAKE_SYSTEM_NAME=watchOS -DCMAKE_OSX_SYSROOT=watchos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64_32 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-watch-device --parallel "$JOBS"
+          cmake -DAPP=build-watch-device/watch/nexus.app/nexus -P watch/tests/no_test_options.cmake
+
   server-policy:
     runs-on: ubuntu-24.04
     timeout-minutes: 2

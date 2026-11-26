@@ -186,6 +186,11 @@ jobs:
           - shard: glide-overlay
             run: '^tlc_(glide|overlay|watch)_'
             build: overlay_walk glide_walk watch_walk
+          # The Apple Watch client (watch/models, docs/watch.md): the voice turn and the relay to the phone, their
+          # witnesses, and the code's walks against them with each planted fault rejected (short tests).
+          - shard: watch-app
+            run: '^tlc_watchapp_'
+            build: watch_voice_walk watch_relay_walk
           # The Tailscale shim's node lifecycle (models/Tailscale.tla): the three liveness instances (47,169 to 74,329
           # states) each in a shard of their own on eight workers, then the witnesses, recorded orders and Go walks.
           - shard: tailscale-spec
@@ -441,6 +446,47 @@ jobs:
           for family in label_trace window_account_picker_trace; do
             bash .github/ctest.sh --test-dir build -L '^model$' -R "^tlc_${family}" -j "$TEST_JOBS" --output-on-failure || exit 1
           done
+
+  # The watch's speech test (watch/tests/speech.cmake): recordings spoken by `say`, through the recognizer the phone
+  # uses (SpeechTranscriber, on device, as nexus-watch-relay --transcribe) and the shared name matcher, and silence
+  # refused with its reason; with its planted twin, which must fail. nexus-watch-relay links the link, so this is the
+  # full configure under Ninja (CMake builds Swift with Ninja and Xcode only) on a runner with Xcode. Never the studio
+  # (Glenn's screen); the fleet's only other Mac, mini-m5, has no Xcode and no runner label apart from the studio's,
+  # so this runs on GitHub's hosted macOS (macos-26) until a fleet Mac off the studio carries Xcode.
+  watch-speech:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Ninja, and caches outside the workspace
+        shell: bash
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+        run: |
+          set -euo pipefail
+          if ! command -v ninja >/dev/null; then
+            brew install ninja
+          fi
+          if ! command -v ninja >/dev/null; then
+            echo "::error::no ninja on $(hostname -s)'s runner PATH after brew install ninja"
+            exit 1
+          fi
+          caches="$HOME/Library/Caches/nexus-ci"
+          mkdir -p "$caches/$RUNNER_NAME/prax-downloads"
+          {
+            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+            echo "JOBS=$(sh .github/job-cores.sh)"
+          } >> "$GITHUB_ENV"
+      - name: Build the relay and the matcher
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel "$JOBS" --target nexus_watch_relay_host watch_match
+      - name: Speech
+        run: bash .github/ctest.sh --test-dir build -R '^watch_speech(_planted)?$' --output-on-failure
 
   # Windows' functional tests, inside WSL2: on Windows the overlay stays native and everything else (nexus-server, the
   # link, the drivers and their tests) runs as the Linux build inside WSL2 (AGENTS.md, platform targets). So these run
@@ -1146,7 +1192,8 @@ jobs:
   # macos-release, server-lock).
   #
   # macOS Debug, as a pull request builds it (asserts on), on the fleet Mac. The link's tests reach this machine over
-  # `ssh localhost` as the runner's login, which this Mac allows.
+  # `ssh localhost` as the runner's login, which this Mac allows. The watch's speech test speaks aloud and runs in
+  # watch-speech, on hosted macOS, never here.
   macos-debug:
     runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
     steps:
@@ -1167,7 +1214,7 @@ jobs:
       - name: The tier_nightly tests
         run: >-
           bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
-          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional)$'
+          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional|watch_speech|watch_speech_planted)$'
           -j "$TEST_JOBS" --output-on-failure
 
   # Linux, as ci.yml's build-linux builds it, on hosted Ubuntu.

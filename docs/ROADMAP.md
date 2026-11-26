@@ -163,6 +163,23 @@ Mechanisms taken from pi (earendil-works/pi, MIT), bottom up, each secured befor
 
 ## Apple Watch
 
+Talk to your AIs from the wrist, and they talk back: the watch is a thin client that relays through the iPhone (docs/watch.md says why). Each layer secured before the next starts.
+
+<!-- nova-work:watch:start -->
+
+| feature | done |
+|---|:---:|
+| 1. The voice turn: hold to talk, the AI named first ("Hey Rowan, ...") or with no name the first AI in the server's list, the reply spoken; every refusal said and shown; locked (not on the wrist since the passcode), it neither listens nor reads a reply | ✅ |
+| 2. The relay to the phone: the watch's prompts reach the server once, through restarts of either end, and a phone app not unlocked since it slept refuses the watch, saying so | ✅ |
+| 3. The watchOS app: SwiftUI over the C++ core, built for the simulator and a watch in CI, driven end to end in the simulator to an AI on a test server and back | ✅ |
+| 4. The iPhone's side of the relay: WatchConnectivity to the nexus iPhone app, its link to nexus-server and its recognizer (waits on the link on iOS) | ❌ |
+| 5. On a real watch: signed with the team, installed, and the owner's check and the microphone tried on the wrist | ❌ |
+| complete | 60% |
+
+[Source data](roadmap.sexp)
+
+<!-- nova-work:watch:end -->
+
 <!-- nova-work:apple-watch:start -->
 
 | feature | done |
