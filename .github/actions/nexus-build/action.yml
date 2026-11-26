@@ -5,13 +5,15 @@
 #   mac-debug    Debug with the link: no LTO (Prax turns it on for Release only), asserts on, and no debug information
 #                (-O0 alone: the build tree, its cache and the links are about half the size); ci.yml's macOS build
 #   mac-asan     Debug with AddressSanitizer and UndefinedBehaviorSanitizer, without the window, its logic and the link
+#   ios-device, ios-simulator   iOS arm64 (cmake/ios.cmake: the client alone) for devices or the simulator, Debug at -O0
+#                without debug information: no LTO, asserts on; ios.yml's builds
 #   linux-release, linux-asan   the same on Linux with clang and lld (no window, no window logic, no link: CMakeLists.txt)
 # Warnings are errors: CMakeLists.txt sets the flags.
 name: nexus-build
 description: Configure and build nexus on a GitHub-hosted runner
 inputs:
   config:
-    description: mac-release, mac-debug, mac-asan, linux-release or linux-asan
+    description: mac-release, mac-debug, mac-asan, ios-device, ios-simulator, linux-release or linux-asan
     required: true
   targets:
     description: the targets to build (empty for all)
@@ -25,7 +27,27 @@ runs:
       run: |
         set -euo pipefail
         xcodebuild -version
-        if ! xcrun metal --version >/dev/null 2>&1; then
+        # hosted-caches started the probe while the cache downloaded (its first run mounts the toolchain, about 12 s);
+        # its result is read here, and the probe runs now when nothing started it.
+        probe="$RUNNER_TEMP/metal-probe"
+        if [ -f "$probe.started" ]; then
+          waited=0
+          while [ ! -f "$probe.rc" ]; do
+            if [ "$waited" -ge 120 ]; then
+              echo "::error::the Metal toolchain probe started by hosted-caches gave no result in 120 s"
+              cat "$probe.log"
+              exit 1
+            fi
+            sleep 1
+            waited=$((waited + 1))
+          done
+          rc=$(cat "$probe.rc")
+          echo "the Metal toolchain probe exited $rc (waited $waited s here)"
+        else
+          rc=0
+          xcrun metal --version >/dev/null 2>&1 || rc=$?
+        fi
+        if [ "$rc" -ne 0 ]; then
           echo "Xcode's Metal toolchain is not on this image: downloading it"
           xcodebuild -downloadComponent MetalToolchain
         fi
@@ -54,6 +76,13 @@ runs:
           mac-asan)
             cmake -S . -B build ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Debug "${off[@]}" "${launch[@]}" \
               -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache "${asan[@]}" ;;
+          ios-device|ios-simulator)
+            sysroot=iphoneos
+            if [ "$CONFIG" = ios-simulator ]; then sysroot=iphonesimulator; fi
+            cmake -S . -B build ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Debug -DCMAKE_SYSTEM_NAME=iOS \
+              "-DCMAKE_OSX_SYSROOT=$sysroot" -DCMAKE_OSX_ARCHITECTURES=arm64 "${launch[@]}" \
+              -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_C_FLAGS_DEBUG=-O0 -DCMAKE_CXX_FLAGS_DEBUG=-O0 -DCMAKE_OBJC_FLAGS_DEBUG=-O0 -DCMAKE_OBJCXX_FLAGS_DEBUG=-O0 ;;
           linux-release)
             CC=clang CXX=clang++ cmake -S . -B build ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Release "${off[@]}" "${launch[@]}" \
               -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto" ;;
