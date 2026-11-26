@@ -58,8 +58,6 @@ jobs:
           config: ios-${{ matrix.target }}
           dir: ${{ env.NEXUS_BUILD }}
           targets: ${{ matrix.target == 'simulator' && 'tier_pr_build' || '' }}
-      - name: Record the sources the build was made from
-        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
       # The fast unit tests and the iOS happy path (tests/tiers.txt), on a simulator device.
       - name: The tier_pr tests on a simulator device
         if: matrix.target == 'simulator'

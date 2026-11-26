@@ -9,12 +9,10 @@
 # sha256 published beside it, is fetched once when the machine has no rustup. Nothing is restored from GitHub's cache.
 #
 # The build directory is configured on every run with every NEXUS_* option (the configure step), then built: MSBuild
-# rebuilds what is newer than its outputs. The checkout rewrites only what changed, and, in case it starts over, the
-# sources a successful build of everything was made from are recorded in the build directory and a file still byte
-# for byte the same gets a fixed old time before the next build (.github/source-times.sh; Git's bash). The record is removed before each build
-# and written only after a build of every target that succeeded (cache-warm.yml, the nightly), never after ci.yml's
-# tier_pr_build. Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one
-# by itself.
+# rebuilds what is newer than its outputs. The runner's one checkout is shared by its build directories (build-x64,
+# build-x64-lto), and each job moves its times, so before each build the sources get the times this directory last
+# saw them with and a file changed since gets the time now (.github/source-times.sh own, Git's bash; fleet-build says
+# why). Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one by itself.
 name: windows-build
 description: The runner's own build directory, configure and build of nexus's native Windows part on a fleet runner
 inputs:
@@ -100,17 +98,13 @@ runs:
         "TEST_JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
         "build=$caches\$buildName" >> $env:GITHUB_OUTPUT
         Write-Output "$env:COMPUTERNAME ($env:RUNNER_NAME): $([Environment]::ProcessorCount) cores; build directory $caches\$buildName (NEXUS_LTO $($env:LTO))"
-    - name: Source times by content
+    - name: Source times as this build directory last saw them
       shell: bash
       run: |
         set -euo pipefail
-        manifest="${NEXUS_BUILD//\\//}/.nexus-ci-sources"
-        if [ -f "$manifest" ]; then
-          bash .github/source-times.sh apply "$manifest"
-          rm -f "$manifest"
-        else
-          echo "no record of a finished build in $NEXUS_BUILD: the build trusts the checkout's times"
-        fi
+        build="${NEXUS_BUILD//\\//}"
+        rm -f "$build/.nexus-ci-sources"
+        bash .github/source-times.sh own "$build/.nexus-ci-times"
     # Prax at the commit CMakeLists.txt pins, at depth 1, into a directory of its own, then renamed into place; and
     # Prax's Slang compiler into Prax's download cache, checked against Prax's pinned sha256.
     - name: Prax at its pin
@@ -170,8 +164,3 @@ runs:
         cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS @only
         if ($LASTEXITCODE -ne 0) { throw "cmake --build exited $LASTEXITCODE" }
         Write-Output "built in $([int]((Get-Date) - $start).TotalSeconds) s"
-    # Only after a build of everything: every output then reflects these sources (fleet-build says why).
-    - name: Record the sources the build was made from
-      if: inputs.target == ''
-      shell: bash
-      run: bash .github/source-times.sh record "${NEXUS_BUILD//\\//}/.nexus-ci-sources"
