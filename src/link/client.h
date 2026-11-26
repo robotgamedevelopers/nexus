@@ -27,6 +27,10 @@
 
 namespace nexus::link {
 
+// `given`, or, when it is empty, runCommand (a child process) where the build runs processes (platform.h
+// NEXUS_PROCESSES), and elsewhere a runner that refuses each command, saying why.
+CommandRunner linkRunner(const CommandRunner& given);
+
 class ClientLink {
 public:
     struct Options {
@@ -36,6 +40,10 @@ public:
         // The window's client id (server/server.h validClientId); empty: one made for this link, "window-" and 16
         // random hex digits, so that two windows, or two launches of one, never share one.
         std::string client;
+        // What runs the bootstrap's commands (ssh -G, and nexus-server new over ssh), and the history pages'
+        // (link/client_port.h). Empty: runCommand, a child process. iOS starts no process, and passes its in-app ssh
+        // (link/inapp_ssh.h), which answers the same commands.
+        CommandRunner run;
     };
 
     struct Snapshot {

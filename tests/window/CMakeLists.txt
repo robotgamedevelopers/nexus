@@ -19,6 +19,14 @@ if(NEXUS_WINDOW_LOGIC)
         set_tests_properties(stock_window_unit PROPERTIES LABELS unit)
     endif()
 
+    # The server a window asks for where nothing names one (src/server_choice.h): the address's checks, server.txt and
+    # the kept server through a store in memory. Pure logic.
+    add_executable(nexus_server_choice_tests test_server_choice.cpp)
+    target_compile_options(nexus_server_choice_tests PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_server_choice_tests PRIVATE nexus_window_logic)
+    add_test(NAME server_choice_unit COMMAND nexus_server_choice_tests)
+    set_tests_properties(server_choice_unit PROPERTIES LABELS unit)
+
     # A terminal tab's label in ssh (src/remote.h): the destination's parsing and matching, the machine list through a fake
     # command runner, and the label across sessions. Pure logic.
     add_executable(nexus_remote_tests test_remote.cpp)
@@ -177,6 +185,16 @@ if(NEXUS_WINDOW)
     target_link_libraries(nexus_frame_host_tests PRIVATE nexus_frame)
     add_test(NAME frame_host_unit COMMAND nexus_frame_host_tests)
     set_tests_properties(frame_host_unit PROPERTIES LABELS unit TIMEOUT 30)
+
+    # The first switch from the Dashboard to an AI's tab as the iOS window draws it, above an on-screen keyboard whose
+    # rect comes on time, early, late, with a gap or never (test_keyboard_frames.cpp): the focus and the keyboard settle
+    # once and no frame asks for another. A kit with no window, the system's fonts, made-up time.
+    add_executable(nexus_keyboard_frames_tests test_keyboard_frames.cpp)
+    target_compile_options(nexus_keyboard_frames_tests PRIVATE ${NEXUS_WARNINGS})
+    target_include_directories(nexus_keyboard_frames_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(nexus_keyboard_frames_tests PRIVATE nexus_frame)
+    add_test(NAME keyboard_frames_unit COMMAND nexus_keyboard_frames_tests)
+    set_tests_properties(keyboard_frames_unit PROPERTIES LABELS unit TIMEOUT 30)
 
     if(NEXUS_SERVER_PARTS)
         add_executable(account_picker_trace account_picker_trace.cpp)

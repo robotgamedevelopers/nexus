@@ -67,6 +67,35 @@ void serverConfig() {
     CHECK(!readServerConfig("machine me@studio\n", "/s/config", &s, &warnings, &why) && has(why, "not a host name"));
     CHECK(s.machine.empty());
 
+    // dashboard: none by default; one line each, `<url> <name>`, kept in order, the name the rest of the line.
+    CHECK(readServerConfig("machine studio\n", "/s/config", &s, &warnings, &why) && s.dashboards.empty());
+    CHECK(readServerConfig("dashboard http://100.76.29.55:8080/ Dashboard\n", "/s/config", &s, &warnings, &why));
+    CHECK((warnings.empty() && s.dashboards == std::vector<sync::Dashboard>{{"Dashboard", "http://100.76.29.55:8080/"}}));
+    CHECK(readServerConfig("dashboard https://b.example/x Build farm\n# a note\ndashboard http://a:1/ Dashboard\n"
+                           "dashboard http://c:2/  Third  one \n", "/s/config", &s, &warnings, &why));
+    CHECK(s.dashboards == (std::vector<sync::Dashboard>{{"Build farm", "https://b.example/x"},
+                              {"Dashboard", "http://a:1/"}, {"Third  one", "http://c:2/"}}));
+    // Each bad line is an error naming its line, and the good lines stand.
+    CHECK(!readServerConfig("dashboard http://a:1/\n", "/s/config", &s, &warnings, &why));
+    CHECK(has(why, "/s/config line 1:") && has(why, "dashboard <url> <name>") && s.dashboards.empty());
+    CHECK(!readServerConfig("dashboard ftp://a/ A\ndashboard http://b:1/ B\n", "/s/config", &s, &warnings, &why));
+    CHECK(has(why, "line 1:") && has(why, "not http:// or https://"));
+    CHECK((s.dashboards == std::vector<sync::Dashboard>{{"B", "http://b:1/"}}));
+    CHECK(!readServerConfig("dashboard http:// A\n", "/s/config", &s, &warnings, &why) && has(why, "no host"));
+    CHECK(!readServerConfig("dashboard http://a:1/ A\ndashboard http://b:1/ A\n", "/s/config", &s, &warnings, &why));
+    CHECK(has(why, "line 2:") && has(why, "given twice") && s.dashboards.size() == 1);
+    CHECK(!readServerConfig("dashboard http://a:1/ " + std::string(sync::kDashboardNameMax + 1, 'n') + "\n",
+        "/s/config", &s, &warnings, &why) && has(why, "1 to 64 bytes"));
+    CHECK(!readServerConfig("dashboard http://a:1/ A\x01" "B\n", "/s/config", &s, &warnings, &why));
+    CHECK(has(why, "control character"));
+    CHECK(!readServerConfig("dashboard http://a/" + std::string(sync::kDashboardUrlMax, 'x') + " A\n", "/s/config", &s,
+        &warnings, &why) && has(why, "longer than"));
+    std::string many;
+    for (std::size_t i = 0; i <= sync::kDashboardsMax; ++i)
+        many += "dashboard http://h:1/ D" + std::to_string(i) + "\n";
+    CHECK(!readServerConfig(many, "/s/config", &s, &warnings, &why) && has(why, "more than 16 dashboards"));
+    CHECK(s.dashboards.size() == sync::kDashboardsMax);
+
     // The server's machine: the config's, else the host name cut short; none when gethostname failed. An instance's
     // machine matches it in any case, and never an empty one.
     CHECK(serverMachine("studio", "Mac-Studio-2.local") == "studio");

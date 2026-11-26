@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The Info.plist of nexus's iOS and iPadOS app (cmake/ios.cmake), after Prax's own for UIKit (Prax's
+  cmake/uikit_info.plist.in, which its pr_uikit_bundle fills from Prax's own source directory only): one universal app
+  for iPhone (device family 1) and iPad (2), one scene, whose delegate Prax's UIKit backend names when it connects; the
+  launch screen that shows the app at the display's own size; and every orientation.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+    <key>CFBundleIdentifier</key>
+    <string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+    <key>CFBundleDisplayName</key>
+    <string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+    <key>CFBundleVersion</key>
+    <string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+    <key>MinimumOSVersion</key>
+    <string>${CMAKE_OSX_DEPLOYMENT_TARGET}</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UIDeviceFamily</key>
+    <array>
+        <integer>1</integer>
+        <integer>2</integer>
+    </array>
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+    </dict>
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>CADisableMinimumFrameDurationOnPhone</key>
+    <true/>
+    <key>UIFileSharingEnabled</key>
+    <true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
+    <key>NexusCommit</key>
+    <string>${NEXUS_IOS_COMMIT}</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>nexus reaches your nexus-server over ssh and mosh when the server is on your local network.</string>
+</dict>
+</plist>

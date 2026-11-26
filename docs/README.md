@@ -8,7 +8,7 @@ For a first install, point your current AI harness at the repository and ask it 
 
 The client and server can run on the same Apple silicon Mac with macOS 26 or newer. An always-on server can keep working while the laptop sleeps. Start with the harness you already use. You can add AIs or other harnesses later. [Accounts and AIs](accounts.md)
 
-On Windows the native window talks to `nexus-server` inside WSL2 (below, "The server"), and its terminal tabs are WSL2 shells. Wayland, Android and iOS clients are still development work. The [Apple Watch app](watch.md) talks to your AIs by voice through the iPhone. The proposed heads-down timer and away report are also on the [roadmap](ROADMAP.md).
+On Windows the native window talks to `nexus-server` inside WSL2 (below, "The server"), and its terminal tabs are WSL2 shells. Wayland and Android clients are still development work. The iPhone and iPad app is in progress ([ios.md](ios.md)). The [Apple Watch app](watch.md) talks to your AIs by voice through the iPhone. The proposed heads-down timer and away report are also on the [roadmap](ROADMAP.md).
 
 ## The window today
 

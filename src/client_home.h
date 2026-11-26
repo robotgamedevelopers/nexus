@@ -40,6 +40,7 @@ struct ClientConfig {
     std::string novaConfig;         // `nova-config <path>`: the full path of nova-config, for the fleet's machine list
                                     // (remote.h); empty: found on the PATH
     std::string serverHost = "localhost";
+    bool serverSet = false;         // the file has a `server` line (else serverHost is the default)
     std::string serverCommand;      // `server-command <words>`: run on the server's machine in place of `nexus-server new`
                                     // (link/bootstrap.h serverCommandWords; the mock, docs/mock.md); empty: that
     bool sprintEnabled = true;
