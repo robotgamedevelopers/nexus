@@ -112,6 +112,20 @@ struct Secrets {
     virtual void cancel() = 0;                      // Escape, or the dialog closed: the request is cancelled
 };
 
+// The window's question for its server where nothing names one (server_choice.h): on iOS, at first launch and when
+// the person asks to change it. Our own seam, so that the dialog draws in a state shot without a link.
+struct ServerChoice {
+    virtual ~ServerChoice() = default;
+    virtual bool asking() = 0;                      // the dialog shows
+    virtual std::string_view current() = 0;         // the server kept now, or empty for none
+    virtual std::string_view typed() = 0;           // the field's text, valid for the round
+    virtual std::string_view problem() = 0;         // why the last Enter was not taken, or empty
+    virtual void type(std::string_view text) = 0;   // the field's text changed
+    virtual void submit() = 0;                      // Enter: checked, then kept and used, or a problem
+    virtual void change() = 0;                      // the person asks to change the server: the dialog opens
+    virtual void cancel() = 0;                      // closed: with a server kept, the dialog closes; else it stays
+};
+
 // The kit's record of one tab strip's tabs (pr/kit_choice.h PrKitTabs), freed with the view.
 struct KitTabsFree {
     void operator()(PrKitTabs* tabs) const { prKitTabsDestroy(tabs); }
@@ -189,6 +203,23 @@ struct View {
     std::function<std::string(const std::string& service, const std::string& text)> requestService;
     std::string extensionProblem;
     int askedTextSteps = 0;                     // the text scale the keys asked for, applied at the next frame's start
+    // The share of the policy's prompt width the prompt box and the transcript's column take, applied at the next
+    // frame's start: 1 on a desktop, style::kRegularWidthColumn on an iPad (main_ios.cpp).
+    float columnScale = 1;
+    // The AI's replies take the column's whole width rather than the policy's reply_width, applied at the next frame's
+    // start: false on a desktop and an iPad, true on a compact width (an iPhone, main_ios.cpp), where the policy's share
+    // wraps a reply at about half the screen.
+    bool fullWidthReplies = false;
+    // The dialogs typed into (the server, a secret) stand at the window's top rather than its centre: true on iOS and
+    // iPadOS (main_ios.cpp), where the on-screen keyboard covers the window's lower part and a modal is placed over
+    // the whole window.
+    bool dialogsAtTop = false;
+    // A tap outside the prompt's box ends editing, and the on-screen keyboard goes down, as in other apps: true on iOS
+    // and iPadOS (main_ios.cpp). A drag or a scroll is no tap, and a tap on a tab or in the prompt's box ends nothing
+    // (FrameHost::watchTap). The draft stays.
+    bool tapEndsEditing = false;
+    bool promptDismissed = false;               // a tap ended editing: the prompt does not take the focus back until
+                                                // a press in its box, a key, or another tab
     std::string notice;                         // shown in place of the transcript when there are no tabs
     std::function<void()> hide;                 // Escape: hides the overlay (overlay.h escape); unset when
                                                 // windowed, where Escape does nothing
@@ -262,6 +293,8 @@ struct View {
     std::function<void()> scaled;               // after a frame's start applied a new text scale (look->textSteps),
                                                 // the first one included: saves it (tab_order.h)
     Secrets* secrets = nullptr;                 // the secret dialog's requests and field; unset, none ever shows
+    ServerChoice* serverChoice = nullptr;       // the server dialog (iOS); unset, it never shows
+    bool serverShown = false;                   // the server dialog showed last round
     std::uint64_t secretShown = 0;              // the request the dialog showed last round (0: none)
     PrLayoutNode secretField = kPrLayoutNodeNone;   // its field, as the last round built it
     // Each AI's transcript scroll from the top in px, by Tab::id, kept while another shows; kAtEnd while it showed

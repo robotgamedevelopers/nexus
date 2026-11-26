@@ -372,6 +372,12 @@ void textScaleLoadsClampsAndWarns() {
     CHECK(has(warning, "/fake/tab-order.txt") && has(warning, "whole number") && has(warning, "deleting it resets"));
     mem.readError = "it cannot be read";
     CHECK(loadTextScale(mem.store(), -5, 10, &warning) == 0 && has(warning, "cannot be read"));
+    // The platform's default (style.h kDefaultTextSteps: smaller on iOS) where nothing is saved or the file is bad; a
+    // saved scale, 0 included, is the person's and wins over it.
+    MemoryStore fresh;
+    CHECK(loadTextScale(fresh.store(), -5, 10, &warning, -2) == -2 && warning.empty());
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning, -2) == -2 && has(warning, "cannot be read"));
+    CHECK(saveTextScale(fresh.store(), 0, &error) && loadTextScale(fresh.store(), -5, 10, &warning, -2) == 0);
     mem.writeError = "Permission denied";
     CHECK(!saveTextScale(mem.store(), 1, &error));
     CHECK(has(error, "text scale") && has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));

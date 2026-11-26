@@ -1501,6 +1501,56 @@ std::string mainSessionFrame(const std::string* instance) {
     return diff.take();
 }
 
+// The server's dashboards cross the wire as SessionsDiff.dashboards, appended to the tables (format 4 on): whole in
+// every diff, read back as sent and in order, for none, one and several; equal states diff to nothing, and a change to
+// the list alone (an address, a name, the order, one fewer) makes a diff; a link of format 3 or older carries none.
+void sessions_dashboards_appended() {
+    using List = std::vector<Dashboard>;
+    const List one{{"Dashboard", "http://100.64.0.1:8080/"}};
+    const List several{{"Dashboard", "http://100.64.0.1:8080/"}, {"Build farm", "https://ci.example/board"},
+        {"\xc3\x9c" "n\xc3\xaf" "code", "http://h:1/"}};
+    for (std::uint32_t format : {kTablesFormat, kStateFormat}) {
+        for (const List& list : {List{}, one, several}) {
+            Sessions a;
+            a.setFormat(format);
+            a.setDashboards(list);
+            Sessions b;
+            b.setFormat(format);
+            b.apply_string(a.init_diff());
+            CHECK(b.dashboards() == list);
+            CHECK(b == a && a.diff_from(b).empty());
+        }
+        Sessions a;
+        a.setFormat(format);
+        a.setDashboards(several);
+        Sessions b;
+        b.setFormat(format);
+        b.apply_string(a.init_diff());
+        List moved = several;
+        moved[0].url = "http://100.64.0.2:8080/";
+        List renamed = several;
+        renamed[1].name = "CI";
+        const List reordered{several[2], several[0], several[1]};
+        const List fewer{several[0], several[2]};
+        Sessions at = a;
+        for (const List& next : {moved, renamed, reordered, fewer, List{}, one}) {
+            Sessions changed = at;
+            changed.setDashboards(next);
+            CHECK(!(changed == at) && !changed.diff_from(at).empty());
+            b.apply_string(changed.diff_from(at));
+            CHECK(b.dashboards() == next);
+            at = changed;
+        }
+    }
+    Sessions a;
+    a.setFormat(3);
+    a.setDashboards(several);
+    Sessions b;
+    b.setFormat(3);
+    b.apply_string(a.init_diff());
+    CHECK(b.dashboards().empty());
+}
+
 // The instance crosses the wire as a field appended to format 2's session frame, so no format number changed: a
 // diff main wrote before instances (old to new) reads each session on no instance, its AI's default; this build's
 // diff is main's with the instance at the frame's end (new to old: a reader from before skips it, as format 2's readers
@@ -3006,6 +3056,7 @@ const Case kCases[] = {
     {"sessions_copy_is_cheap_and_shared", sessions_copy_is_cheap_and_shared},
     {"sessions_removed_session", sessions_removed_tab},
     {"sessions_instance_appended", sessions_instance_appended},
+    {"sessions_dashboards_appended", sessions_dashboards_appended},
     {"sessions_malformed_refused_unchanged", sessions_malformed_refused_unchanged},
     {"sessions_through_mosh_bookkeeping", sessions_through_mosh_bookkeeping},
     {"hub_send_and_queue", hub_send_and_queue},

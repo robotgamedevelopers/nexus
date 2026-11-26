@@ -220,7 +220,8 @@ struct Harness {
     double time = 1000;
     PrVec2 extent{1000, 780};       // the window's, px
 
-    explicit Harness(std::function<SprintBoardAddress()> find = nullptr, bool prewarm = false, std::string storageDirectory = {}) {
+    explicit Harness(std::function<SprintBoardAddress()> find = nullptr, bool prewarm = false, std::string storageDirectory = {},
+        bool fromServer = false) {
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 1};
@@ -233,9 +234,10 @@ struct Harness {
         b.storageDirectory = std::move(storageDirectory);
         b.kit = kit;
         b.fonts = fonts;
+        b.fromServer = fromServer;
         if (find)
             b.find = find;
-        else
+        else if (!fromServer)
             b.url = kUrl;
         b.answer = Server::answer;
         b.answerContext = &server;
@@ -490,6 +492,30 @@ void aFoundAddressLoads() {
     h.model.select_tab(0);
     h.frame();
     CHECK(h.board->problem().empty() && has(h.text(), "first") && h.server.pages == 1);
+}
+
+// Linked to a server, the board waits for the address the server's state gives and says so, never looking one up;
+// once given, it is the page's.
+void theServersAddressLoads() {
+    std::atomic<int> lookups{0};
+    Harness h([&lookups] { ++lookups; return SprintBoardAddress{{}, "looked up"}; }, true, {}, true);
+    h.model.select_tab(0);
+    for (int i = 0; i < 20 && h.board->problem().empty(); ++i) h.frame();
+    CHECK(h.board->problem().find("waiting for nexus-server") != std::string::npos && h.server.pages == 0);
+    h.board->offer(kUrl);
+    for (int i = 0; i < 200 && !h.board->settled(); ++i) h.frame();
+    CHECK(h.board->settled() && h.server.pages == 1 && lookups == 0);
+    CHECK(h.board->problem().empty() && has(h.text(), "first"));
+}
+
+// A server that gives no address (none it knows, or older than the field): the window's own lookup, as unlinked.
+void anEmptyServerAddressLooksUp() {
+    std::atomic<int> lookups{0};
+    Harness h([&lookups] { ++lookups; return SprintBoardAddress{kUrl, {}}; }, true, {}, true);
+    h.model.select_tab(0);
+    h.board->offer({});
+    for (int i = 0; i < 200 && !h.board->settled(); ++i) h.frame();
+    CHECK(h.board->settled() && h.server.pages == 1 && lookups == 1);
 }
 
 // The Cost breakdown reaches one gap above the bottom of the first screen at a tall window and a short one, the gap the
@@ -874,6 +900,8 @@ int main() {
     anUnreachableBoardSaysWhyAndRecovers();
     aFailedLookupIsTheLine();
     aFoundAddressLoads();
+    theServersAddressLoads();
+    anEmptyServerAddressLooksUp();
     theCostBreakdownFillsTheFirstScreen();
     keysAndTheWheelScrollSmoothly();
     linksThatLeaveTheBoardOpenInTheBrowser();
