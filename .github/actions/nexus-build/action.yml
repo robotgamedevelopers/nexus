@@ -27,7 +27,27 @@ runs:
       run: |
         set -euo pipefail
         xcodebuild -version
-        if ! xcrun metal --version >/dev/null 2>&1; then
+        # hosted-caches started the probe while the cache downloaded (its first run mounts the toolchain, about 12 s);
+        # its result is read here, and the probe runs now when nothing started it.
+        probe="$RUNNER_TEMP/metal-probe"
+        if [ -f "$probe.started" ]; then
+          waited=0
+          while [ ! -f "$probe.rc" ]; do
+            if [ "$waited" -ge 120 ]; then
+              echo "::error::the Metal toolchain probe started by hosted-caches gave no result in 120 s"
+              cat "$probe.log"
+              exit 1
+            fi
+            sleep 1
+            waited=$((waited + 1))
+          done
+          rc=$(cat "$probe.rc")
+          echo "the Metal toolchain probe exited $rc (waited $waited s here)"
+        else
+          rc=0
+          xcrun metal --version >/dev/null 2>&1 || rc=$?
+        fi
+        if [ "$rc" -ne 0 ]; then
           echo "Xcode's Metal toolchain is not on this image: downloading it"
           xcodebuild -downloadComponent MetalToolchain
         fi
