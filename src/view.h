@@ -271,7 +271,6 @@ struct View {
     std::vector<TranscriptItems> items;         // each friend's transcript as laid out, by Tab::id
     std::size_t shown = ~std::size_t(0);        // the friend (Tab::id) the transcript showed last round
     std::size_t prompted = ~std::size_t(0);     // the friend (Tab::id) whose draft the prompt edited last round
-    std::size_t terminalShown = ~std::size_t(0); // the terminal (Tab::id) shown last round
     uint32_t promptRows = 1;                    // lines of text the prompt showed at the last layout
     PrLayoutNode prompt = kPrLayoutNodeNone;    // the prompt's text area, as the last round built it
     PrLayoutNode promptBox = kPrLayoutNodeNone; // the rounded box that holds the plus and the text area
