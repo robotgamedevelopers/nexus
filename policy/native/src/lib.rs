@@ -47,6 +47,62 @@ fn defaults(side: &str) -> Result<Bundle> {
     })
 }
 
+// What `nexus-policy apply <side> policy/rules` writes from this build's commit: the side's entry point and every
+// module it loads, with the shipped config.json. An applied bundle that is anything else runs in place of the rules
+// this binary packages, so the hosts say so when they start.
+const PACKAGED_CONFIG: &str = include_str!("../../rules/config.json");
+
+pub fn packaged(side: &str) -> Result<Bundle> {
+    let files: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/rules.rs"));
+    let all: BTreeMap<&str, &str> = files.iter().copied().collect();
+    let mut sources = BTreeMap::new();
+    let mut pending = vec![format!("{side}.star")];
+    while let Some(name) = pending.pop() {
+        if sources.contains_key(&name) {
+            continue;
+        }
+        let text = all
+            .get(name.as_str())
+            .ok_or_else(|| anyhow!("the packaged rules lack {name}"))?;
+        let ast = AstModule::parse(&name, text.to_string(), &Dialect::Standard)
+            .map_err(|e| anyhow!("{e}"))?;
+        pending.extend(ast.loads().into_iter().map(|l| l.module_id.to_owned()));
+        sources.insert(name, text.to_string());
+    }
+    Ok(Bundle {
+        version: 1,
+        side: side.to_owned(),
+        sources,
+        config: serde_json::from_str(PACKAGED_CONFIG).context("reading the packaged config.json")?,
+    })
+}
+
+// The first way an applied bundle differs from the packaged one, by content, or None when they are the same.
+pub fn difference(applied: &[u8], side: &str) -> Result<Option<String>> {
+    let expected = packaged(side)?;
+    let applied: Bundle = match serde_json::from_slice(applied) {
+        Ok(bundle) => bundle,
+        Err(e) => return Ok(Some(format!("it is not a policy bundle ({e})"))),
+    };
+    if applied.version != expected.version || applied.side != expected.side {
+        return Ok(Some(format!("it is not a version 1 {side} bundle")));
+    }
+    for (name, text) in &expected.sources {
+        match applied.sources.get(name) {
+            None => return Ok(Some(format!("it lacks {name}"))),
+            Some(t) if t != text => return Ok(Some(format!("its {name} differs"))),
+            Some(_) => {}
+        }
+    }
+    if let Some(name) = applied.sources.keys().find(|n| !expected.sources.contains_key(*n)) {
+        return Ok(Some(format!("it has {name}, which this build does not package")));
+    }
+    if applied.config != expected.config {
+        return Ok(Some("its config differs from policy/rules/config.json".to_owned()));
+    }
+    Ok(None)
+}
+
 pub fn read(path: &Path) -> Result<Vec<u8>> {
     ensure!(
         path.symlink_metadata()?.is_file(),
@@ -453,6 +509,43 @@ pub unsafe extern "C" fn nexus_star_call_v1(
         (*p).decide(arg(path)?, arg(event)?, serde_json::from_str(arg(json)?)?)
     }))
     .unwrap_or_else(|_| Err(anyhow!("policy evaluation panicked")));
+    match result {
+        Ok(s) => message(s),
+        Err(e) => {
+            unsafe { *err = message(format!("{e:#}")) };
+            std::ptr::null_mut()
+        }
+    }
+}
+
+// Null when no bundle is at `path` or it is the one this build packages; otherwise why it is not, one line.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nexus_star_stale_v1(side: *const c_char, path: *const c_char) -> *mut c_char {
+    let result = std::panic::catch_unwind(|| unsafe {
+        let side = arg(side)?;
+        ensure!(matches!(side, "client" | "server"), "unknown policy side");
+        match read_revision(arg(path)?)? {
+            None => Ok(None),
+            Some(bytes) => difference(&bytes, side),
+        }
+    })
+    .unwrap_or_else(|_| Err(anyhow!("policy comparison panicked")));
+    match result {
+        Ok(None) => std::ptr::null_mut(),
+        Ok(Some(why)) => message(why),
+        Err(e) => message(format!("it could not be compared: {e:#}")),
+    }
+}
+
+// The bundle `nexus-policy apply <side> policy/rules` writes from this build's commit, as JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nexus_star_packaged_v1(side: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    let result = std::panic::catch_unwind(|| unsafe {
+        let side = arg(side)?;
+        ensure!(matches!(side, "client" | "server"), "unknown policy side");
+        Ok(serde_json::to_string(&packaged(side)?)?)
+    })
+    .unwrap_or_else(|_| Err(anyhow!("policy packaging panicked")));
     match result {
         Ok(s) => message(s),
         Err(e) => {

@@ -449,6 +449,17 @@ if(TARGET nexus_policy)
         "-DTOOL=${policy_tool}" "-DCHECK=$<TARGET_FILE:policy_reload_test>"
         "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/policy-reload-test" -P "${PROJECT_SOURCE_DIR}/tests/policy/reload.cmake")
     set_tests_properties(policy_functional_reload PROPERTIES LABELS functional TIMEOUT 30)
+    # An applied bundle that is not the one the binary packages: the comparison, and what apply writes from this commit.
+    add_executable(policy_stale_bundle_test tests/policy/stale_bundle.cpp)
+    target_link_libraries(policy_stale_bundle_test PRIVATE nexus_policy)
+    target_compile_options(policy_stale_bundle_test PRIVATE ${NEXUS_WARNINGS})
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/policy-stale-bundle-test")
+    add_test(NAME policy_unit_stale_bundle COMMAND policy_stale_bundle_test
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/policy-stale-bundle-test")
+    add_test(NAME policy_unit_stale_bundle_applied COMMAND ${CMAKE_COMMAND}
+        "-DTOOL=${policy_tool}" "-DCHECK=$<TARGET_FILE:policy_stale_bundle_test>" "-DRULES=${PROJECT_SOURCE_DIR}/policy/rules"
+        "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/policy-stale-bundle-applied" -P "${PROJECT_SOURCE_DIR}/tests/policy/stale_bundle_apply.cmake")
+    set_tests_properties(policy_unit_stale_bundle policy_unit_stale_bundle_applied PROPERTIES LABELS unit TIMEOUT 30)
 endif()
 add_subdirectory(tests/model)
 add_subdirectory(tests/sync)
