@@ -28,8 +28,8 @@ void check(bool ok, const char* what, int line) {
 
 // The strip's order: a terminal, two AIs, the dashboard. The list puts the dashboard first, then the AIs, then terminals.
 const std::string kTabs = R"("tabs":[{"kind":"terminal","label":"zsh","group":"terminals","type":""},)"
-                          R"({"kind":"friend","label":"emma","group":"friends","type":""},)"
-                          R"({"kind":"friend","label":"rowan","group":"friends","type":""},)"
+                          R"({"kind":"ai","label":"emma","group":"ais","type":""},)"
+                          R"({"kind":"ai","label":"rowan","group":"ais","type":""},)"
                           R"({"kind":"sprint","label":"dashboard","group":"sprint","type":""}])";
 
 std::string ui(const char* idiom, bool menu) {
@@ -37,11 +37,11 @@ std::string ui(const char* idiom, bool menu) {
            R"(,"voice":{"listening":false,"speaking":false},"draft":""})";
 }
 
-WindowApplication window(const std::string& context, const char* tab = "friend") {
+WindowApplication window(const std::string& context, const char* tab = "ai") {
     // The host lives in main: one destroyed after main returns tears down the policy runtime out of order.
     auto& host = *policyHost;
     WindowApplication app;
-    app.update(host, tab, "", true, false, 1, 4, "friends", {}, false, {}, context);
+    app.update(host, tab, "", true, false, 1, 4, "ais", {}, false, {}, context);
     return app;
 }
 

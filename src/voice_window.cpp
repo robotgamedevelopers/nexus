@@ -38,7 +38,7 @@ void VoiceWindow::setSpeech(std::unique_ptr<voice::Speech> speech) {
 
 std::size_t VoiceWindow::aiIndex(const std::string& name) const {
     for (std::size_t i = 0; i < model_.tab_count(); ++i)
-        if (model_.tab(i).kind == TabKind::Friend && model_.tab(i).name == name) return i;
+        if (model_.tab(i).kind == TabKind::AI && model_.tab(i).name == name) return i;
     return model_.tab_count();
 }
 
@@ -79,10 +79,10 @@ void VoiceWindow::draft(const std::string& name, const std::string& text) {
         return;
     }
     std::size_t i = name.empty() ? model_.active() : aiIndex(name);
-    if (i >= model_.tab_count() || model_.tab(i).kind != TabKind::Friend) {
+    if (i >= model_.tab_count() || model_.tab(i).kind != TabKind::AI) {
         i = model_.tab_count();
         for (std::size_t j = 0; j < model_.tab_count() && i == model_.tab_count(); ++j)
-            if (model_.tab(j).kind == TabKind::Friend) i = j;
+            if (model_.tab(j).kind == TabKind::AI) i = j;
     }
     if (i >= model_.tab_count()) return; // no AI's tab at all: the voice panel's line still holds what was heard
     const std::string& typed = model_.tab(i).draft;
@@ -132,7 +132,7 @@ void VoiceWindow::frame(double now) {
     const auto& names = view_.windowApp.surface.voiceNames;
     for (std::size_t i = 0; i < model_.tab_count(); ++i) {
         const auto& tab = model_.tab(i);
-        if (tab.kind != TabKind::Friend || tab.primaryChat()) continue;
+        if (tab.kind != TabKind::AI || tab.primaryChat()) continue;
         const auto aliases = names.find(tab.name);
         ais.push_back({tab.name, aliases != names.end() ? aliases->second : std::vector<std::string>{}});
         if (i == model_.active() && !view_.phoneMenu) current = tab.name;
@@ -155,12 +155,12 @@ void VoiceWindow::frame(double now) {
     // cursor (the server's state: waiting for the person again). What a tab held when first seen is history, not a reply.
     for (std::size_t i = 0; i < model_.tab_count(); ++i) {
         const auto& tab = model_.tab(i);
-        if (tab.kind != TabKind::Friend) continue;
+        if (tab.kind != TabKind::AI) continue;
         auto [seen, fresh] = seen_.try_emplace(tab.id, tab.transcript.size());
         if (!fresh && tab.transcript.size() < seen->second) seen->second = tab.transcript.size(); // cleared
         for (; seen->second < tab.transcript.size(); ++seen->second) {
             const auto& entry = tab.transcript[seen->second];
-            if (entry.kind != EntryKind::Friend) continue;
+            if (entry.kind != EntryKind::AI) continue;
             host_.replied(tab.name, voice::speakable(entry.text));
             if (tab.name == panel_.to) panel_.replyText += (panel_.replyText.empty() ? "" : "\n\n") + entry.text;
         }
