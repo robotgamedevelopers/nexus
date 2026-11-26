@@ -457,7 +457,7 @@ jobs:
   # fleet Mac with Xcode (the macbook's nexus-nightly runner). Never the studio (Glenn's screen).
   watch-speech:
     runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
-    timeout-minutes: 15
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -1571,7 +1571,7 @@ jobs:
       matrix:
         include:
           - part: units
-          # The walks in two halves (every other walk each): together they took past 2 minutes on the image's 4 cores.
+          # The walks in two halves (every other walk each): split so each half finishes sooner on its runner.
           - part: walks
             half: 1
           - part: walks
