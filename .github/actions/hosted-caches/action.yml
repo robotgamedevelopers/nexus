@@ -94,8 +94,11 @@ runs:
         if [ "$RUNNER_OS" = macOS ]; then
           probe="$RUNNER_TEMP/metal-probe"
           touch "$probe.started"
-          nohup bash -c 'rc=0; xcrun metal --version >"$1.log" 2>&1 || rc=$?; echo "$rc" >"$1.rc.tmp"; mv "$1.rc.tmp" "$1.rc"' \
-            metal-probe "$probe" </dev/null >/dev/null 2>&1 &
+          # Not under nohup: on the fleet Mac, whose runner is a launchd service, nohup ended before it started the
+          # probe (nightly 45747049900: no probe log at all), while xcrun metal --version itself answers at once there.
+          bash -c 'rc=0; xcrun metal --version >"$1.log" 2>&1 || rc=$?; echo "$rc" >"$1.rc.tmp"; mv "$1.rc.tmp" "$1.rc"' \
+            metal-probe "$probe" </dev/null >"$probe.err" 2>&1 &
+          echo "$!" > "$probe.pid"
         fi
         # Kegs restored from their cache (the step above) are linked, as an install would leave them.
         if [ "$RUNNER_OS" = macOS ] && [ "$KEGS_HIT" = true ]; then

@@ -31,12 +31,22 @@ runs:
         # its result is read here, and the probe runs now when nothing started it.
         probe="$RUNNER_TEMP/metal-probe"
         if [ -f "$probe.started" ]; then
+          # A probe that ended without a result fails at once, by name. On a GitHub-hosted Mac (2-minute jobs) it also
+          # has 120 s; on a fleet Mac (the nightly, no time limit) it has as long as it takes, reported each minute.
           waited=0
           while [ ! -f "$probe.rc" ]; do
-            if [ "$waited" -ge 120 ]; then
-              echo "::error::the Metal toolchain probe started by hosted-caches gave no result in 120 s"
-              cat "$probe.log"
+            if ! kill -0 "$(cat "$probe.pid")" 2>/dev/null && [ ! -f "$probe.rc" ]; then
+              echo "::error::the Metal toolchain probe started by hosted-caches ended without a result"
+              for part in log err; do if [ -f "$probe.$part" ]; then cat "$probe.$part"; fi; done
               exit 1
+            fi
+            if [ "$RUNNER_ENVIRONMENT" = github-hosted ] && [ "$waited" -ge 120 ]; then
+              echo "::error::the Metal toolchain probe started by hosted-caches gave no result in 120 s"
+              for part in log err; do if [ -f "$probe.$part" ]; then cat "$probe.$part"; fi; done
+              exit 1
+            fi
+            if [ "$waited" -gt 0 ] && [ $((waited % 60)) -eq 0 ]; then
+              echo "still waiting for the Metal toolchain probe after $waited s"
             fi
             sleep 1
             waited=$((waited + 1))
