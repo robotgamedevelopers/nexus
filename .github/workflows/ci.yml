@@ -226,14 +226,14 @@ jobs:
         uses: ./.github/actions/build-fetch
         with:
           name: build-linux
-      # What the link's programs load at run time (Ubuntu's protobuf, which build-linux built against) and the ssh
+      # What the link's programs load at run time (Ubuntu's protobuf and protobuf-lite, which mosh links) and the ssh
       # server the link's happy paths reach, installed only where the image lacks them.
       - name: The link's run-time packages
         shell: bash
         run: |
           set -euo pipefail
           need=()
-          for package in libprotobuf32t64 openssh-server; do
+          for package in libprotobuf32t64 libprotobuf-lite32t64 openssh-server; do
             dpkg -s "$package" >/dev/null 2>&1 || need+=("$package")
           done
           if [ ${#need[@]} -gt 0 ]; then
