@@ -13,6 +13,9 @@
 
 namespace nexus {
 
+// The board's address from the sprint's record runs nova-config, a process: none of it where the build runs no processes
+// (iOS: build_parts.h), whose board takes its address from nexus-server alone (board.cpp).
+#if NEXUS_PROCESSES
 namespace {
 
 constexpr const char* kShown = "nova-config service show sprint-run --json";
@@ -138,7 +141,6 @@ SprintBoardAddress findSprintBoard(const char* override, const Command& command,
     return parseSprintRun(r.out);
 }
 
-#if NEXUS_PROCESSES
 SprintBoardAddress findSprintBoard() {
     const ClientConfig& config = clientConfig();
     return findSprintBoard(config.sprintUrl.c_str(), sprintRunCommand(config.novaConfig.c_str(), std::getenv("SHELL")),
