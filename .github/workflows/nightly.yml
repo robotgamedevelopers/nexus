@@ -450,9 +450,10 @@ jobs:
   # The watch's speech test (watch/tests/speech.cmake): recordings spoken by `say`, through the recognizer the phone
   # uses (SpeechTranscriber, on device, as nexus-watch-relay --transcribe) and the shared name matcher, and silence
   # refused with its reason; with its planted twin, which must fail. nexus-watch-relay links the link, so this is the
-  # full configure under Ninja (CMake builds Swift with Ninja and Xcode only) on a runner with Xcode. Never the studio
-  # (Glenn's screen); the fleet's only other Mac, mini-m5, has no Xcode and no runner label apart from the studio's,
-  # so this runs on GitHub's hosted macOS (macos-26) until a fleet Mac off the studio carries Xcode.
+  # full configure (ci.yml's macOS Debug, from its cache: hosted-caches and nexus-build, which bring Ninja, protobuf and
+  # the pinned Rust) on a runner with Xcode. Never the studio (Glenn's screen); the fleet's only other Mac, mini-m5, has
+  # no Xcode and no runner label apart from the studio's, so this runs on GitHub's hosted macOS (macos-26) until a
+  # fleet Mac off the studio carries Xcode.
   watch-speech:
     runs-on: macos-26
     timeout-minutes: 15
@@ -461,30 +462,18 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Ninja, and caches outside the workspace
-        shell: bash
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: 1
-          HOMEBREW_NO_INSTALL_CLEANUP: 1
-        run: |
-          set -euo pipefail
-          if ! command -v ninja >/dev/null; then
-            brew install ninja
-          fi
-          if ! command -v ninja >/dev/null; then
-            echo "::error::no ninja on $(hostname -s)'s runner PATH after brew install ninja"
-            exit 1
-          fi
-          caches="$HOME/Library/Caches/nexus-ci"
-          mkdir -p "$caches/$RUNNER_NAME/prax-downloads"
-          {
-            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
-            echo "JOBS=$(sh .github/job-cores.sh)"
-          } >> "$GITHUB_ENV"
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: mac-debug
+          require: "false"
+          brew: ninja protobuf
+          brew-keep: protobuf abseil
       - name: Build the relay and the matcher
-        run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --parallel "$JOBS" --target nexus_watch_relay_host watch_match
+        uses: ./.github/actions/nexus-build
+        with:
+          config: mac-debug
+          targets: nexus_watch_relay_host watch_match
       - name: Speech
         run: bash .github/ctest.sh --test-dir build -R '^watch_speech(_planted)?$' --output-on-failure
 
@@ -1173,10 +1162,11 @@ jobs:
       - name: Unit tests
         run: bash .github/ctest.sh --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
       # The link's functional tests reach this machine over `ssh localhost` as the runner's login, which this Mac allows.
+      # The watch's speech test runs in watch-speech, on hosted macOS, never here.
       - name: Functional tests
         run: >-
           bash .github/ctest.sh --test-dir build -L functional
-          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional)$'
+          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional|watch_speech|watch_speech_planted)$'
           -j "$TEST_JOBS" --output-on-failure
       # The paced injected hitch measures Release's frame budgets (tests/window/CMakeLists.txt, unchanged), so it runs
       # here in the Release build rather than in ci.yml's Debug build; alone, so no other test shares the clock. A run
@@ -1192,8 +1182,8 @@ jobs:
   # macos-release, server-lock).
   #
   # macOS Debug, as a pull request builds it (asserts on), on the fleet Mac. The link's tests reach this machine over
-  # `ssh localhost` as the runner's login, which this Mac allows. The watch's speech test speaks aloud and runs in
-  # watch-speech, on hosted macOS, never here.
+  # `ssh localhost` as the runner's login, which this Mac allows. The watch's speech test runs in watch-speech,
+  # on hosted macOS, never here.
   macos-debug:
     runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
     steps:
