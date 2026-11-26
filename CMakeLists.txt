@@ -476,6 +476,24 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
     endif()
 endif()
 
+# Prax's libraries that the native window links on Windows, as one target in this directory: cache-warm builds it into
+# main's Windows cache, so a pull request that turns the window on compiles only nexus's own code within the windows
+# job's 2 minutes. A top-level target, because the Visual Studio generator's `cmake --build --target` finds a project
+# only here, and Prax's are under _deps (MSB1009, cache-warm run 45844287751).
+if(WIN32)
+    set(nexus_prax_window_libraries pr_html pr_html_quickjs pr_svg_quickjs pr_url_quickjs pr_dom pr_fetch pr_net pr_tls
+        pr_http pr_image_select pr_compress_select pr_text pr_font pr_draw pr_audio pr_png pr_studio_app pr_app_select
+        pr_gpu_select pr_draw_select pr_surface)
+    foreach(library IN LISTS nexus_prax_window_libraries)
+        if(NOT TARGET ${library})
+            message(FATAL_ERROR "nexus: Prax at this pin has no target ${library}, which the window links: update "
+                "nexus_prax_window_libraries in CMakeLists.txt")
+        endif()
+    endforeach()
+    add_custom_target(nexus_prax_window_libraries)
+    add_dependencies(nexus_prax_window_libraries ${nexus_prax_window_libraries})
+endif()
+
 if(WIN32 AND NOT NEXUS_WINDOW)
     # The app does not build on Windows until Prax's Win32 backend does (NEXUS_WINDOW above); its Windows part,
     # src/platform_win.cpp, is still compiled (never linked) so CI holds it to the same warnings.
