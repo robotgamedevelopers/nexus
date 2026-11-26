@@ -875,6 +875,9 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
 }
 
 bool FrameHost::stageFile(std::string name, std::string bytes) {
+    // Nothing is staged while locked (View::lockScreen): a clipboard file or image read that finishes after the lock
+    // starts, before the next frame takes the prompt away, lands nowhere.
+    if (view->lockScreen) return false;
     if (!ui || view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt ||
         (view->secrets && view->secrets->showing()) || !model->tab_count()) return false;
     if (name.empty() || name == "." || name == ".." || name.size() > 255 ||

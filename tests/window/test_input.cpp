@@ -2548,6 +2548,26 @@ void lockedWindowDrawsOnlyTheLockScreen() {
     CHECK(anyTextHas(texts, "alex") && anyTextHas(texts, "emma") && anyTextHas(texts, "secret plan"));
 }
 
+// A clipboard file or image whose read finishes after the lock starts, before the next frame takes the prompt away,
+// is not staged into the prompt (FrameHost::stageFile).
+void nothingStagedOnceLocked() {
+    Harness h;
+    FrameHost host;
+    host.view = &h.view;
+    host.model = &h.model;
+    host.ui = h.ui;
+    h.frame();
+    CHECK(host.stageFile("before.txt", "unlocked"));
+    h.frame();
+    const std::string draft = h.active().draft;
+    h.view.lockScreen = View::LockScreen{"nexus is locked", ""};
+    CHECK(!host.stageFile("after.txt", "locked"));
+    CHECK(!host.stageFile("pasted-image.png", "png"));
+    h.view.lockScreen.reset();
+    h.frame();
+    CHECK(h.active().draft == draft);
+}
+
 // ---- Terminal tabs ----
 
 // Command-T adds a terminal tab at the end, shows it below the strip at the window's full width, with no prompt and
@@ -3587,6 +3607,7 @@ int main(int argc, char** argv) {
     textScaleChangesAreSaved();
     textKeysWorkWithCapsLock();
     lockedWindowDrawsOnlyTheLockScreen();
+    nothingStagedOnceLocked();
     escapeHidesAndCommandEscapeStops();
     escapeWindowedHidesNothing();
     escapeWhileComposingDoesNotHide();
