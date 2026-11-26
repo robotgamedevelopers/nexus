@@ -14,8 +14,17 @@
 
 namespace nexus::driver {
 
-// The version a driver states in its hello. A server refuses a driver that states another.
+// The version a driver states in its hello. A server refuses a driver that states another. Steering (steer,
+// follow-up, queue, settled) came into version 1 as kinds an older reader skips, offered only to a driver whose hello
+// names them, so the version stays 1 (docs/driver-protocol.md, "Steering a turn").
 constexpr int kProtocolVersion = 1;
+
+// The features a driver's hello may name for steering (docs/driver-protocol.md, "Steering a turn"): it takes steer
+// lines, it takes follow-up lines, and it writes settled before each done (and queue on every change of its queue). A
+// driver that names steer or follow-up names settled too.
+constexpr std::string_view kFeatureSteer = "steer";
+constexpr std::string_view kFeatureFollowUp = "follow-up";
+constexpr std::string_view kFeatureSettled = "settled";
 
 // The longest line either side writes or reads, in bytes, not counting its newline. A longer line is refused, never
 // buffered: 1 MiB holds any prompt a person types or pastes (a quarter of a million tokens, past most context windows),
@@ -72,7 +81,27 @@ struct SecretAnswer {
     bool operator==(const SecretAnswer&) const = default;
 };
 
-using ServerMessage = std::variant<Send, Stop, Settings, ServerInfo, SecretAnswer, Unknown>;
+// A message from the person into the open turn `turn`, taken in by the harness after the tool calls running finish and
+// before its next model call (or at the end of a model run, before the run would end). `id` is the server's own number
+// for it, from 1, strictly increasing within the driver's process. Written only to a driver whose hello named "steer".
+struct Steer {
+    std::uint64_t turn = 0;
+    std::uint64_t id = 0;
+    std::string text;
+    bool operator==(const Steer&) const = default;
+};
+
+// A message from the person into the open turn `turn`, taken in only when the turn would otherwise settle: at the end
+// of a model run with no tool calls and no steer pending, one per model run. Written only to a driver whose hello named
+// "follow-up".
+struct FollowUp {
+    std::uint64_t turn = 0;
+    std::uint64_t id = 0;
+    std::string text;
+    bool operator==(const FollowUp&) const = default;
+};
+
+using ServerMessage = std::variant<Send, Stop, Settings, ServerInfo, SecretAnswer, Steer, FollowUp, Unknown>;
 
 // ---- Driver to server ----
 
@@ -172,7 +201,27 @@ struct AskSecret {
     bool operator==(const AskSecret&) const = default;
 };
 
-using DriverMessage = std::variant<Hello, Credential, Session, Text, TextEnd, Tool, ChildAgents, Done, Error, AskSecret, Unknown>;
+// The driver's whole queue for turn `turn`: the ids of the steers and of the follow-ups it took and has not yet given
+// the harness, oldest first. Written after every change of either list, never a diff: an id leaves only when the
+// harness takes it in.
+struct Queue {
+    std::uint64_t turn = 0;
+    std::vector<std::uint64_t> steer;
+    std::vector<std::uint64_t> followUp;
+    bool operator==(const Queue&) const = default;
+};
+
+// Turn `turn` has no automatic work left (no retry, no compaction, nothing queued taken in): written once, just before
+// its done, by a driver whose hello named "settled". `aborted` when a stop ended it: then what its last queue held was
+// never given the harness.
+struct Settled {
+    std::uint64_t turn = 0;
+    bool aborted = false;
+    bool operator==(const Settled&) const = default;
+};
+
+using DriverMessage = std::variant<Hello, Credential, Session, Text, TextEnd, Tool, ChildAgents, Done, Error, AskSecret,
+    Queue, Settled, Unknown>;
 
 // ---- Encoding and decoding ----
 
@@ -255,6 +304,10 @@ private:
 
 using ServerReader = MessageReader<ServerMessage>;   // what a driver reads
 using DriverReader = MessageReader<DriverMessage>;   // what the server reads
+
+// The most ids one list of a queue line holds: a driver queues no more than this per turn, so a queue line stays far
+// within the line limit. The server writes no more than this many steers and follow-ups into one turn.
+constexpr std::size_t kMaxQueued = 64;
 
 // The names the protocol gives these values, as written on the line.
 std::string_view billingName(Billing billing);
