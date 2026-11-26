@@ -25,13 +25,13 @@ std::string_view view(PrStringView s) {
 // error, and prUtf8Validate passes surrogates. So a line is checked here before and after it is read.
 
 // The offset of the first byte of `text` that is not well-formed UTF-8, or npos. A sequence decodes as U+FFFD here
-// only if it is ill-formed or is U+FFFD itself; U+0000 (which prUtf8DecodeScalar also turns into U+FFFD) is left for
-// the JSON reader to refuse.
+// only if it is ill-formed, as the bytes of an encoded surrogate are, or is U+FFFD itself. U+0000 decodes as itself
+// and is left for the JSON reader to refuse.
 std::size_t illFormedAt(std::string_view text) {
     std::size_t at = 0;
     while (at < text.size()) {
         std::uint32_t codePoint = 0;
-        const std::uint32_t n = prUtf8DecodeScalar(pr(text), at, &codePoint);
+        const std::uint32_t n = prUtf8Decode(pr(text), at, &codePoint);
         if (codePoint == kPrUtf8Replacement && text[at] != '\0' && text.substr(at, n) != "\xEF\xBF\xBD")
             return at;
         at += n;

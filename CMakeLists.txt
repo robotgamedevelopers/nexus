@@ -26,8 +26,8 @@ set(PR_CHARSET_LEGACY OFF CACHE BOOL "" FORCE)
 
 include(FetchContent)
 FetchContent_Declare(prax
-    URL https://codeload.github.com/pdoane/prax/tar.gz/87bcd16a6657ab8d93573cdf1291ba14c169f0dc
-    URL_HASH SHA256=9bb8fc2473af41ae1cef8a19d61444db82125a2477ea7b95faa24adb43f25909
+    URL https://codeload.github.com/pdoane/prax/tar.gz/1527e556885011a7ecbbafd15dc3fea4e1bb14e3
+    URL_HASH SHA256=d9b4a0ccd8c2dbb4f805831ac4de72be783644190be1313a30c90e53a582fa1e
     # SYSTEM: Prax's headers use Clang nullability, which -Wpedantic rejects in our code otherwise.
     SYSTEM
     EXCLUDE_FROM_ALL)
