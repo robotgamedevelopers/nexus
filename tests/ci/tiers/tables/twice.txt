@@ -1,0 +1,3 @@
+# planted: two rows for one test
+happy_path pr ALWAYS
+happy_path nightly ALWAYS

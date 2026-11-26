@@ -1,0 +1,17 @@
+# Which tests run on every pull request and which in the nightly (cmake/tiers.cmake, docs/ci-tiers.md). By default a
+# unit test runs on every pull request (tier_pr) and every other test in the nightly (tier_nightly). A row here moves
+# one test: `<test> <pr|nightly> <condition>`, where <condition> is the CMake options (joined with +) that are all on
+# wherever the test is registered, or ALWAYS. A row whose condition holds but whose test is missing fails the configure.
+
+# Unit tests run on every pull request only when they are fast. These took 1 s or more on a hosted runner (PR #114's
+# runs, 2026-11-25), so they run in the nightly.
+sync_unit                                   nightly  ALWAYS              # 12.7 s macOS Debug, 3.0 s Linux, 2.4 s Windows
+accounts_unit_friends_cap                   nightly  ALWAYS              # 1.05 s macOS Debug
+
+# The happy path of each feature, end to end, on every pull request.
+link_e2e_loopback                           pr       NEXUS_LINK          # connect: nexus-server over ssh, one round trip
+friends_functional_normal                   pr       NEXUS_SERVER_PARTS  # a session turn with an AI
+link_e2e_signin                             pr       NEXUS_LINK          # sign-in, through the link
+friends_functional_fable_switch_account     pr       NEXUS_SERVER_PARTS  # switching an AI's account
+sprint_board                                pr       NEXUS_WINDOW        # the dashboard tab
+window_state_screenshot                     pr       NEXUS_WINDOW+NEXUS_LINK  # the window drawn from a state

@@ -466,3 +466,6 @@ endif()
 if(NEXUS_TAILSCALE)
     add_subdirectory(tests/tailscale)
 endif()
+# Each test's tier (tier_pr or tier_nightly, cmake/tiers.cmake and tests/tiers.txt), given once every test above is
+# registered.
+include(cmake/tiers.cmake)

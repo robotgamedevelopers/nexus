@@ -1,0 +1,33 @@
+# Restores the build tree a build job of this run shared (.github/actions/build-share) at its path, build/, for a job
+# that only runs tests.
+name: build-fetch
+description: Download and unpack this run's build tree
+inputs:
+  name:
+    description: the artifact's name (one per configuration)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Download
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ runner.temp }}/build-share
+    - name: Unpack the build tree
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v zstd >/dev/null 2>&1; then echo "::error::no zstd on $(hostname -s)"; exit 1; fi
+        start=$(date +%s)
+        zstd -q -d -c "$RUNNER_TEMP/build-share/build.tar.zst" | tar -xf -
+        # Libraries the build job shared (build-share's libraries), restored at the paths the programs load them from.
+        if [ -f "$RUNNER_TEMP/build-share/libraries.tar.zst" ]; then
+          zstd -q -d -c "$RUNNER_TEMP/build-share/libraries.tar.zst" | tar -xPf -
+          echo "restored the shared libraries: $(zstd -q -d -c "$RUNNER_TEMP/build-share/libraries.tar.zst" | tar -tPf - | sed -n 's#.*/opt/\([^/]*\)$#\1#p' | tr '\n' ' ')"
+        fi
+        rm -rf "$RUNNER_TEMP/build-share"
+        if [ ! -f build/CTestTestfile.cmake ]; then echo "::error::the shared build tree has no build/CTestTestfile.cmake"; exit 1; fi
+        echo "unpacked $(du -sh build | cut -f1) in $(( $(date +%s) - start )) s"
+        if [ "$RUNNER_OS" = macOS ]; then cores=$(sysctl -n hw.ncpu); else cores=$(nproc); fi
+        echo "TEST_JOBS=$cores" >> "$GITHUB_ENV"
