@@ -559,6 +559,40 @@ void loginSignsInThenSwitches() {
     CHECK(w.view.problem.empty());
 }
 
+// /login of an account whose sign-in ends in a pasted code (Antigravity's, sync/signin.h signsInByPastedCode): its
+// claim says this window takes one, and once the flow it holds wants the code, the masked ask is for that account in
+// the AI's tab while the session stays on its own; the code goes up with the tab's session. Plants: a claim without
+// pastesCode (the server refuses the flow); the ask keyed to the session's current account (it never shows).
+void loginAsksForAPastedCode() {
+    Window w;
+    std::vector<std::string> opened;
+    w.host.signIn.openUrl = [&](const std::string& url) { opened.push_back(url); };
+    w.view.loginAccount("a3");
+    CHECK(!w.link.sent.empty() && w.link.sent.back().kind == sync::ActionKind::SignInClaim &&
+          w.link.sent.back().account == "a3" && w.link.sent.back().pastesCode);
+    const std::string google = "https://accounts.google.com/o/oauth2/auth?client_id=fake-client&state=fakeMenuXq7wP2";
+    sync::SignInOffer offer{.id = 4, .account = "a3", .provider = "antigravity", .opener = w.host.signIn.opener.token(),
+        .host = "server.test", .url = sync::SecretValue(google)};
+    w.offers = {offer};
+    w.publish();
+    w.frame();
+    CHECK((opened == std::vector<std::string>{google}));
+    CHECK(w.host.signIn.codeAsk() == nullptr);      // no code wanted yet
+    offer.url = sync::SecretValue();
+    offer.codeWanted = true;
+    w.offers = {offer};
+    w.publish();
+    w.frame();
+    const sync::SignInOffer* ask = w.host.signIn.codeAsk();
+    CHECK(ask != nullptr && ask->account == "a3" && ask->id == 4);
+    CHECK(w.current == "a1");
+    const std::string code = "4/0AfakeMenuCodeQx7wP2mZ";
+    w.host.signIn.typeCode(code);
+    w.host.signIn.submitCode();
+    CHECK(w.link.sent.back().kind == sync::ActionKind::SignInCode && w.link.sent.back().request == 4 &&
+          w.link.sent.back().session == kRowan && w.link.sent.back().secret.bytes() == code);
+}
+
 // A /login whose sign-in ends without signing in (cancelled, failed, expired) changes nothing. Plant: switch anyway.
 void cancelledLoginChangesNothing() {
     Window w;
@@ -639,6 +673,7 @@ int main() {
     accountCommandOpensTheSelector();
     signInRowRunsLogin();
     loginSignsInThenSwitches();
+    loginAsksForAPastedCode();
     cancelledLoginChangesNothing();
     logoutConfirmsThenMoves();
     logoutOfTheLastAccountMovesNowhere();

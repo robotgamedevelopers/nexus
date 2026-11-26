@@ -755,6 +755,7 @@ std::uint64_t FrameHost::claimAccount(sync::SessionId session, const std::string
     action.session = session;
     action.request = 0;
     action.text = signIn.opener.token();
+    action.pastesCode = true;   // this window takes a vendor's pasted code (LinkSignIn::codeAsk), as activateSignIn says
     return link->send(std::move(action));
 }
 
@@ -1015,8 +1016,9 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
     signIn.activeTab = [this]() -> std::pair<sync::SessionId, std::string> {
         if (!model->tab_count()) return {0, std::string()};
         const auto session = mirror.session(model->tab(model->active()).id);
-        const auto* choice = activeChoice();
-        return {session, choice ? choice->name : std::string()};
+        // The account this tab signs in: a /login's while it is under way (the session stays on its own until then),
+        // else the session's (signInTarget).
+        return {session, signInTarget().value_or(std::string())};
     };
     signIn.serverArg = serverHost;
     signIn.local = localHostName();
