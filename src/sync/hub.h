@@ -533,3 +533,4 @@ private:
 };
 
 } // namespace nexus::sync
+// CI probe (throwaway, PR to be closed): a comment so every includer of this header rebuilds.
