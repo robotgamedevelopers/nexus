@@ -37,18 +37,18 @@ if(TARGET nexus_link AND APPLE AND CMAKE_GENERATOR MATCHES "Ninja")
     enable_language(Swift)
     # A shared library, linked by clang++: the link's own libraries carry -Wl flags that swiftc refuses, and a shared
     # library keeps them to itself. Swift sees only the C interface, nexus_relay.h.
-    add_library(nexus_watch_relay SHARED host/relay_host.cpp)
+    add_library(nexus_watch_relay SHARED EXCLUDE_FROM_ALL host/relay_host.cpp)
     target_include_directories(nexus_watch_relay PUBLIC host)
     target_compile_options(nexus_watch_relay PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_watch_relay PRIVATE nexus_link nexus_watch_core)
-    add_executable(nexus_watch_relay_host host/main.swift phone/Transcriber.swift)
+    add_executable(nexus_watch_relay_host EXCLUDE_FROM_ALL host/main.swift phone/Transcriber.swift)
     set_target_properties(nexus_watch_relay_host PROPERTIES OUTPUT_NAME nexus-watch-relay)
     target_compile_options(nexus_watch_relay_host PRIVATE -warnings-as-errors
         -import-objc-header "${CMAKE_CURRENT_SOURCE_DIR}/host/nexus_relay.h")
     target_link_libraries(nexus_watch_relay_host PRIVATE nexus_watch_relay)
 
     # The speech test (functional): spoken recordings through the recognizer and the name matcher (tests/speech.cmake).
-    add_executable(watch_match tests/match_tool.cpp)
+    add_executable(watch_match EXCLUDE_FROM_ALL tests/match_tool.cpp)
     target_link_libraries(watch_match PRIVATE nexus_watch_core)
     target_compile_options(watch_match PRIVATE ${NEXUS_WARNINGS})
     foreach(plant 0 1)

@@ -14,15 +14,15 @@ endforeach()
 
 # The walks TLC checks the code's traces with, over a copy of the core built with its planted faults
 # (NEXUS_WATCH_FAULTS: voice_turn.h); no other build has them.
-add_library(nexus_watch_core_faulty STATIC ../core/ai_match.cpp ../core/voice_turn.cpp ../core/relay.cpp
+add_library(nexus_watch_core_faulty STATIC EXCLUDE_FROM_ALL ../core/ai_match.cpp ../core/voice_turn.cpp ../core/relay.cpp
     ${NEXUS_WATCH_SRC}/voice/name_match.cpp)
 target_include_directories(nexus_watch_core_faulty PUBLIC ../core PRIVATE ${NEXUS_WATCH_SRC})
 target_compile_definitions(nexus_watch_core_faulty PUBLIC NEXUS_WATCH_FAULTS)
 target_compile_options(nexus_watch_core_faulty PRIVATE ${NEXUS_WARNINGS})
-add_executable(watch_voice_walk voice_walk.cpp)
+add_executable(watch_voice_walk EXCLUDE_FROM_ALL voice_walk.cpp)
 target_link_libraries(watch_voice_walk PRIVATE nexus_watch_core_faulty)
 target_compile_options(watch_voice_walk PRIVATE ${NEXUS_WARNINGS})
-add_executable(watch_relay_walk relay_walk.cpp)
+add_executable(watch_relay_walk EXCLUDE_FROM_ALL relay_walk.cpp)
 target_link_libraries(watch_relay_walk PRIVATE nexus_watch_core_faulty)
 target_compile_options(watch_relay_walk PRIVATE ${NEXUS_WARNINGS})
 add_custom_target(watch_model_checks DEPENDS watch_core_test watch_voice_walk watch_relay_walk)

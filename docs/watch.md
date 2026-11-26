@@ -118,7 +118,9 @@ is signed with `-DNEXUS_WATCH_TEAM=<identity>`, or ad hoc without one, which no 
 speaks HTTP on 127.0.0.1, which the simulator's app reaches with `--relay`. The run:
 
 1. Run `nexus-server serve` with a home of its own, and a fake driver for each AI.
-2. Run `nexus-watch-relay --port <n> --state <file> -- env HOME=<home> nexus-server new --dir <dir>`.
+2. Build it (`cmake --build build --target nexus_watch_relay_host`: it is not in the default build, nor are the
+   model walks and the speech test's matcher, so a pull request's macOS build stays inside its 2 minutes), then run
+   `nexus-watch-relay --port <n> --state <file> -- env HOME=<home> nexus-server new --dir <dir>`.
 3. Build the app for the simulator with `-DCMAKE_BUILD_TYPE=Debug`, install it on a watch simulator, and launch it with
    these test options:
    - `--relay http://127.0.0.1:<n>/relay`
