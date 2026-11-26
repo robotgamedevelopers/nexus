@@ -49,7 +49,8 @@ void thePhoneOpensOnTheList() {
     const auto app = window(ui("phone", true));
     CHECK((app.panels == std::vector<Panel>{Panel::Menu}));
     CHECK(!app.surface.showTabs);
-    CHECK((app.surface.tabTitles == std::vector<std::string>{"zsh", "Emma", "Rowan", "dashboard"}));
+    // An AI's name capitalised, the dashboard by the shipped tab_labels (policy/rules/config.json).
+    CHECK((app.surface.tabTitles == std::vector<std::string>{"zsh", "Emma", "Rowan", "Dashboard"}));
     // The dashboard, the AIs, then terminals.
     CHECK(app.surface.menuTabs.has_value());
     CHECK((app.surface.menuTabs.value_or(std::vector<std::size_t>{}) == std::vector<std::size_t>{3, 1, 2, 0}));
