@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -52,8 +53,11 @@ class PraxBoard;
 // characters, never inside an escape, then "...".
 std::string loggable(std::string_view text);
 
+class LinkSignIn;
+
 // The secret dialog over the link (view.h Secrets, docs/secrets.md): the requests come in the server's state, and the
-// dialog shows the oldest the window has not answered (sync/secrets.h SecretPrompt). The value is held in the prompt
+// dialog shows the oldest the window has not answered (sync/secrets.h SecretPrompt). Before them, the sign-in code this
+// window's flow waits for (LinkSignIn::codeAsk): the same masked field, its value sent to the sign-in alone. The value is held in the prompt
 // alone while it is typed, then in the one action that carries it to the server, which the link's thread hands to mosh
 // and which is wiped once the server has acknowledged it. Nothing here waits: submit and cancel hand the action to the
 // port.
@@ -61,15 +65,21 @@ class LinkSecrets : public Secrets {
 public:
     LinkPort* port = nullptr;
     sync::SecretPrompt prompt;
+    LinkSignIn* signIn = nullptr;       // its code ask, when it has one, shows first
 
     const SecretAsk* showing() override;
-    std::string_view typed() override { return prompt.typed().bytes(); }
-    void type(std::string_view text) override { prompt.type(text); }
+    std::string_view typed() override;
+    void type(std::string_view text) override;
     void submit() override;
     void cancel() override;
 
+    // The bit a code ask's SecretAsk::id carries, so that it never equals a secret request's id (the dialog opens afresh
+    // on a new id).
+    static constexpr std::uint64_t kCodeAsk = std::uint64_t{1} << 63;
+
 private:
     SecretAsk shown_;
+    bool code_ = false;                 // what showing() last gave is the sign-in code's ask
 };
 
 // In-app sign-in over the link (docs/secrets.md "Sign-in"): the server offers each account that needs signing in, and a
@@ -90,15 +100,20 @@ public:
     // Where the gate comes from: a test seam; empty: a SignInGate.
     std::function<std::unique_ptr<SignInGate>(const sync::SignInTarget&)> openGate;
     std::string problem;                // the last gate's failure, for the view's problem line; cleared when shown
+    // The active tab's session and account, for the code ask (empty account: no account tab). Unset: none.
+    std::function<std::pair<sync::SessionId, std::string>()> activeTab;
 
     // The state's offers as the link last brought them, or the link lost.
-    void received(const sync::Sessions& state) { opener.received(state.offers()); }
+    // A code this window sent that the server answered while its flow still asks for one was refused (a code taken
+    // clears code_wanted in the very state that acknowledges it): the ask opens again, so the person can paste again.
+    void received(const sync::Sessions& state);
     void lost();
     // The overlay was shown: the window may claim one flow.
     void shown() { opener.shown(); }
     // The client lock locked the window (client_lock.h): the claim a show allowed is taken back, and no step runs (no
     // claim, no URL opened, no callback sent up) until it is unlocked; the owner's next show allows one again.
-    void lock() { locked = true; opener.hidden(); }
+    // A code half typed into the masked field is wiped, and none is asked for or sent while locked.
+    void lock() { locked = true; opener.hidden(); wipeCode(); }
     void unlock() { locked = false; }
     bool locked = false;
     // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open. None
@@ -106,7 +121,26 @@ public:
     void step();
     bool gateOpen() const { return gate_ != nullptr; }
 
+    // The paste of a vendor's code (sync/signin.h signsInByPastedCode; models/SignInPaste.tla Paste): the offer this
+    // window holds and has opened, for the active tab's account, whose process waits for the code, and which this
+    // window has not answered or put away; null for none. The person pastes the code into the masked field (LinkSecrets
+    // shows it); Enter sends it once, up this link alone, with the tab's session, and wipes the field; Escape puts the
+    // ask away until Sign in is pressed again in the tab (askCodeAgain). The code is never drawn, logged or kept.
+    const sync::SignInOffer* codeAsk() const;
+    const sync::SecretValue& typedCode() const { return typed_; }
+    void typeCode(std::string_view text);
+    void submitCode();
+    void dismissCode();
+    void askCodeAgain(std::uint64_t id);
+    bool codeSent(std::uint64_t id) const { return codeSent_.contains(id); }
+
 private:
+    void wipeCode();
+    sync::SecretValue typed_;
+    std::uint64_t typedFor_ = 0;        // the flow the field's text was typed for
+    std::map<std::uint64_t, std::uint64_t> codeSent_;   // flow -> the action that sent its code; asked again only
+                                                        // after the server refused it (received)
+    std::set<std::uint64_t> codePutAway_;
     std::unique_ptr<SignInGate> gate_;
     std::uint64_t gateFlow_ = 0;
 };

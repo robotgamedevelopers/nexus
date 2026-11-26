@@ -61,10 +61,14 @@ enum class ActionKind : std::uint8_t {
     SignInCallback = 19,// the window's gate took flow `request`'s callback: its query (`secret`), from `text`'s window
     SignOut = 20,       // Claude logout, only when session still selects the exact named account
     ResolveLimit = 21, // accept a paused turn's offered target (aiName) for account, request and choice kind (text)
+    // The code a vendor's sign-in page showed (`secret`), pasted into the window holding flow `request` (`text`, its
+    // claim token), from the tab of session `session` (sync/signin.h signsInByPastedCode). A server from before it
+    // reads it as Unknown and counts it; nothing of it is kept.
+    SignInCode = 22,
 };
 
 // The last kind this build knows.
-constexpr ActionKind kLastActionKind = ActionKind::ResolveLimit;
+constexpr ActionKind kLastActionKind = ActionKind::SignInCode;
 
 struct Action {
     std::uint64_t num = 0;  // its place in the list, from 1, never reused
@@ -76,6 +80,8 @@ struct Action {
     std::uint64_t request = 0;  // a secret answer's or cancel's request id; 0 for the rest
     SecretValue secret{};   // a secret answer's value; empty for the rest. Wiped when the action is freed, which is
                             // when mosh's acknowledgement subtracts it (Actions::subtract)
+    bool pastesCode = false;    // a claim's: the window takes a vendor's pasted code in its tab (SignInCode); a window
+                                // from before leaves it false, and is refused a flow that needs one (Hub, SignInClaim)
     bool operator==(const Action&) const = default;
 };
 

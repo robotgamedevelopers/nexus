@@ -23,7 +23,17 @@ from nexus_rpc.account_runtime import (
     process_env,
     remove_receipt_if_current,
 )
-from nexus_rpc.enroll import Login, enrollment_lock, link_from, recover, run
+from nexus_rpc.enroll import (
+    CODE_ASK,
+    PASTE_CODE,
+    Login,
+    enrollment_lock,
+    link_from,
+    recover,
+    run,
+    quiet_input,
+    run_paste,
+)
 
 GOOGLE = "https://accounts.google.com/o/oauth2/auth?test=one&scope=two"
 
@@ -364,6 +374,129 @@ print('private-native-transcript', flush=True)
                 self.fail("Overlapping sign-in unexpectedly acquired an account")
             with enrollment_lock(home):
                 pass
+
+
+# A scripted Antigravity CLI: its terminal prompt is the one the real `agy acp --login` prints (2026-11 tracer), and
+# it takes the code on its terminal. A second prompt after a wrong code is what a vendor that refuses it does.
+PASTE_PEER = """
+import os, sys
+from pathlib import Path
+assert os.isatty(0) and os.isatty(1)
+print('Open this link in a browser to log in with Google:')
+print()
+print('  https://accounts.google.com/o/oauth2/auth?test=one&scope=two')
+print()
+while True:
+    print('Then paste the authorization code, or the full URL of the page you land on, and press Enter:', end='',
+          flush=True)
+    if input() == 'synthetic-answer':
+        break
+    print('That code was not accepted.')
+store = Path.home() / '.gemini/antigravity-cli'
+store.mkdir(parents=True)
+(store / 'antigravity-oauth-token').write_text('{"access_token":"test-fixture"}')
+"""
+
+
+class PastedCodeFlow(unittest.TestCase):
+    """run_paste: the vendor's URL and the ask for its code go to the runner; the runner's one line is the code."""
+
+    def start(self, home):
+        login = Login(
+            "antigravity",
+            "remote-fixture",
+            home,
+            [sys.executable, "-c", PASTE_PEER],
+            process_env("antigravity", home),
+        )
+        self.addCleanup(login.close)
+        notes, result = [], []
+        noted = threading.Condition()
+
+        def notify(text):
+            with noted:
+                notes.append(text)
+                noted.notify_all()
+
+        reader, writer = os.pipe()
+        self.addCleanup(os.close, reader)
+        self.addCleanup(os.close, writer)
+        worker = threading.Thread(
+            target=lambda: result.append(run_paste(login, reader, notify=notify)), daemon=True
+        )
+        worker.start()
+
+        def until(count):
+            with noted:
+                self.assertTrue(noted.wait_for(lambda: len(notes) >= count, timeout=4), notes)
+            return list(notes)
+
+        return login, writer, worker, result, until
+
+    def test_antigravity_signs_in_by_a_pasted_code(self):
+        self.assertIn("antigravity", PASTE_CODE)
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            login, writer, worker, result, until = self.start(home)
+            # The vendor's own URL, then the ask: nothing of the terminal besides.
+            self.assertEqual(until(2), [GOOGLE, CODE_ASK])
+            os.write(writer, b"synthetic-answer\r\n")
+            worker.join(4)
+            self.assertEqual(result, [0])
+            self.assertIsNotNone(enrolled(home, "antigravity"))
+            self.assertNotIn(b"synthetic-answer", bytes(login.tail))
+
+    def test_a_refused_code_ends_the_enrollment_and_no_second_is_taken(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            _, writer, worker, result, until = self.start(home)
+            self.assertEqual(until(2), [GOOGLE, CODE_ASK])
+            os.write(writer, b"wrong-answer\n")
+            worker.join(4)
+            self.assertEqual(result, [1])
+            self.assertEqual(until(2), [GOOGLE, CODE_ASK])
+            self.assertIsNone(enrolled(home, "antigravity"))
+
+    def test_the_runner_ending_its_terminal_ends_the_enrollment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            _, writer, worker, result, until = self.start(home)
+            until(2)
+            os.dup2(os.open(os.devnull, os.O_RDONLY), writer)  # the write end gone: end of input
+            worker.join(4)
+            self.assertEqual(result, [1])
+            self.assertIsNone(enrolled(home, "antigravity"))
+
+
+class QuietInput(unittest.TestCase):
+    """quiet_input on a real terminal (a pty, as the runner's): what is pasted is never echoed back."""
+
+    def test_a_terminal_echoes_nothing_and_takes_any_length(self):
+        import pty
+        import termios
+
+        master, slave = pty.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, slave)
+        quiet_input(slave)
+        attrs = termios.tcgetattr(slave)
+        self.assertEqual(attrs[3] & termios.ECHO, 0)
+        self.assertEqual(attrs[3] & termios.ICANON, 0)
+        self.assertEqual(attrs[6][termios.VMIN], 1)
+        self.assertFalse(os.get_blocking(slave))
+        os.write(master, b"synthetic-answer\n")
+        self.assertEqual(os.read(slave, 64), b"synthetic-answer\n")
+        # Nothing comes back to the runner's side: no echo of the code.
+        os.set_blocking(master, False)
+        with self.assertRaises(OSError):
+            os.read(master, 64)
+
+    def test_a_pipe_is_only_made_non_blocking(self):
+        reader, writer = os.pipe()
+        self.addCleanup(os.close, reader)
+        self.addCleanup(os.close, writer)
+        quiet_input(reader)
+        self.assertFalse(os.get_blocking(reader))
 
 
 class EnrollmentRecovery(unittest.TestCase):

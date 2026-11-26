@@ -211,10 +211,36 @@ provider's console, short enough that a forgotten request does not hold an asker
 
 Each account has a separate directory under `~/.nexus/server/harness/<provider>/<account>/`.
 The server reads the provider's `signin` command from its drivers file and supplies
-the selected account name. The window connected to that server over loopback opens
-the helper's one-time local page in the user's browser. The provider's device link,
-code or pasted response stays in that browser flow. The window claims a flow and
-opens its page through the existing sign-in protocol.
+the selected account name. For Codex, Grok and Muse, the window connected to that
+server over loopback opens the helper's one-time local page in the user's browser,
+and the provider's device link or code stays in that browser flow. The window
+claims a flow and opens its page through the existing sign-in protocol.
+
+Antigravity ends its Google sign-in on a page that shows a code to paste into the
+application, so it has no local page. Any window, on any machine, claims the flow
+and opens Google's page (https, `accounts.google.com` only, checked on the server
+and in the window). When `agy` asks for the code, the helper says so, and the
+server tells the holding window alone (`SignInOffer.code_wanted`). That tab asks
+for it in the masked secret dialog; Enter sends it once as `SignInCode` over the
+window's link, and the field is wiped. The server hands it to the waiting `agy`
+only when the flow is running, its process asked, no code went yet, and the
+window sending it holds the flow (`SignInDesk::code`); the runner writes it to the
+`agy` terminal once. Every other code is refused and reaches no process. The
+refusal's plain line goes into the session the sending window names (its tab's)
+only when that session is on the account the code is for: the live flow's
+account while the flow exists, and when it is gone (ended, or never there), the
+account the window's own action names, which nothing else vouches for. A refusal
+naming a session on any other account writes nothing there, and a log line says
+so, without the code (`Hub::signInRefusal`). The window checks the paste is
+a code (`isSignInCode`) before sending it, and once the server has applied a code
+and the flow still asks, it asks again, so a refused paste can be retried. A
+window from before this claims without `Action.pastes_code` and is refused the
+flow with a plain line; a server from before this offers its loopback page, which
+a window on another machine does not open, saying the server is too old and
+that a window on the server's machine can sign in once this attempt ends, within
+the flow's 10-minute deadline (`docs/formats.md`). The code is never logged, never in a transcript, a state
+or a file; only `agy` keeps the login it makes, in the account's harness home
+(`models/SignInPaste.tla`, bound to `SignInDesk` by `tlc_signin_paste_trace_*`).
 
 The server accepts a successful helper exit for the current flow only after it
 verifies the account's owner-only enrollment receipt. That receipt contains the

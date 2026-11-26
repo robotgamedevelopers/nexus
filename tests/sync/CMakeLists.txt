@@ -50,11 +50,16 @@ if(NEXUS_SERVER_PARTS)
     target_include_directories(signin_walk PRIVATE ${CMAKE_SOURCE_DIR}/tests)
     target_compile_options(signin_walk PRIVATE ${warnings})
 
+    # Sign-in by a pasted code's walk (src/sync/signin.h SignInDesk), for SignInPasteTrace.tla.
+    add_executable(signin_paste_walk signin_paste_walk.cpp)
+    target_link_libraries(signin_paste_walk PRIVATE nexus_sync)
+    target_compile_options(signin_paste_walk PRIVATE ${warnings})
+
     add_executable(reconnect_walk reconnect_walk.cpp)
     target_link_libraries(reconnect_walk PRIVATE nexus_sync)
     target_compile_options(reconnect_walk PRIVATE ${warnings})
 
-    add_dependencies(model_checks link_walk secrets_walk signin_walk reconnect_walk)
+    add_dependencies(model_checks link_walk secrets_walk signin_walk signin_paste_walk reconnect_walk)
 endif()
 
 add_test(NAME sync_unit COMMAND sync_test)
@@ -189,3 +194,13 @@ tlc_test(tlc_signin_trace_faulty_callback_rejected SignInTrace SignInTrace.cfg i
          PROPERTY CodeOneCallbackPerFlow SIGNWALK SEED 1 STEPS 6000 FAULTY callback CAP 80)
 tlc_test(tlc_signin_trace_faulty_stray_rejected SignInTrace SignInTrace.cfg invariant
          PROPERTY CodeGateForwardsOnlyMatching SIGNWALK SEED 1 STEPS 6000 FAULTY stray CAP 80)
+
+# Trace binding of sign-in by a pasted code (models/SignInPasteTrace.tla): the desk's random walks (signin_paste_walk),
+# each a behaviour of SignInPaste.tla with every safety property, no log line or notice holding a code or the URL. The
+# faulty walk (a code taken from a window that does not hold the flow) must be rejected by CodeCodeOnlyFromHolder.
+foreach(seed 1 2 4)
+    tlc_test(tlc_signin_paste_trace_seed_${seed} SignInPasteTrace SignInPasteTrace.cfg pass PASTEWALK SEED ${seed}
+             STEPS 600)
+endforeach()
+tlc_test(tlc_signin_paste_trace_faulty_code_rejected SignInPasteTrace SignInPasteTrace.cfg invariant
+         PROPERTY CodeCodeOnlyFromHolder PASTEWALK SEED 1 STEPS 600 FAULTY code)

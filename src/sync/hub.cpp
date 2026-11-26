@@ -226,7 +226,7 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         return secretAction(action, why, client);
     }
     if (action.kind == ActionKind::SignInClaim || action.kind == ActionKind::SignInOpened ||
-            action.kind == ActionKind::SignInCallback) {
+            action.kind == ActionKind::SignInCallback || action.kind == ActionKind::SignInCode) {
         return signInAction(action, why, client);
     }
     if (action.kind == ActionKind::SignOut) {
@@ -1304,6 +1304,10 @@ void Hub::signInUrl(const std::string& account, std::uint64_t id, const SecretVa
     signInEffects(signIns_.url(account, id, url));
 }
 
+void Hub::signInCodeWanted(const std::string& account, std::uint64_t id) {
+    signInEffects(signIns_.codeWanted(account, id));
+}
+
 void Hub::signInPrinted(const std::string& account, const SecretValue& token) {
     const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
     if (!a || a->provider != "claude" || a->requiresVerifiedEmail() || !secretKeeper_) {
@@ -1413,14 +1417,7 @@ void Hub::dropSignIns() {
 }
 
 std::vector<SignInOffer> Hub::publicOffers() const {
-    std::vector<SignInOffer> offers = signIns_.offers();
-    for (SignInOffer& o : offers) {
-        o.url.clear();
-        if (!o.opener.empty()) {
-            o.opener = kSignInHeldBy;
-        }
-    }
-    return offers;
+    return signIns_.offersFor(std::string());
 }
 
 Sessions Hub::historyPage(SessionId id, std::uint64_t epoch, std::uint64_t first) const {
@@ -1448,19 +1445,10 @@ Sessions Hub::stateFor(const std::string& opener, const std::string& client) con
     Sessions s = state_;
     if (!client.empty()) s.setNextAction(store_.applied(client) + 1);
     s.setDashboards(dashboards_);
-    std::vector<SignInOffer> offers = signIns_.offers();
-    if (opener.empty() || offers.empty()) {
+    if (opener.empty() || signIns_.offers().empty()) {
         return s;
     }
-    for (SignInOffer& o : offers) {
-        if (o.opener != opener) {
-            o.url.clear();
-            if (!o.opener.empty()) {
-                o.opener = kSignInHeldBy;
-            }
-        }
-    }
-    s.setOffers(std::move(offers));
+    s.setOffers(signIns_.offersFor(opener));
     return s;
 }
 
@@ -1477,7 +1465,7 @@ bool Hub::signOutAction(const Action& action, std::string* why, const std::strin
     if (!account || session->info.account != name ||
             (!isPrimary(action.session) && !accounts_->linked(session->info.aiName, name))) {
         error = "The account selection changed. Select the account to sign out and try again.";
-    } else if ((!usesLocalSignInPage(account->provider) && account->provider != "claude") || !signOut_) {
+    } else if ((!enrollsByHelper(account->provider) && account->provider != "claude") || !signOut_) {
         error = "This server cannot sign out this provider.";
     } else if (desk_.busy(name) || (flow && flow->second != SignInState::Needed)) {
         error = "Finish or cancel the open sign-in for this account, then retry /logout.";
@@ -1531,17 +1519,85 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
                 }
                 id = flow->first;
             }
+            // A flow that ends in a pasted code goes only to a window that takes one (Action::pastesCode): a window
+            // from before is told so plainly, rather than holding the flow to its deadline with nowhere to paste.
+            if (const auto [account, provider] = signInFlowAccount(id); !action.pastesCode && signsInByPastedCode(provider)) {
+                const std::string refusal = account + " signs in with a code pasted into Nexus, which this window "
+                    "cannot take. Update this Nexus window, or press Sign in in an updated one.";
+                if (secretEvents_ != nullptr) {
+                    secretEvents_->signInLogged("sign-in " + std::to_string(id) + ": " + account +
+                                                ": a claim from a window that cannot take a pasted code, refused");
+                }
+                signInRefusal(action.session, account, refusal);
+                if (why) *why = refusal;
+                return false;
+            }
             signInEffects(signIns_.claim(id, action.text, clock_ ? clock_() : 0));
             break;
         }
         case ActionKind::SignInOpened:
             signInEffects(signIns_.opened(action.request, action.text));
             break;
+        case ActionKind::SignInCode: {
+            // models/SignInPaste.tla CodeWith: the desk takes it from the flow's holder alone, once, while its process
+            // waits; any other is refused with a plain line in the tab it came from. The code is in no line.
+            std::string refusal;
+            // The account the code is for: its flow's, while there is one; once the flow is gone, the one the window's
+            // own action names (its word alone; the notice still goes only into a session on that account).
+            std::string account = signInFlowAccount(action.request).first;
+            if (account.empty()) {
+                account = action.account;
+            }
+            signInEffects(signIns_.code(action.request, action.text, action.secret, &refusal));
+            if (!refusal.empty()) {
+                signInRefusal(action.session, account, refusal);
+                if (why != nullptr) *why = refusal;
+                return false;
+            }
+            break;
+        }
         default:
             signInEffects(signIns_.callback(action.request, action.text, action.secret));
             break;
     }
     return true;
+}
+
+Hub::LinkAction Hub::fromLink(const Action& a, const std::string& link) {
+    LinkAction out{a, link, false};
+    if (a.kind == ActionKind::SignInClaim && isClaimToken(a.text) && a.text != link) {
+        out.token = a.text;
+        out.renamed = true;
+    }
+    if ((a.kind == ActionKind::SignInOpened || a.kind == ActionKind::SignInCallback ||
+            a.kind == ActionKind::SignInCode) && a.text != link) {
+        out.action.text = link;
+    }
+    return out;
+}
+
+void Hub::signInRefusal(SessionId session, const std::string& account, const std::string& text) {
+    const StoredSession* s = store_.find(session);
+    if (s == nullptr || account.empty() || s->info.account != account) {
+        if (secretEvents_ != nullptr) {
+            secretEvents_->signInLogged("sign-in: a refusal for session " + std::to_string(session) +
+                                        ", which is not on the account the sign-in is for: no notice written");
+        }
+        return;
+    }
+    std::string failed;
+    if (store_.commit(session, {SessionChange{entry(EntryKind::Notice, text), {}}}, {}, 0, &failed)) {
+        refresh(session);
+    }
+}
+
+std::pair<std::string, std::string> Hub::signInFlowAccount(std::uint64_t id) const {
+    for (const SignInOffer& o : signIns_.offers()) {
+        if (o.id == id) {
+            return {o.account, o.provider};
+        }
+    }
+    return {};
 }
 
 void Hub::noteAccount(const std::string& account, const std::string& text) {
@@ -1583,6 +1639,11 @@ void Hub::signInEffects(const SignInEffects& effects) {
         for (const SignInEffects::Replay& r : effects.replays) {
             if (signInHooks_->replay) {
                 signInHooks_->replay(r.id, r.account, r.target, r.query);
+            }
+        }
+        for (const SignInEffects::Code& c : effects.codes) {
+            if (signInHooks_->code) {
+                signInHooks_->code(c.id, c.account, c.code);
             }
         }
     }

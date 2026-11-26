@@ -25,6 +25,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -57,8 +58,21 @@ constexpr const char* kSignInHeldBy = "*";
 
 // Whether Nexus can start an interactive sign-in for this provider.
 bool hasSignIn(const std::string& provider);
-// These harnesses conduct their login on a private page on the server's loopback interface.
+// These harnesses enroll through the server's enrollment helper (drivers/rpc nexus_rpc.enroll) into a private
+// account home on the server, and keep an enrollment receipt there: codex, antigravity, grok and muse.
+bool enrollsByHelper(std::string_view provider);
+// These enrollments are conducted on a private page on the server's loopback interface (device codes shown there):
+// codex, grok and muse. Only a window on the server's machine opens it.
 bool usesLocalSignInPage(std::string_view provider);
+// These enrollments end with the vendor's page showing a code to paste back into the application (Antigravity's
+// Google login): the window holding the flow opens the vendor's own URL in its browser, wherever the window runs, and
+// the person pastes the code into that window (models/SignInPaste.tla). No page on the server, no gate.
+bool signsInByPastedCode(std::string_view provider);
+// The longest code taken, in bytes, and its shape: 1 to kSignInCodeBytes printable ASCII bytes, no space (the window
+// cuts spaces and line breaks at its ends, as a paste brings them). The enrollment helper takes the same
+// (enroll.py Login.input).
+constexpr std::size_t kSignInCodeBytes = 2048;
+bool isSignInCode(const SecretValue& code);
 
 // Where a sign-in URL sends the browser back: its redirect_uri, which must be http on localhost or 127.0.0.1, with a
 // port; and the state the URL carries, which the callback must carry back.
@@ -78,6 +92,11 @@ std::string_view urlHost(std::string_view url);
 // Accept a provider authorization URL with its redirect and state, or the exact local broker URL for a provider
 // using a private page. The latter clears the target because the browser never needs a callback relay.
 bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarget* out);
+// Whether `url` is the exact private page an enrollment helper serves on the server's loopback
+// (http://127.0.0.1:<port>/nexus-signin/<64 hex>). For a provider that signs in by a pasted code, only a server from
+// before that sends one: SignInOpener opens it from a window on the server's machine, and says the server is too old
+// from any other (Step::Kind::OldServer).
+bool isLocalSignInPage(std::string_view url);
 // Whether `a` and `b` hold the same bytes, in a time that depends on their lengths alone: for a state and a nonce.
 bool sameBytes(std::string_view a, std::string_view b);
 // Whether `query` holds only bytes a request line carries as they are: no space, CR, LF or other control byte.
@@ -103,6 +122,7 @@ struct SignInOffer {
     std::string opener;         // the claim token of the window that holds it; empty: none
     std::string host;           // the server's host name, for sameMachine
     SecretValue url{};          // with an opener, once the process gave it; else empty
+    bool codeWanted = false;    // with an opener: the flow's process waits for the vendor's code (signsInByPastedCode)
     bool operator==(const SignInOffer&) const = default;
 };
 
@@ -133,9 +153,15 @@ struct SignInEffects {
         std::string account;
         std::string text;
     };
+    struct Code {
+        std::uint64_t id = 0;
+        std::string account;
+        SecretValue code;
+    };
     std::vector<Start> start;               // the processes to start now
     std::vector<std::string> stop;          // the accounts whose process ends now
     std::vector<Replay> replays;            // the callbacks to replay to their listener
+    std::vector<Code> codes;                // the pasted codes to hand to their flow's waiting process, once each
     std::vector<Note> notes;                // a notice in each session on the account
     std::vector<std::string> log;           // server.log's lines
     std::vector<std::string> needAgain;     // accounts whose flow ended unsigned: each needs a fresh flow
@@ -154,6 +180,9 @@ public:
     std::optional<std::pair<std::uint64_t, SignInState>> flowOf(const std::string& account) const;
     // How flow `id` ended, or its state while live; none for one this desk never saw (or long ended).
     std::optional<SignInState> stateOf(std::uint64_t id) const;
+    // Live flow `id`'s pasted-code state: whether its process asks for a code, and whether one went to it; none for a
+    // flow not live (tests/sync/signin_paste_walk reads it as models/SignInPaste.tla's flow[id].asked and .sent).
+    std::optional<std::pair<bool, bool>> codeStateOf(std::uint64_t id) const;
 
     // `account` (of `provider`) has no login: flow `id` (minted, one past the last) is needed, unless one is live.
     SignInEffects need(std::uint64_t id, const std::string& account, const std::string& provider);
@@ -167,6 +196,14 @@ public:
     // The window's gate sent a callback: replayed once, from the window holding the flow, while it waits, and only
     // with the state of its URL and a code or an error; any other is dropped, its bytes in no effect.
     SignInEffects callback(std::uint64_t id, const std::string& opener, const SecretValue& query);
+    // The process of flow `id` (of a provider that signsInByPastedCode) waits for the vendor's code: the window holding
+    // the flow is told (its offer's codeWanted), once. models/SignInPaste.tla Ask.
+    SignInEffects codeWanted(const std::string& account, std::uint64_t id);
+    // A window pasted a code for flow `id`, by its claim token. Handed to the flow's process (effects' codes) only when
+    // the flow runs, its process asked for a code, none went yet, and `opener` holds the flow; then the flow takes no
+    // other. Otherwise refused, with a plain line for the window in `refusal` and the code in no effect and no log
+    // line. models/SignInPaste.tla CodeWith, TakesCorrect.
+    SignInEffects code(std::uint64_t id, const std::string& opener, const SecretValue& code, std::string* refusal);
     // The process of `account` printed its token: the flow is captured (the caller puts the token in the one-chance
     // store). Returns the flow's id; 0 when none was running, and then it is late().
     std::uint64_t printed(const std::string& account, SignInEffects* out);
@@ -194,6 +231,9 @@ public:
 
     // The live flows, as every window receives them.
     std::vector<SignInOffer> offers() const;
+    // The live flows as the window with claim token `opener` receives them: a flow it does not hold carries no URL and
+    // no code wanted, and its holder as kSignInHeldBy (Hub::stateFor; models/SignInPaste.tla PubFor).
+    std::vector<SignInOffer> offersFor(const std::string& opener) const;
     // When expire() next has something to do.
     std::optional<std::uint64_t> deadline() const;
 
@@ -204,6 +244,8 @@ public:
     // calls them.
     void injectClaimFault() { claimFault_ = true; }
     void injectCallbackFault() { callbackFault_ = true; }
+    // tests/sync/signin_paste_walk's faulty run alone: a pasted code is taken from any window, not only the holder.
+    void injectCodeFault() { codeFault_ = true; }
 
 private:
     struct Flow {
@@ -216,6 +258,8 @@ private:
         SignInTarget target;
         std::uint64_t due = 0;
         bool denied = false;    // the callback replayed carried the person's refusal
+        bool asked = false;     // its process waits for a pasted code (codeWanted)
+        bool sent = false;      // a pasted code went to its process: no other is taken
     };
     Flow* byId(std::uint64_t id);
     static std::uint64_t dueAt(const Flow& f);
@@ -225,6 +269,7 @@ private:
     std::string host_;
     bool claimFault_ = false;
     bool callbackFault_ = false;
+    bool codeFault_ = false;
 };
 
 // The window's side: which offer it claims and which URL it opens. A show of the overlay (the person, there) arms one
@@ -248,7 +293,10 @@ public:
 
     struct Step {
         // Refused: the offer's URL is not a sign-in page of its provider's (parseSignInUrl); nothing is opened.
-        enum class Kind : std::uint8_t { None, Claim, Open, Refused } kind = Kind::None;
+        // OldServer: a flow that ends in a pasted code, whose server is from before that and serves its private page
+        // on its own loopback, held by a window on another machine: nothing can be opened from here, and the window
+        // says the server is too old.
+        enum class Kind : std::uint8_t { None, Claim, Open, Refused, OldServer } kind = Kind::None;
         std::uint64_t id = 0;
         std::string account;
         SecretValue url;            // with Open
@@ -274,6 +322,50 @@ private:
     std::uint64_t gate_ = 0;
     bool armed_ = false;
     std::string wantedAccount_;
+};
+
+// One message from an enrollment helper on the runner's socket: "<flow>-<word> <payload>\n". False for any other
+// bytes (no line end, no space before it). Views into `bytes`.
+bool parseHelperMessage(std::string_view bytes, std::string_view* word, std::string_view* payload);
+
+// The runner's part of one sign-in process's pasted code (src/server/signin_runner.cpp), as pure logic: what its helper
+// says (its URL, once; then that its vendor's CLI asks for the code, once, after the URL, for a provider that signs in
+// by a pasted code), and the one code written to its terminal, possibly in pieces. models/SignInPaste.tla Url, Ask and
+// CodeWith's process side; the server's side is SignInDesk::code. Never logs; the code's bytes are wiped as they go.
+class CodeHandoff {
+public:
+    enum class Said : std::uint8_t { None, Url, CodeWanted };
+    // The payload of one helper message for this process (its word already matched). `pastedCode`: the process signs
+    // in by a pasted code (and is no `claude setup-token`). Url: the payload is its URL, the first time; CodeWanted:
+    // "?code", once, after the URL, for a pastedCode process; None: anything else, dropped.
+    Said heard(std::string_view payload, bool pastedCode);
+    // A pasted code for flow `id`, this process's flow `flow`: taken (to write) only when it is this flow's, the process
+    // is not ending, its helper asked, no code was taken before, and it is a code (isSignInCode). False: dropped.
+    bool take(std::uint64_t id, std::uint64_t flow, bool ending, const SecretValue& code);
+    // Writes what is left of the code's line with `write` (returns bytes written, or -1 with errno set), without
+    // waiting: EAGAIN leaves the rest for a later call; EINTR tries again; any other failure (the terminal gone) drops
+    // the rest, wiped.
+    void drain(const std::function<long(const char* bytes, std::size_t size)>& write);
+    bool pending() const { return !out_.empty(); }
+    bool urlSent() const { return urlSent_; }
+    // The URL taken from elsewhere (`claude setup-token`'s terminal): true the first time; after it, a helper's URL is
+    // dropped.
+    bool takeUrl();
+    bool asked() const { return asked_; }
+    bool taken() const { return taken_; }
+    void wipe();
+    ~CodeHandoff() { wipe(); }
+    CodeHandoff() = default;
+    CodeHandoff(const CodeHandoff&) = delete;
+    CodeHandoff& operator=(const CodeHandoff&) = delete;
+    CodeHandoff(CodeHandoff&& o) noexcept;
+    CodeHandoff& operator=(CodeHandoff&&) = delete;
+
+private:
+    bool urlSent_ = false;
+    bool asked_ = false;
+    bool taken_ = false;
+    std::string out_;       // what of the code's line is still to write
 };
 
 // The window's one-shot gate, as pure logic over one connection's bytes: a GET on the target's path whose state

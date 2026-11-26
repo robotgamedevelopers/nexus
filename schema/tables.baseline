@@ -24,6 +24,7 @@ table Action
     field account id=0xa23fd2965dc429bc kind=17 type=string
     field request id=0x6f4743b8bc5b4eb2 kind=9
     field secret id=0xab23f0eec020c951 kind=17 type=bytes
+    field pastes_code id=0xe24950f987c59117 kind=1
 
 table ActionsDiff
     field start id=0xee5d97ad45ad251f kind=9
@@ -116,6 +117,7 @@ table SignInOffer
     field opener id=0x8a28804a0a9ba5e2 kind=17 type=string
     field host id=0x4077f8cc7eaf4d6f kind=17 type=string
     field url id=0x4c4e8b193dc8be7e kind=17 type=bytes
+    field code_wanted id=0x20cc7f35d42125c2 kind=1
 
 table Snapshot
     field next_session id=0x17b96c48ba4cbde7 kind=9
@@ -160,6 +162,7 @@ enum ActionKind
     variant SignInCallback id=0x5c16b9e2e6fb5e04
     variant SignOut id=0x5cdb26887b48e1e8
     variant ResolveLimit id=0x0610706c3ede743e
+    variant SignInCode id=0x40a17ec4a8d3cb42
 
 enum Activity
     variant Idle id=0xc92905d14a9421f3
@@ -221,3 +224,9 @@ union Change
 - SessionsDiff.ais_known: renamed under was = "friends_known", which keeps the wire id and NOT the text key — the JSON key is now "ais_known"; pair json = "friends_known" if an existing text must still read (docs/SPEC-TABLES.md §16.4) [warn]
 - SessionsDiff.ais: renamed under was = "friends", which keeps the wire id and NOT the text key — the JSON key is now "ais"; pair json = "friends" if an existing text must still read (docs/SPEC-TABLES.md §16.4) [warn]
 - SessionsDiff.ais_sent: renamed under was = "friends_sent", which keeps the wire id and NOT the text key — the JSON key is now "ais_sent"; pair json = "friends_sent" if an existing text must still read (docs/SPEC-TABLES.md §16.4) [warn]
+
+### 2026-11-25 (UTC) — sign-in offer says a code is wanted; actions gain sign-in-code
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-25 (UTC) — Action.pastes_code: a claim says its window takes a pasted code
+- no compatibility-affecting edits; the wire absorbs the rest

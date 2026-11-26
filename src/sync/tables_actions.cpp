@@ -33,13 +33,14 @@ wire::ActionKind actionOut(ActionKind k) {
         case ActionKind::SignOut: return wire::ActionKind::SignOut;
         case ActionKind::SignInCallback: return wire::ActionKind::SignInCallback;
         case ActionKind::ResolveLimit: return wire::ActionKind::ResolveLimit;
+        case ActionKind::SignInCode: return wire::ActionKind::SignInCode;
     }
     return wire::ActionKind::None;
 }
 
 bool isSignIn(ActionKind k) {
     return k == ActionKind::SignOut || k == ActionKind::SignInClaim ||
-        k == ActionKind::SignInOpened || k == ActionKind::SignInCallback;
+        k == ActionKind::SignInOpened || k == ActionKind::SignInCallback || k == ActionKind::SignInCode;
 }
 
 // A kind this build does not know (None: a later window's) is Unknown, which the server counts and never applies.
@@ -66,6 +67,7 @@ ActionKind actionIn(wire::ActionKind k) {
         case wire::ActionKind::SignOut: return ActionKind::SignOut;
         case wire::ActionKind::SignInCallback: return ActionKind::SignInCallback;
         case wire::ActionKind::ResolveLimit: return ActionKind::ResolveLimit;
+        case wire::ActionKind::SignInCode: return ActionKind::SignInCode;
         default: return ActionKind::Unknown;
     }
 }
@@ -103,6 +105,7 @@ std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& h
         putText(b.main, x->account, a.account, scratch);
         x->request = a.request;
         putBytes(b.main, x->secret, a.secret.bytes());
+        x->pastes_code = a.pastesCode;
     }
     return saved(b, [](const wire::ActionsDiffBuilder& x) { return wire::ActionsDiffMeasure(x); },
         [](const wire::ActionsDiffBuilder& x, std::uint8_t* to, int64_t n) { return wire::ActionsDiffSave(x, to, n); },
@@ -153,6 +156,7 @@ std::vector<Action> readActionsTables(const std::string& diff, std::uint32_t for
             a.account = textOf(x.account);
             a.request = x.request;
             a.secret = bytesOf(x.secret);
+            a.pastesCode = x.pastes_code;
         }
         out.push_back(std::move(a));
     }

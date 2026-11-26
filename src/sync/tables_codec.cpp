@@ -201,6 +201,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
             putText(b.main, x->opener, o.opener, scratch);
             putText(b.main, x->host, o.host, scratch);
             putBytes(b.main, x->url, o.url.bytes());
+            x->code_wanted = o.codeWanted;
         }
     }
     return saved(b, [](const wire::SessionsDiffBuilder& x) { return wire::SessionsDiffMeasure(x); },
@@ -323,6 +324,7 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
         o.opener = textOf(x.opener);
         o.host = textOf(x.host);
         o.url = bytesOf(x.url);
+        o.codeWanted = x.code_wanted;
         out.offers.push_back(std::move(o));
     }
     return out;

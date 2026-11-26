@@ -127,7 +127,7 @@ function(tlc_test name module cfg expect)
         return()
     endif()
     set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK GLIDEWALK MENUWALK SUPWALK PASSWALK ACCWALK SECWALK
-        SIGNWALK RECONNECTWALK RELAYWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
+        SIGNWALK PASTEWALK RECONNECTWALK RELAYWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
     cmake_parse_arguments(T "${options}"
         "CREDITMODE;PROPERTY;SEED;STEPS;AIS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
@@ -206,6 +206,8 @@ function(tlc_test name module cfg expect)
              -DSTEPS=${T_STEPS})
     elseif(T_SIGNWALK)
         list(APPEND defs -DSIGNWALK=$<TARGET_FILE:signin_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_PASTEWALK)
+        list(APPEND defs -DPASTEWALK=$<TARGET_FILE:signin_paste_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_RECONNECTWALK)
         list(APPEND defs -DRECONNECTWALK=$<TARGET_FILE:reconnect_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_RELAYWALK)
@@ -676,6 +678,25 @@ tlc_test(tlc_signin_witness_no_timeout WSignInNoTimeout WSignInNoTimeout.cfg liv
 tlc_test(tlc_signin_witness_need_twice WSignInNeedTwice WSignInNeedTwice.cfg invariant PROPERTY OneFlowPerAccount)
 tlc_test(tlc_signin_witness_expired_keeps WSignInExpiredKeeps WSignInExpiredKeeps.cfg invariant
          PROPERTY ProcessHasItsFlow)
+
+# Sign-in by a pasted code from any window (SignInPaste.tla; Antigravity): MCSignInPaste.cfg, two windows, one on
+# another machine, and a stray code; MCSignInPasteRestart.cfg, one remote window across two flows and a restart; both
+# every property. Both together (two windows, two flows, a restart: its safety alone) is a bench run, not a test: past
+# 15.9 million distinct states in ten minutes on four workers, unfinished.
+# MCSignInPasteRemote.cfg is reachability: one window, on another machine, must sign the account in (NeverSignedIn
+# violated), and the reversed witness WSignInPasteLocalOnly (only a window on the server's machine may claim, as with
+# the loopback page before) must not. The other witnesses each break one rule of SignInDesk::code and are rejected by
+# it. Bound to the code by trace checks: tests/sync's signin_paste_walk, tlc_signin_paste_trace_*.
+tlc_test(tlc_signin_paste_spec SignInPaste MCSignInPaste.cfg pass WORKERS 4)
+tlc_test(tlc_signin_paste_spec_restart SignInPaste MCSignInPasteRestart.cfg pass WORKERS 4)
+tlc_test(tlc_signin_paste_remote_signs_in SignInPaste MCSignInPasteRemote.cfg invariant PROPERTY NeverSignedIn)
+tlc_test(tlc_signin_paste_witness_local_only WSignInPasteLocalOnly witnesses/WSignInPasteLocalOnly.cfg pass)
+tlc_test(tlc_signin_paste_witness_any_window WSignInPasteAnyWindow witnesses/WSignInPasteAnyWindow.cfg invariant
+         PROPERTY CodeOnlyFromHolder)
+tlc_test(tlc_signin_paste_witness_twice WSignInPasteTwice witnesses/WSignInPasteTwice.cfg invariant
+         PROPERTY OneCodePerFlow)
+tlc_test(tlc_signin_paste_witness_unasked WSignInPasteUnasked witnesses/WSignInPasteUnasked.cfg invariant
+         PROPERTY CodeOnlyWhenAsked)
 
 # The local account selection preview. FrameHost's real callbacks and emitted link actions are checked on macOS.
 tlc_test(tlc_window_account_picker_spec AccountPicker AccountPicker.cfg pass)

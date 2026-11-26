@@ -1813,10 +1813,11 @@ void format4_read_caps() {
     CHECK(refusedAsBadDiff([&] { small.apply_string(crafted); }, past));
     CHECK(small == kept);
 
-    // The sign-in's field (format 5) under the same caps. A flow that is an id alone is 12 bytes and loads into 48, four
-    // times (measured: 300,000 of them, 3,600,036 bytes, load into 14,400,064), so within kMaxDiffBytes the flows
-    // stay within kMaxReadBytes: 300,000 read, as any diff under both caps does. 350,000 (4,200,036 bytes) are longer
-    // than the link carries: refused before they are measured, and the window keeps its state.
+    // The sign-in's field (format 5) under the same caps. A flow that is an id alone is 12 bytes and loads into 56 (with
+    // code_wanted; measured: 300,000 of them, 3,600,036 bytes, load into 16,800,104), so near kMaxDiffBytes the flows
+    // pass kMaxReadBytes: 280,000 read, as any diff under both caps does; 300,000, under the link's cap, are past what
+    // one read allocates and are refused; 350,000 (4,200,036 bytes) are longer than the link carries: refused before
+    // they are measured. The window keeps its state either way.
     const auto flowsOf = [](std::size_t count) {
         codec::SessionsChange flows;
         flows.offers.resize(count);
@@ -1825,9 +1826,14 @@ void format4_read_caps() {
         }
         return codec::writeTables(flows, kSignInFormat);
     };
-    const std::string within = flowsOf(300000);
+    const std::string within = flowsOf(280000);
     CHECK(within.size() <= codec::kMaxDiffBytes);
-    CHECK(codec::readTables(within, &unknown).offers.size() == 300000);
+    CHECK(codec::readTables(within, &unknown).offers.size() == 280000);
+    const std::string pastFlows = flowsOf(300000);
+    CHECK(pastFlows.size() <= codec::kMaxDiffBytes);
+    CHECK(refusedAsBadDiff([&] { (void)codec::readTables(pastFlows, &unknown); }, past));
+    CHECK(refusedAsBadDiff([&] { small.apply_string(pastFlows); }, past));
+    CHECK(small == kept);
     const std::string longerFlows = flowsOf(350000);
     CHECK(longerFlows.size() > codec::kMaxDiffBytes);
     CHECK(refusedAsBadDiff([&] { (void)codec::readTables(longerFlows, &unknown); }, longer));
