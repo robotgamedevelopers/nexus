@@ -3001,7 +3001,7 @@ void dashboardKeepsRosterDiagnosticsOffscreen() {
 // The dashboard waits on the server: while it has no page, the link's line shows under the board's, so a link that
 // failed (here, a server whose host key changed) says why on the tab that shows, rather than waiting in silence.
 void aFailedLinkShowsOnTheDashboard() {
-    Harness h(std::vector<FriendInfo>{}, false, true);
+    Harness h(std::vector<AIInfo>{}, false, true);
     h.board.page = false;
     h.board.problem = "waiting for nexus-server to say which dashboards it offers";
     h.view.status = "glenn@studio: ssh to glenn@studio: the server's ecdsa-sha2-nistp256 host key is not the one kept";
@@ -3048,7 +3048,7 @@ void compactWidthRepliesTakeTheWholeColumn() {
     h.extent = h.view.extent = {402, 874};
     const std::string reply = "The nightly went red in the link walk: seed 17 loses a diff when the window reconnects "
         "while the server is still sending the state it had before the link was made again.";
-    h.model.append(0, {EntryKind::Friend, reply});
+    h.model.append(0, {EntryKind::AI, reply});
     h.frame();
     h.frame();
     const auto near = [](float a, float b) { return std::fabs(a - b) <= 1.f; };
