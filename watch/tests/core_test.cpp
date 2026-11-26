@@ -2,7 +2,7 @@
 // ends, and the C interface the app calls, end to end in memory. No clock, no sockets, no files: time is an argument
 // and the phone's link is a LinkView the test writes.
 //
-//   watch_core_test [group]     groups: match, turn, frames, watchlink, phone, capi, screen (all when none)
+//   watch_core_test [group]     groups: match, turn, frames, watchlink, phone, capi, screen, accounts (all when none)
 
 #include <cstdio>
 #include <cstdlib>
@@ -247,8 +247,8 @@ void frames() {
     CHECK(!decode(good + "x", &f2, &why));
     CHECK(!decode(std::string("nexus-watch 1;"), &f2, &why));
     CHECK(!decode(encode(w), &f2, &why));                    // a watch frame is not a phone frame
-    CHECK(!decode(std::string("nexus-phone 2;"), &f2, &why));
-    CHECK(why.find("protocol 2") != std::string::npos);
+    CHECK(!decode(std::string("nexus-phone 3;"), &f2, &why));
+    CHECK(why.find("protocol 3") != std::string::npos);
     CHECK(!decode(std::string("nexus-watch 1;7:watch-10;0;99999999999;"), &w2, &why));   // a count past the bytes
     CHECK(!decode(std::string("nexus-phone 1;1;0;0;0;9;0:"), &f2, &why));                // a link phase past 2
     PhoneFrame bad;
@@ -256,7 +256,7 @@ void frames() {
     bad.applied = 4;
     CHECK(!decode(encode(bad), &f2, &why));                                                // vouching past what is done
     // Every prefix of a frame is refused, never read past its end.
-    const std::string whole = encode(WatchFrame{1, "w", 1, 0, {{1, "a", "b"}}, Audio{1, "m4a", "xyz"}});
+    const std::string whole = encode(WatchFrame{1, "w", 1, 0, {{1, "a", "b"}}, Audio{1, "m4a", "xyz"}, std::nullopt});
     for (std::size_t n = 0; n < whole.size(); ++n)
         CHECK(!decode(whole.substr(0, n), &w2, &why));
 }
@@ -457,6 +457,220 @@ void phone() {
     WatchLink fresh{"watch-2"};
     const WatchLink::Taken t2 = fresh.take(again.answer(other));
     CHECK(t2.events.size() == 1 && t2.events[0].text == "Emma, new watch");
+}
+
+// An AI's accounts on the watch (docs/watch.md, "Switching an AI's account"): the list, the switch's frames both
+// ways, the phone handing it to the link, and the watch's choice of the account it is on already sending nothing.
+AiAccounts emmaAccounts() {
+    AiAccounts a;
+    a.aiName = "Emma";
+    a.current = "work";
+    a.accounts = {{"work", "Work", "emma@work.example", true},
+                  {"home", "Home", "", true},
+                  {"spare", "", "", true},
+                  {"lapsed", "Lapsed", "lapsed@example.com", false}};
+    return a;
+}
+
+void accounts() {
+    // The list: only signed-in accounts, in the server's order; the current one marked; email, else label, else name.
+    const std::vector<AccountRow> rows = accountRows(emmaAccounts(), std::nullopt);
+    CHECK(rows.size() == 3);
+    CHECK((rows[0] == AccountRow{"work", "emma@work.example", true, false}));
+    CHECK((rows[1] == AccountRow{"home", "Home", false, false}));
+    CHECK((rows[2] == AccountRow{"spare", "spare", false, false}));
+    // A switch held marks its row; one for another AI marks nothing.
+    const std::vector<AccountRow> held = accountRows(emmaAccounts(), AccountSwitch{4, "Emma", "home"});
+    CHECK(held.size() == 3 && held[1].switching && !held[0].switching && held[0].current);
+    CHECK(!accountRows(emmaAccounts(), AccountSwitch{4, "Rowan", "home"})[1].switching);
+
+    // The switch encoded and decoded, both ways.
+    WatchFrame w;
+    w.watch = "watch-1";
+    w.accountSwitch = AccountSwitch{3, "Zhi Yǎ Wén", "a;: 2:b"};
+    WatchFrame w2;
+    std::string why;
+    CHECK(decode(encode(w), &w2, &why));
+    CHECK(w2 == w);
+    CHECK(w2.accountSwitch && w2.accountSwitch->num == 3 && w2.accountSwitch->account == "a;: 2:b");
+    PhoneFrame f;
+    f.epoch = 2;
+    f.switched = 3;
+    f.rosters = {emmaAccounts(), AiAccounts{"Rowan", "", {}}};
+    f.events = {{1, Event::Kind::AccountRefused, 0, "Emma", "lapsed is not signed in"}};
+    PhoneFrame f2;
+    CHECK(decode(encode(f), &f2, &why));
+    CHECK(f2 == f);
+    CHECK(f2.switched == 3 && f2.rosters.size() == 2 && f2.rosters[0].accounts[3].email == "lapsed@example.com" &&
+          !f2.rosters[0].accounts[3].signedIn);
+    // A frame of protocol 1 still reads, without them; one of 2 cut before them does not.
+    WatchFrame old;
+    old.proto = 1;
+    old.watch = "watch-1";
+    CHECK(decode(encode(old), &w2, &why) && !w2.accountSwitch);
+    const std::string two = encode(w);
+    CHECK(!decode(two.substr(0, two.find("1;3;")), &w2, &why));
+    CHECK(!decode(std::string("nexus-watch 2;1:w0;0;0;0;1;0;1:a1:b"), &w2, &why));   // a switch numbered 0
+    CHECK(!decode(std::string("nexus-watch 2;1:w0;0;0;0;2;"), &w2, &why));            // a switch flag past 1
+    PhoneFrame oldPhone;
+    oldPhone.proto = 1;
+    oldPhone.events = {{1, Event::Kind::AccountRefused, 0, "Emma", "x"}};
+    CHECK(!decode(encode(oldPhone), &f2, &why));     // an event kind protocol 1 does not have
+
+    // The watch: nothing to choose from before the phone sends the list; then a choice of the account the AI is on
+    // already sends nothing, and says nothing.
+    WatchLink l{"watch-1"};
+    CHECK(!l.choose("Emma", "home", &why) && !why.empty());
+    PhoneFrame withList;
+    withList.rosters = {emmaAccounts()};
+    l.take(withList);
+    CHECK(l.accounts("Emma").size() == 3 && l.accounts("Rowan").empty());
+    CHECK(!l.choose("Emma", "work", &why));
+    CHECK(why.empty());
+    CHECK(!l.accountSwitch() && !l.frame().accountSwitch);
+    CHECK(l.nextSwitch() == 1);
+    // Not signed in, or not there: refused, saying why.
+    CHECK(!l.choose("Emma", "lapsed", &why) && why.find("not signed in") != std::string::npos);
+    CHECK(!l.choose("Emma", "nobody", &why) && !why.empty());
+    // Another account: held and sent until the phone is done with it.
+    CHECK(l.choose("Emma", "home", &why));
+    CHECK((l.frame().accountSwitch == AccountSwitch{1, "Emma", "home"}));
+    CHECK(l.accounts("Emma")[1].switching);
+    CHECK(!l.choose("Emma", "home", &why) && why.empty());          // the one held already: nothing more
+    CHECK(!l.choose("Rowan", "x", &why));                           // another AI's while one is under way: refused
+    CHECK(l.choose("Emma", "work", &why));                          // back to the current, while home is held: sent
+    CHECK((l.frame().accountSwitch == AccountSwitch{2, "Emma", "work"}));
+    // Kept across a relaunch, numbers and all.
+    WatchLink back;
+    CHECK(WatchLink::load(l.save(), &back, &why));
+    CHECK(back.accountSwitch() == l.accountSwitch() && back.nextSwitch() == 3);
+    // A save from before the switch still loads.
+    CHECK(WatchLink::load("nexus-watch-outbox 1:w1;0;0;", &back, &why) && back.nextSwitch() == 1);
+    withList.switched = 1;
+    l.take(withList);
+    CHECK(l.accountSwitch().has_value());                           // done with 1, not 2
+    withList.switched = 2;
+    l.take(withList);
+    CHECK(!l.accountSwitch());
+
+    // The phone: the switch goes to the AI's first session as a SetAccount, and is done with when acknowledged.
+    using A = LinkSession::Activity;
+    PhoneRelay r{{}, 7};
+    r.setUnlocked(true);
+    WatchFrame in;
+    in.watch = "watch-1";
+    in.accountSwitch = AccountSwitch{5, "Emma", "home"};
+    r.exchange(in);
+    CHECK(r.switchSeen() == 5 && r.switchWaiting());
+    LinkView v = connected({session(9, "Emma", A::Idle), session(4, "Emma", A::Idle)}, 0, true);
+    v.rosters = {emmaAccounts()};
+    std::vector<LinkAction> out = r.link(v);
+    CHECK(out.size() == 1);
+    CHECK((out[0] == LinkAction{LinkAction::Kind::SetAccount, 4, "Emma", "home", 5}));
+    CHECK(r.switched() == 0 && r.answer(in).switched == 0);
+    r.exchange(in);                                                 // the same switch again: not handed twice
+    CHECK(r.link(v).empty());
+    v.sent = 1;
+    r.link(v);
+    CHECK(r.switched() == 5 && r.answer(in).switched == 5);
+    CHECK(r.answer(in).rosters == v.rosters);
+    // Signed out since the watch's list: done with, and said.
+    in.accountSwitch = AccountSwitch{6, "Emma", "lapsed"};
+    r.exchange(in);
+    CHECK(r.link(v).empty() && r.switched() == 6);
+    CHECK(r.events().back().kind == Event::Kind::AccountRefused);
+    // Locked: no list goes to the watch, and no switch is taken.
+    r.setUnlocked(false);
+    in.accountSwitch = AccountSwitch{7, "Emma", "spare"};
+    r.exchange(in);
+    CHECK(r.answer(in).rosters.empty() && r.switchSeen() == 6);
+    // An AI with no session yet: ensured, and the switch waits for it.
+    PhoneRelay q{{}, 8};
+    q.setUnlocked(true);
+    in.accountSwitch = AccountSwitch{1, "Emma", "home"};
+    q.exchange(in);
+    v = connected({}, 0, true);
+    v.rosters = {emmaAccounts()};
+    out = q.link(v);
+    CHECK(out.size() == 1 && out[0].kind == LinkAction::Kind::Ensure && q.switchWaiting());
+
+    // The C interface: the AI shown, its list, a choice of the current one sending nothing, another one sending.
+    nw_client* c = nw_client_new("watch-3", nullptr, 0);
+    char* shownAi = nw_shown_ai(c);
+    CHECK(std::strcmp(shownAi, "") == 0);
+    nw_free(shownAi);
+    PhoneFrame up;
+    up.link = LinkPhase::Connected;
+    up.aisKnown = true;
+    up.ais = {"Emma", "Rowan"};
+    up.rosters = {emmaAccounts()};
+    const std::string upBytes = encode(up);
+    // Still frames: a relaunch shows the last launch's first AI from its first frame, and the phone's first answer
+    // keeps it. Once the list is known it rules, as the words with no name do: a remembered AI the list no longer
+    // starts with gives way, and a known empty list shows none.
+    {
+        nw_client* r = nw_client_new("watch-3", nullptr, 0);
+        nw_remember_ai(r, "Emma");
+        CHECK(nw_ais_known(r) == 0);
+        char* first = nw_shown_ai(r);
+        CHECK(std::strcmp(first, "Emma") == 0);
+        CHECK(nw_take(r, upBytes.data(), upBytes.size()) == 1);
+        CHECK(nw_ais_known(r) == 1);
+        char* after = nw_shown_ai(r);
+        CHECK(std::strcmp(after, first) == 0);
+        nw_free(first);
+        nw_free(after);
+        nw_client_free(r);
+        nw_client* s = nw_client_new("watch-3", nullptr, 0);
+        nw_remember_ai(s, "Stella");
+        CHECK(nw_take(s, upBytes.data(), upBytes.size()) == 1);
+        after = nw_shown_ai(s);
+        CHECK(std::strcmp(after, "Emma") == 0);
+        nw_free(after);
+        PhoneFrame none = up;
+        none.ais = {};
+        none.rosters = {};
+        const std::string noneBytes = encode(none);
+        CHECK(nw_take(s, noneBytes.data(), noneBytes.size()) == 1);
+        after = nw_shown_ai(s);
+        CHECK(std::strcmp(after, "") == 0);
+        nw_free(after);
+        nw_client_free(s);
+    }
+    CHECK(nw_take(c, upBytes.data(), upBytes.size()) == 1);
+    shownAi = nw_shown_ai(c);
+    CHECK(std::strcmp(shownAi, "Emma") == 0);
+    nw_free(shownAi);
+    CHECK(nw_account_count(c, "Emma") == 3);
+    char* account = nullptr;
+    char* shown = nullptr;
+    int current = 0, switching = 0;
+    CHECK(nw_account(c, "Emma", 0, &account, &shown, &current, &switching) == 1);
+    CHECK(std::strcmp(account, "work") == 0 && std::strcmp(shown, "emma@work.example") == 0 && current == 1);
+    nw_free(account);
+    nw_free(shown);
+    CHECK(nw_account(c, "Emma", 3, &account, &shown, &current, &switching) == 0);
+    int kind = 0;
+    char* text = nullptr;
+    while (nw_next_say(c, &kind, &text) == 1)
+        nw_free(text);
+    CHECK(nw_choose_account(c, "Emma", "work") == 0);
+    CHECK(nw_next_say(c, &kind, &text) == 0);                       // nothing sent, nothing said
+    char* bytes = nullptr;
+    std::size_t n = nw_frame(c, &bytes);
+    WatchFrame sent;
+    CHECK(decode(std::string(bytes, n), &sent, &why) && !sent.accountSwitch);
+    nw_free(bytes);
+    CHECK(nw_choose_account(c, "Emma", "home") == 1);
+    CHECK(nw_next_say(c, &kind, &text) == 1 && kind == NW_CUE && std::string(text) == "Switching Emma to Home.");
+    nw_free(text);
+    n = nw_frame(c, &bytes);
+    CHECK(decode(std::string(bytes, n), &sent, &why) && (sent.accountSwitch == AccountSwitch{1, "Emma", "home"}));
+    nw_free(bytes);
+    CHECK(nw_choose_account(c, "Emma", "lapsed") == 0);
+    CHECK(nw_next_say(c, &kind, &text) == 1 && kind == NW_NOTICE);
+    nw_free(text);
+    nw_client_free(c);
 }
 
 // The C interface end to end in memory: the watch's client, a phone relay, and a link the test plays.
@@ -667,7 +881,7 @@ void screen() {
 int main(int argc, char** argv) {
     const std::vector<std::pair<std::string, std::function<void()>>> groups{
         {"match", match}, {"turn", turn}, {"frames", frames}, {"watchlink", watchlink}, {"phone", phone},
-        {"capi", capi}, {"screen", screen}};
+        {"capi", capi}, {"screen", screen}, {"accounts", accounts}};
     bool ran = false;
     for (const auto& [name, run] : groups) {
         if (argc < 2 || name == argv[1]) {

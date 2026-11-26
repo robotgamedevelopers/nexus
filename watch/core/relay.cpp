@@ -102,11 +102,88 @@ bool prompt(Reader& r, Prompt* p) {
 bool proto(Reader& r, std::uint64_t* p) {
     if (!r.u(p))
         return false;
-    return *p == kRelayProto || r.fail("protocol " + std::to_string(*p) + ", where this build speaks " +
+    return (*p >= kRelayProtoOldest && *p <= kRelayProto) || r.fail("protocol " + std::to_string(*p) + ", where this build speaks " +
                                        std::to_string(kRelayProto) + ": update nexus on the watch and the phone");
 }
 
+void switchOf(Writer& w, const std::optional<AccountSwitch>& a) {
+    w.u(a ? 1 : 0);
+    if (a) {
+        w.u(a->num);
+        w.s(a->aiName);
+        w.s(a->account);
+    }
+}
+
+bool switchOf(Reader& r, std::optional<AccountSwitch>* out) {
+    std::uint64_t has = 0;
+    if (!r.u(&has))
+        return false;
+    if (has > 1)
+        return r.fail("an account switch flag past 1");
+    if (has == 0)
+        return true;
+    AccountSwitch a;
+    if (!(r.u(&a.num) && r.s(&a.aiName) && r.s(&a.account)))
+        return false;
+    if (a.num == 0)
+        return r.fail("an account switch numbered 0");
+    *out = std::move(a);
+    return true;
+}
+
+void rosters(Writer& w, const std::vector<AiAccounts>& all) {
+    w.u(all.size());
+    for (const AiAccounts& ai : all) {
+        w.s(ai.aiName);
+        w.s(ai.current);
+        w.u(ai.accounts.size());
+        for (const AccountOption& o : ai.accounts) {
+            w.s(o.name);
+            w.s(o.label);
+            w.s(o.email);
+            w.u(o.signedIn ? 1 : 0);
+        }
+    }
+}
+
+bool rosters(Reader& r, std::vector<AiAccounts>* out) {
+    std::uint64_t n = 0;
+    bool ok = r.count(&n, 6);
+    for (std::uint64_t k = 0; ok && k < n; ++k) {
+        AiAccounts ai;
+        std::uint64_t m = 0;
+        ok = r.s(&ai.aiName) && r.s(&ai.current) && r.count(&m, 8);
+        for (std::uint64_t j = 0; ok && j < m; ++j) {
+            AccountOption o;
+            std::uint64_t in = 0;
+            ok = r.s(&o.name) && r.s(&o.label) && r.s(&o.email) && r.u(&in);
+            if (ok && in > 1)
+                ok = r.fail("a signed-in flag past 1");
+            o.signedIn = in == 1;
+            ai.accounts.push_back(std::move(o));
+        }
+        out->push_back(std::move(ai));
+    }
+    return ok;
+}
+
 } // namespace
+
+std::vector<AccountRow> accountRows(const AiAccounts& ai, const std::optional<AccountSwitch>& held) {
+    std::vector<AccountRow> rows;
+    for (const AccountOption& o : ai.accounts) {
+        if (!o.signedIn)
+            continue;
+        AccountRow row;
+        row.account = o.name;
+        row.shown = !o.email.empty() ? o.email : !o.label.empty() ? o.label : o.name;
+        row.current = o.name == ai.current;
+        row.switching = held && held->aiName == ai.aiName && held->account == o.name;
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
 
 std::string encode(const WatchFrame& f) {
     Writer w;
@@ -124,6 +201,8 @@ std::string encode(const WatchFrame& f) {
         w.s(f.audio->format);
         w.s(f.audio->bytes);
     }
+    if (f.proto >= 2)
+        switchOf(w, f.accountSwitch);
     return w.out;
 }
 
@@ -149,6 +228,10 @@ std::string encode(const PhoneFrame& f) {
         w.s(e.aiName);
         w.s(e.text);
     }
+    if (f.proto >= 2) {
+        w.u(f.switched);
+        rosters(w, f.rosters);
+    }
     return w.out;
 }
 
@@ -171,6 +254,9 @@ bool decode(const std::string& bytes, WatchFrame* out, std::string* why) {
         ok = r.u(&a.utterance) && r.s(&a.format) && r.s(&a.bytes);
         f.audio = std::move(a);
     }
+    // The account switch, from protocol 2: a frame of 1 ends before it.
+    if (ok && f.proto >= 2)
+        ok = switchOf(r, &f.accountSwitch);
     ok = ok && r.end();
     if (!ok) {
         if (why)
@@ -200,10 +286,13 @@ bool decode(const std::string& bytes, PhoneFrame* out, std::string* why) {
     ok = ok && r.count(&n, 10);
     for (std::uint64_t k = 0; ok && k < n; ++k) {
         Event e;
-        ok = r.u(&e.num) && r.u8(&kind, 3) && r.u(&e.utterance) && r.s(&e.aiName) && r.s(&e.text);
+        ok = r.u(&e.num) && r.u8(&kind, f.proto >= 2 ? 4 : 3) && r.u(&e.utterance) && r.s(&e.aiName) && r.s(&e.text);
         e.kind = static_cast<Event::Kind>(kind);
         f.events.push_back(std::move(e));
     }
+    // The accounts, from protocol 2: a frame of 1 ends before them.
+    if (ok && f.proto >= 2)
+        ok = r.u(&f.switched) && rosters(r, &f.rosters);
     ok = ok && r.end();
     if (ok && f.uncertain > f.applied)
         ok = r.fail("prompts it cannot vouch for past those done with");
@@ -237,6 +326,7 @@ WatchFrame WatchLink::frame() const {
     f.ack = ack_;
     f.prompts = outbox_;
     f.audio = audio_;
+    f.accountSwitch = switch_;
     return f;
 }
 
@@ -271,12 +361,50 @@ WatchLink::Taken WatchLink::take(const PhoneFrame& f) {
     outbox_ = std::move(kept);
     if (audio_ && audio_->utterance <= f.audioTaken)
         audio_.reset();
+    if (switch_ && switch_->num <= f.switched)
+        switch_.reset();
+    rosters_ = f.rosters;
     t.applied = f.applied;
     t.link = f.link;
     t.why = f.why;
     t.aisKnown = f.aisKnown;
     t.ais = f.ais;
     return t;
+}
+
+bool WatchLink::choose(const std::string& ai, const std::string& account, std::string* why) {
+    std::string unused;
+    std::string& w = why ? *why : unused;
+    w.clear();
+    const auto roster = std::find_if(rosters_.begin(), rosters_.end(),
+                                     [&](const AiAccounts& r) { return r.aiName == ai; });
+    if (roster == rosters_.end()) {
+        w = "your phone has not sent " + ai + "'s accounts yet";
+        return false;
+    }
+    const auto option = std::find_if(roster->accounts.begin(), roster->accounts.end(),
+                                     [&](const AccountOption& o) { return o.name == account; });
+    if (option == roster->accounts.end() || !option->signedIn) {
+        w = account + " is not signed in for " + ai + ". Sign it in on the phone first.";
+        return false;
+    }
+    if (switch_ && switch_->aiName != ai) {
+        w = "still switching " + switch_->aiName + "'s account. Try again in a moment.";
+        return false;
+    }
+    const std::string& target = switch_ ? switch_->account : roster->current;
+    if (account == target && !FAULT("switch-current"))
+        return false;
+    switch_ = AccountSwitch{nextSwitch_++, ai, account};
+    return true;
+}
+
+std::vector<AccountRow> WatchLink::accounts(const std::string& ai) const {
+    for (const AiAccounts& r : rosters_) {
+        if (r.aiName == ai)
+            return accountRows(r, switch_);
+    }
+    return {};
 }
 
 std::string WatchLink::save() const {
@@ -288,6 +416,9 @@ std::string WatchLink::save() const {
     w.u(outbox_.size());
     for (const Prompt& p : outbox_)
         prompt(w, p);
+    // Appended: the account switch's number and the switch held.
+    w.u(nextSwitch_);
+    switchOf(w, switch_);
     return w.out;
 }
 
@@ -302,6 +433,12 @@ bool WatchLink::load(const std::string& bytes, WatchLink* out, std::string* why)
         if (ok && (p.num == 0 || p.num >= l.nextPrompt_ || (!l.outbox_.empty() && p.num <= l.outbox_.back().num)))
             ok = r.fail("an outbox out of order");
         l.outbox_.push_back(std::move(p));
+    }
+    // Saved before the account switch: none held, numbered from 1.
+    if (ok && r.at < bytes.size()) {
+        ok = r.u(&l.nextSwitch_) && switchOf(r, &l.switch_);
+        if (ok && (l.nextSwitch_ == 0 || (l.switch_ && l.switch_->num >= l.nextSwitch_)))
+            ok = r.fail("an account switch out of order");
     }
     ok = ok && r.end();
     if (ok && l.nextPrompt_ == 0)
@@ -345,6 +482,10 @@ PhoneRelay::Exchanged PhoneRelay::exchange(const WatchFrame& in) {
         eventNext_ = 1;
         watchAck_ = 0;
         audioTaken_ = 0;
+        switchSeen_ = 0;
+        switchWaiting_.reset();
+        switchInflight_.reset();
+        switched_ = 0;
     }
     if (in.epoch == epoch_) {
         watchAck_ = std::max(watchAck_, in.ack);
@@ -363,6 +504,11 @@ PhoneRelay::Exchanged PhoneRelay::exchange(const WatchFrame& in) {
     if (in.audio && in.audio->utterance > audioTaken_) {
         audioTaken_ = in.audio->utterance;
         x.transcribe = in.audio;
+    }
+    // The newest switch only: one the watch made later replaces one still waiting here.
+    if (in.accountSwitch && in.accountSwitch->num > switchSeen_) {
+        switchSeen_ = in.accountSwitch->num;
+        switchWaiting_ = in.accountSwitch;
     }
     x.reply = answer(in);
     return x;
@@ -389,12 +535,15 @@ PhoneFrame PhoneRelay::answer(const WatchFrame& in) const {
             f.events.push_back(e);
     }
     f.uncertain = FAULT("vouch-all") ? 0 : bootHanded_;
+    f.switched = switched_;
+    f.rosters = last_.rosters;
     if (!unlocked_) {
         f.link = LinkPhase::Lost;
         f.why = kLockedWhy;
         f.aisKnown = false;
         f.ais.clear();
         f.events.clear();
+        f.rosters.clear();
     }
     return f;
 }
@@ -441,16 +590,63 @@ void PhoneRelay::readReplies(const LinkView& view) {
     }
 }
 
+std::string PhoneRelay::currentAccount(const std::string& ai) const {
+    for (const AiAccounts& r : last_.rosters) {
+        if (r.aiName == ai)
+            return r.current;
+    }
+    return {};
+}
+
 std::vector<LinkAction> PhoneRelay::link(const LinkView& view) {
     last_ = view;
     while (!inflight_.empty() && view.acknowledged && view.sent >= inflight_.front().second) {
         acked_ = std::max(acked_, inflight_.front().first);
         inflight_.pop_front();
     }
+    if (switchInflight_ && view.acknowledged && view.sent >= switchInflight_->second) {
+        switched_ = std::max(switched_, switchInflight_->first.num);
+        switchInflight_.reset();
+    }
     readReplies(view);
     std::vector<LinkAction> out;
     if (view.phase != LinkPhase::Connected || !unlocked_)
         return out;
+    // The account switch first: the person chose it before anything they say next.
+    if (switchWaiting_) {
+        const AccountSwitch& s = *switchWaiting_;
+        const LinkSession* session = nullptr;
+        for (const LinkSession& x : view.sessions) {
+            if (x.aiName == s.aiName && (session == nullptr || x.id < session->id))
+                session = &x;
+        }
+        const auto roster = std::find_if(view.rosters.begin(), view.rosters.end(),
+                                         [&](const AiAccounts& r) { return r.aiName == s.aiName; });
+        if (roster != view.rosters.end()) {
+            const auto option = std::find_if(roster->accounts.begin(), roster->accounts.end(),
+                                             [&](const AccountOption& o) { return o.name == s.account; });
+            if (option == roster->accounts.end() || !option->signedIn) {
+                // Signed out (or gone) since the watch's list: done with, and the person is told, never left waiting.
+                event(Event::Kind::AccountRefused, 0, s.aiName, s.account + " is not signed in for " + s.aiName +
+                      " any more. Sign it in on the phone first. The account was not changed.");
+                switched_ = std::max(switched_, s.num);
+                switchWaiting_.reset();
+            } else if (session == nullptr) {
+                if (!ensured_[s.aiName]) {
+                    ensured_[s.aiName] = true;
+                    out.push_back(LinkAction{LinkAction::Kind::Ensure, 0, s.aiName, {}, 0});
+                    ++linkSent_;
+                }
+            } else {
+                out.push_back(LinkAction{LinkAction::Kind::SetAccount, session->id, s.aiName, s.account, s.num});
+                ++linkSent_;
+                switchInflight_.emplace(s, linkSent_);
+                if (FAULT("switch-early"))
+                    switched_ = std::max(switched_, s.num);
+                switchWaiting_.reset();
+            }
+        }
+    }
     while (!waiting_.empty()) {
         const Prompt& p = waiting_.front();
         const LinkSession* session = nullptr;

@@ -186,8 +186,9 @@ jobs:
           - shard: glide-overlay
             run: '^tlc_(glide|overlay|watch)_'
             build: overlay_walk glide_walk watch_walk
-          # The Apple Watch client (watch/models, docs/watch.md): the voice turn and the relay to the phone, their
-          # witnesses, and the code's walks against them with each planted fault rejected (short tests).
+          # The Apple Watch client (watch/models, docs/watch.md): the voice turn, the relay to the phone and the
+          # account switch, their witnesses, and the code's walks against them with each planted fault rejected (short
+          # tests).
           - shard: watch-app
             run: '^tlc_watchapp_'
             build: watch_voice_walk watch_relay_walk

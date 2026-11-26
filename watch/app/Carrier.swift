@@ -75,3 +75,24 @@ final class LoopbackCarrier: Carrier {
         }.resume()
     }
 }
+
+#if NEXUS_WATCH_TEST_OPTIONS && targetEnvironment(simulator)
+// --canned-phone <file>: every frame is answered with the same phone frame, read from the file, with no relay or
+// server behind it: the screens with a server's state in them, for a look (a Debug build for the simulator only).
+final class CannedCarrier: Carrier {
+    private let answer: Result<Data, CarrierError>
+
+    init(file: URL) {
+        if let data = try? Data(contentsOf: file) {
+            answer = .success(data)
+        } else {
+            answer = .failure(CarrierError(why: "the canned phone frame \(file.path) cannot be read"))
+        }
+    }
+
+    func exchange(_ frame: Data, answer reply: @escaping (Result<Data, CarrierError>) -> Void) {
+        let a = answer
+        DispatchQueue.main.async { reply(a) }
+    }
+}
+#endif

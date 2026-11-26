@@ -13,6 +13,25 @@ until the phone has reached nexus-server, or for at most four seconds after laun
 rather than flashing "No server" while the phone's link starts. A link that stays down past that, or is lost after it
 was reached, shows at once.
 
+## Switching an AI's account
+
+The AI's name is at the top of the screen: the AI talked to last, or else the first in the server's list (the AI that
+words with no name go to). A relaunch shows the last launch's first AI from its first frame, until the phone sends the
+list. Tap it to
+see that AI's signed-in accounts. The Digital Crown scrolls the list, and the account the AI is on now is marked. Each
+row shows the account's email, or else its label, or else its name. Accounts that need signing in are not listed: sign
+them in with nexus on the iPhone first.
+
+Tap another account to switch the AI to it. The watch says "Switching emma to ...", and the row is marked as switching
+until the server has it. Tapping the account the AI is on already does nothing. One switch is under way at a time: a
+switch for another AI waits until the first is done, and the watch says so.
+
+The switch goes through the phone, like the words do. The phone hands it to the AI's session as a SetAccount, the same
+action the iPad and Mac windows send. The phone checks the account against the server's list first; if it has been
+signed out since, the switch is refused and the watch says why. The watch holds its choice, across relaunches, until
+the phone says the server has it, so a switch is never dropped silently. The list always shows the account the server
+says the AI is on, never the watch's own wish.
+
 **This is a sketch.** The watch app, its core and its models run, in the simulator against a Mac standing in for the
 phone. The iPhone's side of the relay is not built, so on a real watch the app cannot reach a server yet, and the
 phone's lock described below is not enforced anywhere yet: it is the design, and the Mac's stand-in only imitates it
@@ -78,7 +97,13 @@ restarts of the watch app, the phone app, or both, and never loses one silently:
 - After a restart, the phone tells the watch which numbers it can no longer vouch for. The watch says those prompts
   may not have arrived.
 
-Both models are checked by TLC. The code is bound to them: seeded random walks of the real code are checked as
+**The account switch** (`watch/models/AccountSwitch.tla`) rides the same frames: the watch numbers its choice and
+holds the newest until the phone says the server has it, and a phone that restarts takes the choice again. Only
+signed-in accounts are ever chosen, a choice always changes something, and a choice leaves the watch unapplied only for
+a newer one. The model does not claim that the server ends on the newest choice: an earlier run of the phone's link
+can still deliver an older one late.
+
+The models are checked by TLC. The code is bound to them: seeded random walks of the real code are checked as
 behaviours of the specs. Each model has reversed witnesses that must fail, and planted faults that must be rejected.
 
 ## Building
@@ -104,7 +129,7 @@ is signed with `-DNEXUS_WATCH_TEAM=<identity>`, or ad hoc without one, which no 
   its first until the phone reaches the server. They run only there, in the watch's own build (`cmake -S watch`):
   nexus's own build leaves the watch out of its default targets.
 - **The models**, in a nightly shard of their own (`nightly.yml`, shard `watch-app`):
-  - TLC on `VoiceTurn.tla` and `Relay.tla`.
+  - TLC on `VoiceTurn.tla`, `Relay.tla` and `AccountSwitch.tla`.
   - Every reversed witness under `watch/models/witnesses`.
   - The code's walks over four seeds.
   - Each planted fault, which must be rejected.
@@ -128,7 +153,7 @@ speaks HTTP on 127.0.0.1, which the simulator's app reaches with `--relay`. The 
    - `--speak-file` with recordings made by `say`, in place of the microphone
    - `--voice-to <dir>`, so what is said goes to files rather than the speaker
    - `--log <file>`
-   - `--drive "unlock;wait:2;press;wait:2;release;..."`
+   - `--drive "unlock;wait:2;press;wait:2;release;..."` (`accounts` opens the account list)
 
 In the simulator, the owner's check cannot pass because there is no wrist. A driven run plays the wrist itself with
 `lock` and `unlock`. The test options and the driven wrist are compiled only into a Debug build for the simulator
@@ -136,6 +161,10 @@ In the simulator, the owner's check cannot pass because there is no wrist. A dri
 CI checks the Release binaries with `watch/tests/no_test_options.cmake`.
 
 To check the run, transcribe the spoken files with `nexus-watch-relay --transcribe`.
+
+To see the account list without a relay or a server, launch with `--canned-phone watch/tests/data/accounts.phoneframe`
+and `--drive accounts`. Every frame is then answered with that phone frame: one AI, emma, with three signed-in
+accounts and one that needs signing in.
 
 To see a refusal:
 
@@ -148,4 +177,6 @@ To see a refusal:
 - **The iPhone's side of the relay.** This is WatchConnectivity into the nexus iPhone app, with its link and its
   recognizer. It waits on the link on iOS. Until it lands, the watch app's phone carrier reports that the iPhone is not
   reachable, and the phone's lock is not enforced: only the Mac's stand-in imitates it.
+- **The account switch on the iPhone.** The relay carries it both ways, and the Mac's stand-in hands it to the server
+  (`watch/host/relay_host.cpp`). On the iPhone it waits on the same missing relay.
 - **A real watch.** The app has not yet been run on a real watch.

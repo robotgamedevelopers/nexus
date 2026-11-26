@@ -70,8 +70,27 @@ int nw_next_say(nw_client* c, int* kind, char** text);
  * the idle screen. */
 void nw_screen(const nw_client* c, const char* notice, const char* lock_why, const char* reply_from, char** status,
                char** problem);
-/* The bytes to keep across launches: the id, the outbox and the next prompt's number. */
+/* The bytes to keep across launches: the id, the outbox and the next prompt's number, and the account switch held. */
 size_t nw_saved(const nw_client* c, char** out);
+
+/* The AI's accounts (watch/core/relay.h accountRows, docs/watch.md "Switching an AI's account"). The AI shown is the
+ * one talked to last, else the first in the server's list (where words with no name go); "" for none (malloc'd).
+ * Until the phone first sends the list, the first AI of the last launch's list stands in (nw_remember_ai), so a
+ * relaunch's first frame is its last: the name does not appear, or change, when the phone first answers. */
+char* nw_shown_ai(const nw_client* c);
+void nw_remember_ai(nw_client* c, const char* first_ai);
+/* 1 once the phone has sent the server's list of AIs (and so their accounts), 0 before. */
+int nw_ais_known(const nw_client* c);
+/* Its signed-in accounts as the phone last sent them, in the server's order: how many, and row i (1, with the account's
+ * id and what to show, malloc'd, and whether it is the AI's account now and whether a switch to it is under way; 0
+ * past the end). */
+size_t nw_account_count(const nw_client* c, const char* ai);
+int nw_account(const nw_client* c, const char* ai, size_t i, char** account, char** shown, int* current,
+               int* switching);
+/* The person chose the account for the AI: 1 when the switch is held and goes to the phone with the next frame (and a cue
+ * says so); 0 when there is nothing to send (the account is the AI's already), or when it cannot be chosen, with a
+ * notice saying why. */
+int nw_choose_account(nw_client* c, const char* ai, const char* account);
 
 #ifdef __cplusplus
 }

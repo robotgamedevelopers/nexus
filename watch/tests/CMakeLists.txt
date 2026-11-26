@@ -1,15 +1,16 @@
 # The watch core's tests (docs/watch.md), with two labels:
 #   unit    watch_core_test, one test per group: logic only, no clock, sockets or files. Standalone only (cmake -S
 #           watch: ci.yml's watch job, per pull request), so nexus's own build does not compile it.
-#   model   TLC on watch/models: VoiceTurn.tla and Relay.tla on small instances, every reversed witness rejected, and
-#           the code's walks (voice_walk, relay_walk) checked against them over several seeds, with each walk's planted
-#           fault rejected. Needs java and TLA2TOOLS_JAR (the pinned tla2tools.jar, .github/tla2tools.sha256).
+#   model   TLC on watch/models: VoiceTurn.tla, Relay.tla and AccountSwitch.tla on small instances, every reversed
+#           witness rejected, and the code's walks (voice_walk, relay_walk) checked against them over several seeds,
+#           with each walk's planted fault rejected. Needs java and TLA2TOOLS_JAR (the pinned tla2tools.jar,
+#           .github/tla2tools.sha256).
 
 if(NEXUS_WATCH_STANDALONE)
     add_executable(watch_core_test core_test.cpp)
     target_link_libraries(watch_core_test PRIVATE nexus_watch_core)
     target_compile_options(watch_core_test PRIVATE ${NEXUS_WARNINGS})
-    foreach(group match turn frames watchlink phone capi screen)
+    foreach(group match turn frames watchlink phone capi screen accounts)
         add_test(NAME watch_unit_${group} COMMAND watch_core_test ${group})
         set_tests_properties(watch_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
     endforeach()
@@ -50,6 +51,7 @@ endfunction()
 
 watch_tlc(tlc_watchapp_model_voice VoiceTurn MCVoiceTurn.cfg pass)
 watch_tlc(tlc_watchapp_model_relay Relay MCRelay.cfg pass)
+watch_tlc(tlc_watchapp_model_account AccountSwitch MCAccountSwitch.cfg pass)
 file(GLOB witnesses RELATIVE "${models}/witnesses" "${models}/witnesses/W*.cfg")
 foreach(cfg ${witnesses})
     get_filename_component(w "${cfg}" NAME_WE)
@@ -62,6 +64,8 @@ foreach(seed 1 2 3 4)
         WALK watch_voice_walk SEED ${seed} STEPS 400 DATA VoiceTurnTraceData)
     watch_tlc(tlc_watchapp_trace_relay_${seed} RelayTrace RelayTrace.cfg pass
         WALK watch_relay_walk SEED ${seed} STEPS 400 DATA RelayTraceData)
+    watch_tlc(tlc_watchapp_trace_account_${seed} AccountSwitchTrace AccountSwitchTrace.cfg pass
+        WALK watch_relay_walk SEED ${seed} STEPS 400 DATA AccountSwitchTraceData)
 endforeach()
 foreach(fault silent-mic unread drop-on-back speak-locked listen-locked)
     watch_tlc(tlc_watchapp_trace_voice_fault_${fault} VoiceTurnTrace VoiceTurnTrace.cfg fail:Trace
@@ -70,4 +74,8 @@ endforeach()
 foreach(fault forget-handed ack-early vouch-all)
     watch_tlc(tlc_watchapp_trace_relay_fault_${fault} RelayTrace RelayTrace.cfg fail:Trace
         WALK watch_relay_walk SEED 1 STEPS 400 DATA RelayTraceData FAULT ${fault})
+endforeach()
+foreach(fault switch-early switch-current)
+    watch_tlc(tlc_watchapp_trace_account_fault_${fault} AccountSwitchTrace AccountSwitchTrace.cfg fail:Trace
+        WALK watch_relay_walk SEED 1 STEPS 400 DATA AccountSwitchTraceData FAULT ${fault})
 endforeach()

@@ -13,7 +13,10 @@
 //     lists, so an answer vouches for no prompt it was not asked about: an answer the watch takes may be to an older
 //     frame than the outbox it is applied to.
 //   - Within one run of the phone, the link applies each action once (models/Link.tla, Reconnect.tla).
-// watch/models/Relay.tla is the model; watch/tests/relay_walk.cpp binds this code to it.
+// The same frames switch an AI's account (protocol 2): the phone sends each AI's accounts, the watch its newest choice,
+// held until the phone says it is done with it (PhoneFrame::switched), and the phone hands it to the AI's first session
+// as a SetAccount (watch/models/AccountSwitch.tla).
+// watch/models/Relay.tla and AccountSwitch.tla are the models; watch/tests/relay_walk.cpp binds this code to them.
 //
 // Logic only: no clock, no I/O. Frames are encoded and decoded here; the carriers and the link are the hosts'.
 
@@ -30,7 +33,10 @@
 
 namespace nexus::watch {
 
-inline constexpr std::uint64_t kRelayProto = 1;
+// Protocol 2 appends the account switch to the watch's frame and the accounts to the phone's. A frame of 1 still reads,
+// without them; a build of 1 refuses a frame of 2, saying to update both ends.
+inline constexpr std::uint64_t kRelayProto = 2;
+inline constexpr std::uint64_t kRelayProtoOldest = 1;
 
 // A recording on its way to the phone's recognizer.
 struct Audio {
@@ -40,6 +46,45 @@ struct Audio {
     bool operator==(const Audio&) const = default;
 };
 
+// An AI's accounts, as the server lists them (sync::ServerFriend::accounts, sync::AccountChoice), and the one its
+// session runs on now. The watch shows the signed-in ones and switches between them (watch/models/AccountSwitch.tla).
+struct AccountOption {
+    std::string name;               // the account's id: what a switch names
+    std::string label;
+    std::string email;
+    bool signedIn = false;          // !AccountChoice::needsSignIn: only these can be switched to
+    bool operator==(const AccountOption&) const = default;
+};
+
+struct AiAccounts {
+    std::string aiName;
+    std::string current;            // the account the AI's session runs on now; "" for the harness's default
+    std::vector<AccountOption> accounts;    // in the server's order
+    bool operator==(const AiAccounts&) const = default;
+};
+
+// The person's choice of account for an AI, numbered by the watch (1, 2, 3 ... across launches): the watch holds its
+// newest until the phone says it is done with it (PhoneFrame::switched).
+struct AccountSwitch {
+    std::uint64_t num = 0;
+    std::string aiName;
+    std::string account;
+    bool operator==(const AccountSwitch&) const = default;
+};
+
+// A row of the watch's account list: what it shows (the email, else the label, else the name).
+struct AccountRow {
+    std::string account;
+    std::string shown;
+    bool current = false;           // the account the AI runs on now, as the server last said
+    bool switching = false;         // the watch's choice, not yet done
+    bool operator==(const AccountRow&) const = default;
+};
+
+// The list the watch shows for an AI: its signed-in accounts, in the server's order. A switch the watch holds marks
+// its row switching.
+std::vector<AccountRow> accountRows(const AiAccounts& ai, const std::optional<AccountSwitch>& held);
+
 struct WatchFrame {
     std::uint64_t proto = kRelayProto;
     std::string watch;              // the watch's id: one phone relays for one watch at a time
@@ -47,17 +92,19 @@ struct WatchFrame {
     std::uint64_t ack = 0;          // the phone's events the watch has, up to this number
     std::vector<Prompt> prompts;    // the outbox, oldest first
     std::optional<Audio> audio;     // the recording not yet taken
+    std::optional<AccountSwitch> accountSwitch;     // the choice not yet done (protocol 2)
     bool operator==(const WatchFrame&) const = default;
 };
 
 enum class LinkPhase : std::uint8_t { Connecting = 0, Connected = 1, Lost = 2 };
 
 struct Event {
-    enum class Kind : std::uint8_t { Transcript = 0, TranscriptFailed = 1, Reply = 2, Notice = 3 };
+    // AccountRefused (protocol 2): a switch the phone could not make, and why; said, and not an answer to a prompt.
+    enum class Kind : std::uint8_t { Transcript = 0, TranscriptFailed = 1, Reply = 2, Notice = 3, AccountRefused = 4 };
     std::uint64_t num = 0;
     Kind kind = Kind::Reply;
     std::uint64_t utterance = 0;    // with Transcript and TranscriptFailed
-    std::string aiName;         // with Reply and Notice
+    std::string aiName;         // with Reply, Notice and AccountRefused
     std::string text;               // the words, the reply, or what went wrong
     bool operator==(const Event&) const = default;
 };
@@ -74,6 +121,10 @@ struct PhoneFrame {
     bool aisKnown = false;
     std::vector<std::string> ais;
     std::vector<Event> events;      // after the watch's ack, oldest first
+    // From protocol 2:
+    std::uint64_t switched = 0;     // account switches up to this number are done with: the server has applied it (its
+                                    // link acknowledged the SetAccount), or the phone refused it and said why (an event)
+    std::vector<AiAccounts> rosters;    // each AI's accounts, as the link last showed them; none while locked
     bool operator==(const PhoneFrame&) const = default;
 };
 
@@ -103,6 +154,18 @@ public:
     };
     Taken take(const PhoneFrame& f);
 
+    // The person chose `account` for `ai` from the account list. Held, and sent in every frame, until the phone is done
+    // with it. True when there is a switch to send. False with `why` empty when there is nothing to do: the account is
+    // already the AI's (or the one a switch already held for it names). False with `why` when it cannot be chosen: no
+    // list for the AI yet, an account not signed in, or a switch for another AI still under way (one at a time, so
+    // that none is dropped unsaid).
+    bool choose(const std::string& ai, const std::string& account, std::string* why);
+    // The AI's account list as the phone last showed it (accountRows): empty when the phone has sent none for it.
+    std::vector<AccountRow> accounts(const std::string& ai) const;
+    const std::vector<AiAccounts>& rosters() const { return rosters_; }
+    const std::optional<AccountSwitch>& accountSwitch() const { return switch_; }
+    std::uint64_t nextSwitch() const { return nextSwitch_; }
+
     const std::vector<Prompt>& outbox() const { return outbox_; }
     const std::optional<Audio>& audio() const { return audio_; }
     std::uint64_t ack() const { return ack_; }
@@ -125,6 +188,9 @@ private:
     std::uint64_t epoch_ = 0;
     std::uint64_t ack_ = 0;
     bool synced_ = false;                       // ack_ is where this epoch's events stand for this watch
+    std::vector<AiAccounts> rosters_;           // as of the last answer taken
+    std::optional<AccountSwitch> switch_;       // the choice not yet done
+    std::uint64_t nextSwitch_ = 1;              // outlives the app: the phone drops a number it has taken as done
 };
 
 // What the phone's link shows the relay: the server's state and the link's, as link::ClientLink's snapshot holds them.
@@ -152,16 +218,17 @@ struct LinkView {
     std::vector<LinkSession> sessions;
     std::uint64_t sent = 0;             // actions handed to the link
     bool acknowledged = true;           // the server has acknowledged every one
+    std::vector<AiAccounts> rosters;    // each AI's accounts and the one its first session runs on
 };
 
-// An action the relay hands the link (sync::Action Ensure and Send).
+// An action the relay hands the link (sync::Action Ensure, Send and SetAccount).
 struct LinkAction {
-    enum class Kind : std::uint8_t { Ensure, Send };
+    enum class Kind : std::uint8_t { Ensure, Send, SetAccount };
     Kind kind = Kind::Send;
     std::uint64_t session = 0;
     std::string aiName;
-    std::string text;
-    std::uint64_t prompt = 0;           // with Send: the watch's prompt number
+    std::string text;                   // with Send: the words; with SetAccount: the account
+    std::uint64_t prompt = 0;           // with Send: the watch's prompt number; with SetAccount: the switch's
     bool operator==(const LinkAction&) const = default;
 };
 
@@ -208,6 +275,14 @@ public:
     std::uint64_t linkSent() const { return linkSent_; }
     // The prompts handed to the link and not yet acknowledged, with the link's count when each was handed.
     const std::deque<std::pair<std::uint64_t, std::uint64_t>>& inflight() const { return inflight_; }
+    // The account switches, this run (watch/models/AccountSwitch.tla): the newest number taken, the one waiting to be
+    // handed, the one handed and not yet acknowledged (with the link's count when handed), and those done with.
+    std::uint64_t switchSeen() const { return switchSeen_; }
+    const std::optional<AccountSwitch>& switchWaiting() const { return switchWaiting_; }
+    const std::optional<std::pair<AccountSwitch, std::uint64_t>>& switchInflight() const { return switchInflight_; }
+    std::uint64_t switched() const { return switched_; }
+    // The account the AI's roster names as current in the link's latest state, "" for none.
+    std::string currentAccount(const std::string& ai) const;
 
 private:
     void event(Event::Kind kind, std::uint64_t utterance, std::string aiName, std::string text);
@@ -232,6 +307,10 @@ private:
     std::map<std::uint64_t, Await> awaits_; // by session: a reply owed to the watch
     LinkView last_;
     bool unlocked_ = false;
+    std::uint64_t switchSeen_ = 0;
+    std::optional<AccountSwitch> switchWaiting_;
+    std::optional<std::pair<AccountSwitch, std::uint64_t>> switchInflight_;
+    std::uint64_t switched_ = 0;
 };
 
 } // namespace nexus::watch
