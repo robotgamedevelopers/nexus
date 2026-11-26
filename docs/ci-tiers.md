@@ -4,7 +4,7 @@ Every test has exactly one tier, and no test is ever skipped.
 
 | Tier | Runs | Holds | Limit |
 |---|---|---|---|
-| `tier_pr` | every pull request and push to main (`.github/workflows/ci.yml`, GitHub-hosted) | the fast unit tests, and one end-to-end happy path per feature | each job 2 minutes |
+| `tier_pr` | every pull request and push to main (`.github/workflows/ci.yml`, on the fleet's own runners, label `nexus-pr`) | the fast unit tests, and one end-to-end happy path per feature | each job 2 minutes |
 | `tier_nightly` | the nightly (`.github/workflows/nightly.yml`, from main) | every other test | none |
 
 ## How a test gets its tier
@@ -24,7 +24,7 @@ A row is `<test> <pr|nightly> <condition>`. The condition is the CMake options (
 
 So a test the table names cannot quietly drop out of its tier. `.github/tiers-selftest.sh` checks all of this against planted cases (`tests/ci/tiers`) on every pull request.
 
-A unit test stays per pull request only while it is fast. One that takes 1 s or more on a hosted runner moves to the nightly, by a row in the table. It is never skipped.
+A unit test stays per pull request only while it is fast. One that takes 1 s or more on a CI runner moves to the nightly, by a row in the table. It is never skipped.
 
 ## What a pull request builds
 
