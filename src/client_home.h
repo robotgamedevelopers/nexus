@@ -40,13 +40,16 @@ struct ClientConfig {
     std::string novaConfig;         // `nova-config <path>`: the full path of nova-config, for the fleet's machine list
                                     // (remote.h); empty: found on the PATH
     std::string serverHost = "localhost";
+    std::string serverCommand;      // `server-command <words>`: run on the server's machine in place of `nexus-server new`
+                                    // (link/bootstrap.h serverCommandWords; the mock, docs/mock.md); empty: that
     bool sprintEnabled = true;
     std::string sprintUrl;          // `sprint-url <url>`: the sprint board's address; empty: from the sprint's record
     std::vector<std::string> problems;  // one line each: the errors, then the warnings
 };
 
 // The keys the window's config takes.
-inline const std::vector<std::string> kClientConfigKeys{"nova-config", "sprint-url", "sprint", "server"};
+inline const std::vector<std::string> kClientConfigKeys{"nova-config", "sprint-url", "sprint", "server",
+    "server-command"};
 
 // The settings in `text`, the file at `path`. Pure.
 ClientConfig clientConfigFrom(std::string_view text, const std::string& path);

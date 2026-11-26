@@ -169,6 +169,8 @@ ClientConfig clientConfigFrom(std::string_view text, const std::string& path) {
     }
     if (const auto entry = c.values.find("server"); entry != c.values.end())
         out.serverHost = entry->second;
+    if (const auto entry = c.values.find("server-command"); entry != c.values.end())
+        out.serverCommand = entry->second;
     out.problems = c.errors;
     if (const auto entry = c.values.find("sprint"); entry != c.values.end()) {
         if (entry->second == "off") out.sprintEnabled = false;
