@@ -307,9 +307,13 @@ void LinkSignIn::step() {
         // deadline. The URL is never shown.
         problem = next.account + "'s sign-in address failed validation. Restart sign-in on the server.";
     } else if (next.kind == sync::SignInOpener::Step::Kind::OldServer) {
-        // A server from before sign-in by a pasted code: its page is on its own machine alone.
+        // A server from before sign-in by a pasted code: its page is on its own machine alone. This window's claim
+        // holds the attempt until that server's deadline (kSignInDeadlineMs), so a window on the server's machine can
+        // start one only once it ends.
         problem = "nexus-server is too old to sign in to " + next.account + " from another machine. Update "
-                  "nexus-server, or press Sign in in a Nexus window on the server's machine.";
+                  "nexus-server, or once this attempt ends (within " +
+                  std::to_string(sync::kSignInDeadlineMs / 60000) + " minutes), press Sign in in a Nexus window on "
+                  "the server's machine.";
     } else if (next.kind == sync::SignInOpener::Step::Kind::Open) {
         if (next.gate) {
             gate_ = openGate ? openGate(next.target) : std::make_unique<SignInGate>(next.target);

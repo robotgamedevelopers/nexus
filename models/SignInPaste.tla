@@ -345,8 +345,9 @@ CodeOnlyWhenAsked == unasked = {}
 \*     line (paste_hub), and a window facing a server from before, which offers its loopback page, opens it only on the
 \*     server's machine and otherwise says the server is too old (oldServerSaysSo; tests/wire nexus_versions_test
 \*     paste for the bytes).
-\*   - where the refusal's line is written: only into a session of the flow's account (paste_hub). The model has no
-\*     sessions.
+\*   - where the refusal's line is written: only into the session the window names, and only when that session is on
+\*     the account the code is for: the live flow's account, or, once the flow is gone, the account the window's own
+\*     action names (paste_hub). The model has no sessions.
 NoCodeIn(r) == \A f \in DOMAIN r : r[f] \notin Codes
 NoCodeInLog == \A r \in log : NoCodeIn(r)
 NoCodeToWindows == \A c \in Clients : \A o \in view[c] : NoCodeIn(o)
