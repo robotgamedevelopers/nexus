@@ -105,6 +105,14 @@ void grantAfterRelockIsStale() {
 
 // Every relock event locks an unlocked window and says why.
 void relockEventsLock() {
+    // A relock with no reason still locks (as at launch): nothing unlocks by relocking.
+    {
+        ClientLock lock(kIdle);
+        CHECK(lock.answer(lock.prompt(), LockAnswer::Granted, 0));
+        lock.relock(LockReason::None);
+        CHECK(lock.state() == LockState::Locked && lock.reason() == LockReason::Launch);
+        CHECK(!lock.drawsContent());
+    }
     for (const auto why : {LockReason::Sleep, LockReason::ScreenLock, LockReason::SessionSwitch,
                            LockReason::Background}) {
         ClientLock lock(kIdle);
@@ -156,7 +164,8 @@ void messagesSayWhyAndWhatToDo() {
     CHECK(lockMessage(LockState::Prompting, LockReason::Launch, method, "") ==
           "Confirm it is you with Touch ID or your password.");
     CHECK(lockMessage(LockState::Locked, LockReason::Sleep, method, "").find("went to sleep") != std::string::npos);
-    const auto failed = lockMessage(LockState::Locked, LockReason::Failed, method, "Application retry limit exceeded.");
+    const auto failed = lockMessage(LockState::Locked, LockReason::Failed, method, "Application retry limit exceeded.",
+                                     LockInput::KeyOrClick);
     CHECK(failed.find("did not confirm you") != std::string::npos);
     CHECK(failed.find("retry limit") != std::string::npos);
     CHECK(failed.find("Press Return or click here") != std::string::npos);
@@ -241,6 +250,7 @@ void systemCodesMap() {
     CHECK(lockReasonForSessionChange(kWtsRemoteDisconnect) == LockReason::SessionSwitch);
     CHECK(lockReasonForSessionChange(kWtsSessionLogoff) == LockReason::SessionSwitch);
     CHECK(lockReasonForSessionChange(kWtsSessionLock) == LockReason::ScreenLock);
+    CHECK(lockReasonForSessionChange(kWtsSessionRemoteControl) == LockReason::SessionSwitch);
     CHECK(lockReasonForSessionChange(0x1) == LockReason::None);      // console connect
     CHECK(lockReasonForSessionChange(0x8) == LockReason::None);      // unlock
 }

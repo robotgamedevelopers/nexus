@@ -29,7 +29,7 @@ inheritCustomizations: false
 tools:
   - send_message
 ---
-Reply to the conversation using the friend's supplied standing instructions.
+Reply to the conversation using the AI's supplied standing instructions.
 """
 
 # This private CLI settings file also guards file access if a saved session used another agent.

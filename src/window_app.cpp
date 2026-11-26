@@ -104,6 +104,11 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
         return prJsonCount(d, row) == 3 && (out.type == "open" || out.type == "previous" ||
             out.type == "next" || out.type == "confirm" || out.type == "cancel");
     }
+    if (op == "account_menu") {
+        out.command = WindowCommand::AccountMenu;
+        out.type = stringAt(d, prJsonElement(d, row, 2));
+        return prJsonCount(d, row) == 3 && (out.type == "account" || out.type == "login" || out.type == "logout");
+    }
     if (op == "open_tab" || op == "account_command") {
         out.command = op == "open_tab" ? WindowCommand::OpenTab : WindowCommand::AccountCommand;
         out.type = stringAt(d, prJsonElement(d, row, 2));
@@ -138,7 +143,7 @@ bool readGroups(const PrJson* d, const std::map<std::string, TabType>& types, st
         return false;
     }
     closable = mayClose == PrJsonKind_True;
-    std::set<std::string> members{"friend", "terminal", "sprint"}, ids;
+    std::set<std::string> members{"ai", "terminal", "sprint"}, ids;
     for (const auto& type : types) {
         if (!members.insert(type.first).second) {
             why = "tab type conflicts with a native type: " + type.first;
@@ -404,6 +409,27 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
             !readPoints(doc, style, {"gap", 3}, tabs.gap, 0, 128) ||
             !readPoints(doc, style, {"leading", 7}, tabs.leading, 0, 128) ||
             !readFlag(doc, style, {"reserve_width", 13}, tabs.reserveWidth))) return false;
+    auto& menu = surface.accountMenu;
+    const auto drop = prJsonMember(doc, 0, {"account_menu", 12});
+    if (drop != kPrJsonMissing) {
+        if (prJsonKind(doc, drop) != PrJsonKind_Object ||
+                !readPoints(doc, drop, {"row_height", 10}, menu.rowHeight, kMinRowHeight, 128) ||
+                !readPoints(doc, drop, {"gap", 3}, menu.gap, 0, 64) ||
+                !readPoints(doc, drop, {"padding_x", 9}, menu.paddingX, 0, 64) ||
+                !readPoints(doc, drop, {"radius", 6}, menu.radius, 0, 64) ||
+                !readPoints(doc, drop, {"max_width_em", 12}, menu.maxWidthEm, 4, 80) ||
+                !readPoints(doc, drop, {"tab_move_threshold", 18}, menu.tabMoveThreshold, 4, 128) ||
+                !readPoints(doc, drop, {"dialog_text_em", 14}, menu.dialogTextEm, 4, 80) ||
+                !readPoints(doc, drop, {"hover_opacity", 13}, menu.hoverOpacity, 0, 1) ||
+                !readColor(doc, drop, {"fill", 4}, menu.fill) || !readColor(doc, drop, {"ink", 3}, menu.ink) ||
+                !readColor(doc, drop, {"hover_fill", 10}, menu.hoverFill) ||
+                !readColor(doc, drop, {"mark_ink", 8}, menu.markInk)) return false;
+        const auto mark = prJsonMember(doc, drop, {"mark", 4});
+        if (mark != kPrJsonMissing) {
+            if (prJsonKind(doc, mark) != PrJsonKind_String || stringAt(doc, mark).size() > 16) return false;
+            menu.mark = std::string(stringAt(doc, mark));
+        }
+    }
     auto& prompt = surface.prompt;
     const auto box = prJsonMember(doc, 0, {"prompt_style", 12});
     if (box != kPrJsonMissing && (prJsonKind(doc, box) != PrJsonKind_Object ||
@@ -545,15 +571,15 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
         keys.push_back(binding);
     }
     for (uint32_t i = 0; i < prJsonCount(d, list); ++i) {
-        const auto name = stringAt(d, prJsonElement(d, list, i));
+        const auto panelName = stringAt(d, prJsonElement(d, list, i));
         Panel panel;
-        if (name == "board" && tab == "sprint") panel = Panel::Board;
-        else if (name == "terminal" && tab == "terminal") panel = Panel::Terminal;
-        else if (name == "spacer") panel = Panel::Spacer;
-        else if (name == "transcript" && (tab == "friend" || tab == "empty")) panel = Panel::Transcript;
-        else if (name == "prompt" && tab == "friend" && promptOpen) panel = Panel::Prompt;
-        else if (name == "account" && tab == "friend") panel = Panel::Account;
-        else if (name == "limit_choice" && tab == "friend") {
+        if (panelName == "board" && tab == "sprint") panel = Panel::Board;
+        else if (panelName == "terminal" && tab == "terminal") panel = Panel::Terminal;
+        else if (panelName == "spacer") panel = Panel::Spacer;
+        else if (panelName == "transcript" && (tab == "ai" || tab == "empty")) panel = Panel::Transcript;
+        else if (panelName == "prompt" && tab == "ai" && promptOpen) panel = Panel::Prompt;
+        else if (panelName == "account" && tab == "ai") panel = Panel::Account;
+        else if (panelName == "limit_choice" && tab == "ai") {
             label = stringAt(d, prJsonMember(d, 0, {"label", 5}));
             accountLabel = stringAt(d, prJsonMember(d, 0, {"limit_account_label", 19}));
             modelLabel = stringAt(d, prJsonMember(d, 0, {"limit_model_label", 17}));
@@ -563,11 +589,11 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
             }
             panel = Panel::LimitChoice;
         }
-        else if (name == "status") panel = Panel::Status;
-        else if (name == "service_reply" && tab == "extension") panel = Panel::ServiceReply;
-        else if (name == "native" && tab == "extension") panel = Panel::Native;
-        else if (name == "text_area" && tab == "extension") panel = Panel::TextArea;
-        else if (name == "label" && tab == "extension") {
+        else if (panelName == "status") panel = Panel::Status;
+        else if (panelName == "service_reply" && tab == "extension") panel = Panel::ServiceReply;
+        else if (panelName == "native" && tab == "extension") panel = Panel::Native;
+        else if (panelName == "text_area" && tab == "extension") panel = Panel::TextArea;
+        else if (panelName == "label" && tab == "extension") {
             label = stringAt(d, prJsonMember(d, 0, {"label", 5}));
             panel = Panel::Label;
         }
@@ -604,7 +630,12 @@ PrAppHotkey overlayBinding(policy::Host& host, std::string& why) {
 
 double lockIdleSeconds(policy::Host& host, std::string& why) {
     const auto answer = host.decide({}, "app.lock", "{}", why);
-    if (!why.empty() || answer.empty() || answer == "null") return kLockIdleMinutesDefault * 60;
+    if (!why.empty()) return kLockIdleMinutesDefault * 60;
+    return lockIdleSecondsFrom(answer, why);
+}
+
+double lockIdleSecondsFrom(const std::string& answer, std::string& why) {
+    if (answer.empty() || answer == "null") return kLockIdleMinutesDefault * 60;
     std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
     if (prJsonParse(doc.get(), {answer.data(), answer.size()}, nullptr)) {
         const auto value = prJsonMember(doc.get(), 0, {"idle_minutes", 12});
@@ -668,7 +699,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         field({"label", 5}, signInAccount.label);
         field({"email", 5}, signInAccount.email);
         field({"provider", 8}, signInAccount.provider);
-        field({"friend", 6}, signInAccount.friendName);
+        field({"ai", 2}, signInAccount.aiName);
         prJsonWriterEndObject(json.get());
         const auto text = prJsonWriterText(json.get());
         context.append(text.data, text.size);

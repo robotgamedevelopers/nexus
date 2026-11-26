@@ -1,0 +1,177 @@
+# The native Windows build (ci.yml's windows job says what it holds) on a fleet Windows runner (captain's Windows side,
+# label nexus-pr; never a GitHub-hosted one): MSVC x64 at /W4, warnings as errors. Used by ci.yml and cache-warm.yml.
+#
+# Everything is kept on the machine between jobs, on D: (C: is nearly full on captain), in a directory of the runner's
+# own, D:\nexus-ci\<runner>: the build directory (build-x64; build-x64-lto with NEXUS_LTO on), Prax's checkout at
+# its pin, Prax's downloads and cargo's target directory. Two runners never share one. The pinned Rust (1.98.1)
+# and rustup itself live in D:\nexus-ci\rustup
+# and D:\nexus-ci\cargo, shared by the machine's runners: rustup-init, from rustup's own site and checked against the
+# sha256 published beside it, is fetched once when the machine has no rustup. Nothing is restored from GitHub's cache.
+#
+# The build directory is configured on every run with every NEXUS_* option (the configure step), then built: MSBuild
+# rebuilds what is newer than its outputs. The checkout rewrites only what changed, and, in case it starts over, the
+# sources a successful build of everything was made from are recorded in the build directory and a file still byte
+# for byte the same gets a fixed old time before the next build (.github/source-times.sh; Git's bash). The record is removed before each build
+# and written only after a build of every target that succeeded (cache-warm.yml, the nightly), never after ci.yml's
+# tier_pr_build. Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one
+# by itself.
+name: windows-build
+description: The runner's own build directory, configure and build of nexus's native Windows part on a fleet runner
+inputs:
+  target:
+    description: the targets to build, separated by spaces (empty for all; ci.yml gives tier_pr_build and nexus)
+    default: ""
+  lto:
+    description: >-
+      NEXUS_LTO, ON or OFF: whole-program optimisation in Release (CMakeLists.txt). ci.yml and cache-warm.yml give OFF
+      (a shipping optimisation, and most of the windows job's 2 minutes); the nightly keeps the default. Each setting
+      has its own build directory on the runner (build-x64 off, build-x64-lto on), so the nightly on these runners
+      never makes the next pull request's build start over.
+    default: "ON"
+outputs:
+  build:
+    value: ${{ steps.dirs.outputs.build }}
+runs:
+  using: composite
+  steps:
+    - name: The runner's directories and the Rust toolchain
+      id: dirs
+      shell: pwsh
+      env:
+        LTO: ${{ inputs.lto }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+        if ($env:RUNNER_ENVIRONMENT -ne 'self-hosted') { throw "windows-build runs only on the fleet's own runners, not on $env:RUNNER_ENVIRONMENT ones" }
+        $pin = [regex]::Match((Get-Content -Raw CMakeLists.txt), 'codeload\.github\.com/pdoane/prax/tar\.gz/([0-9a-f]{40})').Groups[1].Value
+        if (-not $pin) { throw "no Prax pin found in CMakeLists.txt (the Prax archive URL)" }
+        $root = 'D:\nexus-ci'
+        $runner = $env:RUNNER_NAME -replace '[^A-Za-z0-9_.-]', '_'
+        $caches = "$root\$runner"
+        if ($env:LTO -notin @('ON', 'OFF')) { throw "windows-build: lto is '$($env:LTO)', not ON or OFF" }
+        $buildName = if ($env:LTO -eq 'OFF') { 'build-x64' } else { 'build-x64-lto' }
+        "NEXUS_LTO=$($env:LTO)" >> $env:GITHUB_ENV
+        New-Item -ItemType Directory -Force -Path "$caches\$buildName", "$caches\prax-downloads", "$caches\cargo-target", "$root\rustup", "$root\cargo", "$root\tools" | Out-Null
+        $rustupHome = "$root\rustup"
+        $cargoHome = "$root\cargo"
+        $env:RUSTUP_HOME = $rustupHome
+        $env:CARGO_HOME = $cargoHome
+        # The machine's runners share rustup and the toolchain: one installs at a time (a named mutex; two installs
+        # at once break each other), and a toolchain left half installed is installed again.
+        $mutex = New-Object System.Threading.Mutex($false, 'Global\nexus-ci-rustup')
+        try { $null = $mutex.WaitOne() } catch [System.Threading.AbandonedMutexException] { Write-Output "the last holder of the Rust lock ended without releasing it; taking it" }
+        try {
+          $rustup = "$cargoHome\bin\rustup.exe"
+          if (-not (Test-Path $rustup)) {
+            $url = 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
+            $init = "$root\tools\rustup-init-$runner.exe"
+            curl.exe -fsSL --retry 3 -o $init $url
+            if ($LASTEXITCODE -ne 0) { throw "curl of rustup-init exited $LASTEXITCODE" }
+            $want = ((curl.exe -fsSL --retry 3 "$url.sha256") -split '\s+')[0].ToLower()
+            if ($LASTEXITCODE -ne 0 -or $want -notmatch '^[0-9a-f]{64}$') { throw "no sha256 for rustup-init at $url.sha256" }
+            $got = (Get-FileHash -Algorithm SHA256 $init).Hash.ToLower()
+            if ($got -ne $want) { Remove-Item -Force $init; throw "rustup-init has sha256 $got, and rustup publishes $want" }
+            & $init -y --no-modify-path --default-toolchain none --profile minimal
+            if ($LASTEXITCODE -ne 0) { throw "rustup-init exited $LASTEXITCODE" }
+            Remove-Item -Force $init
+          }
+          $toolchain = '1.98.1-x86_64-pc-windows-msvc'
+          & $rustup run $toolchain cargo --version *> $null
+          if ($LASTEXITCODE -ne 0) {
+            & $rustup toolchain uninstall $toolchain *> $null
+            & $rustup toolchain install $toolchain --profile minimal --no-self-update
+            if ($LASTEXITCODE -ne 0) { throw "Cannot prepare Rust $toolchain" }
+          }
+          & $rustup run $toolchain cargo --version
+          if ($LASTEXITCODE -ne 0) { throw "Rust $toolchain has no working cargo" }
+        } finally {
+          $mutex.ReleaseMutex()
+        }
+        "$cargoHome\bin" >> $env:GITHUB_PATH
+        "RUSTUP_HOME=$rustupHome" >> $env:GITHUB_ENV
+        "CARGO_HOME=$cargoHome" >> $env:GITHUB_ENV
+        "RUSTUP_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
+        "PRAX_PIN=$pin" >> $env:GITHUB_ENV
+        "NEXUS_CACHES=$caches" >> $env:GITHUB_ENV
+        "NEXUS_BUILD=$caches\$buildName" >> $env:GITHUB_ENV
+        "PR_DOWNLOAD_DIR=$caches\prax-downloads" >> $env:GITHUB_ENV
+        "NEXUS_CARGO_TARGET_DIR=$caches\cargo-target" >> $env:GITHUB_ENV
+        "JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
+        "TEST_JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
+        "build=$caches\$buildName" >> $env:GITHUB_OUTPUT
+        Write-Output "$env:COMPUTERNAME ($env:RUNNER_NAME): $([Environment]::ProcessorCount) cores; build directory $caches\$buildName (NEXUS_LTO $($env:LTO))"
+    - name: Source times by content
+      shell: bash
+      run: |
+        set -euo pipefail
+        manifest="${NEXUS_BUILD//\\//}/.nexus-ci-sources"
+        if [ -f "$manifest" ]; then
+          bash .github/source-times.sh apply "$manifest"
+          rm -f "$manifest"
+        else
+          echo "no record of a finished build in $NEXUS_BUILD: the build trusts the checkout's times"
+        fi
+    # Prax at the commit CMakeLists.txt pins, at depth 1, into a directory of its own, then renamed into place; and
+    # Prax's Slang compiler into Prax's download cache, checked against Prax's pinned sha256.
+    - name: Prax at its pin
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+        $pin = $env:PRAX_PIN
+        $prax = "$env:NEXUS_CACHES\prax-$pin"
+        if (-not (Test-Path $prax)) {
+          Get-ChildItem -Force $env:NEXUS_CACHES -Filter 'prax-*' -Directory | Where-Object { $_.Name -ne 'prax-downloads' } | Remove-Item -Recurse -Force
+          $partial = "$env:NEXUS_CACHES\prax-partial"
+          git init -q $partial
+          if ($LASTEXITCODE -ne 0) { throw "git init exited $LASTEXITCODE" }
+          git -C $partial fetch -q --depth 1 https://github.com/pdoane/prax.git $pin
+          if ($LASTEXITCODE -ne 0) { throw "git fetch of Prax $pin exited $LASTEXITCODE" }
+          git -C $partial checkout -q FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "git checkout of Prax $pin exited $LASTEXITCODE" }
+          Rename-Item $partial "prax-$pin"
+        }
+        $head = git -C $prax rev-parse HEAD
+        if ($LASTEXITCODE -ne 0 -or $head -ne $pin) { throw "the Prax checkout at $prax is at '$head', not $pin" }
+        "PRAX_SOURCE=$prax" >> $env:GITHUB_ENV
+        $deps = Get-Content -Raw "$prax\cmake\slang.cmake"
+        $asset = 'windows-x86_64.zip'
+        $hash = [regex]::Match($deps, '_pr_slang_asset ' + [regex]::Escape($asset) + '\)\s+set\(_pr_slang_hash ([0-9a-f]{64})').Groups[1].Value
+        $url = [regex]::Match($deps, 'URL (https://github.com/shader-slang/\S+)\$\{_pr_slang_asset\}').Groups[1].Value
+        if (-not $hash -or -not $url) { throw "Prax's cmake/slang.cmake no longer names Slang's $asset as this step reads it" }
+        $file = ($url -split '/')[-1] + $asset
+        $slang = "$env:PR_DOWNLOAD_DIR\slang"
+        New-Item -ItemType Directory -Force -Path $slang | Out-Null
+        $have = if (Test-Path "$slang\$file") { (Get-FileHash -Algorithm SHA256 "$slang\$file").Hash.ToLower() } else { '' }
+        if ($have -ne $hash) {
+          curl.exe -fsSL --retry 3 -o "$slang\$file.partial" ($url + $asset)
+          if ($LASTEXITCODE -ne 0) { throw "curl of Slang's $file exited $LASTEXITCODE" }
+          $got = (Get-FileHash -Algorithm SHA256 "$slang\$file.partial").Hash.ToLower()
+          if ($got -ne $hash) { Remove-Item -Force "$slang\$file.partial"; throw "Slang's $file has sha256 $got, and Prax pins $hash" }
+          Move-Item -Force "$slang\$file.partial" "$slang\$file"
+        }
+    # Configured on every run with every NEXUS_* option given, so a kept CMakeCache.txt (the runner's build directory,
+    # shared by every branch that runs there) never decides what is built: another branch's options are set back here.
+    # The window and its logic, and not the link, which on Windows runs inside WSL2 (CMakeLists.txt says why).
+    - name: Configure (Release, MSVC x64)
+      shell: pwsh
+      run: |
+        cmake -S . -B $env:NEXUS_BUILD -A x64 "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE" `
+          -DNEXUS_WINDOW=ON -DNEXUS_WINDOW_LOGIC=ON -DNEXUS_LINK=OFF "-DNEXUS_LTO=$env:NEXUS_LTO"
+        if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
+    - name: Build
+      shell: pwsh
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        $start = Get-Date
+        $only = @()
+        if ($env:TARGET) { $only = @('--target') + @($env:TARGET -split ' ' | Where-Object { $_ }) }
+        cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS @only
+        if ($LASTEXITCODE -ne 0) { throw "cmake --build exited $LASTEXITCODE" }
+        Write-Output "built in $([int]((Get-Date) - $start).TotalSeconds) s"
+    # Only after a build of everything: every output then reflects these sources (fleet-build says why).
+    - name: Record the sources the build was made from
+      if: inputs.target == ''
+      shell: bash
+      run: bash .github/source-times.sh record "${NEXUS_BUILD//\\//}/.nexus-ci-sources"

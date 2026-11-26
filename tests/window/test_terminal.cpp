@@ -48,7 +48,7 @@ void check(bool ok, const char* what, int line) {
 constexpr auto kDeadline = std::chrono::seconds(20);
 
 struct Harness {
-    Model model{std::vector<FriendInfo>{FriendInfo{"alex", "m1"}}};
+    Model model{std::vector<AIInfo>{AIInfo{"alex", "m1"}}};
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     PrFontSet* fonts = prFontSetCreate(nullptr);
     PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
@@ -172,7 +172,7 @@ void aShellRunsAndItsTabClosesWhenItExits() {
     if (!closed)
         std::fprintf(stderr, "  screen:\n%s\n", h.terminals->text(id).c_str());
     CHECK(closed);
-    CHECK(h.model.active() == 0 && h.model.tab(0).kind == TabKind::Friend);
+    CHECK(h.model.active() == 0 && h.model.tab(0).kind == TabKind::AI);
     CHECK(h.terminals->text(id).empty());   // destroyed
 }
 
@@ -287,7 +287,7 @@ void showLabel(Harness& h, std::size_t id) {
 void aTabInSshNamesTheMachine() {
     Harness h;
     h.terminals->program = "/bin/sh";
-    h.terminals->machines = {Machine{"space", "100.64.0.9"}, Machine{"hetzner2", ""}};
+    h.terminals->machines = {Machine{"space", "100.64.0.9"}, Machine{"host-a", ""}};
     h.key(PrAppKey('T'), PrAppKeyCode_KeyT, style::kCommand);
     CHECK(h.model.tab_count() == 2);
     if (h.model.tab_count() != 2)
@@ -328,7 +328,7 @@ void aTabInSshNamesTheMachine() {
     // A fleet machine by its tailnet name, with options; then a host that is not one, shown as given. Each time the
     // usual label comes back.
     const std::pair<const char*, const char*> sessions[] = {
-        {"ssh -p 22 nova@hetzner2.tailbd3740.ts.net", "hetzner2"},
+        {"ssh -p 22 nova@host-a.example.ts.net", "host-a"},
         {"ssh -o BatchMode=yes glenn@unknown.example", "unknown.example"},
         {"ssh -o BatchMode=yes nova@fast.example", "fast.example"},
     };

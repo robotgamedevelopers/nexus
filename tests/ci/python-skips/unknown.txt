@@ -1,0 +1,2 @@
+# planted: a row naming a test that does not exist
+tests/ci/python-skips/passes test_ok.Ok.test_gone

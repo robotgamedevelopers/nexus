@@ -1,11 +1,13 @@
 // A driver that speaks the protocol (src/driver/protocol.h) from a script instead of a harness: the stand-in the
-// server's functional tests start as a friend's driver.
+// server's functional tests start as an AI's driver.
 //
 //   nexus-fake-driver --cwd <dir> [--resume <session id>] [--account <name>] [--limit cwd] --script <file>
 //
 // The script is lines of text; blank lines and lines starting with # are skipped. The lines before the first `send`
-// run at start (they write the hello, so a script can also write a wrong one). Each `send` line starts the block that
-// answers the next send the driver accepts, in order. The steps:
+// or `prompt` run at start (they write the hello, so a script can also write a wrong one). Each `send` line starts the
+// block that answers the next send the driver accepts, in order. A `prompt <text>` line starts a block that answers
+// every send whose prompt is exactly <text>, as often as it comes, ahead of the send blocks and without using one up
+// (the mock's seeded conversations: tests/mock/mock.cpp). The steps:
 //
 //   emit <json>          write this message, given as one JSON object. Inside a send block, an object with no "turn"
 //                        member gets the send's turn. It must decode as a driver message; use raw for one that
@@ -20,6 +22,13 @@
 //   exit <code>          exit at once with that status, mid-turn if a turn is open
 //   signal <number>      end by that signal, sent to itself
 //   stderr <text>        write <text> and a newline to standard error
+//   stream <ms> <json string>
+//                        write the string as one text block: a text delta for each word (with the white space after
+//                        it), <ms> milliseconds apart, then its text-end. A stop of this send's turn that arrives
+//                        meanwhile ends the turn as the protocol says (sequence rule 7): the text-end, done outcome
+//                        stopped, and nothing more of the block. <ms> 0 writes the deltas at once.
+//   pause <ms>           wait <ms> milliseconds with no text block open; a stop of this send's turn ends the turn with
+//                        done outcome stopped, and nothing more of the block
 //   record <path> [VAR ...]
 //                        append to <path> the arguments it was started with and the directory it works in, as
 //                        `cwd=<--cwd>`, `dir=<working directory>` and `resume=<id>` (empty when not given), then
@@ -29,6 +38,11 @@
 //   record-send <path>   in a send block: append to <path> `send <turn>:`, a newline, the send's prompt and a newline
 //   count-starts <path>  count this start in the file <path> (which holds the count of earlier starts, or is absent)
 //   on-start <n> <step>  run <step> only on the <n>th start, as counted by an earlier count-starts
+//   await-steer          in a send block: read until a steer or follow-up of this turn is taken (its queue written),
+//                        or a stop of this turn arrives (settled, aborted, written), then go on with the block
+//   boundary             in a send block: a tool-call boundary: every steer pending goes in (the queue written)
+//   settle               in a send block: the turn's model runs end: the steers pending go in, then each follow-up,
+//                        one per run (the queue written after each), then settled (to a driver that names it)
 //   option <name>        anywhere in the script, for the whole run:
 //                          ignore-eof          when standard input ends, wait to be killed instead of exiting
 //                          ignore-sigterm      ignore SIGTERM, so that only a stronger signal ends it
@@ -40,6 +54,14 @@
 //                                              alone (breaks: an error states the cause first)
 //                          echo-input          write each line read from standard input to standard error, as a
 //                                              harness that logs what it reads would
+//                          cycle               once the send blocks are used up, answer the next send with the first
+//                                              again, and so on, so that the driver answers any number of prompts
+//
+// Steering (docs/driver-protocol.md, "Steering a turn") is src/driver/steering.h, named by the hello the script emits:
+// a steer or follow-up is taken (and the queue written) wherever the fake reads the server's lines, ignored when it is
+// not for the open turn, and refused as any line it cannot accept when the hello did not name its kind, its turn was
+// never opened or its id does not go up. A done the script emits for the open turn, from a driver that names settled,
+// is preceded by the settle step when the script wrote none, so a reply script keeps the protocol unchanged.
 //
 // By default it keeps the protocol's rules: it acts on a stop only for the open turn; it refuses any line it cannot
 // accept (malformed, a known kind with a bad or missing field, a send whose turn is not above the last it saw or that
@@ -48,9 +70,11 @@
 // messages of unknown kinds; and it exits 0 when its standard input ends. A script that cannot be read or that writes a
 // message which does not decode is a bug in the test: the fake says why on standard error and exits 2.
 
+#include <poll.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -59,6 +83,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -68,6 +93,7 @@
 #include <vector>
 
 #include "driver/protocol.h"
+#include "driver/steering.h"
 #include "pr/json.h"
 
 // The process's environment, for record-env (POSIX declares it; not every header does).
@@ -121,18 +147,36 @@ struct Step {
 struct Script {
     std::vector<Step> start;
     std::vector<std::vector<Step>> sends;
+    std::map<std::string, std::vector<Step>> prompts;   // by the prompt each block answers
     std::set<std::string> options;
 };
 
 const std::set<std::string> kSteps = {"emit", "raw", "tail", "flood", "await-stop", "await-secret", "hang", "exit",
-    "signal", "stderr", "record", "record-env", "record-send", "count-starts"};
+    "signal", "stderr", "record", "record-env", "record-send", "count-starts", "stream", "pause", "await-steer",
+    "boundary", "settle"};
 const std::set<std::string> kOptions = {"ignore-eof", "ignore-sigterm", "stop-any-turn", "accept-bad-input",
-    "done-without-cause", "echo-input"};
+    "done-without-cause", "echo-input", "cycle"};
 
 // The first word of `s`, and the rest after one space.
 std::pair<std::string, std::string> split(const std::string& s) {
     const std::size_t space = s.find(' ');
     return {s.substr(0, space), space == std::string::npos ? "" : s.substr(space + 1)};
+}
+
+// The string the JSON string literal `text` holds, or nothing when it is not one.
+std::optional<std::string> jsonString(const std::string& text) {
+    const std::string wrapped = "{\"s\":" + text + "}";
+    PrJson* doc = prJsonCreate();
+    std::optional<std::string> out;
+    if (prJsonParse(doc, PrStringView{wrapped.data(), wrapped.size()}, nullptr)) {
+        const PrJsonValueIndex v = prJsonMember(doc, 0, PrStringView{"s", 1});
+        if (prJsonKind(doc, v) == PrJsonKind_String) {
+            const PrStringView sv = prJsonString(doc, v);
+            out = std::string(sv.data, sv.size);
+        }
+    }
+    prJsonDestroy(doc);
+    return out;
 }
 
 Script readScript(const std::string& path) {
@@ -151,6 +195,14 @@ Script readScript(const std::string& path) {
             block = &script.sends.emplace_back();
             continue;
         }
+        if (op == "prompt") {
+            if (arg.empty())
+                scriptBug(where + "prompt takes the text of the prompt its block answers");
+            if (script.prompts.contains(arg))
+                scriptBug(where + "a second block for the prompt \"" + arg + "\"");
+            block = &script.prompts[arg];
+            continue;
+        }
         if (op == "option") {
             if (!kOptions.contains(arg))
                 scriptBug(where + "unknown option \"" + arg + "\"");
@@ -167,6 +219,15 @@ Script readScript(const std::string& path) {
         }
         if (!kSteps.contains(step.op))
             scriptBug(where + "unknown step \"" + step.op + "\"; see the steps at the top of fake_driver.cpp");
+        if (step.op == "stream" || step.op == "pause") {
+            auto [ms, text] = split(step.arg);
+            if (ms.empty() || ms.find_first_not_of("0123456789") != std::string::npos || ms.size() > 6)
+                scriptBug(where + step.op + " takes a whole number of milliseconds first, up to 999999");
+            if (step.op == "stream" && jsonString(text).value_or("").empty())
+                scriptBug(where + "stream takes a non-empty JSON string after its milliseconds");
+            if (step.op == "pause" && !text.empty())
+                scriptBug(where + "pause takes only its milliseconds");
+        }
         block->push_back(std::move(step));
     }
     return script;
@@ -207,39 +268,68 @@ public:
                     ::pause();
                 return std::nullopt;
             }
-            char buffer[4096];
-            const ssize_t n = ::read(STDIN_FILENO, buffer, sizeof buffer);
-            if (n < 0 && errno == EINTR)
-                continue;
-            lines_.clear();
-            if (n <= 0) {
-                ended_ = true;
-                reader_.finish(lines_);
-            } else {
-                reader_.feed(std::string_view(buffer, std::size_t(n)), lines_);
-            }
-            for (const LineReader::Line& line : lines_) {
-                if (echo_) {
-                    std::fprintf(stderr, "fake driver read: %s\n", line.text.c_str());
-                }
-                if (!line.error.empty()) {
-                    pending_.push_back(Input{std::nullopt, line.error, std::nullopt, std::string()});
-                    continue;
-                }
-                Decoded<ServerMessage> d = decodeServerMessage(line.text);
-                if (d.message)
-                    pending_.push_back(Input{std::move(d.message), {}, std::nullopt, line.text});
-                else
-                    pending_.push_back(Input{std::nullopt, "line " + std::to_string(line.number) + ": " + d.error,
-                        readableTurn(line.text), line.text});
-            }
+            readOnce();
         }
         Input input = std::move(pending_.front());
         pending_.pop_front();
         return input;
     }
 
+    // The next line if one arrives by the deadline; nothing when none has by then, or when standard input has ended
+    // (ended says which).
+    std::optional<Input> nextBy(std::chrono::steady_clock::time_point deadline) {
+        while (pending_.empty() && !ended_) {
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - std::chrono::steady_clock::now()).count();
+            if (left <= 0)
+                return std::nullopt;
+            pollfd p{STDIN_FILENO, POLLIN, 0};
+            const int ready = ::poll(&p, 1, int(left));
+            if (ready < 0 && errno != EINTR)
+                std::exit(1);   // standard input cannot be watched: nothing more can be read
+            if (ready > 0)
+                readOnce();
+        }
+        if (pending_.empty())
+            return std::nullopt;
+        Input input = std::move(pending_.front());
+        pending_.pop_front();
+        return input;
+    }
+
+    bool ended() const { return ended_ && pending_.empty(); }
+
 private:
+    // One read of standard input, its whole lines (and its end) queued.
+    void readOnce() {
+        char buffer[4096];
+        const ssize_t n = ::read(STDIN_FILENO, buffer, sizeof buffer);
+        if (n < 0 && errno == EINTR)
+            return;
+        lines_.clear();
+        if (n <= 0) {
+            ended_ = true;
+            reader_.finish(lines_);
+        } else {
+            reader_.feed(std::string_view(buffer, std::size_t(n)), lines_);
+        }
+        for (const LineReader::Line& line : lines_) {
+            if (echo_) {
+                std::fprintf(stderr, "fake driver read: %s\n", line.text.c_str());
+            }
+            if (!line.error.empty()) {
+                pending_.push_back(Input{std::nullopt, line.error, std::nullopt, std::string()});
+                continue;
+            }
+            Decoded<ServerMessage> d = decodeServerMessage(line.text);
+            if (d.message)
+                pending_.push_back(Input{std::move(d.message), {}, std::nullopt, line.text});
+            else
+                pending_.push_back(Input{std::nullopt, "line " + std::to_string(line.number) + ": " + d.error,
+                    readableTurn(line.text), line.text});
+        }
+    }
+
     bool ignoreEof_;
     bool echo_;
     LineReader reader_;
@@ -271,6 +361,8 @@ public:
             }
             if (const Send* send = std::get_if<Send>(&*input->message))
                 answer(*send);
+            else
+                steeringLine(*input->message);
             // a stop with no turn open, and any unknown kind: nothing
         }
         return 0;
@@ -302,18 +394,30 @@ private:
             badSend(send, "does not follow turn " + std::to_string(lastTurn_));
         lastTurn_ = send.turn;
         lastPrompt_ = send.prompt;
+        steering_.send(send);       // its checks are the fake's own above (accept-bad-input answers past them)
+        if (const auto keyed = script_.prompts.find(send.prompt); keyed != script_.prompts.end()) {
+            play(keyed->second, send.turn);
+            return;
+        }
+        if (nextBlock_ == script_.sends.size() && option("cycle") && !script_.sends.empty())
+            nextBlock_ = 0;
         if (nextBlock_ == script_.sends.size()) {
             if (!option("done-without-cause"))
                 emit(Error{"the script has no reply for send " + std::to_string(nextBlock_ + 1), "add a send block "
                     "to the fake driver's script", send.turn, ErrorCode::Other});
+            beforeDone(send.turn);
             emit(Done{send.turn, Outcome::Error, std::nullopt, std::nullopt});
+            steering_.done();
             return;
         }
         play(script_.sends[nextBlock_++], send.turn);
     }
 
     void play(const std::vector<Step>& steps, std::uint64_t turn) {
+        stopped_ = false;
         for (const Step& step : steps) {
+            if (stopped_)
+                return;     // a stop ended the turn: nothing more of its block
             if (step.onStart != 0) {
                 if (start_ == 0)
                     scriptBug("script line " + std::to_string(step.lineNumber) + ": on-start needs a count-starts "
@@ -327,7 +431,27 @@ private:
 
     void run(const Step& step, std::uint64_t turn) {
         if (step.op == "emit") {
-            writeOut(withTurn(step, step.arg, turn));
+            const std::string line = withTurn(step, step.arg, turn);
+            const Decoded<DriverMessage> d = decodeDriverMessage(std::string_view(line).substr(0, line.size() - 1));
+            const Done* done = std::get_if<Done>(&*d.message);
+            if (const Hello* hello = std::get_if<Hello>(&*d.message)) {
+                steering_.name(hello->features);
+            } else if (done != nullptr && done->turn == steering_.turn()) {
+                beforeDone(done->turn);
+            }
+            writeOut(line);
+            if (done != nullptr && done->turn == steering_.turn()) {
+                steering_.done();
+            }
+        } else if (step.op == "await-steer") {
+            awaitSteer(turn);
+        } else if (step.op == "boundary") {
+            const Steering::Given g = steering_.boundary();
+            if (g.report) {
+                emit(*g.report);
+            }
+        } else if (step.op == "settle") {
+            settle();
         } else if (step.op == "raw") {
             writeOut(step.arg + "\n");
         } else if (step.op == "tail") {
@@ -339,6 +463,12 @@ private:
                 writeOut(line);
         } else if (step.op == "await-stop") {
             awaitStop(turn);
+        } else if (step.op == "stream") {
+            auto [ms, text] = split(step.arg);
+            stream(std::atoi(ms.c_str()), *jsonString(text), turn);
+        } else if (step.op == "pause") {
+            if (waitOrStop(std::atoi(step.arg.c_str()), turn))
+                endStopped(turn, false);
         } else if (step.op == "await-secret") {
             awaitSecret(step.arg, turn);
         } else if (step.op == "hang") {
@@ -380,6 +510,68 @@ private:
         return json + "\n";
     }
 
+    // Writes `text` as one text block of turn `turn`, a word a delta, `ms` apart; a stop of the turn meanwhile ends it.
+    void stream(int ms, const std::string& text, std::uint64_t turn) {
+        std::size_t at = 0;
+        bool first = true;
+        while (at < text.size()) {
+            std::size_t end = text.find_first_of(" \n", at);
+            end = end == std::string::npos ? text.size() : text.find_first_not_of(" \n", end);
+            end = end == std::string::npos ? text.size() : end;
+            if (!first && waitOrStop(ms, turn)) {
+                endStopped(turn, true);
+                return;
+            }
+            first = false;
+            emit(Text{turn, text.substr(at, end - at)});
+            at = end;
+        }
+        emit(TextEnd{turn});
+    }
+
+    // Waits `ms` milliseconds for a stop of `turn`, acting on what else arrives as await-stop does: true when the stop came.
+    bool waitOrStop(int ms, std::uint64_t turn) {
+        if (ms <= 0)
+            return false;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        for (;;) {
+            std::optional<Input> item = in_.nextBy(deadline);
+            if (!item) {
+                if (in_.ended()) {
+                    in_.next();     // waits for good under ignore-eof
+                    std::exit(0);   // the server closed our input: owe no done (sequence rule 9)
+                }
+                return false;
+            }
+            if (!item->message) {
+                badLine(*item);
+                continue;
+            }
+            if (const Stop* stop = std::get_if<Stop>(&*item->message)) {
+                if (stop->turn == turn || option("stop-any-turn")) {
+                    stopped(Stop{turn});
+                    return true;
+                }
+            } else if (const Send* send = std::get_if<Send>(&*item->message)) {
+                badSend(*send, "arrived while turn " + std::to_string(turn) + " is open");
+            } else {
+                steeringLine(*item->message);
+            }
+        }
+    }
+
+    // A stopped turn's end: its open text block's text-end, if one is open, then done outcome stopped (rule 7). The
+    // stop already settled the turn (waitOrStop), so steering closes it with the done.
+    void endStopped(std::uint64_t turn, bool blockOpen) {
+        if (blockOpen)
+            emit(TextEnd{turn});
+        emit(Done{turn, Outcome::Stopped, std::nullopt, std::nullopt});
+        if (turn == steering_.turn()) {
+            steering_.done();
+        }
+        stopped_ = true;
+    }
+
     void awaitStop(std::uint64_t turn) {
         while (std::optional<Input> item = in_.next()) {
             if (!item->message) {
@@ -387,13 +579,90 @@ private:
                 continue;
             }
             if (const Stop* stop = std::get_if<Stop>(&*item->message)) {
-                if (stop->turn == turn || option("stop-any-turn"))
+                if (stop->turn == turn || option("stop-any-turn")) {
+                    stopped(Stop{turn});
                     return;
+                }
             } else if (const Send* send = std::get_if<Send>(&*item->message)) {
                 badSend(*send, "arrived while turn " + std::to_string(turn) + " is open");
+            } else {
+                steeringLine(*item->message);
             }
         }
         std::exit(0);
+    }
+
+    // Reads until a steer or follow-up of `turn` is taken, or a stop of `turn` arrives.
+    void awaitSteer(std::uint64_t turn) {
+        while (std::optional<Input> item = in_.next()) {
+            if (!item->message) {
+                badLine(*item);
+                continue;
+            }
+            if (const Stop* stop = std::get_if<Stop>(&*item->message)) {
+                if (stop->turn == turn) {
+                    stopped(*stop);
+                    return;
+                }
+            } else if (const Send* send = std::get_if<Send>(&*item->message)) {
+                badSend(*send, "arrived while turn " + std::to_string(turn) + " is open");
+            } else if (steeringLine(*item->message)) {
+                return;
+            }
+        }
+        std::exit(0);
+    }
+
+    // A steer or follow-up from the server: taken (its queue written), ignored, or refused. True when it was taken.
+    bool steeringLine(const ServerMessage& message) {
+        Steering::Took took;
+        std::uint64_t turn = 0;     // the line's turn, which a refusal carries (rule 4)
+        if (const Steer* steer = std::get_if<Steer>(&message)) {
+            took = steering_.take(*steer);
+            turn = steer->turn;
+        } else if (const FollowUp* follow = std::get_if<FollowUp>(&message)) {
+            took = steering_.take(*follow);
+            turn = follow->turn;
+        } else {
+            return false;
+        }
+        if (took.what == Steering::Took::What::Refused) {
+            refuse(Error{"the server sent a line the driver refused: " + took.why, "the server must write a steer or "
+                "follow-up only into the open turn of a driver that names it (docs/driver-protocol.md, \"Steering a "
+                "turn\")", turn != 0 ? std::optional<std::uint64_t>(turn) : std::nullopt, ErrorCode::Protocol});
+            return false;
+        }
+        if (took.report) {
+            emit(*took.report);
+        }
+        return took.what == Steering::Took::What::Taken;
+    }
+
+    // A stop of the open turn: settled, aborted, to a driver that names it; the script writes the done.
+    void stopped(const Stop& stop) {
+        const Steering::Took took = steering_.stop(stop);
+        if (took.settled) {
+            emit(*took.settled);
+        }
+    }
+
+    // The turn's model runs end: what is pending goes in, then settled.
+    void settle() {
+        for (Steering::Given g = steering_.runEnd(); !g.items.empty(); g = steering_.runEnd()) {
+            if (g.report) {
+                emit(*g.report);
+            }
+        }
+        if (const std::optional<Settled> settled = steering_.settle()) {
+            emit(*settled);
+        }
+    }
+
+    // Before the open turn's done: settle, if the script has not, so that settled comes first.
+    void beforeDone(std::uint64_t turn) {
+        if (turn == steering_.turn() && steering_.phase() == Steering::Phase::Running) {
+            settle();
+        }
     }
 
     // Each line read written to `path` as it came, until a secret's answer, or a stop of `turn`, arrives.
@@ -412,8 +681,10 @@ private:
             if (std::holds_alternative<SecretAnswer>(*item->message)) {
                 return;
             }
+            steeringLine(*item->message);
             if (const Stop* stop = std::get_if<Stop>(&*item->message)) {
                 if (stop->turn == turn || option("stop-any-turn")) {
+                    stopped(Stop{turn});
                     return;
                 }
             } else if (const Send* send = std::get_if<Send>(&*item->message)) {
@@ -465,10 +736,12 @@ private:
     Script script_;
     Arguments arguments_;
     Reader in_;
+    Steering steering_;
     std::uint64_t lastTurn_ = 0;
     std::string lastPrompt_;    // the prompt of the send being answered, for record-send
     std::size_t nextBlock_ = 0;
     int start_ = 0;             // which start this is, once count-starts has run
+    bool stopped_ = false;      // a stop ended the turn being played (stream, pause)
 };
 
 } // namespace

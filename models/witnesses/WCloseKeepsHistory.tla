@@ -9,7 +9,7 @@ BrokenClose(i) ==
     THEN /\ order' = Removed(order, i)
          /\ active' = ClosedIndex(active, i, Count)
          /\ last' = Did("close", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, transcript, draft, queue, nextId, history>>
+         /\ UNCHANGED <<ais, transcript, draft, queue, nextId, history>>
     ELSE /\ last' = Did("close", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

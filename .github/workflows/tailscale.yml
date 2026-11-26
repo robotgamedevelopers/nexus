@@ -1,13 +1,17 @@
-# The Tailscale shim (docs/tailscale.md, layer 0) on each OS, in jobs of its own: src/tailscale/CMakeLists.txt builds it
-# alone, without Prax, so a job is the shim's Go build (nexus's and the test program's), its test program and
-# `ctest -L tailscale` (no test here reaches another machine). Called by ci.yml for every pull request and push to main,
-# with the 2-minute limit of those events, and by tailscale-prime.yml, without it.
+# The Tailscale shim (docs/tailscale.md, layer 0) on macOS and Linux, in jobs of its own (Windows: tailscale-windows.yml,
+# which no per-commit workflow calls): src/tailscale/CMakeLists.txt builds it alone, without Prax, so a job is the
+# shim's Go build (nexus's and the test program's), its test program and `ctest -L tailscale` (no test here reaches
+# another machine). Called by ci.yml for every pull request and push to main, with the 2-minute limit of those events,
+# and by cache-warm.yml and nightly.yml, without it. Every job here runs in every call: a call that does not want one
+# does not call this workflow.
 #
 # The verdict is a commit status. Each OS's result for a commit is the status tailscale-<os> (tailscale-macos,
 # tailscale-linux, tailscale-windows) on that exact commit: on a pull request its head, which is what these jobs check
 # out (not the merge commit the other jobs build), and on a push or a merge queue the pushed commit. It is set only by
 # a job that built and tested that commit on that OS: success or failure, or failure when the job is cancelled or times
-# out. A lander waits for all three to be success on the head it lands; a missing or pending one is not a pass.
+# out. A lander waits for tailscale-macos and tailscale-linux to be success on the head it lands (ci.yml runs those
+# two per commit, macOS for arm64 alone; the nightly runs Windows, whose restore alone does not fit 2 minutes, and
+# macOS's x86_64 slice under Rosetta); a missing or pending one is not a pass.
 #
 # Caches. Go comes from the runner's machine (PATH, or ~/sdk/bin as the fleet installs it) and fetches the pinned Go
 # toolchain into the module cache itself. The toolchain, the modules, Go's build cache and (on Windows) llvm-mingw live
@@ -24,14 +28,14 @@
 # directory's creation time).
 #
 # Primed. A key directory holds `primed` once a build and the tests have finished in it. A cold build (a new key: the
-# toolchain and modules downloaded, tsnet compiled) does not fit 2 minutes (docs/tailscale.md has the numbers), so a
-# per-commit job on a machine whose key directory is not primed builds nothing: it sets its commit status to pending,
-# linked to tailscale-prime's runs, dispatches tailscale-prime.yml for the same commit and OS (one slot, which GitHub
-# places on any runner of that OS), and fails, since it built and tested nothing. That prime run builds and tests the
-# commit with no limit and sets the status to its result (.github/tailscale-dispatch.sh, .ps1 on Windows).
+# toolchain and modules downloaded, tsnet compiled) does not fit 2 minutes (docs/tailscale.md has the numbers). The jobs
+# run on nexus's fleet runners (label nexus-pr; never GitHub-hosted ones), whose machines keep the key directory: a call
+# with prime (cache-warm.yml and nightly.yml, no 2-minute limit) primes the machine it lands on, and a per-commit job
+# that finds its machine not primed for its pins builds nothing, sets its status to failure and fails, saying to run
+# cache-warm. Nothing is saved to or restored from GitHub's cache.
 #
-# Permissions come from the caller: ci.yml grants contents: read, actions: write (the dispatch) and statuses: write;
-# tailscale-prime.yml grants contents: read and statuses: write.
+# Permissions come from the caller: ci.yml grants contents: read and statuses: write; cache-warm.yml and nightly.yml
+# contents: read.
 
 name: tailscale
 
@@ -39,13 +43,17 @@ on:
   workflow_call:
     inputs:
       prime:
-        description: true in tailscale-prime.yml (no time limit, never dispatches); false from ci.yml
+        description: true from cache-warm.yml and nightly.yml (no 2-minute limit); false from ci.yml
         type: boolean
         required: true
       sha:
         description: the commit to check out, build and test (empty for the caller's)
         type: string
         default: ""
+      save:
+        description: kept for its callers; nothing is saved (each fleet machine keeps its primed key directory)
+        type: boolean
+        default: false
       status:
         description: set the commit status tailscale-<os> on that commit to the result
         type: boolean
@@ -55,16 +63,15 @@ on:
         type: boolean
         default: false
       cold:
-        description: with prime, Windows builds in a fresh key directory of its own (removed after), to measure cold
+        description: with prime, saves no cache (tailscale-windows.yml's cold build measures a cold one)
         type: boolean
         default: false
-      macos:
-        type: boolean
-        default: true
-      linux:
-        type: boolean
-        default: true
-      windows:
+      tests:
+        description: "the tests to run, a ctest label regex: unit from ci.yml (each pull request), functional from the nightly, both when it primes"
+        type: string
+        default: '^(unit|functional)$'
+      rosetta:
+        description: macOS also builds the x86_64 slice and runs it under Rosetta (false from ci.yml, whose 2 minutes it does not fit; the nightly runs it)
         type: boolean
         default: true
       # The matrix slots of each job, a JSON array: one from ci.yml and for a dispatch; from the nightly as many as the
@@ -75,15 +82,12 @@ on:
       linux-slots:
         type: string
         default: "[1]"
-      windows-slots:
-        type: string
-        default: "[1]"
 
 jobs:
-  # macOS builds arm64 and x86_64 (joined by lipo) and runs both, the second under Rosetta.
+  # macOS builds arm64 and x86_64 (joined by lipo) and runs both, the second under Rosetta; with rosetta false (ci.yml),
+  # arm64 alone.
   tailscale-macos:
-    if: inputs.macos
-    runs-on: [self-hosted, fleet, macOS, ARM64]
+    runs-on: [self-hosted, nexus-pr, macOS, ARM64]
     timeout-minutes: ${{ inputs.prime && 30 || 2 }}
     strategy:
       fail-fast: false
@@ -98,6 +102,13 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.sha || github.sha }}
+      # Go from the runner's machine (the fleet's sdk/bin or Homebrew), which fetches the pinned toolchain into the key
+      # directory's module cache.
+      - name: Go from the runner's machine
+        shell: bash
+        run: |
+          if ! command -v go >/dev/null; then echo "::error::no go on $(hostname -s)'s runner PATH: the fleet installs Go (sdk-toolchain)"; exit 1; fi
+          go version
       - name: Caches for these pins
         id: caches
         shell: bash
@@ -133,18 +144,18 @@ jobs:
           DESCRIPTION: building and testing on ${{ runner.name }}
           TARGET: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash .github/tailscale-status.sh
-      - name: Not primed here, so tailscale-prime builds and tests this commit (this job fails)
-        id: dispatch
+      - name: No primed cache for these pins (this job fails; cache-warm makes one)
         if: ${{ !inputs.prime && steps.caches.outputs.primed != 'true' }}
         shell: bash
-        env:
-          DIR: ${{ steps.caches.outputs.dir }}
-          REF: ${{ github.head_ref || github.ref_name }}
-        run: bash .github/tailscale-dispatch.sh
-      - name: Configure (Release, arm64 and x86_64)
+        run: |
+          echo "::error::$(hostname -s) is not primed for these pins: run the cache-warm workflow on main (gh workflow run cache-warm.yml --ref main), which primes every fleet machine, then re-run; a cold Go build does not fit the 2 minutes"
+          exit 1
+      - name: Configure (Release, ${{ inputs.rosetta && 'arm64 and x86_64' || 'arm64' }})
         if: ${{ steps.caches.outputs.build == 'true' }}
+        env:
+          ARCHS: ${{ inputs.rosetta && 'arm64;x86_64' || 'arm64' }}
         run: >-
-          cmake -S src/tailscale -B build-tailscale -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+          cmake -S src/tailscale -B build-tailscale -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=$ARCHS"
           "-DNEXUS_GO_MODCACHE=$NEXUS_GO_CACHES/mod" "-DNEXUS_GO_BUILDCACHE=$NEXUS_GO_CACHES/build"
       # tailscale_checks: the test program, nexus's build of the shim, go vet and the licence notices' check, side by
       # side (tests/tailscale).
@@ -153,12 +164,14 @@ jobs:
         run: cmake --build build-tailscale --parallel "$JOBS" --target tailscale_checks
       - name: Tests (arm64)
         if: ${{ steps.caches.outputs.build == 'true' }}
-        run: ctest --test-dir build-tailscale -L tailscale -j "$TEST_JOBS" --output-on-failure --no-tests=error
+        env:
+          TESTS: ${{ inputs.tests }}
+        run: bash .github/ctest.sh --test-dir build-tailscale -L "$TESTS" -j "$TEST_JOBS" --output-on-failure
       # The x86_64 slice runs every group (tests/tailscale/CMakeLists.txt's lists), side by side as ctest runs them; the
       # children that lock_two_process and quiet start are the program again, which macOS runs as its native (arm64)
       # slice.
       - name: Tests (x86_64, under Rosetta)
-        if: ${{ steps.caches.outputs.build == 'true' }}
+        if: ${{ steps.caches.outputs.build == 'true' && inputs.rosetta }}
         shell: bash
         run: |
           set -euo pipefail
@@ -180,7 +193,7 @@ jobs:
         shell: bash
         run: touch "${{ steps.caches.outputs.dir }}/primed"
       - name: Status (the result of this job's build and tests)
-        if: ${{ always() && inputs.status && steps.dispatch.outcome == 'skipped' }}
+        if: ${{ always() && inputs.status }}
         shell: bash
         env:
           STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
@@ -188,11 +201,10 @@ jobs:
           TARGET: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash .github/tailscale-status.sh
 
-  # On the fleet's Linux runners with clang and lld, as build-and-unit-linux; also the licence notices
+  # On the fleet's Linux runners with clang and lld, as ci.yml's build-linux; also the licence notices
   # (src/tailscale/NOTICES.md) against the modules the shim links on every platform.
   tailscale-linux:
-    if: inputs.linux
-    runs-on: [self-hosted, fleet, Linux, X64]
+    runs-on: [self-hosted, nexus-pr, Linux, X64]
     timeout-minutes: ${{ inputs.prime && 30 || 2 }}
     strategy:
       fail-fast: false
@@ -209,6 +221,13 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.sha || github.sha }}
+      # Go from the runner's machine (the fleet's sdk/bin or Homebrew), which fetches the pinned toolchain into the key
+      # directory's module cache.
+      - name: Go from the runner's machine
+        shell: bash
+        run: |
+          if ! command -v go >/dev/null; then echo "::error::no go on $(hostname -s)'s runner PATH: the fleet installs Go (sdk-toolchain)"; exit 1; fi
+          go version
       - name: Caches for these pins
         id: caches
         shell: bash
@@ -244,14 +263,12 @@ jobs:
           DESCRIPTION: building and testing on ${{ runner.name }}
           TARGET: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash .github/tailscale-status.sh
-      - name: Not primed here, so tailscale-prime builds and tests this commit (this job fails)
-        id: dispatch
+      - name: No primed cache for these pins (this job fails; cache-warm makes one)
         if: ${{ !inputs.prime && steps.caches.outputs.primed != 'true' }}
         shell: bash
-        env:
-          DIR: ${{ steps.caches.outputs.dir }}
-          REF: ${{ github.head_ref || github.ref_name }}
-        run: bash .github/tailscale-dispatch.sh
+        run: |
+          echo "::error::$(hostname -s) is not primed for these pins: run the cache-warm workflow on main (gh workflow run cache-warm.yml --ref main), which primes every fleet machine, then re-run; a cold Go build does not fit the 2 minutes"
+          exit 1
       - name: Configure (Release)
         if: ${{ steps.caches.outputs.build == 'true' }}
         run: >-
@@ -264,172 +281,18 @@ jobs:
         run: cmake --build build-tailscale --parallel "$JOBS" --target tailscale_checks
       - name: Tests
         if: ${{ steps.caches.outputs.build == 'true' }}
-        run: ctest --test-dir build-tailscale -L tailscale -j "$TEST_JOBS" --output-on-failure --no-tests=error
+        env:
+          TESTS: ${{ inputs.tests }}
+        run: bash .github/ctest.sh --test-dir build-tailscale -L "$TESTS" -j "$TEST_JOBS" --output-on-failure
       - name: Primed
         if: ${{ steps.caches.outputs.build == 'true' }}
         shell: bash
         run: touch "${{ steps.caches.outputs.dir }}/primed"
       - name: Status (the result of this job's build and tests)
-        if: ${{ always() && inputs.status && steps.dispatch.outcome == 'skipped' }}
+        if: ${{ always() && inputs.status }}
         shell: bash
         env:
           STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
           DESCRIPTION: built and tested on ${{ runner.name }} (job ${{ job.status }})
           TARGET: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash .github/tailscale-status.sh
-
-  # On captain's Windows runners with MSVC: the DLL (whose C parts llvm-mingw compiles), its import library, and the
-  # test program with the Windows 10 manifest.
-  tailscale-windows:
-    if: inputs.windows
-    runs-on: [self-hosted, fleet, Windows, X64, captain]
-    timeout-minutes: ${{ inputs.prime && 30 || 2 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        slot: ${{ fromJSON(inputs.windows-slots) }}
-    env:
-      OS: windows
-      SHA: ${{ inputs.sha || github.sha }}
-      GH_TOKEN: ${{ github.token }}
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-          ref: ${{ inputs.sha || github.sha }}
-      # Refresh files already present in a prepared checkout with their pinned LF attributes.
-      - run: git checkout-index --force -- src/tailscale/pins.cmake src/tailscale/go.mod src/tailscale/go.sum
-      - name: Caches for these pins
-        id: caches
-        env:
-          KEY: ${{ hashFiles('src/tailscale/pins.cmake', 'src/tailscale/go.mod', 'src/tailscale/go.sum') }}
-          COLD: ${{ inputs.prime && inputs.cold }}
-          SKIP_PRIMED: ${{ inputs.skip-primed }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $root = Join-Path $env:LOCALAPPDATA "nexus-ci-tailscale"
-          $dir = Join-Path $root $env:KEY.Substring(0, 16)
-          # A cold measurement (tailscale-prime's cold input) builds in a key directory of its own, removed after.
-          if ($env:COLD -eq 'true') { $dir = Join-Path $root "cold-$env:GITHUB_RUN_ID-${{ matrix.slot }}" }
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          Set-Content -Path "$dir\used" -Value ''
-          New-Item -ItemType Directory -Force -Path "$dir\go\mod", "$dir\go\build", "$dir\downloads" | Out-Null
-          # Unused for 7 days: by its used file, or, while it has none (a job on another runner is creating it, and
-          # writes it next), by the directory's creation time.
-          $cutoff = (Get-Date).AddDays(-7)
-          Get-ChildItem -Directory $root | Where-Object { $_.FullName -ne $dir } | ForEach-Object {
-            $used = Join-Path $_.FullName 'used'
-            $last = if (Test-Path $used) { (Get-Item $used).LastWriteTime } else { $_.CreationTime }
-            if ($last -lt $cutoff) {
-              Write-Output "removing $($_.FullName), unused since $last"
-              Remove-Item -Recurse -Force $_.FullName
-            }
-          }
-          "NEXUS_GO_CACHES=$dir\go" >> $env:GITHUB_ENV
-          "NEXUS_TAILSCALE_DOWNLOADS=$dir\downloads" >> $env:GITHUB_ENV
-          # Compiles use the runner's core share and tests the processor count, as ci.yml's windows job.
-          $jobs = [Environment]::ProcessorCount
-          $share = 0
-          if ("$env:NOVA_JOB_CORES" -match '^[1-9][0-9]*$' -and [int]::TryParse($env:NOVA_JOB_CORES, [ref]$share)) {
-            $jobs = $share
-            Write-Output "NOVA_JOB_CORES on ${env:COMPUTERNAME} is ${share}: jobs use it"
-          } else {
-            $shown = if ($null -eq $env:NOVA_JOB_CORES) { 'unset' } else { $env:NOVA_JOB_CORES }
-            Write-Output "NOVA_JOB_CORES on ${env:COMPUTERNAME} is '$shown', not a positive integer: jobs use the processor count, $jobs"
-          }
-          "JOBS=$jobs" >> $env:GITHUB_ENV
-          "TEST_JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
-          "dir=$dir" >> $env:GITHUB_OUTPUT
-          $primed = Test-Path "$dir\primed"
-          "primed=$(if ($primed) { 'true' } else { 'false' })" >> $env:GITHUB_OUTPUT
-          if ($env:SKIP_PRIMED -eq 'true' -and $primed) {
-            "$env:COMPUTERNAME is primed for these pins already: nothing to build"
-            "build=false" >> $env:GITHUB_OUTPUT
-          } else {
-            "build=true" >> $env:GITHUB_OUTPUT
-          }
-      - name: Status pending (this job builds and tests this commit)
-        if: ${{ inputs.status && (inputs.prime || steps.caches.outputs.primed == 'true') }}
-        env:
-          STATE: pending
-          DESCRIPTION: building and testing on ${{ runner.name }}
-          TARGET: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: ./.github/tailscale-status.ps1
-      - name: Not primed here, so tailscale-prime builds and tests this commit (this job fails)
-        id: dispatch
-        if: ${{ !inputs.prime && steps.caches.outputs.primed != 'true' }}
-        env:
-          DIR: ${{ steps.caches.outputs.dir }}
-          REF: ${{ github.head_ref || github.ref_name }}
-        run: ./.github/tailscale-dispatch.ps1
-      - name: Configure (Release, MSVC x64)
-        if: ${{ steps.caches.outputs.build == 'true' }}
-        run: |
-          cmake -S src/tailscale -B build-tailscale -A x64 "-DNEXUS_GO_MODCACHE=$env:NEXUS_GO_CACHES\mod" "-DNEXUS_GO_BUILDCACHE=$env:NEXUS_GO_CACHES\build" "-DNEXUS_TAILSCALE_DOWNLOADS=$env:NEXUS_TAILSCALE_DOWNLOADS"
-          if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
-      # Measurements, in tailscale-prime only: the Go caches the generated build really passes to Go (GOCACHE and
-      # GOMODCACHE, read from the build files; nothing else of the environment is printed) and how many files Go's
-      # build cache holds before and after the build.
-      - name: Go's caches in use
-        if: ${{ inputs.prime && steps.caches.outputs.build == 'true' }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Get-ChildItem -Recurse -Filter *.vcxproj build-tailscale | Select-String -Pattern '(GOCACHE|GOMODCACHE)=[^ "&;]+' -AllMatches |
-            ForEach-Object { $_.Matches.Value } | Sort-Object -Unique
-          "build cache files before the build: $((Get-ChildItem -Recurse -File "$env:NEXUS_GO_CACHES\build").Count)"
-      # tailscale_checks: the test program, nexus's build of the shim, go vet and the licence notices' check, side by
-      # side (tests/tailscale).
-      - name: Build the shim (both builds) and its test program, go vet, and the licence notices
-        if: ${{ steps.caches.outputs.build == 'true' }}
-        run: |
-          cmake --build build-tailscale --config Release --parallel $env:JOBS --target tailscale_checks
-          if ($LASTEXITCODE -ne 0) { throw "cmake --build exited $LASTEXITCODE" }
-      - name: Tests
-        if: ${{ steps.caches.outputs.build == 'true' }}
-        run: |
-          ctest --test-dir build-tailscale -C Release -L tailscale -j $env:TEST_JOBS --output-on-failure --no-tests=error
-          if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }
-      # In tailscale-prime only: the build cache's files after the build; the antivirus's state (measured, never
-      # changed); the time to read every build cache file twice (the first read is scanned on access by a real-time
-      # scanner, the second mostly not); and a no-change rebuild (the shim's sources touched, so Go runs and finds
-      # everything cached).
-      - name: Cache, antivirus and no-change measurements
-        if: ${{ inputs.prime && steps.caches.outputs.build == 'true' }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $files = Get-ChildItem -Recurse -File "$env:NEXUS_GO_CACHES\build"
-          "build cache files after the build: $($files.Count), $([math]::Round(($files | Measure-Object Length -Sum).Sum / 1MB)) MB"
-          try {
-            $mp = Get-MpComputerStatus
-            "antivirus: real-time protection $($mp.RealTimeProtectionEnabled), on-access $($mp.OnAccessProtectionEnabled), engine $($mp.AMEngineVersion)"
-          } catch { "antivirus status not readable here: $($_.Exception.Message)" }
-          try {
-            $ex = (Get-MpPreference).ExclusionPath
-            "antivirus path exclusions: $(if ($ex) { $ex -join '; ' } else { 'none listed' })"
-          } catch { "antivirus exclusions not readable here: $($_.Exception.Message)" }
-          foreach ($pass in 1, 2) {
-            $t = Measure-Command { foreach ($f in $files) { [void][IO.File]::ReadAllBytes($f.FullName) } }
-            "read every build cache file, pass ${pass}: $([math]::Round($t.TotalSeconds, 1)) s"
-          }
-          Get-ChildItem src/tailscale/shim/*.go | ForEach-Object { $_.LastWriteTime = Get-Date }
-          $t = Measure-Command { cmake --build build-tailscale --config Release --parallel $env:JOBS --target tailscale_checks | Out-Null }
-          if ($LASTEXITCODE -ne 0) { throw "the no-change rebuild exited $LASTEXITCODE" }
-          "no-change rebuild (shim sources touched, Go cache warm): $([math]::Round($t.TotalSeconds, 1)) s"
-      - name: Primed
-        if: ${{ steps.caches.outputs.build == 'true' && !(inputs.prime && inputs.cold) }}
-        run: Set-Content -Path "${{ steps.caches.outputs.dir }}\primed" -Value ''
-      - name: Status (the result of this job's build and tests)
-        if: ${{ always() && inputs.status && steps.dispatch.outcome == 'skipped' }}
-        env:
-          STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
-          DESCRIPTION: built and tested on ${{ runner.name }} (job ${{ job.status }})
-          TARGET: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: ./.github/tailscale-status.ps1
-      - name: Remove the cold measurement's key directory
-        if: ${{ always() && inputs.prime && inputs.cold }}
-        run: |
-          $dir = "${{ steps.caches.outputs.dir }}"
-          if ($dir -and (Split-Path -Leaf $dir) -like 'cold-*') { Remove-Item -Recurse -Force $dir }

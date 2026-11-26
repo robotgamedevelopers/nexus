@@ -64,16 +64,22 @@ if(NEXUS_SERVER_PARTS)
     target_link_libraries(ios_lock_walk PRIVATE nexus_model prax::surface)
     target_compile_options(ios_lock_walk PRIVATE ${warnings})
 
-    # The friend strip's walk (src/sync/friend_strip.h), for FriendStripTrace.tla.
+    # The AI strip's walk (src/sync/ai_strip.h), for AIStripTrace.tla.
     add_executable(strip_walk strip_walk.cpp)
     target_link_libraries(strip_walk PRIVATE nexus_sync)
     target_compile_options(strip_walk PRIVATE ${warnings})
+
+    # The account menu's gesture (src/account_menu.h), for AccountMenuTrace.tla.
+    add_executable(account_menu_walk account_menu_walk.cpp)
+    target_link_libraries(account_menu_walk PRIVATE nexus_sync)
+    target_compile_options(account_menu_walk PRIVATE ${warnings})
 
     add_executable(watch_walk watch_walk.cpp)
     target_link_libraries(watch_walk PRIVATE nexus_terminal_watch)
     target_compile_options(watch_walk PRIVATE ${warnings})
 
-    add_dependencies(model_checks trace_walk glide_walk overlay_walk lock_walk ios_lock_walk strip_walk watch_walk)
+    add_dependencies(model_checks trace_walk glide_walk overlay_walk lock_walk ios_lock_walk strip_walk watch_walk
+        account_menu_walk)
 endif()
 
 add_test(NAME model_unit COMMAND model_test)
@@ -83,7 +89,7 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 add_test(NAME client_lock_unit COMMAND client_lock_test)
 set_tests_properties(client_lock_unit PROPERTIES LABELS unit TIMEOUT 30)
 
-# tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT] [CHURN]
+# tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n AIS f] [FAULTY <fault>] [NOSPRINT] [CHURN]
 #          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [SEED s STEPS n ACCWALK]
 #          [WORKERS w] [NIGHTLY] [SHARD] [CAP s] [SPLIT P=A+B] [LABEL] [OVERLAY])
 # SPLIT P=A+B declares <name>_rest, every property of the cfg but P, and <name>_temporal_1 and _2, A and B in P's place,
@@ -97,15 +103,17 @@ set_tests_properties(client_lock_unit PROPERTIES LABELS unit TIMEOUT 30)
 # not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below. CAP s caps it at
 # s instead, nightly or not; a per-commit cap stays well inside the CI job's 2 minutes (.github/workflows/ci.yml, the
 # model shards, says how the per-commit caps and worker counts were measured).
-# With SEED, the walk is trace_walk (the window's model, FRIENDS friends); with LINKWALK, it is tests/sync's link_walk
+# The caps apply to a local run alone: the nightly, the one place these checks run in CI, configures
+# NEXUS_TLC_UNCAPPED, which drops every cap and ctest timeout (CMakeLists.txt).
+# With SEED, the walk is trace_walk (the window's model, AIS ais); with LINKWALK, it is tests/sync's link_walk
 # (the link, WINDOWS windows), and FAULTY names one of its faults (applier, mirror, tail). Called from tests/sync too.
-# With SEED and LABEL, the walk is label_walk (a terminal tab's label, FRIENDS remotes).
+# With SEED and LABEL, the walk is label_walk (a terminal tab's label, AIS remotes).
 # With SEED and OVERLAY, the walk is overlay_walk (the overlay's rules, STEPS steps), and FAULTY names one of its faults
 # (hide-unkeyed, hotkey-hides). With GLIDEWALK, it is glide_walk (the board's scroller), and FAULTY keyup its one fault.
-# With STRIPWALK, it is strip_walk (the friend strip, FRIENDS friends), and FAULTY one of its faults (forget, wait).
-# With SUPWALK, it is tests/server's supervisor_walk (a friend tab's driver supervisor), and FAULTY one of its faults
+# With STRIPWALK, it is strip_walk (the AI strip, AIS ais), and FAULTY one of its faults (forget, wait).
+# With SUPWALK, it is tests/server's supervisor_walk (an AI tab's driver supervisor), and FAULTY one of its faults
 # (turn, resume, queue).
-# With ACCWALK, it is tests/accounts' accounts_walk (the hub's accounts and friends), and FAULTY one of its faults
+# With ACCWALK, it is tests/accounts' accounts_walk (the hub's accounts and ais), and FAULTY one of its faults
 # (stay, harness). Called from tests/accounts.
 # With RECONNECTWALK, it is tests/sync's reconnect_walk (the window's link making its session again), and FAULTY one of
 # its faults (cached, no-reset). Called from tests/sync.
@@ -125,10 +133,10 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK IOSLOCKWALK WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
-        SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
+    set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK IOSLOCKWALK WATCHWALK GLIDEWALK MENUWALK SUPWALK PASSWALK ACCWALK SECWALK
+        SIGNWALK RECONNECTWALK RELAYWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
     cmake_parse_arguments(T "${options}"
-        "CREDITMODE;PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
+        "CREDITMODE;PROPERTY;SEED;STEPS;AIS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
     # place, each with every invariant (tlc.cmake, SPLIT); the spec defines A /\ B as P, so between them every property
     # of the cfg is checked. TEMPORALCFG optionally appends model configuration to just the temporal parts.
@@ -172,7 +180,7 @@ function(tlc_test name module cfg expect)
     if(T_CAP)
         set(cap ${T_CAP})
     endif()
-    math(EXPR ctest_timeout "${cap} + 30")
+    nexus_tlc_limits(${cap} cap ctest_timeout)
     set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${models_dir}
              -DMODULE=${module} -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=${T_WORKERS} -DCAP=${cap})
     if(T_PROPERTY)
@@ -207,6 +215,8 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DSIGNWALK=$<TARGET_FILE:signin_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_RECONNECTWALK)
         list(APPEND defs -DRECONNECTWALK=$<TARGET_FILE:reconnect_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_RELAYWALK)
+        list(APPEND defs -DRELAYWALK=$<TARGET_FILE:relay_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_SECWALK)
         list(APPEND defs -DSECWALK=$<TARGET_FILE:secrets_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DFORMAT=${T_FORMAT})
     elseif(T_CREDITMODE)
@@ -217,9 +227,11 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DSUPWALK=$<TARGET_FILE:supervisor_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_STRIPWALK)
         list(APPEND defs -DSTRIPWALK=$<TARGET_FILE:strip_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS}
-             -DFRIENDS=${T_FRIENDS})
+             -DAIS=${T_AIS})
     elseif(T_PASSWALK)
         list(APPEND defs -DPASSWALK=$<TARGET_FILE:pass_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_MENUWALK)
+        list(APPEND defs -DMENUWALK=$<TARGET_FILE:account_menu_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_GLIDEWALK)
         list(APPEND defs -DGLIDEWALK=$<TARGET_FILE:glide_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_LINKWALK)
@@ -234,9 +246,9 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DWATCHWALK=$<TARGET_FILE:watch_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(DEFINED T_SEED AND T_LABEL)
         list(APPEND defs -DWALK=$<TARGET_FILE:label_walk> -DDATA=TabLabelTraceData -DSEED=${T_SEED} -DSTEPS=${T_STEPS}
-             -DFRIENDS=${T_FRIENDS})
+             -DAIS=${T_AIS})
     elseif(DEFINED T_SEED)
-        list(APPEND defs -DWALK=$<TARGET_FILE:trace_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DFRIENDS=${T_FRIENDS})
+        list(APPEND defs -DWALK=$<TARGET_FILE:trace_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DAIS=${T_AIS})
     endif()
     if(T_FAULTY)
         list(APPEND defs -DFAULTY=${T_FAULTY})
@@ -251,7 +263,7 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DCHURN=ON)
     endif()
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${tlc_script})
-    set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
+    set_tests_properties(${name} PROPERTIES LABELS ${label} ${ctest_timeout} PROCESSORS ${T_WORKERS})
 endfunction()
 
 tlc_test(tlc_bus_delivery_spec BusDelivery BusDelivery.cfg pass)
@@ -270,12 +282,12 @@ tlc_test(tlc_bus_delivery_peer_trace BusPeerFilterTrace BusPeerFilterTrace.cfg p
 # The spec, every property, no error. The instances with tens of thousands of states get eight workers: TLC's time on
 # them falls nearly in proportion (MCWindow3.cfg 28 s on two workers, 8 s on eight, on the studio at full speed).
 tlc_test(tlc_spec_sprint_terminals MCWindow MCWindowSprint.cfg pass WORKERS 8)
-tlc_test(tlc_spec_no_friends MCWindow MCWindowEmpty.cfg pass)
+tlc_test(tlc_spec_no_ais MCWindow MCWindowEmpty.cfg pass)
 tlc_test(tlc_spec_no_sprint  MCWindow MCWindowNoSprint.cfg pass WORKERS 8)
 tlc_test(tlc_spec_three_behind_sprint MCWindow MCWindow3Sprint.cfg pass WORKERS 8)
 # Nightly: the three largest instances. With the selection history, every order of it a state of its own: the sprint tab,
-# two friends, two terminals and entries of one, 320,760 states (37 s on eight workers in a login session; its form
-# without entries, MCWindowSprint.cfg, 8,910, runs above); three friends in all orders, 384,912 (27 s); entries and
+# two AIs, two terminals and entries of one, 320,760 states (37 s on eight workers in a login session; its form
+# without entries, MCWindowSprint.cfg, 8,910, runs above); three AIs in all orders, 384,912 (27 s); entries and
 # queues of two, 214,326 (12 s).
 # The per-commit job checks every property on the instances above, every witness and every trace. On the studio's CI
 # runners TLC runs about four times slower than in a login session (MCWindow3.cfg on eight workers, before the history:
@@ -303,7 +315,7 @@ tlc_test(tlc_witness_select_clears_draft  WSelectClearsDraft  WSelectClearsDraft
 tlc_test(tlc_witness_append_wrong_tab     WAppendWrongTab     WAppendWrongTab.cfg     action    PROPERTY AppendExact)
 tlc_test(tlc_witness_move_drops_tab       WMoveDropsTab       WMoveDropsTab.cfg       invariant PROPERTY NoTabLost)
 tlc_test(tlc_witness_move_duplicates_tab  WMoveDuplicatesTab  WMoveDuplicatesTab.cfg  invariant PROPERTY NoTabDuplicated)
-tlc_test(tlc_witness_move_leaves_active   WMoveLeavesActive   WMoveLeavesActive.cfg   action    PROPERTY ActiveFriendKept)
+tlc_test(tlc_witness_move_leaves_active   WMoveLeavesActive   WMoveLeavesActive.cfg   action    PROPERTY ActiveAIKept)
 tlc_test(tlc_witness_move_leaves_draft    WMoveLeavesDraft    WMoveLeavesDraft.cfg    action    PROPERTY MoveKeepsTabs)
 tlc_test(tlc_witness_move_out_of_range    WMoveOutOfRange     WMoveOutOfRange.cfg     action    PROPERTY RefusedChangesNothing)
 tlc_test(tlc_witness_move_swaps           WMoveSwaps          WMoveSwaps.cfg          action    PROPERTY MovePlaces)
@@ -312,20 +324,20 @@ tlc_test(tlc_witness_set_draft_outside    WSetDraftOutsideDrafts WSetDraftOutsid
 tlc_test(tlc_witness_send_appends_twice   WSendAppendsTwice   WSendAppendsTwice.cfg   action    PROPERTY SendAppendsOne)
 tlc_test(tlc_witness_queue_appends_twice  WQueueAppendsTwice  WQueueAppendsTwice.cfg  action    PROPERTY QueueAppendsOne)
 tlc_test(tlc_witness_select_reorders      WSelectReorders     WSelectReorders.cfg     action    PROPERTY OnlyMoveReorders)
-tlc_test(tlc_witness_append_renames       WAppendRenamesFriend WAppendRenamesFriend.cfg action  PROPERTY FriendsFixed)
-# Terminal tabs: added, closed, and kept in their zone after the friends.
-tlc_test(tlc_witness_close_removes_friend WCloseRemovesFriend WCloseRemovesFriend.cfg invariant PROPERTY NoTabLost)
+tlc_test(tlc_witness_append_renames       WAppendRenamesAI WAppendRenamesAI.cfg action  PROPERTY AIsFixed)
+# Terminal tabs: added, closed, and kept in their zone after the AIs.
+tlc_test(tlc_witness_close_removes_ai WCloseRemovesAI WCloseRemovesAI.cfg invariant PROPERTY NoTabLost)
 tlc_test(tlc_witness_close_wrong_tab      WCloseWrongTab      WCloseWrongTab.cfg      action    PROPERTY CloseRemovesExactly)
 tlc_test(tlc_witness_close_active_past_end WCloseActivePastEnd WCloseActivePastEnd.cfg invariant PROPERTY ActiveValid)
 tlc_test(tlc_witness_close_active_wrong   WCloseActiveWrong   WCloseActiveWrong.cfg   action    PROPERTY CloseActiveRule)
-tlc_test(tlc_witness_close_drops_draft    WCloseDropsDraft    WCloseDropsDraft.cfg    action    PROPERTY CloseKeepsFriends)
+tlc_test(tlc_witness_close_drops_draft    WCloseDropsDraft    WCloseDropsDraft.cfg    action    PROPERTY CloseKeepsAIs)
 tlc_test(tlc_witness_add_reuses_id        WAddReusesId        WAddReusesId.cfg        action    PROPERTY AddFreshId)
 tlc_test(tlc_witness_add_among_terminals  WAddAmongTerminals  WAddAmongTerminals.cfg  action    PROPERTY AddAppends)
-tlc_test(tlc_witness_add_before_friend    WAddBeforeFriend    WAddBeforeFriend.cfg    invariant PROPERTY ZonesOrdered)
+tlc_test(tlc_witness_add_before_ai    WAddBeforeAI    WAddBeforeAI.cfg    invariant PROPERTY ZonesOrdered)
 tlc_test(tlc_witness_send_to_terminal     WSendToTerminal     WSendToTerminal.cfg     action    PROPERTY TerminalTakesNoText)
-tlc_test(tlc_witness_move_terminal_before_friend WMoveTerminalBeforeFriend WMoveTerminalBeforeFriend.cfg invariant
+tlc_test(tlc_witness_move_terminal_before_ai WMoveTerminalBeforeAI WMoveTerminalBeforeAI.cfg invariant
          PROPERTY ZonesOrdered)
-tlc_test(tlc_witness_move_friend_behind_terminal WMoveFriendBehindTerminal WMoveFriendBehindTerminal.cfg invariant
+tlc_test(tlc_witness_move_ai_behind_terminal WMoveAIBehindTerminal WMoveAIBehindTerminal.cfg invariant
          PROPERTY ZonesOrdered)
 tlc_test(tlc_witness_move_cross_zone_moves WMoveCrossZoneMoves WMoveCrossZoneMoves.cfg action    PROPERTY RefusedChangesNothing)
 # The sprint tab: always first, never moved, never closed, never takes text.
@@ -341,18 +353,18 @@ tlc_test(tlc_witness_select_keeps_place   WSelectKeepsPlace   WSelectKeepsPlace.
 tlc_test(tlc_witness_select_appends_again WSelectAppendsAgain WSelectAppendsAgain.cfg invariant PROPERTY HistoryOnce)
 tlc_test(tlc_witness_select_skips_history WSelectSkipsHistory WSelectSkipsHistory.cfg invariant PROPERTY HistoryEndsActive)
 
-# The friends from the server's list (sync/client.h applyFriends): Window.tla with add_friend and remove_friend, behind
-# the sprint tab with one friend (39,465 states, 9 s on four workers in a login session), and from an empty strip,
-# no sprint tab and no friend (1,930 states); and their reversed witnesses.
-tlc_test(tlc_spec_friends       MCWindow MCWindowFriends.cfg      pass WORKERS 8 SHARD)
-tlc_test(tlc_spec_friends_empty MCWindow MCWindowFriendsEmpty.cfg pass)
-tlc_test(tlc_witness_add_friend_twice     WAddFriendTwice     WAddFriendTwice.cfg     invariant PROPERTY NamesOnce)
-tlc_test(tlc_witness_add_friend_among_terminals WAddFriendAmongTerminals WAddFriendAmongTerminals.cfg invariant
+# The AIs from the server's list (sync/client.h applyAIs): Window.tla with add_ai and remove_ai, behind
+# the sprint tab with one AI (39,465 states, 9 s on four workers in a login session), and from an empty strip,
+# no sprint tab and no AI (1,930 states); and their reversed witnesses.
+tlc_test(tlc_spec_ais       MCWindow MCWindowAIs.cfg      pass WORKERS 8 SHARD)
+tlc_test(tlc_spec_ais_empty MCWindow MCWindowAIsEmpty.cfg pass)
+tlc_test(tlc_witness_add_ai_twice     WAddAITwice     WAddAITwice.cfg     invariant PROPERTY NamesOnce)
+tlc_test(tlc_witness_add_ai_among_terminals WAddAIAmongTerminals WAddAIAmongTerminals.cfg invariant
          PROPERTY ZonesOrdered)
-tlc_test(tlc_witness_add_friend_selects   WAddFriendSelects   WAddFriendSelects.cfg   action    PROPERTY AddFriendExact)
-tlc_test(tlc_witness_remove_friend_active_wrong WRemoveFriendActiveWrong WRemoveFriendActiveWrong.cfg action
+tlc_test(tlc_witness_add_ai_selects   WAddAISelects   WAddAISelects.cfg   action    PROPERTY AddAIExact)
+tlc_test(tlc_witness_remove_ai_active_wrong WRemoveAIActiveWrong WRemoveAIActiveWrong.cfg action
          PROPERTY RemoveActiveRule)
-tlc_test(tlc_witness_remove_friend_keeps_history WRemoveFriendKeepsHistory WRemoveFriendKeepsHistory.cfg invariant
+tlc_test(tlc_witness_remove_ai_keeps_history WRemoveAIKeepsHistory WRemoveAIKeepsHistory.cfg invariant
          PROPERTY HistoryOpen)
 tlc_test(tlc_witness_close_leaves_history_empty WCloseLeavesHistoryEmpty WCloseLeavesHistoryEmpty.cfg invariant
          PROPERTY HistoryEndsActive)
@@ -360,56 +372,56 @@ tlc_test(tlc_witness_close_leaves_history_empty WCloseLeavesHistoryEmpty WCloseL
 # Trace binding: the real model's random walks, each a behaviour of Window.tla. 1000 steps take every walk's queues past
 # four prompts (trace_walk prints the longest).
 foreach(seed 1 2 3 4 5)
-    tlc_test(tlc_trace_seed_${seed} WindowTrace WindowTrace.cfg pass SEED ${seed} STEPS 1000 FRIENDS 3)
+    tlc_test(tlc_trace_seed_${seed} WindowTrace WindowTrace.cfg pass SEED ${seed} STEPS 1000 AIS 3)
 endforeach()
-tlc_test(tlc_trace_two_tabs WindowTrace WindowTrace.cfg pass SEED 6 STEPS 1000 FRIENDS 2)
-tlc_test(tlc_trace_one_tab  WindowTrace WindowTrace.cfg pass SEED 8 STEPS 1000 FRIENDS 1)
-tlc_test(tlc_trace_no_tabs  WindowTrace WindowTrace.cfg pass SEED 7 STEPS 100 FRIENDS 0)
+tlc_test(tlc_trace_two_tabs WindowTrace WindowTrace.cfg pass SEED 6 STEPS 1000 AIS 2)
+tlc_test(tlc_trace_one_tab  WindowTrace WindowTrace.cfg pass SEED 8 STEPS 1000 AIS 1)
+tlc_test(tlc_trace_no_tabs  WindowTrace WindowTrace.cfg pass SEED 7 STEPS 100 AIS 0)
 # Every walk above starts with the sprint tab, as the window does; this one is the model
 # without it.
-tlc_test(tlc_trace_no_sprint WindowTrace WindowTrace.cfg pass SEED 9 STEPS 1000 FRIENDS 3 NOSPRINT)
-# The friends coming and going as the server's list does: from the start's three, and from an empty strip, with
-# no sprint tab and no friend.
-tlc_test(tlc_trace_friends_churn WindowTrace WindowTrace.cfg pass SEED 10 STEPS 1000 FRIENDS 3 CHURN)
-tlc_test(tlc_trace_friends_fresh WindowTrace WindowTrace.cfg pass SEED 11 STEPS 1000 FRIENDS 0 NOSPRINT CHURN)
+tlc_test(tlc_trace_no_sprint WindowTrace WindowTrace.cfg pass SEED 9 STEPS 1000 AIS 3 NOSPRINT)
+# The AIs coming and going as the server's list does: from the start's three, and from an empty strip, with
+# no sprint tab and no AI.
+tlc_test(tlc_trace_ais_churn WindowTrace WindowTrace.cfg pass SEED 10 STEPS 1000 AIS 3 CHURN)
+tlc_test(tlc_trace_ais_fresh WindowTrace WindowTrace.cfg pass SEED 11 STEPS 1000 AIS 0 NOSPRINT CHURN)
 
 # The binding can fail: a faulty model's trace must be rejected, with the fault in send, in queue and in move.
 tlc_test(tlc_trace_faulty_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 300 FRIENDS 3 FAULTY send)
+         SEED 1 STEPS 300 AIS 3 FAULTY send)
 tlc_test(tlc_trace_faulty_queue_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 1000 FRIENDS 3 FAULTY queue)
+         SEED 1 STEPS 1000 AIS 3 FAULTY queue)
 tlc_test(tlc_trace_faulty_move_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 300 FRIENDS 3 FAULTY move)
+         SEED 1 STEPS 300 AIS 3 FAULTY move)
 # And with the queue dropping its oldest prompt past four, and send stripping trailing spaces.
 tlc_test(tlc_trace_faulty_queue_cap_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 1000 FRIENDS 3 FAULTY queue-cap)
+         SEED 1 STEPS 1000 AIS 3 FAULTY queue-cap)
 tlc_test(tlc_trace_faulty_send_trim_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 1000 FRIENDS 3 FAULTY send-trim)
+         SEED 1 STEPS 1000 AIS 3 FAULTY send-trim)
 # And with a send of the text just sent appending nothing (a hole the walk had before it sent equal text twice).
 tlc_test(tlc_trace_faulty_send_dedup_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 1000 FRIENDS 3 FAULTY send-dedup)
-# And with close removing a friend's tab.
+         SEED 1 STEPS 1000 AIS 3 FAULTY send-dedup)
+# And with close removing an AI's tab.
 tlc_test(tlc_trace_faulty_close_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 300 FRIENDS 3 FAULTY close)
-# And with the sprint tab moved among the friends, and closed.
+         SEED 1 STEPS 300 AIS 3 FAULTY close)
+# And with the sprint tab moved among the AIs, and closed.
 tlc_test(tlc_trace_faulty_sprint_move_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 300 FRIENDS 3 FAULTY sprint-move)
+         SEED 1 STEPS 300 AIS 3 FAULTY sprint-move)
 tlc_test(tlc_trace_faulty_sprint_close_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 300 FRIENDS 3 FAULTY sprint-close)
+         SEED 1 STEPS 300 AIS 3 FAULTY sprint-close)
 # And with closing the active tab ignoring the selection history.
 tlc_test(tlc_trace_faulty_close_fallback_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 300 FRIENDS 3 FAULTY close-fallback)
-# And with remove_friend leaving the removed tab's id in the selection history.
-tlc_test(tlc_trace_faulty_remove_friend_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 300 FRIENDS 3 CHURN FAULTY remove-friend)
+         SEED 1 STEPS 300 AIS 3 FAULTY close-fallback)
+# And with remove_ai leaving the removed tab's id in the selection history.
+tlc_test(tlc_trace_faulty_remove_ai_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 300 AIS 3 CHURN FAULTY remove-ai)
 
-# The friend tabs from the server's state (src/sync/friend_strip.h): FriendStrip.tla on two friends (three nightly), its
+# The AI tabs from the server's state (src/sync/ai_strip.h): AIStrip.tla on two AIs (three nightly), its
 # reversed witnesses (one a window writing its kept drafts over the file other windows share), and the code's random
 # walks checked against it, with two faulty walks that must be rejected.
-tlc_test(tlc_spec_strip MCFriendStrip MCFriendStrip.cfg pass WORKERS 4)
-tlc_test(tlc_spec_strip_three MCFriendStrip MCFriendStrip3.cfg pass WORKERS 8 NIGHTLY)
+tlc_test(tlc_spec_strip MCAIStrip MCAIStrip.cfg pass WORKERS 4)
+tlc_test(tlc_spec_strip_three MCAIStrip MCAIStrip3.cfg pass WORKERS 8 NIGHTLY)
 # And with another window of the server sharing the kept drafts' file (150,016 states, about 22 s on 4 workers).
-tlc_test(tlc_spec_strip_shared MCFriendStrip MCFriendStripShared.cfg pass WORKERS 8 SHARD)
+tlc_test(tlc_spec_strip_shared MCAIStrip MCAIStripShared.cfg pass WORKERS 8 SHARD)
 tlc_test(tlc_witness_strip_draft_goes   WStripDraftGoes         WStripDraftGoes.cfg         invariant PROPERTY DraftsKept)
 tlc_test(tlc_witness_strip_bad_name     WStripBadName           WStripBadName.cfg           invariant PROPERTY NamesValid)
 tlc_test(tlc_witness_strip_never_removes WStripNeverRemoves     WStripNeverRemoves.cfg      invariant PROPERTY StripExact)
@@ -420,14 +432,14 @@ tlc_test(tlc_witness_strip_no_restore   WStripNoRestore         WStripNoRestore.
 tlc_test(tlc_witness_strip_person_loses WStripPersonLoses       WStripPersonLoses.cfg       action PROPERTY PersonWins)
 tlc_test(tlc_witness_strip_blind_rewrite WStripBlindRewrite      WStripBlindRewrite.cfg      invariant PROPERTY FileKeepsOthers)
 foreach(seed 1 2 3)
-    tlc_test(tlc_strip_trace_seed_${seed} FriendStripTrace FriendStripTrace.cfg pass STRIPWALK SEED ${seed} STEPS 400
-             FRIENDS 2)
+    tlc_test(tlc_strip_trace_seed_${seed} AIStripTrace AIStripTrace.cfg pass STRIPWALK SEED ${seed} STEPS 400
+             AIS 2)
 endforeach()
-tlc_test(tlc_strip_trace_three FriendStripTrace FriendStripTrace.cfg pass STRIPWALK SEED 4 STEPS 400 FRIENDS 3)
-tlc_test(tlc_strip_trace_faulty_forget_rejected FriendStripTrace FriendStripTrace.cfg invariant PROPERTY TraceMatches
-         STRIPWALK SEED 1 STEPS 400 FRIENDS 2 FAULTY forget)
-tlc_test(tlc_strip_trace_faulty_wait_rejected FriendStripTrace FriendStripTrace.cfg invariant PROPERTY TraceMatches
-         STRIPWALK SEED 1 STEPS 400 FRIENDS 2 FAULTY wait)
+tlc_test(tlc_strip_trace_three AIStripTrace AIStripTrace.cfg pass STRIPWALK SEED 4 STEPS 400 AIS 3)
+tlc_test(tlc_strip_trace_faulty_forget_rejected AIStripTrace AIStripTrace.cfg invariant PROPERTY TraceMatches
+         STRIPWALK SEED 1 STEPS 400 AIS 2 FAULTY forget)
+tlc_test(tlc_strip_trace_faulty_wait_rejected AIStripTrace AIStripTrace.cfg invariant PROPERTY TraceMatches
+         STRIPWALK SEED 1 STEPS 400 AIS 2 FAULTY wait)
 
 # A terminal tab's label across ssh sessions (src/remote.h TabLabel): TabLabel.tla, its reversed witnesses, and the code's
 # random walks checked against it, with a faulty walk that must be rejected.
@@ -438,11 +450,11 @@ tlc_test(tlc_witness_label_before_at_start WLabelBeforeAtStart WLabelBeforeAtSta
 tlc_test(tlc_witness_label_no_tail         WLabelNoTail        WLabelNoTail.cfg        action PROPERTY TailRestores)
 if(NEXUS_WINDOW_LOGIC)
     foreach(seed 1 2 3)
-        tlc_test(tlc_label_trace_seed_${seed} TabLabelTrace TabLabelTrace.cfg pass LABEL SEED ${seed} STEPS 1000 FRIENDS 2)
+        tlc_test(tlc_label_trace_seed_${seed} TabLabelTrace TabLabelTrace.cfg pass LABEL SEED ${seed} STEPS 1000 AIS 2)
     endforeach()
-    tlc_test(tlc_label_trace_three_remotes TabLabelTrace TabLabelTrace.cfg pass LABEL SEED 4 STEPS 1000 FRIENDS 3)
+    tlc_test(tlc_label_trace_three_remotes TabLabelTrace TabLabelTrace.cfg pass LABEL SEED 4 STEPS 1000 AIS 3)
     tlc_test(tlc_label_trace_faulty_before_rejected TabLabelTrace TabLabelTrace.cfg invariant PROPERTY TraceMatches
-             LABEL SEED 1 STEPS 1000 FRIENDS 2 FAULTY before)
+             LABEL SEED 1 STEPS 1000 AIS 2 FAULTY before)
 endif()
 
 # The board's scroller (src/scroll_glide.h): Glide.tla on its small instance, every property.
@@ -461,6 +473,27 @@ foreach(seed 1 2 3 4 5)
 endforeach()
 tlc_test(tlc_glide_trace_faulty_keyup_rejected GlideTrace GlideTrace.cfg deadlock SEED 1 STEPS 1000 GLIDEWALK
          FAULTY keyup)
+
+# The account menu's one gesture (src/account_menu.h): AccountMenu.tla on two rows, every property.
+tlc_test(tlc_account_menu_spec AccountMenu AccountMenu.cfg pass)
+# Its reversed witnesses: a lift that leaves the menu open, a sideways move that keeps it, a press on any tab that
+# opens it, a slide across a row after the press went down that moves the tab.
+tlc_test(tlc_account_menu_witness_lift_keeps_open WAccountMenuLiftKeepsOpen WAccountMenuLiftKeepsOpen.cfg invariant
+         PROPERTY LiftCloses)
+tlc_test(tlc_account_menu_witness_sideways_keeps WAccountMenuSidewaysKeeps WAccountMenuSidewaysKeeps.cfg invariant
+         PROPERTY SidewaysIsTheTabsMove)
+tlc_test(tlc_account_menu_witness_any_tab_opens WAccountMenuAnyTabOpens WAccountMenuAnyTabOpens.cfg invariant
+         PROPERTY OpensOnlyOnTheActiveTab)
+tlc_test(tlc_account_menu_witness_decided_moves WAccountMenuDecidedMoves WAccountMenuDecidedMoves.cfg invariant
+         PROPERTY DecidedStaysTheMenu)
+# Its code traces, each a behaviour of AccountMenu.tla; and a gesture that keeps the menu on a sideways move,
+# rejected (no step of the spec reaches its next state: a deadlock).
+foreach(seed 1 2 3 4 5)
+    tlc_test(tlc_account_menu_trace_seed_${seed} AccountMenuTrace AccountMenuTrace.cfg pass SEED ${seed} STEPS 1000
+             MENUWALK)
+endforeach()
+tlc_test(tlc_account_menu_trace_faulty_sideways_rejected AccountMenuTrace AccountMenuTrace.cfg deadlock SEED 1
+         STEPS 1000 MENUWALK FAULTY sideways)
 
 # The overlay (Overlay.tla): the whole state space, a witness per property, code traces, and faulty traces rejected.
 tlc_test(tlc_window_plugin_groups_trace PluginTabTrace PluginTabTrace.cfg pass PLUGINTRACE)

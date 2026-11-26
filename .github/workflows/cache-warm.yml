@@ -1,0 +1,179 @@
+# Warms the fleet runners' own build directories for ci.yml and ios.yml, with no 2-minute limit: a cold build (a new
+# runner, a Prax pin change, a Tailscale pin change) does not fit a per-commit job, and per-commit jobs never build cold
+# on purpose. Each runner keeps its build directory per configuration beside its checkout (.github/actions/fleet-build,
+# windows-build), so a warm directory stays warm: a pull request's job then compiles only what changed since the last
+# job on that runner. Nothing is saved to GitHub's cache; nothing here is GitHub-hosted.
+#
+# Each job has as many slots as nexus has runners for its OS (Linux: amd-3 and intel, 3 each; macOS: the macbook, 3;
+# Windows: captain, 2), so that with the runners idle GitHub places one slot on every runner. A runner a slot missed is
+# warmed by its first per-commit job (ccache, shared by the machine's runners, makes most of that build hits) or by the
+# next run here. The Tailscale shim's key directory is per machine (tailscale.yml, prime).
+#
+# On every push to main (so the runners follow main), daily, and by hand: `gh workflow run cache-warm.yml --ref main`,
+# after a Prax or Tailscale pin changes, or for a new runner.
+
+name: cache-warm
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "41 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-warm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    name: linux-release (${{ matrix.slot }})
+    runs-on: [self-hosted, nexus-pr, Linux, X64]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [1, 2, 3, 4, 5, 6]
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Build directory and caches
+        uses: ./.github/actions/fleet-build
+        with:
+          name: linux-release
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: linux-release
+          dir: ${{ env.NEXUS_BUILD }}
+          # As ci.yml builds this directory (NEXUS_LTO off), so it stays warm for the pull requests.
+          lto: "OFF"
+      - name: Record the sources the build was made from
+        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
+
+  macos:
+    name: mac-debug (${{ matrix.slot }})
+    runs-on: [self-hosted, nexus-pr, macOS, ARM64, xcode]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Build directory and caches
+        uses: ./.github/actions/fleet-build
+        with:
+          name: mac-debug
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: mac-debug
+          dir: ${{ env.NEXUS_BUILD }}
+      - name: Record the sources the build was made from
+        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
+
+  watch:
+    name: watch (${{ matrix.slot }})
+    runs-on: [self-hosted, nexus-pr, macOS, ARM64, xcode]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Build directory
+        uses: ./.github/actions/fleet-build
+        with:
+          name: watch
+          rust: "false"
+      - name: The core, the app for the simulator and for a watch
+        run: |
+          set -euo pipefail
+          cmake -S watch -B "$NEXUS_BUILD/core" -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$NEXUS_BUILD/core" --parallel "$JOBS" --target watch_core_test
+          cmake -S . -B "$NEXUS_BUILD/sim" -G Ninja -DCMAKE_SYSTEM_NAME=watchOS -DCMAKE_OSX_SYSROOT=watchsimulator \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$NEXUS_BUILD/sim" --parallel "$JOBS"
+          cmake -S . -B "$NEXUS_BUILD/device" -G Ninja -DCMAKE_SYSTEM_NAME=watchOS -DCMAKE_OSX_SYSROOT=watchos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64_32 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$NEXUS_BUILD/device" --parallel "$JOBS"
+      - name: Record the sources the builds were made from
+        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
+
+  # ios.yml's two builds, each in its own directory (ios-device, ios-simulator), whole.
+  ios:
+    name: ios-${{ matrix.target }} (${{ matrix.slot }})
+    runs-on: [self-hosted, nexus-pr, macOS, ARM64, xcode]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [1, 2, 3]
+        target: [device, simulator]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Build directory and caches
+        uses: ./.github/actions/fleet-build
+        with:
+          name: ios-${{ matrix.target }}
+      - name: Rust's iOS standard library
+        shell: bash
+        run: rustup target add --toolchain "$RUSTUP_TOOLCHAIN" aarch64-apple-ios aarch64-apple-ios-sim
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: ios-${{ matrix.target }}
+          dir: ${{ env.NEXUS_BUILD }}
+      - name: Record the sources the build was made from
+        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
+
+  windows:
+    name: windows-release (${{ matrix.slot }})
+    runs-on: [self-hosted, nexus-pr, Windows, X64]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [1, 2]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Build directory, configure and build
+        uses: ./.github/actions/windows-build
+        with:
+          # As ci.yml builds this directory (NEXUS_LTO off), so it stays warm for the pull requests.
+          lto: "OFF"
+
+  # The Tailscale shim's primed key directory on each machine (one slot per runner), built and tested with no time limit.
+  tailscale:
+    uses: ./.github/workflows/tailscale.yml
+    permissions:
+      contents: read
+    with:
+      prime: true
+      tests: '^unit$'
+      rosetta: false
+      macos-slots: "[1, 2, 3]"
+      linux-slots: "[1, 2, 3, 4, 5, 6]"

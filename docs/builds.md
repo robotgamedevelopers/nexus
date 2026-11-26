@@ -86,12 +86,12 @@ that build is removed and placed again.
 The formats file lists `format <name> <writes> <reader>`: the version the build writes, and the oldest reader that
 can read it (`nexus-server builds formats` prints this program's). `current` refuses, in one line, a build that cannot
 read what the current one writes: for each of `store-record`, `store-snapshot` (store/store.h) and `config`
-(accounts.json and friends.json), the current build's `reader` must be at most the target's `writes`. The link's state
+(accounts.json and ais.json), the current build's `reader` must be at most the target's `writes`. The link's state
 format and the driver protocol are agreed between their two ends at each connection, and are listed but not checked.
 
 When `current` downgrades `writes` on any checked format (including a multi-hop step such as `5/5 -> 5/3 -> 3/3` where
 the adjacent versions pass `formatsRefusal`), and whenever `back` switches to an older writer or past a format bump,
-`builds` also inspects what `<serverDir>/store` and `<serverDir>/nexus-config/{accounts,friends}.json` hold on disk
+`builds` also inspects what `<serverDir>/store` and `<serverDir>/nexus-config/{accounts,ais}.json` hold on disk
 under the store's shared lock (`src/server/migration.h` `readDiskFormats`, `diskFormatsRefusal`; refused while a running
 server holds the store open for writing):
 
@@ -237,6 +237,10 @@ and inspects `handover/state` first:
 Exit statuses of `nexus-server handover`: `0` ok (for `resume`, recovered to `SERVING`); `1` failed; `2` usage; `3`
 refused (not placed, untested, incompatible formats, no current build); `4` lock busy; `5` target failed to serve and
 rolled back to `previous`.
+
+Handover does not touch `<server dir>/policy.bundle.json`. If the server has one, apply it again from the new build's
+commit after the handover ([docs/policy.md](policy.md#after-deploying-a-build)); until then the new build warns at
+its start and on `nexus-server status` that the applied bundle is not the one it packages.
 
 ## Supervision
 

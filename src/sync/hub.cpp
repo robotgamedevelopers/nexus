@@ -173,7 +173,7 @@ bool isSet(ActionKind kind) {
     return kind == ActionKind::SetAccount || kind == ActionKind::SetModel || kind == ActionKind::SetEffort;
 }
 
-bool onDefaultInstance(const std::string& instance, const accounts::Friend* owner) {
+bool onDefaultInstance(const std::string& instance, const accounts::AI* owner) {
     return instance.empty() || (owner && !owner->instances.empty() && instance == owner->instances.front().name);
 }
 
@@ -220,7 +220,7 @@ bool Hub::counted(const Action& action, const std::string& refused, std::string*
 
 bool Hub::apply(const Action& action, std::string* why, const std::string& client) {
     if (const auto* s = action.session ? store_.find(action.session) : nullptr;
-            s && s->info.friendName == kPrimaryChat && !isPrimary(action.session))
+            s && s->info.aiName == kPrimaryChat && !isPrimary(action.session))
         return counted(action, "This conversation is unavailable with the current primary harness configuration.", why, client);
     if (action.kind == ActionKind::SecretAnswer || action.kind == ActionKind::SecretCancel) {
         return secretAction(action, why, client);
@@ -255,10 +255,10 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
 }
 
 bool Hub::createSession(const Action& action, std::string* why, const std::string& client, bool requireDefault) {
-    if (action.friendName == kPrimaryChat)
+    if (action.aiName == kPrimaryChat)
         return counted(action, "Only the server can open the primary conversation.", why, client);
-    if (action.friendName.empty() || action.friendName.size() > limits_.friendName) {
-        return counted(action, "a session's friend is named by 1 to " + std::to_string(limits_.friendName) +
+    if (action.aiName.empty() || action.aiName.size() > limits_.aiName) {
+        return counted(action, "a session's AI is named by 1 to " + std::to_string(limits_.aiName) +
             " bytes", why, client);
     }
     if (!action.text.empty()) {
@@ -266,22 +266,22 @@ bool Hub::createSession(const Action& action, std::string* why, const std::strin
     }
     if (action.kind == ActionKind::Ensure) {
         for (SessionId id : store_.ids()) {
-            if (store_.find(id)->info.friendName == action.friendName) {
-                // The friend has a session: nothing to make, and nothing refused.
+            if (store_.find(id)->info.aiName == action.aiName) {
+                // The AI has a session: nothing to make, and nothing refused.
                 return count(action, why, client);
             }
         }
     }
-    SessionInfo info = responder_ != nullptr ? responder_->defaults(action.friendName)
-                                             : SessionInfo{action.friendName, kDefaultHarness, {}, {}, {}};
-    info.friendName = action.friendName;
-    const auto* f = accounts_ ? accounts_->friendNamed(action.friendName) : nullptr;
+    SessionInfo info = responder_ != nullptr ? responder_->defaults(action.aiName)
+                                             : SessionInfo{action.aiName, kDefaultHarness, {}, {}, {}};
+    info.aiName = action.aiName;
+    const auto* f = accounts_ ? accounts_->aiNamed(action.aiName) : nullptr;
     const auto* from = action.kind == ActionKind::Create && action.session ? store_.find(action.session) : nullptr;
     if (action.kind == ActionKind::Create && action.session && !from)
         return counted(action, "no session " + std::to_string(action.session) + " to copy", why, client);
     const SessionInfo defaults = info;
     std::string error;
-    const auto pool = subscriptionsFor(info.friendName);
+    const auto pool = subscriptionsFor(info.aiName);
     if (!policy::newSession(application_, bundlePath_(), defaults, from ? &from->info : nullptr, f,
                             bool(accounts_), pool.size() > 1, info, error))
         return counted(action, "New session application: " + error, why, client);
@@ -290,17 +290,17 @@ bool Hub::createSession(const Action& action, std::string* why, const std::strin
     if (info.autoAccount) {
         if (pool.size() < 2)
             return counted(action, "Automatic account selection needs two linked subscriptions.", why, client);
-        if (!from || from->info.friendName != info.friendName || !from->info.autoAccount ||
+        if (!from || from->info.aiName != info.aiName || !from->info.autoAccount ||
                 !signedIn_.contains(info.account) || std::find(pool.begin(), pool.end(), info.account) == pool.end())
             info.account = firstAutoAccount(pool);
     }
     if (info.model.size() > limits_.setting || info.effort.size() > limits_.setting ||
             !printable(info.model) || !printable(info.effort) ||
-            (accounts_ && !info.account.empty() && !accounts_->linked(action.friendName, info.account)) ||
+            (accounts_ && !info.account.empty() && !accounts_->linked(action.aiName, info.account)) ||
             (accounts_ && !info.instance.empty() && (!f || !f->instance(info.instance))) ||
             (!accounts_ && info.account != defaults.account && (!from || info.account != from->info.account)) ||
             (!accounts_ && info.instance != defaults.instance &&
-                (!from || from->info.friendName != info.friendName || info.instance != from->info.instance)))
+                (!from || from->info.aiName != info.aiName || info.instance != from->info.instance)))
         return counted(action, "New session application: choose an available account and instance and "
             "printable model and effort within the setting limit", why, client);
     if (accounts_)
@@ -332,7 +332,7 @@ std::string primaryReceipt(SessionId id) {
 
 bool Hub::ensurePrimary(const SessionInfo& binding, std::string* why) {
     const auto* account = accounts_ ? accounts_->account(binding.account) : nullptr;
-    if (binding.friendName != kPrimaryChat || !account || account->billing != accounts::Billing::Subscription ||
+    if (binding.aiName != kPrimaryChat || !account || account->billing != accounts::Billing::Subscription ||
             account->provider != binding.harness || !accounts::isProvider(binding.harness) || binding.autoAccount ||
             binding.instance.size() != 32 || binding.instance.find_first_not_of("0123456789abcdef") != std::string::npos) {
         clearPrimary();
@@ -341,7 +341,7 @@ bool Hub::ensurePrimary(const SessionInfo& binding, std::string* why) {
     }
     const auto matches = [&](SessionId id) {
         const auto& info = store_.find(id)->info;
-        return info.friendName == kPrimaryChat && info.account == binding.account &&
+        return info.aiName == kPrimaryChat && info.account == binding.account &&
                info.harness == binding.harness && info.instance == binding.instance;
     };
     if (primary_ && matches(*primary_)) return true;
@@ -406,11 +406,11 @@ bool Hub::receiveBus(const std::string& recipient, const std::string& id, const 
     if (blankText(displayBody) || blankText(promptBody) || !codec::tableText(displayBody) || !codec::tableText(promptBody))
         return refuse("The message needs nonempty UTF-8 text.");
 
-    const auto* fr = accounts_ ? accounts_->friendNamed(recipient) : nullptr;
-    if (!fr || !responder_) return refuse("The recipient has no configured Nexus friend and driver.");
+    const auto* fr = accounts_ ? accounts_->aiNamed(recipient) : nullptr;
+    if (!fr || !responder_) return refuse("The recipient has no configured Nexus AI and driver.");
     SessionId sessionId = 0;
     for (const auto& s : state_.sessions()) {
-        if (s->info.friendName == recipient && onDefaultInstance(s->info.instance, fr)) {
+        if (s->info.aiName == recipient && onDefaultInstance(s->info.instance, fr)) {
             sessionId = s->id;
             break;
         }
@@ -460,7 +460,7 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
     ActionKind kind = action.kind;
     const std::string* text = &action.text;
     if (kind != ActionKind::Stop && text->size() <= limits_.text) {
-        policy::MessageState state{*text, session.info.friendName, session.info.model, session.queue.size(),
+        policy::MessageState state{*text, session.info.aiName, session.info.model, session.queue.size(),
             session.driver.openTurn != 0, session.info.effort, session.info.harness,
             responder_ ? responder_->catalog(session.info) : std::string{}};
         if (const auto* account = accounts_ ? accounts_->account(session.info.account) : nullptr) {
@@ -468,7 +468,7 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
             state.loginState = signedIn_.contains(account->name) ? "signed in" :
                 (signsIn(account->name) ? "signed out" : "unconfirmed");
         }
-        if (responder_ && text->find("/info") != std::string::npos) state.friendInfo = responder_->friendInfo(session.info.friendName);
+        if (responder_ && text->find("/info") != std::string::npos) state.aiInfo = responder_->aiInfo(session.info.aiName);
         if (!policy::messagePlan(application_, bundlePath_(), false, kind == ActionKind::Queue ? "queue" : "send", state, plan, refused)) {
             refused = "Message application: " + refused;
         } else {
@@ -577,7 +577,7 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
         changes = responder_->send(action.session, *text);
     } else if (kind == ActionKind::Send) {
         changes.push_back(SessionChange{entry(EntryKind::Person, *text), {}});
-        changes.push_back(SessionChange{entry(EntryKind::Friend, kReceived), {}});
+        changes.push_back(SessionChange{entry(EntryKind::AI, kReceived), {}});
     } else if (kind == ActionKind::Queue && responder_ != nullptr) {
         changes = responder_->queue(action.session, *text);
     } else if (kind == ActionKind::Queue) {
@@ -600,14 +600,14 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
 // A new session, with the next id, in one step with the client's counter.
 bool Hub::make(const Action& action, const SessionInfo& info, std::string* why, const std::string& client) {
     if (store_.size() >= limits_.sessions) {
-        return counted(action, "no session made for " + action.friendName + ": the server holds " +
+        return counted(action, "no session made for " + action.aiName + ": the server holds " +
             std::to_string(limits_.sessions) + " sessions, its limit", why, client);
     }
     const SessionId id = store_.nextId();
     std::string failed;
     if (!store_.commit(id, {infoChange(info)}, client, action.num, &failed)) {
         if (why != nullptr) {
-            *why = "no session made for " + action.friendName + ": " + failed;
+            *why = "no session made for " + action.aiName + ": " + failed;
         }
         return false;
     }
@@ -637,26 +637,26 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client,
     std::string account = action.text;
     const bool chooseAuto = action.kind == ActionKind::SetAccount && account == kAutoAccountTarget;
     if (refused.empty() && chooseAuto) {
-        const auto pool = subscriptionsFor(info.friendName);
+        const auto pool = subscriptionsFor(info.aiName);
         if (pool.size() < 2)
-            refused = "Link at least two subscription accounts for this friend’s driver in friends.json to use auto.";
+            refused = "Link at least two subscription accounts for this AI’s driver in ais.json to use auto.";
         else
             account = firstAutoAccount(pool);
     } else if (refused.empty() && action.kind == ActionKind::SetAccount && account.starts_with('+')) {
-        const auto* who = accounts_ ? accounts_->friendNamed(info.friendName) : nullptr;
+        const auto* who = accounts_ ? accounts_->aiNamed(info.aiName) : nullptr;
         if (!who || who->accounts.empty()) {
-            refused = "Link an account to " + info.friendName + " in friends.json to switch accounts.";
+            refused = "Link an account to " + info.aiName + " in ais.json to switch accounts.";
         } else {
             account = policy::accountCommand(application_, bundlePath_(), info.account, who->accounts,
                                              account.substr(1), refused);
         }
     }
     if (refused.empty() && action.kind == ActionKind::SetAccount && accounts_ && !account.empty() &&
-            !accounts_->linked(info.friendName, account)) {
-        refused = "The account was not changed: " + account + " is not one of " + info.friendName +
+            !accounts_->linked(info.aiName, account)) {
+        refused = "The account was not changed: " + account + " is not one of " + info.aiName +
             "'s accounts" + (accounts_->account(account) == nullptr ? " (no account " + account +
-            " is set up in accounts.json)" : "") + ". Link it to " + info.friendName + " first: add it to " +
-            info.friendName + "'s \"accounts\" in friends.json and run `nexus-server config reload` "
+            " is set up in accounts.json)" : "") + ". Link it to " + info.aiName + " first: add it to " +
+            info.aiName + "'s \"accounts\" in ais.json and run `nexus-server config reload` "
             "(docs/accounts.md).";
     }
     if (action.kind == ActionKind::SetAccount) {
@@ -741,14 +741,14 @@ bool Hub::setOpen(SessionId id, const std::string& text) {
     } else if (it != open_.end() && it->second->text == text) {
         return false;
     } else {
-        open_[id] = std::make_shared<const SessionEntry>(SessionEntry{EntryKind::Friend, text, false});
+        open_[id] = std::make_shared<const SessionEntry>(SessionEntry{EntryKind::AI, text, false});
     }
     refresh(id);
     return true;
 }
 
 namespace {
-// An absent routing constraint belongs to an unrestricted responder. A missing friend in an installed table
+// An absent routing constraint belongs to an unrestricted responder. A missing AI in an installed table
 // has no account-capable driver. Its registry can still be edited and its named accounts displayed.
 bool canRoute(const std::optional<AccountRoutes>& routes, const std::string& who, const std::string& provider) {
     if (!routes) return true;
@@ -757,9 +757,9 @@ bool canRoute(const std::optional<AccountRoutes>& routes, const std::string& who
 }
 } // namespace
 
-std::vector<std::string> Hub::subscriptionsFor(const std::string& friendName) const {
+std::vector<std::string> Hub::subscriptionsFor(const std::string& aiName) const {
     std::vector<std::string> pool;
-    const auto* who = accounts_ ? accounts_->friendNamed(friendName) : nullptr;
+    const auto* who = accounts_ ? accounts_->aiNamed(aiName) : nullptr;
     if (who) {
         const auto routes = responder_ ? responder_->accountRoutes() : std::nullopt;
         for (const auto& name : who->accounts) {
@@ -812,16 +812,16 @@ bool Hub::moveTo(SessionId id, const SessionInfo& info, const std::string& notic
     return true;
 }
 
-// Every session on an account no longer linked to its friend moves off it; every session whose account's provider
-// changed takes its harness. Each is told. A session whose friend is not in the registry is left as it is until its
-// friend is back; one whose friend this change took out is told, once, and its responder stops what runs in it. False
+// Every session on an account no longer linked to its AI moves off it; every session whose account's provider
+// changed takes its harness. Each is told. A session whose AI is not in the registry is left as it is until its
+// AI is back; one whose AI this change took out is told, once, and its responder stops what runs in it. False
 // when the store did not take a step.
 bool Hub::settle(std::vector<std::string>* report, const std::string& cause, const accounts::Registry* before) {
     for (SessionId id : store_.ids()) {
-        const std::string friendName = store_.find(id)->info.friendName;
-        const bool was = before != nullptr && before->friendNamed(friendName) != nullptr;
-        if (accounts_->friendNamed(friendName) == nullptr) {
-            if (was && !removed(id, friendName, cause, report)) {
+        const std::string aiName = store_.find(id)->info.aiName;
+        const bool was = before != nullptr && before->aiNamed(aiName) != nullptr;
+        if (accounts_->aiNamed(aiName) == nullptr) {
+            if (was && !removed(id, aiName, cause, report)) {
                 return false;
             }
             continue;
@@ -830,26 +830,26 @@ bool Hub::settle(std::vector<std::string>* report, const std::string& cause, con
             return false;
         }
         if (before != nullptr && !was && responder_ != nullptr) {
-            responder_->present(id, true);    // its friend is back: what waits goes on
+            responder_->present(id, true);    // its AI is back: what waits goes on
         }
     }
     return true;
 }
 
-// A session whose friend a change took out of friends.json: one notice, then its responder stops what runs in it. Its
+// A session whose AI a change took out of ais.json: one notice, then its responder stops what runs in it. Its
 // account, instance, transcript and queue are kept as they are.
-bool Hub::removed(SessionId id, const std::string& friendName, const std::string& cause,
+bool Hub::removed(SessionId id, const std::string& aiName, const std::string& cause,
                   std::vector<std::string>* report) {
-    const std::string notice = friendName + " was taken out of friends.json (" + cause + "), so nexus-server stopped "
+    const std::string notice = aiName + " was taken out of ais.json (" + cause + "), so nexus-server stopped "
         "any work running in this session and ended its driver. This session, its transcript and its queued prompts "
-        "are kept, and the queued prompts go on if " + friendName + " is added to friends.json again.";
+        "are kept, and the queued prompts go on if " + aiName + " is added to ais.json again.";
     std::string failed;
     if (!store_.commit(id, {SessionChange{entry(EntryKind::Notice, notice), {}}}, std::string(), 0, &failed)) {
         return false;
     }
     refresh(id);
     if (report != nullptr) {
-        report->push_back("session " + std::to_string(id) + " (" + friendName + "): its friend was removed, so its work "
+        report->push_back("session " + std::to_string(id) + " (" + aiName + "): its AI was removed, so its work "
             "was stopped; the session is kept");
     }
     if (responder_ != nullptr) {
@@ -858,74 +858,74 @@ bool Hub::removed(SessionId id, const std::string& friendName, const std::string
     return true;
 }
 
-// One session whose friend is in the registry, settled against it.
+// One session whose AI is in the registry, settled against it.
 bool Hub::settleOne(SessionId id, std::vector<std::string>* report, const std::string& cause,
                     const accounts::Registry* before) {
     auto where = [](const accounts::Instance& in) { return "on " + in.machine + " in " + in.dir; };
     SessionInfo info = store_.find(id)->info;
-    // A session belongs to one of its friend's instances, or to none when the friend has none. An instance the
-    // friend no longer has: the session moves to the friend's default instance (its first), or none, told. No
-    // instance while the friend has some: the default. Its instance moved in place (the same name, another
+    // A session belongs to one of its AI's instances, or to none when the AI has none. An instance the
+    // AI no longer has: the session moves to the AI's default instance (its first), or none, told. No
+    // instance while the AI has some: the default. Its instance moved in place (the same name, another
     // machine or directory): told, and its driver follows (Drivers::configured).
-    const accounts::Friend* fr = accounts_->friendNamed(info.friendName);   // in the registry: settle() saw to it
+    const accounts::AI* fr = accounts_->aiNamed(info.aiName);   // in the registry: settle() saw to it
     const accounts::Instance* in = info.instance.empty() ? nullptr : fr->instance(info.instance);
-    const accounts::Friend* frBefore = before == nullptr ? nullptr : before->friendNamed(info.friendName);
+    const accounts::AI* frBefore = before == nullptr ? nullptr : before->aiNamed(info.aiName);
     const accounts::Instance* inBefore = frBefore == nullptr || in == nullptr ? nullptr :
         frBefore->instance(info.instance);
     std::string instanceNotice;
     if (info.instance.empty() && !fr->instances.empty()) {
         const accounts::Instance& first = fr->instances.front();
         info.instance = first.name;
-        instanceNotice = "This session now belongs to " + info.friendName + "'s default instance, " + first.name +
-            " (" + where(first) + "): a session belongs to one of its friend's instances (" + cause + ").";
+        instanceNotice = "This session now belongs to " + info.aiName + "'s default instance, " + first.name +
+            " (" + where(first) + "): a session belongs to one of its AI's instances (" + cause + ").";
         if (report != nullptr) {
-            report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): instance none -> " +
+            report->push_back("session " + std::to_string(id) + " (" + info.aiName + "): instance none -> " +
                 info.instance);
         }
     } else if (inBefore != nullptr && (inBefore->machine != in->machine || inBefore->dir != in->dir)) {
-        instanceNotice = info.friendName + "'s instance " + in->name + " moved (" + cause + "): it was " +
+        instanceNotice = info.aiName + "'s instance " + in->name + " moved (" + cause + "): it was " +
             where(*inBefore) + " and is now " + where(*in) + ". This session's driver restarts there once no "
             "turn is open: in the same directory it resumes the conversation; in another it starts afresh, given "
             "a summary of the conversation so far.";
         if (report != nullptr) {
-            report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): instance " +
+            report->push_back("session " + std::to_string(id) + " (" + info.aiName + "): instance " +
                 in->name + " moved, " + where(*inBefore) + " -> " + where(*in));
         }
     } else if (!info.instance.empty() && in == nullptr) {
         const std::string wasInstance = info.instance;
         info.instance = fr->instances.empty() ? std::string() : fr->instances.front().name;
-        instanceNotice = "The instance " + wasInstance + " is no longer one of " + info.friendName + "'s (" +
+        instanceNotice = "The instance " + wasInstance + " is no longer one of " + info.aiName + "'s (" +
             cause + "), so this session now belongs to " + (info.instance.empty() ? std::string("none of its "
-            "instances") : "its instance " + info.instance) + ". Add an instance to " + info.friendName +
-            " in friends.json to choose another.";
+            "instances") : "its instance " + info.instance) + ". Add an instance to " + info.aiName +
+            " in ais.json to choose another.";
         if (report != nullptr) {
-            report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): instance " +
+            report->push_back("session " + std::to_string(id) + " (" + info.aiName + "): instance " +
                 wasInstance + " -> " + (info.instance.empty() ? std::string("none") : info.instance));
         }
     }
-    // Its friend's "limit" changed (a reload): told. Tightened, an open turn is stopped now and the driver restarts
-    // limited (Supervisor::setLimited); loosened, the driver restarts unlimited once no turn is open. A friend put back
-    // in friends.json (frBefore null) takes its record's limit through Drivers::configured like any other start.
+    // Its AI's "limit" changed (a reload): told. Tightened, an open turn is stopped now and the driver restarts
+    // limited (Supervisor::setLimited); loosened, the driver restarts unlimited once no turn is open. An AI put back
+    // in ais.json (frBefore null) takes its record's limit through Drivers::configured like any other start.
     if (frBefore != nullptr && fr->limit != frBefore->limit) {
-        instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + info.friendName + " is " +
+        instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + info.aiName + " is " +
             (fr->limit ? "now limited to its directory" : "no longer limited to its directory") + " (" + cause +
             "): this session's driver restarts " + (fr->limit ? "limited; a turn already open is stopped now." :
             "unlimited once no turn is open; a turn already open finishes as it started.");
         if (report != nullptr) {
-            report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): limit " +
+            report->push_back("session " + std::to_string(id) + " (" + info.aiName + "): limit " +
                 (frBefore->limit ? "true" : "false") + " -> " + (fr->limit ? "true" : "false"));
         }
     }
-    // The directories a limited friend is kept out of changed (friends.json "limit_keeps_out"): told in each limited
+    // The directories a limited AI is kept out of changed (ais.json "limit_keeps_out"): told in each limited
     // session, whose driver restarts keeping out the new list (Supervisor::setKeepsOut): a turn open is stopped now
     // when more are kept out, and finishes as it started when fewer are.
     if (before != nullptr && before->keepsOut != accounts_->keepsOut &&
-        accounts::limitedFor(&*accounts_, info.friendName, info.account)) {
+        accounts::limitedFor(&*accounts_, info.aiName, info.account)) {
         std::string dirs;
         for (const std::string& d : accounts_->keepsOut) {
             dirs += (dirs.empty() ? "" : ", ") + d;
         }
-        instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + "The directories a limited friend is "
+        instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + "The directories a limited AI is "
             "kept out of, on top of its own, are now " + (dirs.empty() ? std::string("none") : dirs) + " (" + cause +
             "): this session's driver restarts keeping them out; a turn already open is stopped now if more are "
             "kept out, and otherwise finishes as it started.";
@@ -933,11 +933,11 @@ bool Hub::settleOne(SessionId id, std::vector<std::string>* report, const std::s
     const std::string was = info.account;
     std::string notice;
     if (info.autoAccount) {
-        const auto pool = subscriptionsFor(info.friendName);
+        const auto pool = subscriptionsFor(info.aiName);
         if (pool.size() < 2) {
             info.autoAccount = false;
             notice = "Automatic account selection ended because fewer than two subscription accounts remain linked to " +
-                info.friendName + " (" + cause + ").";
+                info.aiName + " (" + cause + ").";
         }
         if (std::find(pool.begin(), pool.end(), was) == pool.end()) {
             info.account = firstAutoAccount(pool);
@@ -946,13 +946,13 @@ bool Hub::settleOne(SessionId id, std::vector<std::string>* report, const std::s
             notice += info.account.empty() ? "No subscription account is selected." :
                 "The selected subscription account is now " + info.account + ".";
         }
-    } else if (!was.empty() && !accounts_->linked(info.friendName, was)) {
-        info.account = accounts::landing(*accounts_, signedIn_, info.friendName);
+    } else if (!was.empty() && !accounts_->linked(info.aiName, was)) {
+        info.account = accounts::landing(*accounts_, signedIn_, info.aiName);
         info.harness = harnessOf(info.account, info.harness);
-        notice = "The account " + was + " is no longer one of " + info.friendName + "'s accounts (" + cause +
+        notice = "The account " + was + " is no longer one of " + info.aiName + "'s accounts (" + cause +
             "), so this session now runs on " + (info.account.empty() ? std::string("no account (the harness's own "
-            "login)") : "the account " + info.account) + ". Link an account to " + info.friendName + " in "
-            "friends.json to choose another.";
+            "login)") : "the account " + info.account) + ". Link an account to " + info.aiName + " in "
+            "ais.json to choose another.";
     }
     if (info.account == was && info.harness != harnessOf(was, info.harness)) {
         info.harness = harnessOf(was, info.harness);
@@ -973,7 +973,7 @@ bool Hub::settleOne(SessionId id, std::vector<std::string>* report, const std::s
         return true;    // its instance alone moved: said above
     }
     if (report != nullptr) {
-        report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): account " + was + " -> " +
+        report->push_back("session " + std::to_string(id) + " (" + info.aiName + "): account " + was + " -> " +
             (info.account.empty() ? std::string("none") : info.account) + ", harness " + info.harness);
     }
     return true;
@@ -991,13 +991,13 @@ AccountIndex indexAccounts(const accounts::Registry& registry) {
     return index;
 }
 
-std::vector<ServerFriend> windowRoster(const accounts::Registry& registry, const AccountIndex& index,
+std::vector<ServerAI> windowRoster(const accounts::Registry& registry, const AccountIndex& index,
                                       const std::set<std::string>* signedIn = nullptr, bool canSignIn = false,
                                       const std::optional<AccountRoutes>& routes = {}) {
-    std::vector<ServerFriend> friends;
-    friends.reserve(registry.friends.size());
-    for (const auto& f : registry.friends) {
-        ServerFriend& row = friends.emplace_back(ServerFriend{f.name});
+    std::vector<ServerAI> ais;
+    ais.reserve(registry.ais.size());
+    for (const auto& f : registry.ais) {
+        ServerAI& row = ais.emplace_back(ServerAI{f.name});
         row.accounts.reserve(f.accounts.size());
         std::size_t subscriptions = 0;
         for (const auto& name : f.accounts) {
@@ -1012,19 +1012,19 @@ std::vector<ServerFriend> windowRoster(const accounts::Registry& registry, const
         }
         row.canAutoAccount = subscriptions > 1;
     }
-    return friends;
+    return ais;
 }
 
 } // namespace
 
 std::string accountRosterProblem(const accounts::Registry& registry) {
     const auto index = indexAccounts(registry);
-    const char* problem = "friends.json: the linked account choices exceed the window roster budget "
+    const char* problem = "ais.json: the linked account choices exceed the window roster budget "
                           "(3 MiB on the wire or 12 MiB decoded); shorten repeated account labels or emails in accounts.json "
-                          "or remove links from friends.json";
+                          "or remove links from ais.json";
     std::size_t textBytes = 0;
     std::size_t rows = 0;
-    for (const auto& f : registry.friends) {
+    for (const auto& f : registry.ais) {
         textBytes += f.name.size();
         rows++;
         for (const auto& name : f.accounts) {
@@ -1075,20 +1075,20 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
         }
         return false;
     }
-    // With none held before (the committed files did not read at the start), no friend was known to be in or out: the
-    // sessions are settled as at a start, and then each is told, from `next` alone, whether its friend is in it. It is
-    // never diffed against an empty registry, which would read every friend as put back (models/Supervisor.tla Learn).
+    // With none held before (the committed files did not read at the start), no AI was known to be in or out: the
+    // sessions are settled as at a start, and then each is told, from `next` alone, whether its AI is in it. It is
+    // never diffed against an empty registry, which would read every AI as put back (models/Supervisor.tla Learn).
     const bool unknown = !accounts_;
     const accounts::Registry before = accounts_ ? *accounts_ : accounts::Registry{};
     lines = accounts::changes(before, next);
     take(next);
-    const std::string cause = "the accounts and friends were changed: " + message;
+    const std::string cause = "the accounts and AIs were changed: " + message;
     if (!settle(&lines, cause, unknown ? nullptr : &before)) {
         lines.push_back("the store failed while the sessions were moved, so the server stops; at its next start it "
             "moves them, against what was committed");
     } else if (unknown && responder_ != nullptr) {
         for (SessionId id : store_.ids()) {
-            responder_->present(id, isPrimary(id) || accounts_->friendNamed(store_.find(id)->info.friendName) != nullptr);
+            responder_->present(id, isPrimary(id) || accounts_->aiNamed(store_.find(id)->info.aiName) != nullptr);
         }
     }
     if (report != nullptr) {
@@ -1130,7 +1130,7 @@ void Hub::take(accounts::Registry next) {
             if (probe_ && probe_(a)) signedIn_.insert(a.name);
         }
     }
-    stateFriends();
+    stateAIs();
     // A flow for an account removed, or now of another provider, ends with it.
     for (const SignInOffer& o : signIns_.offers()) {
         const accounts::Account* a = accounts_->account(o.account);
@@ -1157,14 +1157,14 @@ void Hub::reportSignedIn(const std::string& account, bool signedIn) {
         signedIn = probe_ && probe_(*accountRow);
     }
     if (signedIn) {
-        if (signedIn_.insert(account).second && accounts_) stateFriends();
+        if (signedIn_.insert(account).second && accounts_) stateAIs();
         // Signed in otherwise (a paste, its driver): a flow for it ends, its process ended.
         if (signIns_.live(account)) {
             signInEffects(signIns_.signedIn(account));
         }
         return;
     }
-    if (signedIn_.erase(account) && accounts_) stateFriends();
+    if (signedIn_.erase(account) && accounts_) stateAIs();
     // An account whose provider signs in in the app: a flow, one browser sign-in, unless one is live or a login for it
     // is held already.
     if (signsIn(account)) {
@@ -1191,7 +1191,7 @@ void Hub::needsSignIn(const std::string& account, const std::string& why) {
     if (accounts_ && accounts_->account(account) == nullptr) {
         return;
     }
-    if (signedIn_.erase(account) && accounts_) stateFriends();
+    if (signedIn_.erase(account) && accounts_) stateAIs();
     if (signsIn(account)) {
         needSignIn(account);
         return;
@@ -1208,7 +1208,7 @@ void Hub::needsSignIn(const std::string& account, const std::string& why) {
 void Hub::signInWith(SignInHooks hooks, std::string host) {
     signInHooks_ = std::move(hooks);
     signIns_.setHost(std::move(host));
-    if (accounts_) stateFriends();
+    if (accounts_) stateAIs();
     needAll();
 }
 
@@ -1447,7 +1447,7 @@ Sessions Hub::historyPage(SessionId id, std::uint64_t epoch, std::uint64_t first
 Sessions Hub::stateFor(const std::string& opener, const std::string& client) const {
     Sessions s = state_;
     if (!client.empty()) s.setNextAction(store_.applied(client) + 1);
-    s.setSprintUrl(sprintUrl_);
+    s.setDashboards(dashboards_);
     std::vector<SignInOffer> offers = signIns_.offers();
     if (opener.empty() || offers.empty()) {
         return s;
@@ -1467,7 +1467,7 @@ Sessions Hub::stateFor(const std::string& opener, const std::string& client) con
 bool Hub::signOutAction(const Action& action, std::string* why, const std::string& client) {
     const auto* session = store_.find(action.session);
     if (!session)
-        return counted(action, "The selected session no longer exists. Select a friend and retry.", why, client);
+        return counted(action, "The selected session no longer exists. Select an AI and retry.", why, client);
     // Count before removing a credential, so an interrupted command cannot remove a replacement on replay.
     if (!count(action, why, client)) return false;
     std::string error;
@@ -1475,7 +1475,7 @@ bool Hub::signOutAction(const Action& action, std::string* why, const std::strin
     const auto* account = accounts_ ? accounts_->account(name) : nullptr;
     const auto flow = signIns_.flowOf(name);
     if (!account || session->info.account != name ||
-            (!isPrimary(action.session) && !accounts_->linked(session->info.friendName, name))) {
+            (!isPrimary(action.session) && !accounts_->linked(session->info.aiName, name))) {
         error = "The account selection changed. Select the account to sign out and try again.";
     } else if ((!usesLocalSignInPage(account->provider) && account->provider != "claude") || !signOut_) {
         error = "This server cannot sign out this provider.";
@@ -1486,7 +1486,7 @@ bool Hub::signOutAction(const Action& action, std::string* why, const std::strin
     }
     if (error.empty()) {
         signedIn_.erase(name);
-        stateFriends();
+        stateAIs();
     }
     const auto message = error.empty() ? "Signed out of " + name + " in Nexus." : error;
     std::string failed;
@@ -1518,7 +1518,7 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
                 const auto* session = store_.find(action.session);
                 if (!isClaimToken(action.text) || !session || action.account.empty() ||
                     session->info.account != action.account || !signsIn(action.account) ||
-                    (!isPrimary(action.session) && !accounts_->linked(session->info.friendName, action.account)) ||
+                    (!isPrimary(action.session) && !accounts_->linked(session->info.aiName, action.account)) ||
                     signedIn_.contains(action.account)) {
                     if (why) *why = "The selected session or its sign-in changed. Use the current account's sign-in.";
                     return false;
@@ -1640,12 +1640,12 @@ bool Hub::askSecret(const SecretAsker& asker, const std::string& account, const 
     if (a == nullptr) {
         return refuse("no account " + account + " is set up in accounts.json (docs/accounts.md)");
     }
-    // A friend's AI asks only for an account its friend is linked to; nexus itself asks for any.
+    // An AI asks only for an account it is linked to; nexus itself asks for any.
     const bool primaryAccount = isPrimary(asker.session) && asker.name == kPrimaryChat &&
                                 store_.find(asker.session)->info.account == account;
     if (asker.session != 0 && !primaryAccount && !accounts_->linked(asker.name, account)) {
-        return refuse("the account " + account + " is not linked to the friend of session " +
-                      std::to_string(asker.session) + " in friends.json, so its AI may not ask for its secrets");
+        return refuse("the account " + account + " is not linked to the AI of session " +
+                      std::to_string(asker.session) + " in ais.json, so its AI may not ask for its secrets");
     }
     if (a->requiresVerifiedEmail() && what == loginFile(a->provider)) {
         return refuse("Sign in to " + a->email + " in the browser so Nexus can verify the email.");
@@ -1803,7 +1803,7 @@ std::string Hub::nextSubscription(SessionId id, const std::vector<std::string>& 
                                   const std::string& provider) const {
     reason.clear();
     const auto* session = store_.find(id);
-    const auto* who = session && accounts_ ? accounts_->friendNamed(session->info.friendName) : nullptr;
+    const auto* who = session && accounts_ ? accounts_->aiNamed(session->info.aiName) : nullptr;
     if (!who) {
         reason = "No subscription roster is available for this session";
         return {};
@@ -1839,9 +1839,9 @@ bool Hub::rotate(SessionId id, std::string* why, const std::vector<std::string>&
     const auto next = nextSubscription(id, exhausted, policyReason);
     if (next.empty()) {
         const std::string notice = !policyReason.empty() ? "Account policy: " + policyReason + ". See docs/policy.md." :
-            "The account " + was + " reached its usage limit, and " + info.friendName +
-            " has no other signed-in account available for this turn. Link another account to " + info.friendName + " in "
-            "friends.json, or sign in one it has (docs/accounts.md).";
+            "The account " + was + " reached its usage limit, and " + info.aiName +
+            " has no other signed-in account available for this turn. Link another account to " + info.aiName + " in "
+            "ais.json, or sign in one it has (docs/accounts.md).";
         std::string failed;
         if (!store_.commit(id, {SessionChange{entry(EntryKind::Notice, notice), {}}}, std::string(), 0, &failed)) {
             return refuse(failed);
@@ -1849,7 +1849,7 @@ bool Hub::rotate(SessionId id, std::string* why, const std::vector<std::string>&
         refresh(id);
         if (noEligible) *noEligible = true;
         return refuse("session " + std::to_string(id) + ": " +
-            (policyReason.empty() ? info.friendName + " has no other signed-in account" : policyReason));
+            (policyReason.empty() ? info.aiName + " has no other signed-in account" : policyReason));
     }
     info.account = next;
     info.harness = harnessOf(next, info.harness);
@@ -1866,7 +1866,7 @@ std::vector<std::string> Hub::adoptDefaults() {
     }
     for (SessionId id : store_.ids()) {
         SessionInfo info = store_.find(id)->info;
-        const accounts::Friend* f = accounts_->friendNamed(info.friendName);
+        const accounts::AI* f = accounts_->aiNamed(info.aiName);
         if (f == nullptr) {
             continue;
         }
@@ -1876,11 +1876,11 @@ std::vector<std::string> Hub::adoptDefaults() {
         info.account = f->preferred;
         info.harness = harnessOf(info.account, info.harness);
         if (!moveTo(id, info, "This session runs on the account " + info.account + ", which the drivers file gave " +
-                    info.friendName + " before accounts were set up; accounts.json and friends.json now say so "
+                    info.aiName + " before accounts were set up; accounts.json and ais.json now say so "
                     "(docs/accounts.md).")) {
             break;
         }
-        report.push_back("session " + std::to_string(id) + " (" + info.friendName + "): account none -> " +
+        report.push_back("session " + std::to_string(id) + " (" + info.aiName + "): account none -> " +
                          info.account + ", as the drivers file ran it");
     }
     return report;
@@ -1895,8 +1895,8 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
     }
     accounts::Registry next = *accounts_;
     const std::string& a = action.account;
-    const std::string& f = action.friendName;
-    accounts::Friend* fr = next.friendNamed(f);
+    const std::string& f = action.aiName;
+    accounts::AI* fr = next.aiNamed(f);
     std::string refused;
     switch (action.kind) {
         case ActionKind::AddAccount:
@@ -1916,7 +1916,7 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
             } else {
                 next.accounts.erase(std::find_if(next.accounts.begin(), next.accounts.end(),
                     [&](const accounts::Account& x) { return x.name == a; }));
-                for (accounts::Friend& x : next.friends) {
+                for (accounts::AI& x : next.ais) {
                     x.accounts.erase(std::remove(x.accounts.begin(), x.accounts.end(), a), x.accounts.end());
                     if (x.preferred == a) {
                         x.preferred.clear();
@@ -1924,29 +1924,29 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
                 }
             }
             break;
-        case ActionKind::AddFriend:
+        case ActionKind::AddAI:
             if (!accounts::isName(f)) {
-                refused = "a friend's name is 1 to 64 letters, digits, '-', '_' or '.', not starting with '.' or '-': \"" +
+                refused = "an AI's name is 1 to 64 letters, digits, '-', '_' or '.', not starting with '.' or '-': \"" +
                     f + "\" is not";
             } else if (fr != nullptr) {
-                refused = "the friend " + f + " is already set up";
-            } else if (next.friends.size() >= accounts::kMaxFriends) {
-                refused = "friends.json holds " + std::to_string(next.friends.size()) + " friends, the most it may "
-                    "(" + std::to_string(accounts::kMaxFriends) + "); take one out to add " + f;
+                refused = "the AI " + f + " is already set up";
+            } else if (next.ais.size() >= accounts::kMaxAIs) {
+                refused = "ais.json holds " + std::to_string(next.ais.size()) + " AIs, the most it may "
+                    "(" + std::to_string(accounts::kMaxAIs) + "); take one out to add " + f;
             } else {
-                next.friends.push_back(accounts::Friend{f, {}, {}});
+                next.ais.push_back(accounts::AI{f, {}, {}});
             }
             break;
         case ActionKind::LinkAccount:
             if (fr == nullptr) {
-                refused = "no friend " + f + " is set up";
+                refused = "no AI " + f + " is set up";
             } else if (next.account(a) == nullptr) {
                 refused = "no account " + a + " is set up";
             } else if (std::find(fr->accounts.begin(), fr->accounts.end(), a) != fr->accounts.end()) {
                 refused = f + " is already linked to " + a;
             } else if (!fr->limit && next.account(a)->billing == accounts::Billing::Api) {
-                refused = a + " is billed at API rate, and a friend on an API-billed account is always limited, but " +
-                    f + " has \"limit\": false in friends.json; set it to true there first (docs/accounts.md)";
+                refused = a + " is billed at API rate, and an AI on an API-billed account is always limited, but " +
+                    f + " has \"limit\": false in ais.json; set it to true there first (docs/accounts.md)";
             } else {
                 fr->accounts.push_back(a);
             }
@@ -1963,7 +1963,7 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
             break;
         default:    // SetDefault
             if (fr == nullptr) {
-                refused = "no friend " + f + " is set up";
+                refused = "no AI " + f + " is set up";
             } else if (!a.empty() && std::find(fr->accounts.begin(), fr->accounts.end(), a) == fr->accounts.end()) {
                 refused = a + " is not one of " + f + "'s accounts: link it first";
             } else {
@@ -2026,9 +2026,9 @@ void Hub::offerLimitChoice(SessionId id, const DriverState& driver, SessionInfo&
         return;
     std::string reason;
     info.limitAccount = nextSubscription(id, driver.exhaustedAccounts, reason, info.harness);
-    if (!accounts_->linked(info.friendName, info.account) || !signedIn_.count(info.account))
+    if (!accounts_->linked(info.aiName, info.account) || !signedIn_.count(info.account))
         return;
-    auto model = policy::modelAfterLimit(application_, bundlePath_(), info.friendName, info.account, info.model);
+    auto model = policy::modelAfterLimit(application_, bundlePath_(), info.aiName, info.account, info.model);
     if (!model.empty() && model != info.model && model.size() <= limits_.setting && printable(model))
         info.limitModel = std::move(model);
 }
@@ -2045,7 +2045,7 @@ bool Hub::resolveLimit(const Action& action, std::string* why, const std::string
     offerLimitChoice(action.session, driver, offer);
     const bool account = action.text == "account";
     const std::string& target = account ? offer.limitAccount : offer.limitModel;
-    if ((!account && action.text != "model") || target.empty() || action.friendName != target) {
+    if ((!account && action.text != "model") || target.empty() || action.aiName != target) {
         refresh(action.session);
         return counted(action, "That model-limit option is no longer available.", why, client);
     }
@@ -2075,7 +2075,7 @@ bool Hub::setBusSenders(const std::map<std::string, std::set<std::string>>& name
     busSenders_ = names;
     bool changed = false;
     for (auto& [id, history] : busHistory_) {
-        const auto roster = names.find(store_.find(id)->info.friendName);
+        const auto roster = names.find(store_.find(id)->info.aiName);
         std::vector<std::string> allowed;
         if (roster != names.end()) {
             for (const auto& sender : history.senders)
@@ -2093,7 +2093,7 @@ bool Hub::setBusSenders(const std::map<std::string, std::set<std::string>>& name
 // The session's new tail, in place of its old one; every other session is shared with the state before.
 void Hub::refresh(SessionId id) {
     const StoredSession* stored = store_.find(id);
-    if (stored->info.friendName == kPrimaryChat && !isPrimary(id)) {
+    if (stored->info.aiName == kPrimaryChat && !isPrimary(id)) {
         if (!state_.find(id)) return;
         auto sessions = state_.sessions();
         std::erase_if(sessions, [id](const SessionRef& s) { return s->id == id; });
@@ -2107,7 +2107,7 @@ void Hub::refresh(SessionId id) {
         history = {};
         history.contextEpoch = stored->info.contextEpoch;
     }
-    const auto roster = busSenders_.find(stored->info.friendName);
+    const auto roster = busSenders_.find(stored->info.aiName);
     for (; history.indexed < stored->transcript.size(); ++history.indexed) {
         const auto& e = *stored->transcript[history.indexed];
         if (e.kind != EntryKind::Bus) continue;
@@ -2140,22 +2140,22 @@ void Hub::refresh(SessionId id) {
 }
 
 void Hub::publishSessions(std::vector<SessionRef> sessions) {
-    // The friends as they were: one list, shared by every state until the registry's friends change (stateFriends).
+    // The AIs as they were: one list, shared by every state until the registry's AIs change (stateAIs).
     Sessions next(std::move(sessions));
     next.setRequests(desk_.open());
-    next.shareFriends(state_);
+    next.shareAIs(state_);
     next.setOffers(publicOffers());
     state_ = std::move(next);
 }
 
-// The friends of the registry the hub holds, in its order, into the state the windows receive: who the friends are is
-// the server's, and a window shows a tab for each (sync/client.h applyFriends).
-void Hub::stateFriends() {
-    auto friends = windowRoster(*accounts_, indexAccounts(*accounts_), &signedIn_,
+// The AIs of the registry the hub holds, in its order, into the state the windows receive: who the AIs are is
+// the server's, and a window shows a tab for each (sync/client.h applyAIs).
+void Hub::stateAIs() {
+    auto ais = windowRoster(*accounts_, indexAccounts(*accounts_), &signedIn_,
                                 signInHooks_.has_value() && secretKeeper_ != nullptr,
                                 responder_ ? responder_->accountRoutes() : std::nullopt);
-    if (!state_.friendsKnown() || state_.friends() != friends) {
-        state_.setFriends(std::move(friends));
+    if (!state_.aisKnown() || state_.ais() != ais) {
+        state_.setAIs(std::move(ais));
     }
     if (primary_) refresh(*primary_);
     for (SessionId id : store_.ids()) {

@@ -1,5 +1,5 @@
 ------------------------------ MODULE WAccLinkApiUnlimited ------------------------------
-\* Reversed witness: a friend not limited may link an account billed at API rate. LimitSound must reject it.
+\* Reversed witness: an AI not limited may link an account billed at API rate. LimitSound must reject it.
 EXTENDS MCAccounts
 
 BrokenLink(f, a) ==
@@ -7,5 +7,5 @@ BrokenLink(f, a) ==
     THEN Become("link", f, a, acct, prov, known, [links EXCEPT ![f] = Append(@, a)], dflt)
     ELSE Refused("link", f, a, 0, {})
 
-BrokenSpec == Init /\ [][NextLimitWith(BrokenLink, AddFriend, Start, ReloadLimit, ReloadBilling)]_vars
+BrokenSpec == Init /\ [][NextLimitWith(BrokenLink, AddAI, Start, ReloadLimit, ReloadBilling)]_vars
 =============================================================================

@@ -410,6 +410,139 @@ void secretWithoutServer(Child& d) {
     CHECK(count(d.items(), ErrorCode::Protocol) == 0);
 }
 
+// ---- steering a turn (docs/driver-protocol.md, "Steering a turn"): the fake alone names it ----
+
+// The steering lines a driver wrote, in order, as text: q<turn>:<steer ids>/<follow-up ids>, s<turn>:<aborted>, and
+// d<turn> for each done.
+std::string steeringLines(const std::vector<DriverReader::Item>& items) {
+    std::string out;
+    auto ids = [](const std::vector<std::uint64_t>& v) {
+        std::string s;
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            s += (i ? "," : "") + std::to_string(v[i]);
+        }
+        return s;
+    };
+    for (const DriverReader::Item& item : items) {
+        if (!item.message) {
+            continue;
+        }
+        if (const Queue* q = std::get_if<Queue>(&*item.message)) {
+            out += "q" + std::to_string(q->turn) + ":" + ids(q->steer) + "/" + ids(q->followUp) + " ";
+        } else if (const Settled* st = std::get_if<Settled>(&*item.message)) {
+            out += "s" + std::to_string(st->turn) + ":" + (st->aborted ? "aborted " : "ok ");
+        } else if (const Done* d = std::get_if<Done>(&*item.message)) {
+            out += "d" + std::to_string(d->turn) + " ";
+        }
+    }
+    return out;
+}
+
+auto queueOf(std::size_t n) {
+    return [n](const std::vector<DriverReader::Item>& items) {
+        std::size_t seen = 0;
+        for (const DriverReader::Item& item : items) {
+            seen += item.message && std::holds_alternative<Queue>(*item.message) ? 1 : 0;
+        }
+        return seen >= n;
+    };
+}
+
+// A steer and a follow-up into a turn that runs: each queued and reported whole, the steer taken in at the tool-call
+// boundary, the follow-up at the run's end, then settled, then the done.
+void steerExchange(Child& d) {
+    d.send(Send{1, "steered"});
+    CHECK(d.readUntil(textOf(1)));
+    d.send(Steer{1, 1, "go left"});
+    d.send(FollowUp{1, 2, "then run the tests"});
+    CHECK(d.readUntil(doneOf(1)));
+    CHECK(steeringLines(d.items()) == "q1:1/ q1:1/2 q1:/2 q1:/ s1:ok d1 ");
+    d.closeInput();
+    CHECK(d.exitStatus() == 0);
+    checkStream(d.items(), {1});
+    CHECK(count(d.items(), ErrorCode::Protocol) == 0);
+}
+
+// A stop of the turn: settled, aborted, with the steer it never took in left in its last queue; then done stopped.
+void steerStopped(Child& d) {
+    d.send(Send{1, "steered-stop"});
+    CHECK(d.readUntil(textOf(1)));
+    d.send(Steer{1, 1, "go left"});
+    CHECK(d.readUntil(queueOf(1)));
+    d.send(Stop{1});
+    CHECK(d.readUntil(doneOf(1)));
+    CHECK(steeringLines(d.items()) == "q1:1/ s1:aborted d1 ");
+    const Done* done = lastDone(d.items(), 1);
+    CHECK(done != nullptr && done->outcome == Outcome::Stopped);
+    d.closeInput();
+    CHECK(d.exitStatus() == 0);
+    checkStream(d.items(), {1});
+}
+
+// A steer that arrives during a pause is taken and its queue written; a stop during the pause settles the turn,
+// aborted, before its done, and the next turn opens and settles as any other.
+void steerPaused(Child& d) {
+    d.send(Send{1, "paused"});
+    CHECK(d.readUntil(textOf(1)));
+    d.send(Steer{1, 1, "go left"});
+    CHECK(d.readUntil(queueOf(1)));
+    d.send(Stop{1});
+    CHECK(d.readUntil(doneOf(1)));
+    d.send(Send{2, "reply"});
+    CHECK(d.readUntil(doneOf(2)));
+    CHECK(steeringLines(d.items()) == "q1:1/ s1:aborted d1 s2:ok d2 ");
+    CHECK(count(d.items(), ErrorCode::Protocol) == 0);
+    d.closeInput();
+    CHECK(d.exitStatus() == 0);
+    checkStream(d.items(), {1, 2});
+}
+
+// A steer that crossed its turn's end (settled and done on the way) is ignored and answered by nothing; every done of
+// a driver that names settled follows its settled.
+void steerCrossed(Child& d) {
+    d.send(Send{1, "reply"});
+    CHECK(d.readUntil(doneOf(1)));
+    d.send(Steer{1, 1, "too late"});
+    d.send(FollowUp{1, 2, "too late too"});
+    d.send(Send{2, "reply"});
+    CHECK(d.readUntil(doneOf(2)));
+    CHECK(steeringLines(d.items()) == "s1:ok d1 s2:ok d2 ");
+    d.closeInput();
+    CHECK(d.exitStatus() == 0);
+    checkStream(d.items(), {1, 2});
+    CHECK(count(d.items(), ErrorCode::Protocol) == 0);
+}
+
+// The server's bugs, each refused with one protocol error carrying the line's turn, and an exit other than 0: a steer
+// to a driver whose hello did not name it, one for a turn the server never opened, and an id that does not go up.
+void refusedSteer(Child& d, const ServerMessage& bad, std::uint64_t turn, const ServerMessage* first = nullptr) {
+    d.send(Send{1, "wait"});
+    CHECK(d.readUntil(textOf(1)));
+    if (first != nullptr) {
+        d.send(*first);
+        CHECK(d.readUntil(queueOf(1)));
+    }
+    d.send(bad);
+    CHECK(d.readUntil(errorOf(ErrorCode::Protocol)));
+    CHECK(d.exitStatus() > 0);
+    CHECK(count(d.items(), ErrorCode::Protocol) == 1);
+    CHECK(has<Error>(d.items(), [turn](const Error& e) { return e.code == ErrorCode::Protocol && e.turn == turn; }));
+    checkStream(d.items(), {1});
+}
+
+void steerUnnamed(Child& d) {
+    refusedSteer(d, Steer{1, 1, "x"}, 1);
+}
+
+void steerUnopenedTurn(Child& d) {
+    refusedSteer(d, FollowUp{2, 1, "x"}, 2);
+}
+
+void steerIdOrder(Child& d) {
+    const ServerMessage first = Steer{1, 5, "first"};
+    refusedSteer(d, Steer{1, 5, "same id"}, 1, &first);
+}
+
 // The fake driver's script for each case: "reply" and "wait" sends, in the order the case sends them.
 std::string fakeScript(const std::string& name) {
     const std::string hello = "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n";
@@ -433,6 +566,22 @@ std::string fakeScript(const std::string& name) {
             "\"why\":\"the login expired\"}\nawait-secret conformance-secret-ask.heard\n"
             "emit {\"kind\":\"text\",\"delta\":\"refused: no-client\"}\nemit {\"kind\":\"text-end\"}\n"
             "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
+    const std::string steering =
+        "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\",\"features\":[\"steer\",\"follow-up\","
+        "\"settled\"]}\n";
+    const std::string open = "send\nemit {\"kind\":\"text\",\"delta\":\"working\"}\nemit {\"kind\":\"text-end\"}\n";
+    if (name == "steer_exchange")
+        return steering + open + "await-steer\nawait-steer\nboundary\nsettle\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
+    if (name == "steer_stopped")
+        return steering + open + "await-steer\nawait-stop\nemit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n";
+    if (name == "steer_crossed")
+        return steering + reply + reply;
+    if (name == "steer_paused")
+        return steering + open + "pause 60000\n" + reply;
+    if (name == "steer_unnamed")
+        return hello + open + "await-stop\n";
+    if (name == "steer_unopened_turn" || name == "steer_id_order")
+        return steering + open + "await-steer\nawait-stop\n";
     if (name == "secret_without_server")
         return hello +
             "send\nemit {\"kind\":\"text\",\"delta\":\"refused: no-client\"}\nemit {\"kind\":\"text-end\"}\n"
@@ -453,7 +602,10 @@ int main(int argc, char** argv) {
     const std::string kind = argv[2];
     const std::map<std::string, void (*)(Child&)> cases = {{"exchange", exchange}, {"refused", refused},
         {"not_json", notJson}, {"order", order}, {"send_while_open", sendWhileOpen}, {"eof_while_open", eofWhileOpen},
-        {"secret_ask", secretAsk}, {"secret_without_server", secretWithoutServer}};
+        {"secret_ask", secretAsk}, {"secret_without_server", secretWithoutServer},
+        {"steer_exchange", steerExchange}, {"steer_stopped", steerStopped}, {"steer_crossed", steerCrossed},
+        {"steer_unnamed", steerUnnamed}, {"steer_unopened_turn", steerUnopenedTurn}, {"steer_id_order", steerIdOrder},
+        {"steer_paused", steerPaused}};
     const auto found = cases.find(name);
     if (found == cases.end() || (kind != "fake" && kind != "prompted")) {
         std::fprintf(stderr, "driver_conformance_test: no case %s of kind %s\n", name.c_str(), kind.c_str());

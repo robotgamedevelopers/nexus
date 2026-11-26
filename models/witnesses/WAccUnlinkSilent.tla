@@ -1,5 +1,5 @@
 ------------------------------ MODULE WAccUnlinkSilent ------------------------------
-\* Reversed witness: unlinking moves the friend's sessions off the account but tells none of them. MovedIsTold must reject it.
+\* Reversed witness: unlinking moves the AI's sessions off the account but tells none of them. MovedIsTold must reject it.
 EXTENDS MCAccounts
 
 BrokenUnlink(f, a) ==

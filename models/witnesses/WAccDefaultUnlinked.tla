@@ -1,5 +1,5 @@
 ------------------------------ MODULE WAccDefaultUnlinked ------------------------------
-\* Reversed witness: a friend's default may be any account set up, linked or not. DefaultLinked must reject it.
+\* Reversed witness: an AI's default may be any account set up, linked or not. DefaultLinked must reject it.
 EXTENDS MCAccounts
 
 BrokenDefault(f, a) ==

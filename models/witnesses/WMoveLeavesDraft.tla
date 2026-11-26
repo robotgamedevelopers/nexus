@@ -1,7 +1,7 @@
 ------------------------- MODULE WMoveLeavesDraft -------------------------
-\* Reversed witness: move carries the friend (its name, transcript and queue)
+\* Reversed witness: move carries the AI (its name, transcript and queue)
 \* to the new position but leaves the drafts where they stood, so each
-\* position keeps the draft it showed and a friend gets another's unsent text.
+\* position keeps the draft it showed and an AI gets another's unsent text.
 \* MoveKeepsTabs must reject it.
 EXTENDS MCWindow
 
@@ -12,7 +12,7 @@ BrokenMove(from, to) ==
          /\ active' = MovedIndex(active, from, to)
          /\ draft' = [f \in Ids |-> draft[order[CHOOSE p \in Tabs : o2[p] = f]]]
          /\ last' = DidMove(from, to, TRUE)
-         /\ UNCHANGED <<friends, transcript, queue>>
+         /\ UNCHANGED <<ais, transcript, queue>>
     ELSE /\ last' = DidMove(from, to, FALSE)
          /\ UNCHANGED model
 

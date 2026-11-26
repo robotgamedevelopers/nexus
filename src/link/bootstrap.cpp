@@ -3,6 +3,7 @@
 #include <netdb.h>
 #include <sys/socket.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <sstream>
@@ -130,6 +131,25 @@ bool statesHello(const Bootstrap& b, sync::Hello* out) {
     return true;
 }
 
+bool serverCommandWords(const std::string& text, std::vector<std::string>* words, std::string* why) {
+    words->clear();
+    std::size_t at = 0;
+    while (at < text.size()) {
+        const std::size_t start = text.find_first_not_of(" \t", at);
+        if (start == std::string::npos)
+            break;
+        const std::size_t end = std::min(text.find_first_of(" \t", start), text.size());
+        words->push_back(text.substr(start, end - start));
+        at = end;
+    }
+    if (words->empty()) {
+        *why = "the server command is empty: give the command to run in place of `nexus-server new`, as "
+            "`/usr/bin/env HOME=<home> <nexus-server> new --dir <dir>`";
+        return false;
+    }
+    return true;
+}
+
 std::string remoteLine(const std::vector<std::string>& command) {
     std::string inner;
     for (const std::string& w : command)
@@ -160,6 +180,12 @@ Command bootstrapCommand(const Bootstrap& b) {
     }
     const std::string line = remoteLine(command);
     Command c;
+    if (b.local) {
+        c.program = "/bin/sh";
+        c.arguments = {"-c", line};
+        c.shown = "sh -c " + line;
+        return c;
+    }
     c.program = b.ssh;
     c.arguments = {"-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", b.host, "--", line};
     c.shown = b.ssh + " " + b.host + " " + line;

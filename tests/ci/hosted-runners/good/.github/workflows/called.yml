@@ -1,0 +1,8 @@
+# Planted: a workflow the per-commit one calls, on fleet labels.
+name: called
+on:
+  workflow_call:
+jobs:
+  mac:
+    runs-on: [self-hosted, nexus-pr, macOS]   # a comment after the labels
+    steps: [{run: "true"}]

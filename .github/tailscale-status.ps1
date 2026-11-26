@@ -7,14 +7,20 @@ if ($description.Length -gt 140) { $description = $description.Substring(0, 140)
 $body = @{ state = $env:STATE; context = "tailscale-$env:OS"; description = $description; target_url = $env:TARGET } |
   ConvertTo-Json -Compress
 $code = 0
-try {
-  $r = Invoke-WebRequest -Method Post -Body $body -ContentType 'application/json' -SkipHttpErrorCheck `
+# GitHub answers 5xx now and then: three tries, each said, two seconds apart; any other answer is final.
+foreach ($attempt in 1..3) {
+  try {
+    $r = Invoke-WebRequest -Method Post -Body $body -ContentType 'application/json' -SkipHttpErrorCheck `
     -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } `
     -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/statuses/$env:SHA"
-  $code = [int]$r.StatusCode
-} catch {
-  "::error::setting the status tailscale-$env:OS did not reach GitHub: $($_.Exception.Message)"
-  exit 1
+    $code = [int]$r.StatusCode
+  } catch {
+    "::error::setting the status tailscale-$env:OS did not reach GitHub: $($_.Exception.Message)"
+    exit 1
+  }
+  if ($code -lt 500) { break }
+  "::warning::setting the status tailscale-$env:OS: try $attempt answered HTTP $code"
+  if ($attempt -lt 3) { Start-Sleep -Seconds 2 }
 }
 if ($code -ne 201) {
   "::error::setting the status tailscale-$env:OS ($env:STATE) on $env:SHA answered HTTP $code"

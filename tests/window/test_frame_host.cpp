@@ -1,5 +1,5 @@
-// Unit tests of the window's frame code around the friend tabs (src/frame_host.h FrameHost::takeFriends), over a fake
-// link: no window, no Prax tree, no clock. A tab the friends select (the saved one arriving, or another after the one
+// Unit tests of the window's frame code around the AI tabs (src/frame_host.h FrameHost::takeAIs), over a fake
+// link: no window, no Prax tree, no clock. A tab the AIs select (the saved one arriving, or another after the one
 // that showed went) is no choice of the person's: the view's next round (view.h selected) must not see a change of the
 // selected tab, so that it neither saves the selection nor ends the saved tab's wait. A selection the person made is
 // read by the round as before. And text from outside as a log line holds it (loggable).
@@ -35,11 +35,11 @@ struct Window {
     FrameHost host;
     int chosen = 0;     // the times the round would have taken a selection for the person's
 
-    explicit Window(const std::string& savedFriend) {
+    explicit Window(const std::string& savedAI) {
         view.model = &model;
         host.model = &model;
         host.view = &view;
-        host.strip = sync::FriendStrip({}, savedFriend, {});
+        host.strip = sync::AIStrip({}, savedAI, {});
         host.connect(&link, "studio");
         view.selectedId = model.tab(model.active()).id;
     }
@@ -67,7 +67,7 @@ struct Window {
 // The tab that showed goes: the one the strip shows in its place is not taken for the person's choice.
 void removedTabIsNoChoice() {
     Window w("");
-    w.link.friends({"ada", "bo"});
+    w.link.ais({"ada", "bo"});
     w.host.pollLink();
     w.round();
     CHECK(w.chosen == 0);
@@ -77,8 +77,8 @@ void removedTabIsNoChoice() {
     CHECK(w.model.select_tab(w.tabOf("bo")));
     w.round();
     CHECK(w.chosen == 2);
-    // bo goes from the server's friends: ada shows again, by the strip, not by the person.
-    w.link.friends({"ada"});
+    // bo goes from the server's AIs: ada shows again, by the strip, not by the person.
+    w.link.ais({"ada"});
     w.host.pollLink();
     CHECK(w.model.tab(w.model.active()).name == "ada");
     w.round();
@@ -89,7 +89,7 @@ void removedTabIsNoChoice() {
 void savedTabArrivingIsNoChoice() {
     Window w("bo");
     CHECK(w.host.strip.pending());
-    w.link.friends({"ada", "bo"});
+    w.link.ais({"ada", "bo"});
     w.host.pollLink();
     CHECK(w.model.tab(w.model.active()).name == "bo" && !w.host.strip.pending());
     w.round();
@@ -99,8 +99,8 @@ void savedTabArrivingIsNoChoice() {
     CHECK(w.chosen == 1);
 }
 
-// While the saved tab waits, friends that bring no tab of its friend's and select nothing leave it waiting.
-void waitOutlastsOtherFriends() {
+// While the saved tab waits, AIs that bring no tab of its AI's and select nothing leave it waiting.
+void waitOutlastsOtherAIs() {
     Window w("cy");
     LinkState s;
     s.phase = sync::LinkPhase::Connected;
@@ -133,10 +133,10 @@ void extensionTargetsItsConfiguredConversation() {
     CHECK(!w.view.requestService("tools", "one two").empty());
     auto session = std::make_shared<sync::SessionView>();
     session->id = 42;
-    session->info.friendName = "tools";
-    w.link.friends({"tools"});
+    session->info.aiName = "tools";
+    w.link.ais({"tools"});
     w.link.state.sessions = sync::Sessions({session});
-    w.link.state.sessions.setFriends({sync::ServerFriend{"tools"}});
+    w.link.state.sessions.setAIs({sync::ServerAI{"tools"}});
     w.host.pollLink();
     const auto count = w.link.sent.size();
     CHECK(!w.view.requestService("absent", "one two").empty() && w.link.sent.size() == count);
@@ -149,11 +149,11 @@ void accountCommandsUseTheActiveConversation() {
     Window w("Ada");
     auto convo = std::make_shared<sync::SessionView>();
     convo->id = 19;
-    convo->info.friendName = "Ada";
+    convo->info.aiName = "Ada";
     convo->info.account = "work";
     w.link.state.phase = sync::LinkPhase::Connected;
     w.link.state.sessions = sync::Sessions({convo});
-    w.link.state.sessions.setFriends({{"Ada", {{"work", "Work"}, {"home", ""}}}, {"Bo"}});
+    w.link.state.sessions.setAIs({{"Ada", {{"work", "Work"}, {"home", ""}}}, {"Bo"}});
     w.link.changed = true;
     w.host.pollLink();
     CHECK(w.view.accountCaption() == "Account · Work");
@@ -169,7 +169,7 @@ void accountCommandsUseTheActiveConversation() {
     auto switched = std::make_shared<sync::SessionView>(*convo);
     switched->info.account = "home";
     w.link.state.sessions = sync::Sessions({switched});
-    w.link.state.sessions.setFriends({{"Ada", {{"work", "Work"}, {"home", ""}}}, {"Bo"}});
+    w.link.state.sessions.setAIs({{"Ada", {{"work", "Work"}, {"home", ""}}}, {"Bo"}});
     w.link.changed = true;
     w.host.pollLink();
     CHECK(w.view.accountCaption() == "Account · home");
@@ -206,8 +206,8 @@ void accountCommandsUseTheActiveConversation() {
     CHECK(pages == 2 && w.link.sent.size() == actions);
     w.host.signIn.step();
     CHECK(pages == 2);
-    // An older server advertises friends without choices; no relative command is sent.
-    w.link.state.sessions.setFriends({{"Ada"}, {"Bo"}});
+    // An older server advertises AIs without choices; no relative command is sent.
+    w.link.state.sessions.setAIs({{"Ada"}, {"Bo"}});
     w.link.changed = true;
     w.host.pollLink();
     w.view.accountCommand("next");
@@ -223,7 +223,7 @@ void accountPickerRechecksTheServerRoster() {
         session->info = {"chat", "codex", account, "", ""};
         w.link.state.phase = sync::LinkPhase::Connected;
         w.link.state.sessions = sync::Sessions({session});
-        w.link.state.sessions.setFriends({{"chat", choices}});
+        w.link.state.sessions.setAIs({{"chat", choices}});
         w.link.changed = true;
         w.host.pollLink();
     };
@@ -268,7 +268,7 @@ void automaticAccountIsASelectionMode() {
     session.id = 31;
     session.info.account = "auto";
     session.info.autoAccount = true;
-    sync::ServerFriend roster{"chat", {{"auto"}, {"work"}}, true};
+    sync::ServerAI roster{"chat", {{"auto"}, {"work"}}, true};
     auto picker = AccountPicker::open(2, session, roster, 0);
     CHECK(picker && picker->options.size() == 3);
     if (!picker || picker->options.size() != 3) return;
@@ -292,12 +292,12 @@ void savedStateShowsTheSelectedEmailWithoutStartingSignIn() {
     FrameHost host;
     host.model = &model;
     host.view = &view;
-    host.strip = sync::FriendStrip({}, "Ada", {});
+    host.strip = sync::AIStrip({}, "Ada", {});
     auto conversation = std::make_shared<sync::SessionView>();
     conversation->id = 42;
     conversation->info = {"Ada", "codex", "second", "", ""};
     sync::Sessions saved({conversation});
-    saved.setFriends({{"Ada", {{"first", "Home", true, "home@example.test"}, {"second", "Work", true, "work@example.test"}}}});
+    saved.setAIs({{"Ada", {{"first", "Home", true, "home@example.test"}, {"second", "Work", true, "work@example.test"}}}});
     host.showState(saved, false);
     CHECK((view.signInAccount() == SignInAccount{"second", "Work", "work@example.test", "codex", "Ada"}));
     CHECK(!view.activateSignIn() && !host.signIn.opener.armed());
@@ -312,7 +312,7 @@ void logoutUsesTheConfirmedAccountAndReturnsToSignIn() {
         session->info.autoAccount = automatic;
         w.link.state.phase = sync::LinkPhase::Connected;
         w.link.state.sessions = sync::Sessions({session});
-        w.link.state.sessions.setFriends({{"chat", {{"home", "Home", false}, {"work", "Work", needsSignIn}}}});
+        w.link.state.sessions.setAIs({{"chat", {{"home", "Home", false}, {"work", "Work", needsSignIn}}}});
         w.link.state.sessions.setNextAction(next);
         w.link.changed = true;
         w.host.pollLink();
@@ -353,7 +353,7 @@ void enterDuringAccountSwitchWaitsForServerState() {
         w.link.state.phase = sync::LinkPhase::Connected;
         w.link.state.loopback = true;
         w.link.state.sessions = sync::Sessions({current});
-        w.link.state.sessions.setFriends({{"chat", {{"first", "", false}, {"second", "", true}}}});
+        w.link.state.sessions.setAIs({{"chat", {{"first", "", false}, {"second", "", true}}}});
         w.link.state.sessions.setNextAction(next);
         w.link.changed = true;
         w.host.pollLink();
@@ -386,7 +386,7 @@ void explicitSignInKeepsTheDraft() {
     w.link.state.phase = sync::LinkPhase::Connected;
     w.link.state.loopback = true;
     w.link.state.sessions = sync::Sessions({session});
-    w.link.state.sessions.setFriends({{"chat", {{"work", "Work", true, "work@example.test"}, {"other", "Other", true, "other@example.test"}}}});
+    w.link.state.sessions.setAIs({{"chat", {{"work", "Work", true, "work@example.test"}, {"other", "Other", true, "other@example.test"}}}});
     w.link.changed = true;
     w.host.pollLink();
     w.link.sent.clear();
@@ -399,7 +399,7 @@ void explicitSignInKeepsTheDraft() {
     CHECK(w.model.tab(i).draft == "  keep this draft  ");
     CHECK(w.link.sent.size() == 1 && w.link.sent.front().kind == sync::ActionKind::SignInClaim &&
           w.link.sent.front().session == 37 && w.link.sent.front().account == "work" && !w.link.sent.front().request);
-    w.link.state.sessions.setFriends({{"chat", {{"work", "Work", false}, {"other", "Other", true}}}});
+    w.link.state.sessions.setAIs({{"chat", {{"work", "Work", false}, {"other", "Other", true}}}});
     w.link.changed = true;
     w.host.pollLink();
     CHECK(w.view.signInAccount().name.empty() && !w.view.activateSignIn());
@@ -408,17 +408,17 @@ void explicitSignInKeepsTheDraft() {
           w.link.sent.back().text == "  keep this draft  " && w.model.tab(i).draft.empty());
 }
 
-void dismissedFriendRemainsLocal() {
+void dismissedAIRemainsLocal() {
     Window w("");
-    w.link.friends({"ada"});
+    w.link.ais({"ada"});
     w.host.pollLink();
     const auto i = w.tabOf("ada");
     CHECK(w.model.set_draft(i, "keep my draft"));
-    w.view.dismissFriend(w.model.tab(i));
+    w.view.dismissAI(w.model.tab(i));
     CHECK(w.model.dismiss_tab(i));
-    CHECK(!w.host.strip.hasFriends());
+    CHECK(!w.host.strip.hasAIs());
     CHECK(w.host.strip.kept().at("ada") == "keep my draft");
-    w.link.friends({"bo", "ada"});
+    w.link.ais({"bo", "ada"});
     w.host.pollLink();
     CHECK(w.tabOf("ada") == w.model.tab_count());
     CHECK(w.tabOf("bo") < w.model.tab_count());
@@ -444,6 +444,12 @@ void lockedHostDropsInput() {
     CHECK(w.host.event(make(PrAppEventKind_Scroll)));
     CHECK(w.host.event(make(PrAppEventKind_Drop)));
     CHECK(w.host.event(make(PrAppEventKind_CompositionUpdate)));
+    CHECK(w.host.event(make(PrAppEventKind_Gesture)));
+    CHECK(w.host.event(make(PrAppEventKind_TrackpadTouches)));
+    CHECK(w.host.event(make(PrAppEventKind_DragEnter)));
+    CHECK(w.host.event(make(PrAppEventKind_DragOver)));
+    CHECK(w.host.event(make(PrAppEventKind_DragLeave)));
+    CHECK(w.host.event(make(PrAppEventKind_DragPromise)));
     CHECK(w.host.event(make(PrAppEventKind_KeyDown, PrAppKey_Enter, PrAppModifierFlag_Shift)));
     CHECK(w.host.event(make(PrAppEventKind_KeyDown, PrAppKey('t'), style::kCommand)));
     CHECK(!w.host.event(make(PrAppEventKind_KeyDown, PrAppKey_Enter)));
@@ -455,11 +461,54 @@ void lockedHostDropsInput() {
     w.view.lockScreen.reset();
     CHECK(!w.host.event(make(PrAppEventKind_KeyDown, PrAppKey('a'))));
 }
+// A link that lost actions before the server acknowledged them (LinkState::cut, the native window's link in WSL2 that
+// ended): shown whatever the link's phase, never silent. A message among them goes back to its tab as a pending
+// message; the problem line says how many were lost and that none was sent again.
+void cutActionsAreShown() {
+    Window w("");
+    w.link.ais({"ada"});
+    w.host.pollLink();
+    const auto i = w.tabOf("ada");
+    const auto id = w.model.tab(i).id;
+    w.view.outgoing.push_back({id, 2, "hello across"});
+    w.view.outgoing.push_back({id, 4, "still on its way"});
+    LinkState s = w.link.state;
+    s.phase = sync::LinkPhase::Failed;
+    s.problem = "nexus-link-relay in WSL2 ended (exit 1)";
+    s.cut = {2, 3};
+    w.link.state = s;
+    w.link.changed = true;
+    w.host.pollLink();
+    CHECK(w.model.tab(i).held == "hello across");
+    CHECK(w.view.outgoing.size() == 1 && w.view.outgoing.front().action == 4);
+    CHECK(w.view.problem.find("acknowledged 2 actions") != std::string::npos);
+    CHECK(w.view.problem.find("not sent again") != std::string::npos);
+    CHECK(w.view.problem.find("among them are back") != std::string::npos);
+    // Each cut comes in one poll: a later state without one leaves the tab and the line as they are.
+    s.cut.clear();
+    s.phase = sync::LinkPhase::Connected;
+    w.link.state = s;
+    w.link.changed = true;
+    w.host.pollLink();
+    CHECK(w.model.tab(i).held == "hello across");
+    CHECK(w.view.problem.find("acknowledged 2 actions") != std::string::npos);
+    // One cut action, a message: the line says it is back.
+    w.view.outgoing.push_back({id, 5, "again"});
+    s.cut = {5};
+    w.link.state = s;
+    w.link.changed = true;
+    w.host.pollLink();
+    CHECK(w.model.tab(i).held == "again\nhello across");
+    CHECK(w.view.problem.find("acknowledged 1 action from") != std::string::npos);
+    CHECK(w.view.problem.find("The message is back in its tab") != std::string::npos);
+}
+
 } // namespace
 
 int main() {
-    dismissedFriendRemainsLocal();
+    dismissedAIRemainsLocal();
     lockedHostDropsInput();
+    cutActionsAreShown();
     accountCommandsUseTheActiveConversation();
     automaticAccountIsASelectionMode();
     accountPickerRechecksTheServerRoster();
@@ -470,7 +519,7 @@ int main() {
     extensionTargetsItsConfiguredConversation();
     removedTabIsNoChoice();
     savedTabArrivingIsNoChoice();
-    waitOutlastsOtherFriends();
+    waitOutlastsOtherAIs();
     loggableEscapesAndCuts();
     if (failures != 0) {
         std::fprintf(stderr, "frame_host_unit: %d failed\n", failures);

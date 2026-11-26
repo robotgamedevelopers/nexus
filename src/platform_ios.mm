@@ -20,4 +20,19 @@ bool coverScreen(const PrSurface& surface) {
     return view.window != nil;
 }
 
+bool regularWidth(const PrSurface& surface) {
+    if (surface.kind != PrSurfaceKind_UiView || surface.handle == nullptr)
+        return false;
+    UIView* view = (__bridge UIView*)surface.handle;
+    return view.traitCollection.horizontalSizeClass == UIUserInterfaceSizeClassRegular;
+}
+
+void releaseFirstResponder(const PrSurface& surface) {
+    if (surface.kind != PrSurfaceKind_UiView || surface.handle == nullptr)
+        return;
+    UIView* view = (__bridge UIView*)surface.handle;
+    if (view.isFirstResponder)
+        [view resignFirstResponder];
+}
+
 } // namespace nexus

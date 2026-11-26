@@ -5,7 +5,7 @@ EXTENDS MCAccounts
 AnyNext(f, x) == LET c == After(links[f], x) IN IF c = << >> THEN None ELSE Head(c)
 BrokenRotate(s) ==
     IF ses[s].made
-    THEN LET n == AnyNext(ses[s].friend, ses[s].acct) IN
+    THEN LET n == AnyNext(ses[s].ai, ses[s].acct) IN
          IF n = None
          THEN Refused("rotate", None, None, s, {s})
          ELSE /\ ses' = [ses EXCEPT ![s].acct = n, ![s].harness = prov[n]]

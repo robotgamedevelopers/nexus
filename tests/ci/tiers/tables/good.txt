@@ -1,0 +1,4 @@
+# planted: moves a slow unit test to the nightly and a happy path to every pull request; a row whose condition is off
+slow_unit   nightly ALWAYS
+happy_path  pr      PLANTED_ON
+not_built   pr      PLANTED_ON+PLANTED_OFF

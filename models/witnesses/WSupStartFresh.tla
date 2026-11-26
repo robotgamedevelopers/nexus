@@ -1,5 +1,5 @@
 ----------------------------- MODULE WSupStartFresh -----------------------------
-\* Reversed witness: a driver is started without --resume although a session id is known, so the friend loses the
+\* Reversed witness: a driver is started without --resume although a session id is known, so the AI loses the
 \* conversation. StartsSound must reject it.
 EXTENDS MCSupervisor
 

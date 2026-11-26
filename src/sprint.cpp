@@ -10,10 +10,12 @@
 
 #include "client_home.h"
 #include "style.h"
-#include "sync/sprint_board.h"
 
 namespace nexus {
 
+// The board's address from the sprint's record runs nova-config, a process: none of it where the build runs no processes
+// (iOS: build_parts.h), whose board takes its address from nexus-server alone (board.cpp).
+#if NEXUS_PROCESSES
 namespace {
 
 constexpr const char* kShown = "nova-config service show sprint-run --json";
@@ -40,6 +42,16 @@ bool startsWith(std::string_view s, std::string_view prefix) {
 
 SprintBoardAddress failed(std::string error) {
     return SprintBoardAddress{{}, std::move(error)};
+}
+
+// The address a client reaches a server listening on `listen` (host:port) at.
+std::string reachable(std::string_view listen) {
+    std::size_t colon = listen.rfind(':');
+    std::string_view host = colon == std::string_view::npos ? std::string_view() : listen.substr(0, colon);
+    std::string_view port = colon == std::string_view::npos ? listen : listen.substr(colon + 1);
+    if (host.empty() || host == "0.0.0.0" || host == "[::]" || host == "::")
+        host = "127.0.0.1";
+    return "http://" + std::string(host) + ":" + std::string(port) + "/";
 }
 
 } // namespace
@@ -76,8 +88,13 @@ SprintBoardAddress parseSprintRun(std::string_view json) {
     for (PrJsonValueIndex i = prJsonFirst(doc, argv); i != kPrJsonMissing; i = prJsonAfter(doc, argv, i))
         words.emplace_back(prJsonKind(doc, i) == PrJsonKind_String ? view(prJsonString(doc, i)) : std::string_view());
     prJsonDestroy(doc);
-    if (std::string url = sync::sprintBoardFromArgv(words); !url.empty())
-        return SprintBoardAddress{std::move(url), {}};
+    for (std::size_t k = 0; k < words.size(); ++k) {
+        std::string_view w = words[k];
+        if (w == "--listen" && k + 1 < words.size() && !words[k + 1].empty())
+            return SprintBoardAddress{reachable(words[k + 1]), {}};
+        if (startsWith(w, "--listen=") && w.size() > 9)
+            return SprintBoardAddress{reachable(w.substr(9)), {}};
+    }
     return failed("the sprint's run service (" + std::string(kShown) + ") has no --listen address in its argv, so it "
         "serves no board; set it up again with `nova-sprint up`, or " + kSetUrl);
 }
@@ -124,7 +141,6 @@ SprintBoardAddress findSprintBoard(const char* override, const Command& command,
     return parseSprintRun(r.out);
 }
 
-#if NEXUS_PROCESSES
 SprintBoardAddress findSprintBoard() {
     const ClientConfig& config = clientConfig();
     return findSprintBoard(config.sprintUrl.c_str(), sprintRunCommand(config.novaConfig.c_str(), std::getenv("SHELL")),

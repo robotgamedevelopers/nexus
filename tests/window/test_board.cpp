@@ -125,6 +125,7 @@ constexpr const char* kLinksPage = R"HTML(<!doctype html>
 
 // The served board's header and footer in their shape (nova-sprint's index.html): the logo tile and the wordmark in the
 // brand's h1, the live clock on the right, the footer's link to the repository; and a link to another repository.
+// Its "friends" section ids and labels are nova-sprint's own, so the word stays in this page only.
 constexpr const char* kBrandPage = R"HTML(<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>nova-sprint</title>
 <style>:root { --text: #e6e8eb; } html, body { margin: 0; color: var(--text); }
@@ -200,11 +201,11 @@ struct Clock {
     static double wall(void* context) { return 1794326567000.0 + static_cast<Clock*>(context)->ms.load(); }
 };
 
-// The window with no window, the sprint tab first and one friend, and the board over the fixture.
+// The window with no window, the sprint tab first and one AI, and the board over the fixture.
 struct Harness {
     Server server;
     Clock clock;
-    Model model{std::vector<FriendInfo>{FriendInfo{"f1", "m"}}, true};
+    Model model{std::vector<AIInfo>{AIInfo{"f1", "m"}}, true};
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     PrFontSet* fonts = prFontSetCreate(nullptr);
     PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
@@ -421,7 +422,7 @@ void offScreenRunsNothingAndCatchesUp() {
     CHECK(h.server.polls > polls);
 }
 
-// A cleared sprint replaces a populated chart while the friend page remains selected.
+// A cleared sprint replaces a populated chart while the AI page remains selected.
 void preparationWaitsForTheNewChart() {
     Harness h;
     h.frames(10);
@@ -804,7 +805,11 @@ void largeDashboardRefresh(bool reuse) {
         h.model.select_tab(1); h.frame();
         h.board->prepare(h.extent);
         h.view.pendingBoardId = h.model.tab(0).id;
-        h.frames(5);
+        // The board is shown once its page is prepared, which waits on the page's fetch from the server's thread: that
+        // is real time, which frame() does not wait for, so five frames were not always enough (PR #127's macOS Debug
+        // run: active() was still 1). Up to 200 frames (10 s on the test's clock) for the switch.
+        for (int f = 0; f < 200 && h.model.active() != 0; ++f)
+            h.frame();
         CHECK(h.model.active() == 0);
     }
     CHECK(h.server.pages == (reuse ? 1 : 6) && h.server.polls == 6);
@@ -814,6 +819,7 @@ void largeDashboardRefresh(bool reuse) {
 
 void activeAndTransferredCellsAnimate() {
     Harness h;
+    // "friends" below is nova-sprint's section id, so the word stays in this page only.
     h.server.page = R"HTML(<style>
         #overall .cell { animation: pulse 2.4s ease-in-out infinite; }
         .flash { animation: flash 1.5s ease-out; }

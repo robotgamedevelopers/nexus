@@ -8,7 +8,7 @@ For a first install, point your current AI harness at the repository and ask it 
 
 The client and server can run on the same Apple silicon Mac with macOS 26 or newer. An always-on server can keep working while the laptop sleeps. Start with the harness you already use. You can add AIs or other harnesses later. [Accounts and AIs](accounts.md)
 
-Windows has native window code and WSL2 terminal support. The connected Windows client, Wayland and Android clients are still development work. The iPhone and iPad app is in progress ([ios.md](ios.md)). The proposed heads-down timer and away report are also on the [roadmap](ROADMAP.md).
+On Windows the native window talks to `nexus-server` inside WSL2 (below, "The server"), and its terminal tabs are WSL2 shells. Wayland and Android clients are still development work. The iPhone and iPad app is in progress ([ios.md](ios.md)). The [Apple Watch app](watch.md) talks to your AIs by voice through the iPhone. The proposed heads-down timer and away report are also on the [roadmap](ROADMAP.md).
 
 ## The window today
 
@@ -23,7 +23,7 @@ Spaces, with no Dock icon.
 Escape hides it too, and so does switching away: Command-Tab, a click on another app, or Mission Control. With
 `--windowed` it is a normal window instead.
 
-Each AI the server holds (its `friends.json`, `docs/accounts.md`) has a tab, and an AI added or removed there
+Each AI the server holds (its `ais.json`, `docs/accounts.md`) has a tab, and an AI added or removed there
 gets or loses its tab as soon as the server applies the change (`nexus-server config reload`); the sprint tab comes
 first. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
 reorder the tabs; the order is kept across launches. In the [keyboard profile](policy.md#start-with-the-keyboard-driven-client), Enter stages the current message. Empty Enter sends the batch. Command-Enter sends the batch and current draft in order. Command-Delete clears the draft and all locally staged messages in this tab. Shift-Enter starts a new line. The stock profile binds Enter to send and Command-Enter to queue. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller,
@@ -58,8 +58,8 @@ show the host as typed.
 
 The window writes its errors to stderr. On Windows it has no terminal, so unless stderr was redirected they go to
 `%USERPROFILE%\.nexus\client\nexus.log`, appended to on each launch; if the hotkey does not register, a message box says
-so and names that file. On Windows only the window is native: `nexus-server` and the link run as the Linux build inside WSL2, and
-the Windows window has no `--server` yet.
+so and names that file. On Windows only the window is native: `nexus-server` and the link run as the Linux build inside WSL2
+(below, "The server").
 
 ## Where nexus keeps things
 
@@ -73,12 +73,12 @@ the Keychain, the environment or another tool's directory (`~/.claude` included)
     tab-order.txt, selected-tab.txt, text-scale.txt, terminals.txt
                                 its saved order, selection, text size and terminals
     kept-drafts.txt, kept-drafts.lock
-                                the drafts of friends taken off a server, kept by server and name until they return,
+                                the drafts of AIs taken off a server, kept by server and name until they return,
                                 and the lock every window's change of them takes
     nexus.log                   Windows only: its errors
 ~/.nexus/server/                nexus-server (`--dir` gives another directory)
     config                      its settings (it takes none yet)
-    drivers                     which program drives which friend
+    drivers                     which program drives which AI
     store/                      the tabs and what each window has had applied
     server.sock, server.log     its control socket (mode 0600) and its log
     accounts/<name>/            one harness login each (always here, whatever `--dir` says)
@@ -103,6 +103,23 @@ window keeps in memory and nowhere else. From then on the window and the server 
 transport (AES-128-OCB, roaming, retransmission by diff); ssh is not used again. Until the window has the server's
 first state it says it is connecting and takes no typing; after that it is quiet unless it has heard nothing from the
 server for 6 s, when it says how long.
+
+On Windows the window's link runs inside WSL2, not in the window: mosh's transport does not run natively on Windows (its
+sender reads `/dev/urandom` for each datagram). The window starts `nexus-link-relay` (built with `nexus-server`; put it
+in `~/.local/bin`, as `nexus-server` is) with `wsl.exe` in the default WSL2 distribution, through a plain `sh -c` with
+`~/.local/bin` first on its PATH, not a login shell (a profile that prints would come out ahead of the relay's first
+frame), and talks to it over the relay's standard input and output: the window's actions
+to it, the link's state back (`src/relay/relay_wire.h`). The relay does what the window's link does on macOS and
+Linux. With the default server, `localhost`, it runs `nexus-server new` in WSL2 itself, with no ssh; with
+`--server <host>` it runs ssh from WSL2. If the relay ends, the window says why (with what
+`wsl.exe` or the relay's process wrote that was not the relay's protocol, as text) and starts another after a second, then longer, up to 10 s
+(`src/relay/relay_life.h`, modelled in `models/RelayLife.tla`); that is a new link, as a new launch of the window is.
+Actions sent to the old one and not yet acknowledged by the server are never sent again (the server might have applied
+one whose acknowledgement was lost, and would apply it twice): the window says how many may not have arrived, and puts
+a message among them back in its tab, pending, to send again after a look at the conversation. Actions not yet handed
+to the old relay go to the next. `NEXUS_WSL_RELAY`, when set (through `WSLENV`), is the relay's command in WSL2 in
+place of `nexus-link-relay`: its program, then what goes after the host, split at spaces (a test's
+`-- <command>` for the server).
 
 What syncs, so far: each prompt sent or queued in the window goes to the server once, in order, and the server
 runs the configured AI’s driver. Its reply appears in the same tab. Every window connected to the server shows every
@@ -217,6 +234,13 @@ The window and `nexus-server` need protobuf for mosh's transport (on macOS, `bre
 crypto come with macOS). Without it, configure with `-DNEXUS_LINK=OFF` for the window alone, without `--server`. A
 Homebrew protobuf is built for the macOS it was installed on, and so then are nexus and `nexus-server` (the build says
 so).
+
+On Linux, and inside WSL2 on Windows, the same commands build `nexus-server`, the drivers and their tests, but not the
+window: Prax has no Linux app backend yet (the desktop client waits on its Wayland backend). It builds with clang and
+lld, which the configure picks where they are installed, and needs `apt install clang lld cmake ninja-build
+libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev` (and Rust and Cargo, as above). On Linux the window's logic
+runs over a workaround for a link error in Prax's lib/process at the pinned commit (`cmake/prax_environ.h`), which goes
+away when Prax fixes it.
 
 Tests: `ctest --test-dir build -L unit`, `-L functional`, and `-L model` (needs Java and `TLA2TOOLS_JAR`; see
 [models/README.md](../models/README.md)). The link's functional tests run `nexus-server` over `ssh localhost`, which has

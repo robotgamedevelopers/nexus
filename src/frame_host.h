@@ -29,10 +29,11 @@
 #include "pr/ui.h"
 
 #include "hitch.h"
+#include "link_port.h"
 #include "model.h"
 #include "sync/actions.h"
 #include "sync/client.h"
-#include "sync/friend_strip.h"
+#include "sync/ai_strip.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
 #include "signin_gate.h"
@@ -46,29 +47,10 @@ namespace nexus {
 class PraxTerminals;
 class PraxBoard;
 
-// Text from outside (a name the server sent that is not a friend's, the host given), as a log line can hold it: every
+// Text from outside (a name the server sent that is not an AI's, the host given), as a log line can hold it: every
 // byte below 0x20, 0x7f and above, and the backslash as \xNN, the rest as it is; at most 80 bytes, cut between two
 // characters, never inside an escape, then "...".
 std::string loggable(std::string_view text);
-
-// The link to nexus-server as the window's frame sees it: the latest state, read without waiting, and actions handed
-// over without waiting. link/client_port.h is the one over the link's thread (link/client.h).
-struct LinkState {
-    sync::LinkPhase phase = sync::LinkPhase::Connecting;
-    std::string problem;                // with Failed: why
-    std::uint64_t heardMsAgo = 0;       // with Connected: since the server was last heard
-    sync::Sessions sessions;            // the server's latest state
-    bool loopback = false;              // link connected to a numeric loopback address
-};
-
-struct LinkPort {
-    virtual ~LinkPort() = default;
-    // The latest state; true if it changed since the last call that returned true. Never waits.
-    virtual bool poll(LinkState* out) = 0;
-    virtual void requestHistory(sync::SessionId, std::uint64_t, std::uint64_t) {}
-    // An action for the server, in order. Never waits.
-    virtual std::uint64_t send(sync::Action action) = 0;
-};
 
 // The secret dialog over the link (view.h Secrets, docs/secrets.md): the requests come in the server's state, and the
 // dialog shows the oldest the window has not answered (sync/secrets.h SecretPrompt). The value is held in the prompt
@@ -114,7 +96,13 @@ public:
     void lost();
     // The overlay was shown: the window may claim one flow.
     void shown() { opener.shown(); }
-    // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open.
+    // The client lock locked the window (client_lock.h): the claim a show allowed is taken back, and no step runs (no
+    // claim, no URL opened, no callback sent up) until it is unlocked; the owner's next show allows one again.
+    void lock() { locked = true; opener.hidden(); }
+    void unlock() { locked = false; }
+    bool locked = false;
+    // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open. None
+    // while locked.
     void step();
     bool gateOpen() const { return gate_ != nullptr; }
 
@@ -126,8 +114,12 @@ private:
 // The client lock's input gate (FrameHost::event, View::lockScreen). isInputEvent: the person's input (pointer, scroll,
 // keys, text, paste, composition, drag and drop), as against the window's and the app's own events. lockScreenTakes:
 // the input a locked window lets through to its lock screen: the pointer, and Return and Escape with no modifier.
+// resetsIdle: the person's deliberate input, which starts the lock's idle time again (a key, text, a press, a scroll, a
+// paste, a drop); a pointer passing over the window, a drag passing over it, a gesture or a touch on the trackpad does
+// not, so that nothing but the person's act keeps the window unlocked.
 bool isInputEvent(const PrAppEvent& e);
 bool lockScreenTakes(const PrAppEvent& e);
+bool resetsIdle(const PrAppEvent& e);
 
 inline constexpr size_t kMaxAttachmentBytes = 32 * 1024 * 1024;
 struct StagedFile {
@@ -164,16 +156,16 @@ struct FrameHost {
     std::uint64_t savedLayoutRevision = ~std::uint64_t{};
     std::size_t savedLayoutFocus = ~std::size_t{};
 
-    // The friend tabs are the server's (AGENTS.md "Friend tabs"): each state the link brings while connected whose
-    // friends changed sets them (sync/friend_strip.h), new ones in the saved order, and a session is ensured with each
-    // friend as its tab is added. A saved friend's tab is selected when it arrives, unless the person chose a tab first
-    // (personSelected); the selection is not saved while it waits, nor the friends' order before the friends arrive.
-    // A removed friend's draft is kept by name, and given back when a friend of that name has a tab again; each such
+    // The AI tabs are the server's (AGENTS.md "AI tabs"): each state the link brings while connected whose
+    // AIs changed sets them (sync/ai_strip.h), new ones in the saved order, and a session is ensured with each
+    // AI as its tab is added. A saved AI's tab is selected when it arrives, unless the person chose a tab first
+    // (personSelected); the selection is not saved while it waits, nor the AIs' order before the AIs arrive.
+    // A removed AI's draft is kept by name, and given back when an AI of that name has a tab again; each such
     // change is made in `keptStore` for this window's server, `host` (with `keep`, and unless its file did not read or
     // the host cannot key a draft: tab_order.h KeptChange, keptServer).
-    sync::FriendStrip strip;
+    sync::AIStrip strip;
     const KeptDraftsStore* keptStore = nullptr;
-    // A tab chosen by the person (view.h selected): the saved selection no longer waits for the friends.
+    // A tab chosen by the person (view.h selected): the saved selection no longer waits for the AIs.
     void personSelected();
 
     // With a server (main.cpp --server, or a state file).
@@ -186,7 +178,7 @@ struct FrameHost {
     LinkSignIn signIn;                  // in-app sign-in, from connect(); main.cpp sets its openUrl
 
     // Shows the server's sessions through `port`: the prompt waits for the server, Enter and Command-Enter send and
-    // queue to the session the tab shows, Command-Escape stops it, the friend tabs follow the server's friends, a
+    // queue to the session the tab shows, Command-Escape stops it, the AI tabs follow the server's AIs, a
     // session is ensured with each, and the server's secret requests are asked in the secret dialog.
     void connect(LinkPort* port, const std::string& serverHost);
     // Shows `state` as the window holds it once the server is heard, or with `lost` once it has lost the server.
@@ -202,17 +194,32 @@ struct FrameHost {
     PrUi* ui = nullptr;                     // the window's tree's context, while the window is open; null cuts nothing
     // One round of the window under `root`.
     void build(PrKit* kit, PrLayoutNode root);
+    // One round of the window under `root`, inside a box of its own, `box` px, in every frame (iOS, main_ios.cpp): the
+    // viewport less its safe area, and only the room above the on-screen keyboard while one covers its foot
+    // (keyboard_room.h contentBox). view->extent is that box. The box is there with the keyboard and without it, so the
+    // window's nodes stay the same nodes as it comes and goes: built straight into the root while no keyboard showed,
+    // they were new each time it rose or fell, the prompt took the focus anew, and the keyboard went down and up
+    // every frame (tests/window/test_keyboard_frames.cpp).
+    void buildAbove(PrKit* kit, PrLayoutNode root, PrVec2 box);
 
     // Saves the terminal tabs and the selected tab if they changed (and the window keeps them).
     void keepTerminals();
     void keepSelection();
 
-    // The link's latest state into the window, as each frame's start takes it: the friend tabs, the transcripts, the
+    // The link's latest state into the window, as each frame's start takes it: the AI tabs, the transcripts, the
     // secret requests and the status line. Never waits. main.cpp calls it before the first frame too, while a --tab
-    // waits for the server's friends.
+    // waits for the server's AIs.
     void pollLink();
 
 private:
+    // Actions the link lost before the server acknowledged them (LinkState::cut): a message among them goes back to its
+    // tab as a pending message, and the problem line says what happened. Never silent.
+    void showCut(const std::vector<std::uint64_t>& cut);
+    // A press, followed until it is a tap (released within kTapSlop of where it went down) or not (View::tapEndsEditing).
+    void watchTap(const PrAppEvent& e);
+    bool tapping_ = false;
+    PrVec2 tapDown_{};
+    std::size_t tapTab_ = ~std::size_t(0);      // the active tab's id when the prompt was dismissed
     std::vector<StagedFile> stagedFiles_;
     unsigned stagedCount_ = 0, pasteFrame_ = 0;
     std::future<void> uploadWorker_;
@@ -229,6 +236,15 @@ private:
     LimitOffer currentLimit() const;
     std::optional<std::pair<sync::SessionId, std::string>> signInSelection_;
     std::map<std::string, std::uint64_t> pendingClaims_; // until the offer changes or this link ends
+    // /login: the session and the account signing in while the session stays on its own; it switches once signed in.
+    std::optional<std::pair<sync::SessionId, std::string>> pendingLogin_;
+    std::string logoutNext_;    // /logout: the account the AI moves to after, chosen as the dialog opened
+    const sync::ServerAI* rosterOf(sync::SessionId session) const;
+    std::optional<std::string> signInTarget() const;
+    std::uint64_t claimAccount(sync::SessionId session, const std::string& account);
+    void startLogin(const std::string& account);
+    void settleLogin();
+    void wireAccountMenu();
     const sync::AccountChoice* activeChoice() const;
     const sync::SignInOffer* offerFor(const std::string& account) const;
     void selectSignInAccount();
@@ -238,12 +254,12 @@ private:
     void chooseAccount(std::string account);
     void setAccount(sync::SessionId session, const std::string& target);
     bool activateSignIn();
-    const sync::ServerFriend* activeAccountRoster() const;
+    const sync::ServerAI* activeAccountRoster() const;
     void wire();
-    // The friend tabs from `state` (FriendStrip::take): when its friends changed, the mirror's record of each removed
+    // The AI tabs from `state` (AIStrip::take): when its AIs changed, the mirror's record of each removed
     // tab forgotten, a session ensured for each added one when there is a link, each name the server sent that is not
-    // a friend's logged, the kept drafts saved when they changed, and the notice for a strip without friends.
-    void takeFriends(const sync::Sessions& state);
+    // an AI's logged, the kept drafts saved when they changed, and the notice for a strip without AIs.
+    void takeAIs(const sync::Sessions& state);
 };
 
 } // namespace nexus

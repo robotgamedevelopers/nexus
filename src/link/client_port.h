@@ -1,4 +1,4 @@
-// The window's frame's view of its link to nexus-server (frame_host.h LinkPort) over the link's thread
+// The window's frame's view of its link to nexus-server (link_port.h LinkPort) over the link's thread
 // (link/client.h): poll copies the latest snapshot under the link's lock, and send queues an action and nudges the
 // thread through a non-blocking pipe. Neither waits on the network.
 
@@ -12,7 +12,7 @@
 #include <memory>
 #include <utility>
 
-#include "frame_host.h"
+#include "link_port.h"
 #include "link/client.h"
 
 namespace nexus::link {

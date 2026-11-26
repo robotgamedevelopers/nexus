@@ -9,12 +9,15 @@ if(NEXUS_WINDOW_LOGIC)
     add_test(NAME window_unit COMMAND nexus_window_tests)
     set_tests_properties(window_unit PROPERTIES LABELS unit)
 
-    # The window with no applied policy bundle is the shipped profile's (stock_window_test.cpp). Pure logic.
-    add_executable(nexus_stock_window_tests stock_window_test.cpp)
-    target_compile_options(nexus_stock_window_tests PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_stock_window_tests PRIVATE nexus_view)
-    add_test(NAME stock_window_unit COMMAND nexus_stock_window_tests)
-    set_tests_properties(stock_window_unit PROPERTIES LABELS unit)
+    # The window with no applied policy bundle is the shipped profile's (stock_window_test.cpp). Pure logic; it needs
+    # the view (NEXUS_WINDOW).
+    if(TARGET nexus_view)
+        add_executable(nexus_stock_window_tests stock_window_test.cpp)
+        target_compile_options(nexus_stock_window_tests PRIVATE ${NEXUS_WARNINGS})
+        target_link_libraries(nexus_stock_window_tests PRIVATE nexus_view)
+        add_test(NAME stock_window_unit COMMAND nexus_stock_window_tests)
+        set_tests_properties(stock_window_unit PROPERTIES LABELS unit)
+    endif()
 
     # The server a window asks for where nothing names one (src/server_choice.h): the address's checks, server.txt and
     # the kept server through a store in memory. Pure logic.
@@ -176,12 +179,32 @@ if(NEXUS_WINDOW)
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/terminal_work)
     set_tests_properties(window_terminal PROPERTIES LABELS functional TIMEOUT 60)
 
-    # The window's frame code around the friend tabs (test_frame_host.cpp): FrameHost over a fake link, no window.
+    # The window's frame code around the AI tabs (test_frame_host.cpp): FrameHost over a fake link, no window.
     add_executable(nexus_frame_host_tests test_frame_host.cpp)
     target_compile_options(nexus_frame_host_tests PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_frame_host_tests PRIVATE nexus_frame)
     add_test(NAME frame_host_unit COMMAND nexus_frame_host_tests)
     set_tests_properties(frame_host_unit PROPERTIES LABELS unit TIMEOUT 30)
+
+    # The first switch from the Dashboard to an AI's tab as the iOS window draws it, above an on-screen keyboard whose
+    # rect comes on time, early, late, with a gap or never (test_keyboard_frames.cpp): the focus and the keyboard settle
+    # once and no frame asks for another. A kit with no window, the system's fonts, made-up time.
+    add_executable(nexus_keyboard_frames_tests test_keyboard_frames.cpp)
+    target_compile_options(nexus_keyboard_frames_tests PRIVATE ${NEXUS_WARNINGS})
+    target_include_directories(nexus_keyboard_frames_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(nexus_keyboard_frames_tests PRIVATE nexus_frame)
+    add_test(NAME keyboard_frames_unit COMMAND nexus_keyboard_frames_tests)
+    set_tests_properties(keyboard_frames_unit PROPERTIES LABELS unit TIMEOUT 30)
+
+    # Switching an AI's account (src/account_menu.h): the menu a press on the active AI's tab opens under its highlight,
+    # its gesture, layout and still frames, and the /account, /login and /logout commands, over the real frame code, a
+    # kit with no window and a fake link. The system's fonts, made-up time.
+    add_executable(nexus_account_menu_tests test_account_menu.cpp)
+    target_compile_options(nexus_account_menu_tests PRIVATE ${NEXUS_WARNINGS})
+    target_include_directories(nexus_account_menu_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(nexus_account_menu_tests PRIVATE nexus_frame)
+    add_test(NAME account_menu_unit COMMAND nexus_account_menu_tests)
+    set_tests_properties(account_menu_unit PROPERTIES LABELS unit TIMEOUT 30)
 
     if(NEXUS_SERVER_PARTS)
         add_executable(account_picker_trace account_picker_trace.cpp)
@@ -231,6 +254,14 @@ if(NEXUS_WINDOW)
     add_test(NAME window_unit_signin COMMAND nexus_signin_host_tests)
     set_tests_properties(window_unit_signin PROPERTIES LABELS unit TIMEOUT 30)
 
+    # The window's side of the client lock (src/window_lock.h) over recording hooks and a fake authenticator: what
+    # locking, unlocking, asking and input do to the window, the idle timeout's limits, no sound while locked. Unit.
+    add_executable(nexus_window_lock_tests test_window_lock.cpp)
+    target_compile_options(nexus_window_lock_tests PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_window_lock_tests PRIVATE nexus_frame)
+    add_test(NAME window_lock_unit COMMAND nexus_window_lock_tests)
+    set_tests_properties(window_lock_unit PROPERTIES LABELS unit TIMEOUT 30)
+
     # The link opener (src/url_opener.h) over a stub browser: in order off the caller's thread, and a stuck browser call
     # that keeps closing waiting 2 s at most. Real threads and time: functional.
     add_executable(nexus_url_opener_tests test_url_opener.cpp)
@@ -241,12 +272,21 @@ if(NEXUS_WINDOW)
         set_tests_properties(window_functional_url_opener_${case} PROPERTIES LABELS functional TIMEOUT 30)
     endforeach()
 
-    # `nexus --state` against a fixture state (fixtures/busy.state, written by tests/server's friends_functional_window
+    # `nexus --state` against a fixture state (fixtures/busy.state, written by tests/server's ais_functional_window
     # from the fake driver), with HOME an empty directory: it draws from the file alone (state_screenshot.cmake).
     if(NEXUS_LINK AND TARGET nexus)
         add_test(NAME window_state_screenshot COMMAND ${CMAKE_COMMAND} -DNEXUS=$<TARGET_FILE:nexus>
             -DSTATE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/busy.state -DWORK=${CMAKE_CURRENT_BINARY_DIR}/state_screenshot
             -P ${CMAKE_CURRENT_SOURCE_DIR}/state_screenshot.cmake)
         set_tests_properties(window_state_screenshot PROPERTIES LABELS functional TIMEOUT 60)
+    endif()
+
+    # On Windows the window's link through WSL2 does not pass a server command on (docs/mock.md), so --server-command
+    # is refused there before any window opens, never accepted and dropped. Without the refusal the window starts the
+    # relay instead and the test times out.
+    if(WIN32 AND TARGET nexus)
+        add_test(NAME window_server_command_refused COMMAND nexus --server localhost --server-command fake-server)
+        set_tests_properties(window_server_command_refused PROPERTIES LABELS functional TIMEOUT 30
+            PASS_REGULAR_EXPRESSION "--server-command is not supported on Windows")
     endif()
 endif()

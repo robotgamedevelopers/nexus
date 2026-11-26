@@ -76,7 +76,14 @@ OffscreenFrame::OffscreenFrame(View& view, PrFontSet* fonts, PrVec2 extent, floa
     tree_ = prLayoutTreeCreate(&treeDesc);
     // The window paints its fill once over the transparent canvas, as in the live overlay; at the text scale the view
     // asks for, as the live window's first frame takes it (view.h beginWindowFrame).
-    if (view_.look != nullptr) view_.look->textSteps = view_.askedTextSteps;
+    // The prompt and the column take the share of the width the view asks for, and the replies the column's whole
+    // width where it asks for that, as beginWindowFrame gives them (an iPad's regular width, View::columnScale; an
+    // iPhone's compact one, View::fullWidthReplies).
+    if (view_.look != nullptr) {
+        view_.look->textSteps = view_.askedTextSteps;
+        view_.look->prompt.width *= view_.columnScale;
+        if (view_.fullWidthReplies) view_.look->transcriptStyle.replyWidth = 100;
+    }
     PrKitTheme theme = windowTheme(fonts, seeThrough, view_.askedTextSteps);
     ui_ = prUiCreate(tree_);
     kit_ = prKitCreate(ui_, &theme);

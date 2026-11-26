@@ -9,9 +9,14 @@ description=${DESCRIPTION:0:140}
 description=${description//\\/\\\\}
 description=${description//\"/\\\"}
 body="{\"state\":\"$STATE\",\"context\":\"tailscale-$OS\",\"description\":\"$description\",\"target_url\":\"$TARGET\"}"
-code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-  -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$SHA" -d "$body") || code=000
+# GitHub answers 5xx now and then: three tries, each said, two seconds apart; any other answer is final.
+for attempt in 1 2 3; do
+  code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+    -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$SHA" -d "$body") || code=000
+  case "$code" in 5??|000) echo "::warning::setting the status tailscale-$OS: try $attempt answered HTTP $code" ;; *) break ;; esac
+  if [ "$attempt" -lt 3 ]; then sleep 2; fi
+done
 if [ "$code" != 201 ]; then
   echo "::error::setting the status tailscale-$OS ($STATE) on $SHA answered HTTP $code"
   exit 1

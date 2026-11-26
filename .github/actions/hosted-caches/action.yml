@@ -1,0 +1,251 @@
+# A GitHub-hosted macOS or Linux job's tools and caches. Installs what the image lacks (Homebrew on macOS, apt on
+# Linux), then restores the newest cache of this name for Prax's pin (read from CMakeLists.txt): the build directory
+# (build/, so Prax is not recompiled: tar keeps its sources' times, and the checkout makes only nexus's own files
+# newer) and ~/nexus-ci (ccache, the linker's ThinLTO cache, Prax's downloads, cargo's target directory), and cargo's
+# registry, and the pinned Rust toolchain. Sets what the jobs' steps read: NEXUS_CACHES, PR_DOWNLOAD_DIR, CCACHE_*,
+# NEXUS_CARGO_TARGET_DIR (cmake/policy.cmake), RUSTUP_TOOLCHAIN, JOBS and TEST_JOBS.
+#
+# Rust is pinned (1.98.1, as windows-build pins it), not the image's: the hosted images roll out a new Rust every few
+# days, and a cargo target directory built by another rustc rebuilds every crate (67 s on 4 cores, PR #89's run).
+# The toolchain lives in ~/nexus-ci/rustup (RUSTUP_HOME), so it is restored with the rest of ~/nexus-ci.
+#
+# Tools. ccache is ccache's own release build (4.14.3, checked against its sha256), kept in ~/nexus-ci/tools and so
+# restored with the cache: Homebrew's ccache pours four dependencies first, and apt's needs an index update, each about
+# 25 s of a 2-minute job. On Linux, ld.lld and ninja come from the image's own LLVM 18 and ninja where it has them, at
+# the paths the cached CMakeCache.txt names (/usr/bin/ld.lld, /usr/bin/ninja); apt only for what is still missing.
+#
+# The caches are made only by .github/workflows/cache-warm.yml, on main (on every push to main, daily, and by hand), so
+# every pull request can restore them, built from main as it is now. A per-commit job (require: true) fails at once when there is none for this
+# pin, saying to run cache-warm; it never builds Prax cold inside its 2 minutes.
+name: hosted-caches
+description: Tools and restored caches for a GitHub-hosted macOS or Linux job
+inputs:
+  name:
+    description: the cache's name (one per job and part), e.g. mac-release
+    required: true
+  require:
+    description: true in ci.yml (a missing cache fails the job); false in cache-warm.yml (it starts from what there is)
+    default: "true"
+  brew:
+    description: Homebrew formulae the macOS job needs, installed when missing
+    default: ""
+  apt:
+    description: apt packages the Linux job needs, installed when missing
+    default: ""
+  brew-keep:
+    description: >-
+      Homebrew kegs kept in a cache of their own on a GitHub-hosted Mac (the formulae and their dependencies, e.g.
+      "protobuf abseil"): restored and linked instead of installed, which took 12 to 32 s of a 2-minute job
+    default: ""
+outputs:
+  key:
+    description: the key cache-warm saves under
+    value: ${{ steps.key.outputs.key }}
+  matched:
+    description: the key restored, empty when nothing was
+    value: ${{ steps.restore.outputs.cache-matched-key || steps.restore-again.outputs.cache-matched-key }}
+  brew-key:
+    description: the key of the Homebrew kegs' cache (empty when brew-keep is)
+    value: ${{ steps.kegs.outputs.key }}
+  brew-paths:
+    description: the kept kegs' paths, which cache-warm saves under brew-key
+    value: ${{ steps.kegs.outputs.paths }}
+  brew-hit:
+    description: true when the kegs' cache was restored
+    value: ${{ steps.kegs-restore.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    # Only on a GitHub-hosted Mac: a fleet Mac's Homebrew is its owner's, and nothing is restored into it.
+    - name: The Homebrew kegs' key
+      id: kegs
+      if: runner.os == 'macOS' && runner.environment == 'github-hosted' && inputs.brew-keep != ''
+      shell: bash
+      env:
+        KEEP: ${{ inputs.brew-keep }}
+      run: |
+        set -euo pipefail
+        prefix=$(brew --prefix)
+        names=$(echo $KEEP | tr ' ' '-')
+        echo "key=brew-v1-$ImageOS-$names" >> "$GITHUB_OUTPUT"
+        {
+          echo "paths<<EOF"
+          for keg in $KEEP; do echo "$prefix/Cellar/$keg"; done
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+    - name: Restore the Homebrew kegs
+      id: kegs-restore
+      if: steps.kegs.outputs.key != ''
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: ${{ steps.kegs.outputs.paths }}
+        key: ${{ steps.kegs.outputs.key }}
+    - name: Tools the image lacks
+      shell: bash
+      env:
+        BREW: ${{ inputs.brew }}
+        APT: ${{ inputs.apt }}
+        KEEP: ${{ inputs.brew-keep }}
+        KEGS_HIT: ${{ steps.kegs-restore.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
+        # The Metal toolchain's first run mounts it (about 12 s on a hosted Mac): started here, in the background, so
+        # it overlaps the cache's download; nexus-build reads its result before it builds.
+        if [ "$RUNNER_OS" = macOS ]; then
+          probe="$RUNNER_TEMP/metal-probe"
+          touch "$probe.started"
+          # Not under nohup: on the fleet Mac, whose runner is a launchd service, nohup ended before it started the
+          # probe (nightly 45747049900: no probe log at all), while xcrun metal --version itself answers at once there.
+          bash -c 'rc=0; xcrun metal --version >"$1.log" 2>&1 || rc=$?; echo "$rc" >"$1.rc.tmp"; mv "$1.rc.tmp" "$1.rc"' \
+            metal-probe "$probe" </dev/null >"$probe.err" 2>&1 &
+          echo "$!" > "$probe.pid"
+        fi
+        # Kegs restored from their cache (the step above) are linked, as an install would leave them.
+        if [ "$RUNNER_OS" = macOS ] && [ "$KEGS_HIT" = true ]; then
+          HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 brew link --overwrite $KEEP
+          echo "linked the cached kegs: $KEEP"
+        fi
+        if [ "$RUNNER_OS" = macOS ] && [ -n "$BREW" ]; then
+          need=()
+          for formula in $BREW; do
+            brew list --versions "$formula" >/dev/null 2>&1 || need+=("$formula")
+          done
+          if [ "${#need[@]}" -gt 0 ]; then
+            poured="$RUNNER_TEMP/brew-poured"
+            touch "$poured"
+            HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 \
+              HOMEBREW_NO_ENV_HINTS=1 brew install --quiet "${need[@]}"
+            # What was just poured (the formulae and their dependencies, protobuf's abseil among them) gets a fixed old
+            # time: the cached programs that link these libraries are then not older than them, and are not relinked
+            # (11 programs, 18 s of build-macos on PR #114, with no source changed).
+            prefix=$(brew --prefix)
+            count=$(find "$prefix/Cellar" "$prefix/lib" "$prefix/include" -newer "$poured" \( -type f -o -type l \) | wc -l)
+            find "$prefix/Cellar" "$prefix/lib" "$prefix/include" -newer "$poured" \( -type f -o -type l \) -exec touch -h -t 202001010000 {} +
+            echo "poured ${need[*]}: $count files set to 2020-01-01"
+          fi
+        fi
+        if [ "$RUNNER_OS" = Linux ]; then
+          if [ ! -e /usr/bin/ld.lld ] && [ -x /usr/bin/ld.lld-18 ]; then sudo ln -s ld.lld-18 /usr/bin/ld.lld; fi
+          if [ ! -e /usr/bin/ninja ] && command -v ninja >/dev/null 2>&1; then sudo ln -s "$(command -v ninja)" /usr/bin/ninja; fi
+          if [ ! -e /usr/bin/ld.lld ]; then APT="$APT lld"; fi
+          if [ ! -e /usr/bin/ninja ]; then APT="$APT ninja-build"; fi
+        fi
+        if [ "$RUNNER_OS" = Linux ] && [ -n "${APT// /}" ]; then
+          need=()
+          for package in $APT; do
+            dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed' || need+=("$package")
+          done
+          if [ "${#need[@]}" -gt 0 ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends "${need[@]}"
+          fi
+        fi
+    - name: Key
+      id: key
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+      run: |
+        set -euo pipefail
+        pin=$(sed -n 's#.*codeload\.github\.com/pdoane/prax/tar\.gz/\([0-9a-f]\{40\}\).*#\1#p' CMakeLists.txt | head -n 1)
+        if [ -z "$pin" ]; then echo "::error::no Prax pin found in CMakeLists.txt (the Prax archive URL)"; exit 1; fi
+        echo "prefix=$NAME-v2-$pin-" >> "$GITHUB_OUTPUT"
+        echo "older=$NAME-v1-$pin-" >> "$GITHUB_OUTPUT"
+        echo "key=$NAME-v2-$pin-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+    - name: Restore the newest cache for this pin
+      id: restore
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: |
+          build
+          ~/nexus-ci
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+        key: ${{ steps.key.outputs.key }}
+        # cache-warm may also start from a cache made before the source manifest (v1); a per-commit job may not.
+        restore-keys: |
+          ${{ steps.key.outputs.prefix }}
+          ${{ inputs.require != 'true' && steps.key.outputs.older || steps.key.outputs.prefix }}
+    # cache-warm saves a new cache on every push to main and then deletes the one before it (.github/cache-prune.sh).
+    # A job that matched the older one just before that delete fails its download ("The specified blob does not
+    # exist", PR #133's build-macos, run 45830725169), and restore reports nothing restored. One more lookup then finds
+    # the new one, which is saved before the old one is deleted; where there is truly none, it misses again in about a
+    # second and the next step fails by name.
+    - name: Restore again, if the cache was replaced while it downloaded
+      id: restore-again
+      if: steps.restore.outputs.cache-matched-key == ''
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: |
+          build
+          ~/nexus-ci
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: |
+          ${{ steps.key.outputs.prefix }}
+          ${{ inputs.require != 'true' && steps.key.outputs.older || steps.key.outputs.prefix }}
+    - name: Environment
+      shell: bash
+      env:
+        REQUIRE: ${{ inputs.require }}
+        MATCHED: ${{ steps.restore.outputs.cache-matched-key || steps.restore-again.outputs.cache-matched-key }}
+        PREFIX: ${{ steps.key.outputs.prefix }}
+      run: |
+        set -euo pipefail
+        if [ -z "$MATCHED" ] && [ "$REQUIRE" = true ]; then
+          echo "::error::no cache ${PREFIX}* on main for Prax's pin: run the cache-warm workflow on main (gh workflow run cache-warm.yml --ref main), then re-run this job; a cold Prax build does not fit the 2 minutes"
+          exit 1
+        fi
+        # What the cache was built from keeps an old time, so only what changed since is rebuilt (.github/source-times.sh).
+        # (cache-warm, restoring a cache made before the manifest existed, rebuilds it all instead.)
+        if [ -n "$MATCHED" ] && { [ "$REQUIRE" = true ] || [ -f build/.nexus-ci-sources ]; }; then
+          bash .github/source-times.sh apply build/.nexus-ci-sources
+        fi
+        caches="$HOME/nexus-ci"
+        mkdir -p "$caches/ccache" "$caches/lto" "$caches/prax-downloads" "$caches/cargo-target"
+        if [ "$RUNNER_OS" = macOS ]; then cores=$(sysctl -n hw.ncpu); else cores=$(nproc); fi
+        # ccache's release build, from the cache or downloaded once and checked.
+        ccache_version=4.14.3
+        if [ "$RUNNER_OS" = macOS ]; then
+          ccache_asset=ccache-$ccache_version-darwin
+          ccache_sha=764dd2a8100ff83e6bbd7b9a1e2016cc401be34bee8a70ea99698186622c34d5
+        else
+          ccache_asset=ccache-$ccache_version-linux-x86_64-glibc
+          ccache_sha=9ac91421d7372565118cb421e4dc2d03f273a11ab81ab9e051fd1cb4577222d7
+        fi
+        tools="$caches/tools"
+        if [ ! -x "$tools/$ccache_asset/ccache" ]; then
+          mkdir -p "$tools"
+          curl -fsSL --retry 3 -o "$tools/$ccache_asset.tar.gz" \
+            "https://github.com/ccache/ccache/releases/download/v$ccache_version/$ccache_asset.tar.gz"
+          echo "$ccache_sha  $tools/$ccache_asset.tar.gz" | shasum -a 256 -c -
+          tar -xzf "$tools/$ccache_asset.tar.gz" -C "$tools"
+          rm -f "$tools/$ccache_asset.tar.gz"
+        fi
+        "$tools/$ccache_asset/ccache" --version | head -n 1
+        echo "$tools/$ccache_asset" >> "$GITHUB_PATH"
+        toolchain=1.98.1
+        export RUSTUP_HOME="$caches/rustup"
+        if ! ls -d "$RUSTUP_HOME/toolchains/$toolchain-"*/bin/cargo >/dev/null 2>&1; then
+          if ! command -v rustup >/dev/null 2>&1; then
+            echo "::error::no rustup on $(hostname -s), so Rust $toolchain cannot be installed"
+            exit 1
+          fi
+          rustup toolchain install "$toolchain" --profile minimal --no-self-update
+        fi
+        {
+          echo "NEXUS_CACHES=$caches"
+          echo "PR_DOWNLOAD_DIR=$caches/prax-downloads"
+          echo "CCACHE_DIR=$caches/ccache"
+          echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+          echo "CCACHE_MAXSIZE=2G"
+          echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
+          echo "NEXUS_CARGO_TARGET_DIR=$caches/cargo-target"
+          echo "RUSTUP_HOME=$RUSTUP_HOME"
+          echo "RUSTUP_TOOLCHAIN=$toolchain"
+          echo "JOBS=$cores"
+          echo "CARGO_BUILD_JOBS=$cores"
+          echo "TEST_JOBS=$cores"
+        } >> "$GITHUB_ENV"
+        echo "$(hostname -s): $cores cores; restored: ${MATCHED:-nothing}"

@@ -3,7 +3,7 @@
 EXTENDS MCAccounts
 
 BrokenSet(s, a) ==
-    IF ses[s].made /\ (a = None \/ a \in Range(links[ses[s].friend]))
+    IF ses[s].made /\ (a = None \/ a \in Range(links[ses[s].ai]))
     THEN /\ Done("set", None, a, s, TRUE) /\ told' = {}
          /\ UNCHANGED model
     ELSE Refused("set", None, a, s, IF ses[s].made THEN {s} ELSE {})

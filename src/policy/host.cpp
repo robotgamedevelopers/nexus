@@ -1,4 +1,5 @@
 #include "policy/host.h"
+#include "policy/stale.h"
 
 #include <algorithm>
 #include <charconv>
@@ -15,6 +16,8 @@ char* nexus_star_watch_v1(NexusPolicyHost*, const char* path);
 uint64_t nexus_star_refresh_v1(NexusPolicyHost*);
 void nexus_star_close_v1(NexusPolicyHost*);
 void nexus_star_free_v1(char*);
+char* nexus_star_stale_v1(const char* side, const char* path);
+char* nexus_star_packaged_v1(const char* side, char** error);
 }
 
 namespace nexus::policy {
@@ -61,6 +64,24 @@ std::string Host::decide(const std::string& path, const char* event, const std::
     return answer;
 }
 
+std::string staleBundle(const char* side, const std::string& path) {
+    const auto why = take(nexus_star_stale_v1(side, path.c_str()));
+    if (why.empty())
+        return {};
+    const auto slash = path.find_last_of("/\\");
+    const auto dir = slash == std::string::npos ? std::string(".") : path.substr(0, slash);
+    return "WARNING: the applied " + std::string(side) + " policy " + path + " is not the one this build packages (" +
+        why + "), and it runs in place of the packaged rules. Re-apply from this build's commit with `nexus-policy "
+        "apply " + side + " policy/rules " + dir + "`, or remove " + path + " to use the packaged rules.";
+}
+
+std::string packagedBundle(const char* side, std::string& why) {
+    char* error = nullptr;
+    auto bundle = take(nexus_star_packaged_v1(side, &error));
+    why = take(error);
+    return bundle;
+}
+
 bool messagePlan(Host& host, const std::string& path, bool client, const char* intent,
     const MessageState& state, MessagePlan& out, std::string& why) {
     std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);
@@ -71,7 +92,7 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
     };
     field(client ? "key" : "intent", intent);
     field("text", state.text);
-    field("friend", state.friendName);
+    field("ai", state.aiName);
     field("model", state.model);
     prJsonWriterKey(w.get(), pr("signed_out"));
     prJsonWriterBool(w.get(), state.signedOut);
@@ -92,9 +113,9 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
         context.pop_back();
         context += ",\"catalog\":" + state.catalog + "}";
     }
-    if (!client && !state.friendInfo.empty()) {
+    if (!client && !state.aiInfo.empty()) {
         context.pop_back();
-        context += ",\"identity\":" + state.friendInfo + "}";
+        context += ",\"identity\":" + state.aiInfo + "}";
     }
     const auto answer = host.decide(path, client ? "app.prompt_key" : "app.message", context, why);
     if (!why.empty())
@@ -186,7 +207,7 @@ int textZoom(Host& host, const std::string& path, int current, int delta, int lo
     return current;
 }
 
-std::string modelAfterLimit(Host& host, const std::string& path, const std::string& friendName,
+std::string modelAfterLimit(Host& host, const std::string& path, const std::string& aiName,
     const std::string& account, const std::string& model) {
     std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);
     prJsonWriterBeginObject(w.get());
@@ -194,7 +215,7 @@ std::string modelAfterLimit(Host& host, const std::string& path, const std::stri
         prJsonWriterKey(w.get(), pr(key));
         prJsonWriterString(w.get(), pr(value));
     };
-    field("friend", friendName);
+    field("ai", aiName);
     field("account", account);
     field("model", model);
     prJsonWriterEndObject(w.get());
@@ -230,7 +251,7 @@ std::string accountCommand(Host& host, const std::string& path, const std::strin
                 return selected;
         }
     }
-    why = "account_command must return one of the friend's linked accounts";
+    why = "account_command must return one of the AI's linked accounts";
     return {};
 }
 

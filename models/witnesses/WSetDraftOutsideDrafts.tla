@@ -7,7 +7,7 @@ BrokenSetDraft(i, t) ==
     IF i \in Tabs
     THEN /\ draft' = [draft EXCEPT ![At(i)] = t \o "!"]
          /\ last' = Did("set_draft", i, t, NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active, transcript, queue>>
+         /\ UNCHANGED <<ais, order, active, transcript, queue>>
     ELSE /\ last' = Did("set_draft", i, t, NoEntry, FALSE)
          /\ UNCHANGED model
 

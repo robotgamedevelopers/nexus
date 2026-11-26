@@ -1,5 +1,5 @@
 -------------------------- MODULE WLinkCloseKeepsOpen --------------------------
-\* Reversed witness: the server closes the friend's open entry into the transcript but keeps showing it open, so the
+\* Reversed witness: the server closes the AI's open entry into the transcript but keeps showing it open, so the
 \* same text is in the transcript and still growing. EachClosedOnce must reject it.
 EXTENDS MCLink
 

@@ -12,12 +12,17 @@
 // Launched with `--state FILE`, the window shows a server's state file as the desktop's `--screenshot --state` draws
 // it (state_window.h), live; `--lost` with it shows it as once the server is lost.
 //
+// --server-command WORDS, or the client config's `server-command`, is what the link runs there in place of
+// `nexus-server new` (link/bootstrap.h serverCommandWords), as on the desktop: the mock's command (docs/mock.md). A
+// device key behind nexus-ios-gate runs only nexus-server new and history-page, so the gate refuses any other.
+//
 // The window is locked (client_lock.h, ios_lock.h): until the device's owner passes Face ID or Touch ID (or the
 // passcode) it draws the lock screen alone and no input reaches nexus, and it locks again when the app goes to the
 // background or goes inactive (the app switcher), when the device's screen locks, and at the idle timeout. While it is
 // not active the window is covered, so the app switcher's snapshot shows nothing of nexus.
 //
-// Usage (as the simulator or devicectl passes a launch's arguments): nexus [--server USER@HOST | --state FILE [--lost]]
+// Usage (as the simulator or devicectl passes a launch's arguments):
+//   nexus [--server USER@HOST] [--server-command WORDS] | nexus --state FILE [--lost]
 
 #include <algorithm>
 #include <atomic>
@@ -27,6 +32,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "pr/app_select.h"
 #include "pr/app_device.h"
@@ -52,6 +58,9 @@
 #include "frame_host.h"
 #include "hitch.h"
 #include "ios_lock.h"
+#include "keyboard_room.h"
+#include "keyboard_start.h"
+#include "link/bootstrap.h"
 #include "link/client_port.h"
 #include "link/inapp_ssh.h"
 #include "model.h"
@@ -85,7 +94,9 @@ struct App {
     bool linked = false;                    // the window reaches a server (not a state file): it has the sprint tab
     std::string home;                       // the client home, for the board's storage
     std::unique_ptr<PraxBoard> board;       // the sprint tab's page, while the window is open
-    float keyboardCover = 0;                // px of the viewport's foot that the on-screen keyboard covers, this frame
+    TextInputStart textInput;               // whether the frames edit text, for the keyboard's start (keyboard_start.h)
+    PrAppInsets safeArea{};                 // the frame's safe area, which Prax pads the window's panel by
+    float keyboardRoom = 0;                 // px of content above the on-screen keyboard this frame; 0: none covers it
     // The client lock (client_lock.h, ios_lock.h): nothing of nexus is drawn and no input reaches it until the device's
     // owner passes Face ID, Touch ID or the passcode. Made in main, before the window opens.
     std::unique_ptr<ClientLock> lock;
@@ -316,16 +327,17 @@ void palette(void*, PrStudioWindow* window, const PrAppUserPreferences*, PrKitPa
 // How much of the viewport's foot the on-screen keyboard covers: the viewport is the frame less its safe area
 // (studio_window.h PrStudioWindowBuildFn), and the keyboard's rect is in the frame's coordinates, empty when it is
 // hidden.
-float keyboardCover(const PrAppFrame& f) {
-    if (f.keyboard.bottom <= f.keyboard.top || f.keyboard.right <= f.keyboard.left) return 0;
-    const float foot = f.extent.y - f.safeArea.bottom;
-    return f.keyboard.top < foot ? foot - f.keyboard.top : 0;
-}
-
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
     a.hitch.begin();
-    a.keyboardCover = keyboardCover(*f);
+    a.safeArea = f->safeArea;
+    a.keyboardRoom = roomAboveKeyboard(f->extent, f->safeArea, f->keyboard);
+    // An iPad's regular width takes a narrower prompt and column than the policy's (style.h kRegularWidthColumn); an
+    // iPhone's compact width gives the replies the column's whole width (View::fullWidthReplies).
+    PrSurface surface{};
+    const bool known = prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok;
+    a.view.columnScale = known && regularWidth(surface) ? style::kRegularWidthColumn : 1;
+    a.view.fullWidthReplies = known && !regularWidth(surface);
     // The authenticator's answers, then the time: the frame draws the lock screen unless the lock is unlocked now.
     a.iosLock->notices(a.lockInbox->mail.take(), f->time);
     a.iosLock->tick(f->time);
@@ -348,37 +360,26 @@ bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
 }
 
 // The window above the on-screen keyboard: while it shows, the window is laid out in the part of the viewport it leaves,
-// so that the prompt and the transcript's end stay in sight, as a desktop window shorter by that much would.
-struct AboveKeyboard {
-    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
-    float width;
-    float height;
-
-    void make(const App&, PrLayoutBoxStyle& box) const {
-        box.boxSizing = PrLayoutBoxSizing_BorderBox;
-        box.display = PrLayoutDisplay_Flex;
-        box.width = prLayoutLengthPx(width);
-        box.height = prLayoutLengthPx(height);
-    }
-};
-
+// so that the prompt and the transcript's end stay in sight, as a desktop window shorter by that much would. The
+// content starts at the safe area's top (Prax's Studio window pads its panel to it), so the part is the room from there
+// to the keyboard's top. Without a keyboard it is the viewport less its safe area: `extent` is the whole frame's, and a
+// box that tall ran past the screen's foot by the safe area's top and bottom. It is built in the same box with the
+// keyboard and without it (FrameHost::buildAbove).
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 extent) {
     App& a = appOf(context);
-    const float cover = std::min(a.keyboardCover, extent.y);
-    if (cover <= 0) {
-        a.view.extent = extent;
-        a.host.build(prStudioWindowKit(window), root);
-        return;
-    }
-    a.view.extent = PrVec2{extent.x, extent.y - cover};
-    PrUi* ui = prStudioWindowUi(window);
-    const PrLayoutNode above = prUiElement(ui, root, prHashString(PrStringView{"above-keyboard", 14}, 0),
-        pr::uiStyle(ui, a, AboveKeyboard{a.view.extent.x, a.view.extent.y}), 0);
-    a.host.build(prStudioWindowKit(window), above);
+    a.host.buildAbove(prStudioWindowKit(window), root, contentBox(extent, a.safeArea, a.keyboardRoom));
 }
 
-bool laidOut(void* context, PrStudioWindow*) {
-    return windowWantsFrame(appOf(context).view);
+// The frame is laid out, and Prax will raise or lower the keyboard by what it edits once it is drawn. A frame that starts
+// editing text lets the view go as the first responder first, so the keyboard rises with its keys (keyboard_start.h).
+bool laidOut(void* context, PrStudioWindow* window) {
+    App& a = appOf(context);
+    if (a.textInput.frameEnds(prUiOutput(prStudioWindowUi(window)).hasTextInput) == KeyboardStart::Present) {
+        PrSurface surface{};
+        if (prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok)
+            releaseFirstResponder(surface);
+    }
+    return windowWantsFrame(a.view);
 }
 
 void trace(void* context, const PrStudioWindowFrameTimes* t) {
@@ -392,7 +393,7 @@ void trace(void* context, const PrStudioWindowFrameTimes* t) {
 }
 
 // The client home's files, as the desktop window reads and keeps them (main.cpp): the applied client policy
-// (policy.bundle.json, docs/policy.md), the friends' saved order, the tab layout, the selected tab and the text scale.
+// (policy.bundle.json, docs/policy.md), the AIs' saved order, the tab layout, the selected tab and the text scale.
 void keepHome(App& a, const std::string& home) {
     static StoreWriter writer;
     static TabOrderStore order;
@@ -437,8 +438,8 @@ void keepHome(App& a, const std::string& home) {
         savedTab = loadSavedTab(selection, &warning, &savedSelection);
         if (!warning.empty()) std::fprintf(stderr, "nexus: %s\n", warning.c_str());
     }
-    const bool waitForSaved = savedTab.kind == TabKind::Friend;
-    a.host.strip = sync::FriendStrip(std::move(savedOrder), waitForSaved ? savedTab.name : std::string(), {});
+    const bool waitForSaved = savedTab.kind == TabKind::AI;
+    a.host.strip = sync::AIStrip(std::move(savedOrder), waitForSaved ? savedTab.name : std::string(), {});
     if (savedSelection && !waitForSaved) a.host.strip.personSelected();
     a.view.moved = [&a] {
         if (!a.host.strip.taken()) return;
@@ -463,27 +464,43 @@ void keepHome(App& a, const std::string& home) {
 int main(int argc, char** argv) {
     const char* state = nullptr;
     const char* server = nullptr;
+    const char* serverCommand = nullptr;
     bool lost = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--state") == 0 && i + 1 < argc) {
             state = argv[++i];
         } else if (std::strcmp(argv[i], "--server") == 0 && i + 1 < argc) {
             server = argv[++i];
+        } else if (std::strcmp(argv[i], "--server-command") == 0 && i + 1 < argc) {
+            serverCommand = argv[++i];
         } else if (std::strcmp(argv[i], "--lost") == 0) {
             lost = true;
         } else {
-            std::fprintf(stderr, "usage: nexus [--server USER@HOST | --state FILE [--lost]]\n");
+            std::fprintf(stderr, "usage: nexus [--server USER@HOST] [--server-command WORDS] | --state FILE [--lost]\n");
             return 2;
         }
     }
-    if ((lost && state == nullptr) || (state != nullptr && server != nullptr)) {
-        std::fprintf(stderr, "nexus: --lost needs --state, and --state shows a file without --server\n");
+    if ((lost && state == nullptr) || (state != nullptr && (server != nullptr || serverCommand != nullptr))) {
+        std::fprintf(stderr, "nexus: --lost needs --state, and --state shows a file without --server or "
+            "--server-command\n");
         return 2;
+    }
+    // --server-command, else the client config's server-command: the words the link runs in place of nexus-server new.
+    std::vector<std::string> serverWords;
+    {
+        const std::string command = serverCommand != nullptr ? serverCommand : clientConfig().serverCommand;
+        std::string why;
+        if (!command.empty() && !link::serverCommandWords(command, &serverWords, &why)) {
+            std::fprintf(stderr, "nexus: --server-command: %s\n", why.c_str());
+            return 2;
+        }
     }
     static Model model({}, state == nullptr);   // the sprint tab (the Dashboard) when linked, as on the desktop
     App a;
     a.model = &model;
     a.view.model = &model;
+    a.view.dialogsAtTop = true;
+    a.view.tapEndsEditing = true;   // a tap outside the prompt lowers the keyboard (View::tapEndsEditing)     // the on-screen keyboard covers the lower part (View::dialogsAtTop)
     a.view.look = &a.look;
     a.host.model = &model;
     a.host.view = &a.view;
@@ -504,13 +521,14 @@ int main(int argc, char** argv) {
         std::string why;
         if (!clientHome(&home, &why) || !makeClientHome(home, &why))
             std::fprintf(stderr, "nexus: %s\n", why.c_str());
-        auto startLink = [&a, home](const std::string& serverHost) {
+        auto startLink = [&a, home, serverWords](const std::string& serverHost) {
             link::InAppSshOptions ssh;
             ssh.dir = home;
             if (const char* h = std::getenv("HOME"))
                 ssh.publicCopy = std::string(h) + "/Documents/nexus-ssh-key.pub";
             link::ClientLink::Options options;
             options.bootstrap.host = serverHost;
+            if (!serverWords.empty()) options.bootstrap.command = serverWords;
             options.run = link::inAppSsh(ssh);
             options.wake = [&a] {
                 if (PrApp* app = a.wakeApp.load())

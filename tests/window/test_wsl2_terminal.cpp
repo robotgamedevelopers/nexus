@@ -58,7 +58,7 @@ void drain(PrProcess* process, PrProcessStream stream, std::string& into) {
     }
 }
 
-// runCommand's work (src/friends.cpp), over pipes: nexus's own runner is in the window's logic, which Windows does not
+// runCommand's work (src/ais.cpp), over pipes: nexus's own runner is in the window's logic, which Windows does not
 // build at the pin (CMakeLists.txt NEXUS_WINDOW_LOGIC).
 CommandResult run(PrProcessLauncher* launcher, const Command& command, int timeoutSeconds) {
     CommandResult result;

@@ -25,15 +25,15 @@ CommandResult success(const std::string& output) {
 
 int main() {
     DriverTable table;
-    table.drivers["codex"] = {"/policy", "-I", "-m", "nexus_policy", "friend-driver", "/profile",
-                              "{friend}", "{harness}", "/driver"};
-    table.friends["review"] = {"codex", "/working"};
-    table.friends["author"] = {"codex", "/work"};  // its registry harness does not match this driver
+    table.drivers["codex"] = {"/policy", "-I", "-m", "nexus_policy", "ai-driver", "/profile",
+                              "{ai}", "{harness}", "/driver"};
+    table.ais["review"] = {"codex", "/working"};
+    table.ais["author"] = {"codex", "/work"};  // its registry harness does not match this driver
     table.drivers["claude"] = table.drivers["codex"];
-    table.friends["admin"] = {"claude", "/admin"};
+    table.ais["admin"] = {"claude", "/admin"};
     table.drivers["muse"] = table.drivers["codex"];
     table.drivers["muse"][5] = "/other";
-    table.friends["writer"] = {"muse", "/other-work"};
+    table.ais["writer"] = {"muse", "/other-work"};
 
     enum Revision { Initial, HeldOld, Updated, Legacy, Invalid };
     std::atomic<Revision> revision{Initial};
@@ -95,7 +95,7 @@ int main() {
     CHECK(subscriptions.sender("review", "200-0", "new-peer") == BusPeer::Pending);
     revision = Updated;
     releaseOld.set_value();
-    CHECK(decision(31001, "review", "200-0", "new-peer", BusPeer::Friend));
+    CHECK(decision(31001, "review", "200-0", "new-peer", BusPeer::AI));
     CHECK(subscriptions.unsandboxed().contains("admin"));
     CHECK(!subscriptions.addresses().contains("new-peer"));  // enabled in nova-config, no local inbox or driver
     CHECK(subscriptions.knownSenders().at("review").contains("new-peer"));
@@ -104,7 +104,7 @@ int main() {
     CHECK(subscriptions.sender("review", "201-0", "local-only") == BusPeer::Pending);
     CHECK(decision(31002, "review", "201-0", "local-only", BusPeer::Other));
     CHECK(subscriptions.sender("writer", "201-0", "local-only") == BusPeer::Pending);
-    CHECK(decision(31003, "writer", "201-0", "local-only", BusPeer::Friend));
+    CHECK(decision(31003, "writer", "201-0", "local-only", BusPeer::AI));
 
     // An outdated policy returning grants alone cannot establish that a sender is unknown. Ignore
     // the entire response on parse failure and keep the last confirmed roster for history.
@@ -115,7 +115,7 @@ int main() {
     CHECK(subscriptions.knownSenders().at("review").contains("new-peer"));
     CHECK(subscriptions.sender("review", "202-0", "new-peer") == BusPeer::Pending);
     revision = Updated;
-    CHECK(decision(37000, "review", "202-0", "new-peer", BusPeer::Friend));
+    CHECK(decision(37000, "review", "202-0", "new-peer", BusPeer::AI));
     CHECK(subscriptions.problem().empty());
 
     revision = Invalid;

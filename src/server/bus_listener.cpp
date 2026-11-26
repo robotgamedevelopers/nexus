@@ -78,7 +78,7 @@ struct Frame {
 
     bool feed(std::string_view bytes) {
         const std::array fields{&msg.id, &msg.from, &msg.replyTo, &msg.subject, &msg.body};
-        // Nova's bus can name non-friend publishers longer than the registry's 128-byte limit.
+        // Nova's bus can name non-AI publishers longer than the registry's 128-byte limit.
         // Preserve their full envelope for the private server inbox.
         constexpr std::array<std::size_t, 5> limits{64, driver::kMaxLineBytes, 64, driver::kMaxLineBytes, kBusAttachmentBytes};
         while (!bytes.empty()) {

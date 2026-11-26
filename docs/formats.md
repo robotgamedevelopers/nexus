@@ -25,9 +25,9 @@ cannot read what the current one writes is refused as current: `docs/builds.md`,
 
 | Format | What it is |
 | --- | --- |
-| 1 | The first (main before formats): nothing framed, no activity, entry kinds Person 0, Friend 1, Notice 2. A reader of 1 reads exactly 1. |
+| 1 | The first (main before formats): nothing framed, no activity, entry kinds Person 0, AI 1, Notice 2. A reader of 1 reads exactly 1. |
 | 2 | Each session and each entry framed by its length (`Writer::str`); the session's activity after its effort; entry kind Tool 3. Anything after the sessions, and after the known fields of a frame, is skipped. Appended since, at the end of the session's frame: its instance (`str`). |
-| 3 | Format 2, then the open secret requests after the sessions (`docs/secrets.md`): a count, then each request framed by its length (its id, account, what is asked, the asker's session, the asker's friend, the asker's reason). The list is always written (count 0 for none), so a diff cut short before it is refused. Anything after a request's known fields, and after the list, is skipped. The actions up are framed from 3, with the secret dialog's answer (15) and cancel (16). A window of 2 receives no requests, and the server counts it as unable to take one; a secret action, which 2 cannot carry, is written as a stop naming session 0, refused by every server. |
+| 3 | Format 2, then the open secret requests after the sessions (`docs/secrets.md`): a count, then each request framed by its length (its id, account, what is asked, the asker's session, the asker's AI, the asker's reason). The list is always written (count 0 for none), so a diff cut short before it is refused. Anything after a request's known fields, and after the list, is skipped. The actions up are framed from 3, with the secret dialog's answer (15) and cancel (16). A window of 2 receives no requests, and the server counts it as unable to take one; a secret action, which 2 cannot carry, is written as a stop naming session 0, refused by every server. |
 | 4 | schema's variable tables (`schema/Nexus.schema`): the state is a `SessionsDiff` and the actions an `ActionsDiff`, written and read by the generated code. Every field, enum value and union arm rides under the hash of its name, so rules 1 to 3 hold by construction: a field a reader does not know is skipped, an enum value it does not know reads None, and both are counted (`TableReport.unknown`), which the window logs when the count changes, for the state it receives. The server logs no such count: mosh hands it the actions re-encoded from those it kept, where an unknown field is already gone, and it refuses an unknown action kind with its reason instead. None reads as the plainest thing known: an entry kind as a Notice, an activity as Busy, an action kind as unknown (which the server refuses alone, never the link). It says the same as format 3. |
 | 5 | Format 4's tables with the in-app sign-in added (`docs/secrets.md` "Sign-in"): `SessionsDiff.signins`, the live sign-in flows as each window sees them (`SignInOffer`: its id, account, provider, the claim token of the window holding it or `*` to every other window, the server's host name, and its URL, set only in the holder's state), and the action kinds `SignInClaim`, `SignInOpened` and `SignInCallback`. A format 4 reader reads through all of it (rule 1: the field skipped and counted, the kinds read as unknown and refused alone), but a format 4 window would never act on a flow, so the server must know which windows do: that is why this is a new number rather than an added field. The server reads it from the window's Hello (the link's format, the older of the two protos) and nothing else: it writes `signins` only on a link of 5 or later, takes the three kinds only from one, and while no linked window is of 5 or later it asks for a claude account's login by a paste instead (`docs/secrets.md` "Versions"). The typed `SignOut` action adds an account name and session check on links of format 5 or later. Earlier servers on format 5 count the unfamiliar action as unknown. The hand-written codecs of 1 to 3 carry no sign-in. |
 
@@ -46,7 +46,7 @@ later field goes after them.
 - Unknown entry kind: a **Notice**, a plain dim line with the entry's text. The text is never lost, and a notice
   claims nothing about who wrote it.
 - Unknown activity: **Busy** (the pulsing light blue). Something a later server knows is going on; busy says work
-  may be under way without claiming the friend is waiting (idle) or broken (down). A stop is always allowed.
+  may be under way without claiming the AI is waiting (idle) or broken (down). A stop is always allowed.
 - A server records an incoming bus message as framed store entry kind 5 and sends it as `EntryKind.Bus` on a
   table link. Its text starts with the bus sender’s name and one newline, followed by the display body. Newlines
   in the body are preserved. Windows use the entry kind to identify bus traffic. An older table reader renders
@@ -62,7 +62,7 @@ later field goes after them.
   every bus row. A missing field identifies an older writer. A current window uses these names to update
   bubbles it has already displayed, including entries preceding the bounded tail. A reconnecting window
   can recover message bodies from the current tail, plus any earlier history the window already received.
-- A format 1 link carries a Tool entry as a Friend entry (the line's text unchanged) and no activity.
+- A format 1 link carries a Tool entry as an AI entry (the line's text unchanged) and no activity.
 - Absent secret requests (a link of format 2 or older): **none**. A window with none shows no dialog and sends no secret
   action; the server, which knows the link's format, never offers that window a request.
 - Absent sign-in flows (a link of format 4 or older): **none**. The window claims, opens and binds nothing; the server,
@@ -72,12 +72,12 @@ later field goes after them.
   binds the session, interrupted request, current payer, choice kind, and offered target. An earlier table reader
   skips the fields and refuses the unknown action. The legacy codecs never offer this choice.
 - Absent instance (a server from before instances, or a format 1 link): **none**, empty. The window groups the session
-  by its friend alone; the server, which holds the friend's instances, settles an empty instance to the friend's
+  by its AI alone; the server, which holds the AI's instances, settles an empty instance to the AI's
   default instance (its first) and says so in a notice, so an empty one never decides where a driver runs.
-- Absent list of friends (a server from before it, or a link of format 3 or older): **not known**. Format 4's
-  `SessionsDiff` carries `friends_sent` (bool, default false), `friends_known` (bool, default false) and `friends` (a
-  list of `Friend` records with a `name` and linked `accounts`; default empty), the friends the server's `friends.json` holds, in its order. A
-  friend's accounts are ordered `AccountChoice` records with the stable `name` used for SetAccount and an optional
+- Absent list of AIs (a server from before it, or a link of format 3 or older): **not known**. Format 4's
+  `SessionsDiff` carries `ais_sent` (bool, default false), `ais_known` (bool, default false) and `ais` (a
+  list of `AI` records with a `name` and linked `accounts`; default empty), the AIs the server's `ais.json` holds, in its order. An
+  AI's accounts are ordered `AccountChoice` records with the stable `name` used for SetAccount and an optional
   display `label`. The optional `email` is the address from the account’s server registry entry. It reads as
   empty for older servers. Older windows skip it and retain the account name, label and sign-in status.
   The optional `needs_sign_in` flag defaults to false. The server sets it for a linked account
@@ -91,24 +91,25 @@ later field goes after them.
   account command in the server profile. Every account ID excludes `+`. The server resolves the command against
   the current session and validates its resulting ID before applying the ordinary SetAccount operation. Older
   servers omit the choices, which read as an empty list, and the window sends them no account commands. A
-  diff carries the friends, with `friends_sent` true, only when they differ from the state the diff is from (the one
-  the reader holds); without `friends_sent` the reader keeps the friends it holds, so an unchanged list costs no bytes.
+  diff carries the AIs, with `ais_sent` true, only when they differ from the state the diff is from (the one
+  the reader holds); without `ais_sent` the reader keeps the AIs it holds, so an unchanged list costs no bytes.
   A first diff, from the empty state, carries them whenever the server has a list. A diff from a server before these
-  fields has no `friends_sent`, and the reader holds no list: not known. The window builds its friend tabs from the
-  list when it is known, adding and removing tabs as it changes; when not known it takes the friends of the sessions it
+  fields has no `ais_sent`, and the reader holds no list: not known. The window builds its AI tabs from the
+  list when it is known, adding and removing tabs as it changes; when not known it takes the AIs of the sessions it
   is sent, adds a tab for each new one and removes none, as a window did before the list. Formats 1 to 3 carry none,
-  byte for byte as before (`sync_unit` `friends_cross_the_wire`, `friends_not_in_older_formats`,
-  `friends_sent_only_when_changed`).
-- Absent sprint board address (a server from before it, or a link of format 3 or older): **none known**.
-  `SessionsDiff.sprint_url` (`*string`, default empty) is the address of the sprint board the server serves: the
-  `--listen` of the `sprint-run` service in its own services.json, as `http://HOST:PORT/` (`sync/sprint_board.h`),
-  or empty. It is whole in every diff. A window opens it in its sprint tab (the Dashboard); given none, a window that
-  can run processes looks the board up itself, from its client config's `sprint-url` or the sprint's record, as it
-  did before the field, and one that cannot (iOS) says the server sends none. An older window skips the field and
-  looks the board up as before. Formats 1 to 3 carry none (`sync_unit` `sessions_sprint_url_appended`).
+  byte for byte as before (`sync_unit` `ais_cross_the_wire`, `ais_not_in_older_formats`,
+  `ais_sent_only_when_changed`).
+- Absent dashboards (a server from before them, or a link of format 3 or older): **none**.
+  `SessionsDiff.dashboards` (`[]Dashboard`, each a `name` and a `url`, both `*string`) is the list of dashboards
+  the server offers, from its config's `dashboard <url> <name>` lines in their order (`~/.nexus/server/config`,
+  `server/home.h`; none by default), whole in every diff (`sync/dashboards.h` holds the bounds: at most 16, a name of 1
+  to 64 bytes, an `http://` or `https://` address of at most 2048 bytes, no name twice). A window today shows the
+  first at its dashboard tab (`board.h`); a tab for each is the next step (docs/ios.md); with none, the window finds
+  its board as before. An older window skips the field. Formats 1 to 3 carry none (`sync_unit`
+  `sessions_dashboards_appended`).
 
 Text in format 4 is schema's text: well-formed UTF-8 with no NUL, or the whole diff would not load. The server writes
-what it holds with each malformed byte, and each NUL, shown as U+FFFD (the replacement character), so a friend's
+what it holds with each malformed byte, and each NUL, shown as U+FFFD (the replacement character), so an AI's
 stray byte costs one character on screen, never the link. An entry whose text is not clean is sent whole each time,
 never as growth, so the window's copy is always the server's text as shown; so is an entry whose earlier text the
 window holds was not clean (cut inside a character the growth completes), since the window holds that text with
@@ -155,15 +156,15 @@ server's state is.
 
 | Kind | Format | Reader byte | What it is |
 | --- | --- | --- | --- |
-| record | 1 | | a friend tab's, by name: migrated at open |
+| record | 1 | | an AI tab's, by name: migrated at open |
 | record | 2 | | by session, unframed, entry kinds 0 to 2 |
 | record | 3 | 3 | by session; each change framed by its length, each entry framed in it; trailing fields skipped. Appended since: an info's frame carries the instance (`str`) and optional Auto marker (`0xA2`), a driver's with the summary flag (`u8`) and its session's directory (`str`), followed by the optional session account (`0xA1`, `str`) |
-| snapshot | 1, 2 | | friend tabs (1 before drivers): migrated at open |
+| snapshot | 1, 2 | | AI tabs (1 before drivers): migrated at open |
 | snapshot | 3 | | by session, unframed, entry kinds 0 to 2 |
 | snapshot | 4 | 4 | by session; each session framed, each entry framed in it; trailing fields skipped. Appended since, after the driver: the summary flag, its session's directory, then the instance, then the optional session account (`0xA1`, `str`) and optional Auto marker (`0xA2`) |
 
 - The Auto marker records automatic subscription selection. Its absence preserves the stored named selection.
-- Absent instance: **the friend's default instance**, settled at the server's start with a notice, as above.
+- Absent instance: **the AI's default instance**, settled at the server's start with a notice, as above.
 - An interrupted request may append a continuation to the driver record or session snapshot. Tag `0xA3` introduces the original prompt (`str`), the exhausted account names (`u32` count, then each `str`), and a model-limit decision pending (`u8`). No tag means no outstanding continuation. Its transcript effects and turn boundary commit together. An open turn on recovery may already have executed, so the server cuts it. A checkpoint between turns can safely continue.
 - Absent summary flag: **none owed**. An absent session account means the owner of the harness ID is unknown.
   The server starts a new harness session and provides recent transcript entries on its first send. An explicitly
@@ -173,7 +174,7 @@ server's state is.
   defaults.
 
 - A newer server reads every older format. Format 2 records and format 3 snapshots are read as they are, never
-  rewritten. A friend-tab store is compacted into the current format at open.
+  rewritten. An AI-tab store is compacted into the current format at open.
 - An unframed format holding an entry kind it never had is refused, naming the store, the record (or snapshot) and
   the kind. That is damage, not a later version.
 - A framed record or snapshot of a later format is read. A change of a kind this build does not know is skipped
@@ -259,7 +260,7 @@ prompt. So at most one process ever has a store open for writing, and the operat
    neither serving nor ending and how to find it. Only readers holding it past their wait: exit 1.
 3. Bind the control socket (a server says it serves on it: exit 0), recording the socket file it made (its device and
    inode).
-4. Only then settle the sessions against the accounts and restore the friends' drivers, which may commit to the
+4. Only then settle the sessions against the accounts and restore the AIs' drivers, which may commit to the
    journal and start a driver for a queued prompt.
 
 Nothing writes a record or starts a driver before the lock and the socket are both held. Exit 0 is a start refused
@@ -359,6 +360,12 @@ a field, an enum value and a union arm (`tests/wire/next/NexusNext.schema`) and 
 ways. Step 2 is in: the state and the actions are on the tables from format 4 (the hand-written codecs stay for links
 of 1 to 3, so an older end still works), and the Hello replaces the old floors. The store is next; its record and
 snapshot formats above are unchanged.
+
+A rename is `| was = "<first name>"` (schema's §5): the id stays the hash of the first name, so the bytes do not move
+and every reader, older or newer, reads the renamed field as before. When nexus called its AIs "AI" (2026-11-25),
+`friend_name`, `friends`, `friends_known`, `friends_sent`, the table `Friend` and the values `Friend` and `AddFriend`
+became `ai_name`, `ais`, `ais_known`, `ais_sent`, `AI` and `AddAI` this way; `schema/tables.baseline` records each
+first name, and `wire_unit_versions` and the fixtures of main's formats read them both ways unchanged.
 
 Encode and decode on the link thread, never the window's frame thread (`tests/sync/wire_bench`, release build, mean of
 one): a typical frame's diff (one open entry grown by 120 bytes, 404 bytes) 0.023 ms to encode and 0.002 ms to

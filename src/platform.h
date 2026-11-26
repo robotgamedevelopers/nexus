@@ -41,4 +41,14 @@ void trackForegroundPriority(const PrSurface& surface, const std::function<void(
 
 bool coverScreen(const PrSurface& surface);
 
+#if !NEXUS_PROCESSES
+// Whether the UIKit view behind `surface` is laid out in a regular horizontal size class (an iPad's full screen, or a
+// wide part of it), as against a compact one (an iPhone, or a narrow iPad split). False for any other surface.
+bool regularWidth(const PrSurface& surface);
+// Lets the UIKit view behind `surface` go as the first responder, so that Prax, raising the keyboard at the end of this
+// frame, makes it the first responder afresh and the system presents its keyboard whole (keyboard_start.h). Nothing
+// for any other surface.
+void releaseFirstResponder(const PrSurface& surface);
+#endif
+
 } // namespace nexus

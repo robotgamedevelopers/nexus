@@ -5,6 +5,7 @@
 #include <optional>
 #include <vector>
 
+#include "account_menu.h"
 #include "model.h"
 #include "policy/host.h"
 #include "style.h"
@@ -12,7 +13,7 @@
 
 namespace nexus {
 
-enum class WindowCommand { ScrollTranscript, ClearComposer, ReplaceDraft, SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit };
+enum class WindowCommand { ScrollTranscript, ClearComposer, ReplaceDraft, SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit, AccountMenu };
 struct Shortcut {
     PrAppKey key;
     PrAppModifierFlags modifiers;
@@ -53,8 +54,8 @@ struct PromptStyle {
     float caretHeight = style::kCursorHeight, caretRadius = style::kCursorRadius, caretSeconds = 1.5f;
     float caretHold = 0.1f, caretFallRatio = 0.5f;
     PrVec2 segmentSize(float scale) const {
-        const float height = caretHeight * scale;
-        return {height * caretAspect, height};
+        const float h = caretHeight * scale;
+        return {h * caretAspect, h};
     }
     bool bold = false, showPlus = false;
     bool operator==(const PromptStyle&) const = default;
@@ -68,6 +69,8 @@ PrAppHotkey overlayBinding(policy::Host& host, std::string& why);
 inline constexpr double kLockIdleMinutesDefault = 10;
 inline constexpr double kLockIdleMinutesMost = 240;
 double lockIdleSeconds(policy::Host& host, std::string& why);
+// The same from the rule's answer (JSON), for the tests.
+double lockIdleSecondsFrom(const std::string& answer, std::string& why);
 
 struct Chirp {
     float startHz = 440, endHz = 440, durationMs = 50, gain = 0;
@@ -81,6 +84,7 @@ struct AccountSurface {
     std::vector<std::string> tabTitles;
     TabStyle tabs;
     PromptStyle prompt;
+    AccountMenuStyle accountMenu;   // the menu under an AI's tab (account_menu.h), from the policy's account_menu
     bool showTabs = true, reorderTabs = true, promptCommand = false;
 };
 
@@ -135,7 +139,7 @@ struct TranscriptStyle {
 };
 
 struct SignInAccount {
-    std::string name, label, email, provider{}, friendName{};
+    std::string name, label, email, provider{}, aiName{};
     bool operator==(const SignInAccount&) const = default;
 };
 

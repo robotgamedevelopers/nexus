@@ -118,7 +118,7 @@ void PraxTerminals::run() {
         if (!ending_ && (recheck_ || std::chrono::steady_clock::now() >= watchAt)) {
             recheck_ = false;
             const std::map<std::size_t, int> shells = shells_;
-            const std::vector<Machine> machines = watched_;
+            const std::vector<Machine> watchedMachines = watched_;
             const std::map<std::size_t, ForegroundSeen> snapshot = watch_;
             lock.unlock();
             struct Polled {

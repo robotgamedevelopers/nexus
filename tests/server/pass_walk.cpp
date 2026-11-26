@@ -104,9 +104,9 @@ std::string tlaEntry(const sync::SessionEntry& e) {
     if (e.kind == EntryKind::Person) {
         return "[k |-> \"P\", t |-> 0, p |-> " + tlaPrompt(parsePrompt(e.text)) + "]";
     }
-    if (e.kind == EntryKind::Friend) {
+    if (e.kind == EntryKind::AI) {
         if (e.text.rfind("reply:", 0) != 0) {
-            std::fprintf(stderr, "pass_walk: unexpected friend entry '%s'\n", e.text.c_str());
+            std::fprintf(stderr, "pass_walk: unexpected AI entry '%s'\n", e.text.c_str());
             std::exit(1);
         }
         const std::uint64_t t = std::strtoull(e.text.substr(6).c_str(), nullptr, 10);
@@ -314,7 +314,7 @@ public:
         openServer();
         sync::Action ensure;
         ensure.kind = sync::ActionKind::Ensure;
-        ensure.friendName = "ada";
+        ensure.aiName = "ada";
         if (!hub_->apply(ensure) || hub_->failed()) {
             std::fprintf(stderr, "pass_walk: failed to create initial session\n");
             std::exit(1);
@@ -392,7 +392,7 @@ private:
         opts.machine = "box";
         opts.host = &host_;
         opts.readTable = [](std::string* text, std::string*) {
-            *text = "driver claude /fake/driver\nfriend ada claude /work\n";
+            *text = "driver claude /fake/driver\nai ada claude /work\n";
             return true;
         };
         opts.quiet = true;
@@ -400,7 +400,7 @@ private:
         hub_ = std::make_unique<sync::Hub>(store_, limits_, drivers_.get());
         drivers_->attach(*hub_);
         accounts::Registry reg;
-        reg.friends.push_back(accounts::Friend{"ada", {}, std::string()});
+        reg.ais.push_back(accounts::AI{"ada", {}, std::string()});
         hub_->useAccounts(reg, nullptr);
         if (!drivers_->start(now_)) {
             std::fprintf(stderr, "pass_walk: drivers start failed\n");
@@ -670,7 +670,7 @@ private:
         opts.machine = "box";
         opts.host = &host_;
         opts.readTable = [](std::string* text, std::string*) {
-            *text = "driver claude /fake/driver\nfriend ada claude /work\n";
+            *text = "driver claude /fake/driver\nai ada claude /work\n";
             return true;
         };
         opts.quiet = true;
@@ -678,7 +678,7 @@ private:
         hub_ = std::make_unique<sync::Hub>(store_, limits_, drivers_.get());
         drivers_->attach(*hub_);
         accounts::Registry reg;
-        reg.friends.push_back(accounts::Friend{"ada", {}, std::string()});
+        reg.ais.push_back(accounts::AI{"ada", {}, std::string()});
         hub_->useAccounts(reg, nullptr);
         if (!drivers_->start(now_)) {
             std::fprintf(stderr, "pass_walk: crash recovery drivers start failed\n");

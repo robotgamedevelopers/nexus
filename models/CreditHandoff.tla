@@ -9,7 +9,7 @@ EXTENDS Sequences, FiniteSets, Naturals
 Order == <<"a", "b", "c">>
 Accounts == {Order[i] : i \in DOMAIN Order}
 Request == <<"person", "request">>
-Prefix == <<Request, <<"friend", "partial">>>>
+Prefix == <<Request, <<"ai", "partial">>>>
 
 VARIABLES pinned, eligible, session, content, payers, stopped
 vars == <<pinned, eligible, session, content, payers, stopped>>

@@ -472,14 +472,17 @@ void PraxBoard::run() {
     std::unique_lock<std::mutex> lock(mutex_);
     pageUrl_ = desc_.url;
     if (pageUrl_.empty() && desc_.fromServer) {
-        lookupError_ = "waiting for nexus-server to say where the sprint board is";
+        lookupError_ = "waiting for nexus-server to say which dashboards it offers";
         if (app_) prAppWake(app_);
-        // Frames are acknowledged while it waits, as while a lookup fails (below).
+        // Frames are acknowledged while it waits, as while a lookup fails (below). The wait has a predicate: a frame
+        // posted before this thread first waits must not be missed, or its poster waits for ever (wait()).
         while (!ending_ && !offered_) {
-            wake_.wait(lock);
             done_ = posted_;
             stepped_.notify_all();
+            wake_.wait(lock, [&] { return ending_ || offered_ || done_ != posted_; });
         }
+        done_ = posted_;
+        stepped_.notify_all();
         lookupError_.clear();
         pageUrl_ = offeredUrl_;
     }
@@ -488,8 +491,8 @@ void PraxBoard::run() {
 #if NEXUS_PROCESSES
         auto found = desc_.find ? desc_.find() : findSprintBoard();
 #else
-        auto found = desc_.find ? desc_.find() : SprintBoardAddress{{}, "nexus-server sends no sprint board address: "
-            "it runs no sprint-run service, or is older than this window; the dashboard shows once it does"};
+        auto found = desc_.find ? desc_.find() : SprintBoardAddress{{}, "nexus-server offers no dashboard: "
+            "its config has no dashboard line, or it is older than this window"};
 #endif
         lock.lock();
         if (pageUrl_.empty() && offered_ && !offeredUrl_.empty()) {
@@ -956,6 +959,8 @@ void PraxBoard::addPageStyle() {
                     prDomNodeSetTextContent(prDomElementAsNode(element), sv(to));
             };
             auto* root = prDomDocumentAsNode(document);
+            // The sprint dashboard (nova-sprint) names its section and column "friends"; those ids and labels are its
+            // own, so the word stays here only, and nexus shows them as "AIs" and "AI".
             auto* subtitle = prDomNodeGetElementById(root, sv("friends-sub"));
             if (subtitle) rename(prDomNodePreviousElementSibling(prDomElementAsNode(subtitle)), "Friends", "AIs");
             auto* rows = prDomNodeGetElementById(root, sv("friends"));
@@ -1095,12 +1100,27 @@ int arrowOf(const PrAppEvent& e, bool plain) {
     return e.keyboard.key == PrAppKey_Up ? -1 : e.keyboard.key == PrAppKey_Down ? 1 : 0;
 }
 
+// The key as Prax's view reads it. Command-Up and Command-Down go to the top and the bottom; Prax reads Command as
+// Super or Control, and ignores a key held with Alt, so where Command is Alt (Windows and Linux, style::kCommand) they
+// reach it as Home and End.
+PrAppEvent forPrax(const PrAppEvent& e) {
+    PrAppEvent out = e;
+    const bool keyEvent = e.kind == PrAppEventKind_KeyDown || e.kind == PrAppEventKind_KeyUp;
+    if ((style::kCommand & PrAppModifierFlag_Alt) != 0 && keyEvent && (e.modifiers & style::kCommand) != 0 &&
+        (e.keyboard.key == PrAppKey_Up || e.keyboard.key == PrAppKey_Down)) {
+        out.keyboard.key = static_cast<PrAppKey>(e.keyboard.key == PrAppKey_Up ? PrAppKey_Home : PrAppKey_End);
+        out.modifiers = static_cast<PrAppModifierFlags>(e.modifiers & ~style::kCommand);
+    }
+    return out;
+}
+
 } // namespace
 
 // Keys and the wheel go through the scroller (scroll_glide.h), which gives each to Prax's view and moves the page where
 // it went over the next frames; a trackpad's scroll and a press stop that motion where the page shows and go to the
 // view as they are. Returns false for an event the page must not see (a held arrow's repeat).
-bool PraxBoard::scrollEvent(const PrAppEvent& e) {
+bool PraxBoard::scrollEvent(const PrAppEvent& event) {
+    const PrAppEvent e = forPrax(event);
     PrDomElement* s = scroller();
     if (s == nullptr) {
         prHtmlViewEvent(view_, &e, 0);

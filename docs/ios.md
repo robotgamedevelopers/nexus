@@ -15,7 +15,7 @@ with the iOS targets (`rustup target add aarch64-apple-ios aarch64-apple-ios-sim
 cmake -S . -B build-ios-sim -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator \
   -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_TYPE=Release
 cmake --build build-ios-sim -j "$(sysctl -n hw.ncpu)"
-ctest --test-dir build-ios-sim -L 'unit|ios' -j "$(sysctl -n hw.ncpu)"
+ctest --test-dir build-ios-sim -j "$(sysctl -n hw.ncpu)"
 
 # Devices (arm64)
 cmake -S . -B build-ios -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -28,7 +28,8 @@ SHA-256 (`cmake/ios_link.cmake`): protobuf's lite runtime with protoc for the Ma
 
 The app is `build-ios*/nexus.app`, signed ad hoc as the simulator requires. The simulator build's tests run on a
 simulator device through Prax's runner (ctest's emulator), which boots an available iOS device unless
-`PR_SIMULATOR_DEVICE` names one. CI builds both and runs the tests (`.github/workflows/ios.yml`).
+`PR_SIMULATOR_DEVICE` names one. CI builds both on every pull request and runs the tier_pr tests on a simulator
+device (`.github/workflows/ios.yml`); the nightly runs the rest (nightly.yml ios-nightly, docs/ci-tiers.md).
 
 To see the app in the simulator: `xcrun simctl install booted build-ios-sim/nexus.app`, then
 `xcrun simctl launch booted com.robotgamedevelopers.nexus`. With `--state FILE` after the identifier it shows a server's
@@ -55,6 +56,11 @@ ssh is inside the app (`src/link/inapp_ssh.h`, libssh2 over mbedTLS); everything
 
 - **The server's host key** is trusted on first use and kept in `known_hosts` in the client home; a different key later is
   refused, with what to do.
+- **What it runs there.** `nexus-server new`, unless the client config's `server-command <words>` (or
+  `--server-command <words>` at launch) names another command, as on the desktop: words split at spaces and tabs, with no
+  quoting (`src/link/bootstrap.h` serverCommandWords), such as the mock's `/usr/bin/env HOME=<home> <nexus-server> new
+  --dir <dir>`. A key behind `nexus-ios-gate` runs only `nexus-server new` and `history-page`, so the gate refuses any
+  other command: a server command reaches only a server whose key is not behind the gate.
 
 Until the server has sent a tab, the window shows the link's line: connecting, or why it failed.
 
@@ -72,9 +78,10 @@ run time, everything that runs one (`src/build_parts.h`, `NEXUS_PROCESSES`; `cma
 
 - **nexus-server**, its store and drivers. The server runs on a Mac or Linux machine; the app reaches it.
 - **Terminal tabs.** A terminal tab is a local login shell. There is no Command-T.
-- **Looking up the sprint board.** A desktop window can find the board's address itself by running nova-config. The
-  app takes the address nexus-server sends in its state (`SessionsDiff.sprint_url`, `docs/formats.md`) and shows the
-  board in its sprint tab, the Dashboard, through the same page code as the desktop (`src/board.cpp`).
+- **Looking up a dashboard.** A desktop window can still find the sprint's board itself by running nova-config. The
+  app takes the dashboards nexus-server sends in its state (`SessionsDiff.dashboards`, `docs/formats.md`), from the
+  server's config, and shows the first in its Dashboard tab through the same page code as the desktop
+  (`src/board.cpp`). A tab for each dashboard, on every client, is the next step.
 - **Attachments.** A file goes to the server through ssh running `nexus-receive`, a child process. The in-app ssh
   runs only the link's commands, so attaching a file, or pasting text long enough to become one, says that it is not
   available on iOS yet; nothing is lost.
@@ -89,6 +96,11 @@ iOS is the container, whose top an app may not write. It holds what the desktop 
 An iOS app's window is the system's to show, so there is no overlay and no global hotkey: the app's window fills its
 scene, on iPhone and on iPad. Command is the key left of the space bar on an iPad's keyboard, as on a Mac, so the
 window's keys are the desktop's.
+
+The window is laid out inside the safe area, clear of the status bar and the home indicator, and while the on-screen
+keyboard shows, in the room above it, so the prompt sits at the safe area's foot or just above the keyboard. A tap
+outside the prompt's box ends editing and lowers the keyboard, as in other apps; a drag or a scroll, a tap in the
+prompt's box and a tap on a tab do not, and the draft stays. A tap in the prompt's box, or a key typed, edits again.
 
 ## The lock
 

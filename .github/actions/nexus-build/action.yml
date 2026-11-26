@@ -1,0 +1,140 @@
+# Configure and build nexus on a macOS or Linux runner: after fleet-build on the fleet's runners (ci.yml, ios.yml,
+# cache-warm.yml: the runner's own build directory, NEXUS_BUILD), or after hosted-caches (nightly.yml's jobs that still
+# build in the checkout's build/).
+#   mac-release  Release with the link (mosh, protobuf), ThinLTO through the cache under $NEXUS_CACHES/lto (the
+#                nightly, on the fleet Mac)
+#   mac-debug    Debug with the link: no LTO (Prax turns it on for Release only), asserts on, and no debug information
+#                (-O0 alone: the build tree, its cache and the links are about half the size); ci.yml's macOS build
+#   mac-asan     Debug with AddressSanitizer and UndefinedBehaviorSanitizer, without the window, its logic and the link
+#   ios-device, ios-simulator   iOS arm64 (cmake/ios.cmake: the client alone) for devices or the simulator, Debug at -O0
+#                without debug information: no LTO, asserts on; ios.yml's builds
+#   linux-release  the same on Linux with clang and lld: no window (CMakeLists.txt), but its logic, the link and
+#                  nexus-server; named ON so a build directory configured without them turns them on; no sandbox tools
+#                  (claude-driver-wall-linux builds those)
+#   linux-asan     Debug with the sanitizers on Linux, with clang and lld, without the window, its logic and the link
+# Warnings are errors: CMakeLists.txt sets the flags.
+name: nexus-build
+description: Configure and build nexus
+inputs:
+  dir:
+    description: the build directory (fleet-build's NEXUS_BUILD; build/ when empty)
+    default: ""
+
+  config:
+    description: mac-release, mac-debug, mac-asan, ios-device, ios-simulator, linux-release or linux-asan
+    required: true
+  targets:
+    description: the targets to build (empty for all)
+    default: ""
+  lto:
+    description: >-
+      NEXUS_LTO for the Release configurations (mac-release, linux-release), ON or OFF: whole-program optimisation
+      (CMakeLists.txt). ci.yml and cache-warm.yml give OFF for the pull requests' build directories; the nightly keeps
+      the default.
+    default: "ON"
+runs:
+  using: composite
+  steps:
+    - name: Xcode and its Metal toolchain (Prax compiles Metal shaders)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        xcodebuild -version
+        # hosted-caches started the probe while the cache downloaded (its first run mounts the toolchain, about 12 s);
+        # its result is read here, and the probe runs now when nothing started it.
+        probe="$RUNNER_TEMP/metal-probe"
+        if [ -f "$probe.started" ]; then
+          # A probe that ended without a result fails at once, by name. On a GitHub-hosted Mac (2-minute jobs) it also
+          # has 120 s; on a fleet Mac (the nightly, no time limit) it has as long as it takes, reported each minute.
+          waited=0
+          while [ ! -f "$probe.rc" ]; do
+            if ! kill -0 "$(cat "$probe.pid")" 2>/dev/null && [ ! -f "$probe.rc" ]; then
+              echo "::error::the Metal toolchain probe started by hosted-caches ended without a result"
+              for part in log err; do if [ -f "$probe.$part" ]; then cat "$probe.$part"; fi; done
+              exit 1
+            fi
+            if [ "$RUNNER_ENVIRONMENT" = github-hosted ] && [ "$waited" -ge 120 ]; then
+              echo "::error::the Metal toolchain probe started by hosted-caches gave no result in 120 s"
+              for part in log err; do if [ -f "$probe.$part" ]; then cat "$probe.$part"; fi; done
+              exit 1
+            fi
+            if [ "$waited" -gt 0 ] && [ $((waited % 60)) -eq 0 ]; then
+              echo "still waiting for the Metal toolchain probe after $waited s"
+            fi
+            sleep 1
+            waited=$((waited + 1))
+          done
+          rc=$(cat "$probe.rc")
+          echo "the Metal toolchain probe exited $rc (waited $waited s here)"
+        else
+          rc=0
+          xcrun metal --version >/dev/null 2>&1 || rc=$?
+        fi
+        if [ "$rc" -ne 0 ]; then
+          echo "Xcode's Metal toolchain is not on this image: downloading it"
+          xcodebuild -downloadComponent MetalToolchain
+        fi
+        xcrun metal --version
+    - name: Configure
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        LTO: ${{ inputs.lto }}
+        DIR: ${{ inputs.dir || 'build' }}
+      run: |
+        set -euo pipefail
+        generator=()
+        if [ ! -f "$DIR/CMakeCache.txt" ]; then generator=(-G Ninja); fi
+        launch=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+        asan=("-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
+              "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined")
+        off=(-DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF)
+        linux_server=(-DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=ON -DNEXUS_LINK=ON -DNEXUS_SANDBOX_TOOLS=OFF)
+        case "$LTO" in ON|OFF) ;; *) echo "::error::nexus-build: lto is '$LTO', not ON or OFF"; exit 1 ;; esac
+        case "$CONFIG" in
+          mac-release)
+            cmake -S . -B "$DIR" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Release "${launch[@]}" \
+              -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-cache_path_lto,$NEXUS_CACHES/lto" \
+              -DNEXUS_E2E_TAILNET= "-DNEXUS_LTO=$LTO" ;;
+          mac-debug)
+            cmake -S . -B "$DIR" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Debug "${launch[@]}" \
+              -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache -DNEXUS_E2E_TAILNET= \
+              -DCMAKE_C_FLAGS_DEBUG=-O0 -DCMAKE_CXX_FLAGS_DEBUG=-O0 -DCMAKE_OBJC_FLAGS_DEBUG=-O0 -DCMAKE_OBJCXX_FLAGS_DEBUG=-O0 ;;
+          mac-asan)
+            cmake -S . -B "$DIR" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Debug "${off[@]}" "${launch[@]}" \
+              -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache "${asan[@]}" ;;
+          ios-device|ios-simulator)
+            sysroot=iphoneos
+            if [ "$CONFIG" = ios-simulator ]; then sysroot=iphonesimulator; fi
+            cmake -S . -B "$DIR" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Debug -DCMAKE_SYSTEM_NAME=iOS \
+              "-DCMAKE_OSX_SYSROOT=$sysroot" -DCMAKE_OSX_ARCHITECTURES=arm64 "${launch[@]}" \
+              -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_C_FLAGS_DEBUG=-O0 -DCMAKE_CXX_FLAGS_DEBUG=-O0 -DCMAKE_OBJC_FLAGS_DEBUG=-O0 -DCMAKE_OBJCXX_FLAGS_DEBUG=-O0 ;;
+          linux-release)
+            CC=clang CXX=clang++ cmake -S . -B "$DIR" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Release "${linux_server[@]}" "${launch[@]}" \
+              -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto" "-DNEXUS_LTO=$LTO" ;;
+          linux-asan)
+            CC=clang CXX=clang++ cmake -S . -B "$DIR" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Debug "${off[@]}" "${launch[@]}" \
+              -DCMAKE_LINKER_TYPE=LLD "${asan[@]}" ;;
+          *) echo "::error::nexus-build: unknown config '$CONFIG'"; exit 1 ;;
+        esac
+    - name: Build
+      shell: bash
+      env:
+        TARGETS: ${{ inputs.targets }}
+        DIR: ${{ inputs.dir || 'build' }}
+      run: |
+        set -euo pipefail
+        targets=()
+        for t in $TARGETS; do targets+=(--target "$t"); done
+        # On a fleet machine other runners' jobs share the cores: Ninja starts no new compile while the load is above
+        # the core count (-l), so a full rebuild takes every idle core and leaves the rest to them.
+        load=()
+        if [ "$RUNNER_ENVIRONMENT" = self-hosted ] && grep -q '^CMAKE_GENERATOR:INTERNAL=Ninja$' "$DIR/CMakeCache.txt"; then
+          load=(-- -l "$JOBS")
+        fi
+        start=$(date +%s)
+        cmake --build "$DIR" --parallel "$JOBS" ${targets[@]+"${targets[@]}"} ${load[@]+"${load[@]}"}
+        echo "built in $(( $(date +%s) - start )) s"
+        ccache --show-log-stats

@@ -26,7 +26,7 @@ const UnitViewInfo * UnitView()
         { 8, "SetEffort", 0x7aa5e74b9dd7baa5ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 9, "AddAccount", 0xe8b69819a6b671dbull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 10, "RemoveAccount", 0x49d09394f5773664ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
-        { 11, "AddFriend", 0xf7368f51997e9bccull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 11, "AddAI", 0xf7368f51997e9bccull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 12, "LinkAccount", 0xff7b88c2ff4bff78ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 13, "UnlinkAccount", 0xdea837e630d4d73dull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 14, "SetDefault", 0xd9292b9837d05494ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
@@ -50,7 +50,7 @@ const UnitViewInfo * UnitView()
     static const ViewVariant EntryKind_view_variants[] = {
         { 0, "None", 0, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 1, "Person", 0x40d76f1f51639ec0ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
-        { 2, "Friend", 0x9f57a2661b8a7e2dull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 2, "AI", 0x9f57a2661b8a7e2dull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 3, "Notice", 0x9117fb5195e75151ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 4, "Tool", 0x5a71f1fb3a12c6a7ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 5, "Bus", 0x166a3d19b1137d79ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
@@ -78,13 +78,14 @@ const UnitViewInfo * UnitView()
         { "Change", "NexusNext.schema", 6, 8, 7, Change_view_variants, TableDocNone, 0, NULL },
     };
     static const ViewType tables[] = {
+        { "AI", "NexusNext.schema", true, AITableType(), TableDocNone, 0, NULL },
         { "AccountChoice", "NexusNext.schema", true, AccountChoiceTableType(), TableDocNone, 0, NULL },
         { "Action", "NexusNext.schema", true, ActionTableType(), TableDocNone, 0, NULL },
         { "ActionsDiff", "NexusNext.schema", true, ActionsDiffTableType(), TableDocNone, 0, NULL },
         { "ClientCounter", "NexusNext.schema", true, ClientCounterTableType(), TableDocNone, 0, NULL },
+        { "Dashboard", "NexusNext.schema", true, DashboardTableType(), TableDocNone, 0, NULL },
         { "Driver", "NexusNext.schema", true, DriverTableType(), TableDocNone, 0, NULL },
         { "EntryChange", "NexusNext.schema", true, EntryChangeTableType(), TableDocNone, 0, NULL },
-        { "Friend", "NexusNext.schema", true, FriendTableType(), TableDocNone, 0, NULL },
         { "Hello", "NexusNext.schema", true, HelloTableType(), TableDocNone, 0, NULL },
         { "Record", "NexusNext.schema", true, RecordTableType(), TableDocNone, 0, NULL },
         { "SecretRequest", "NexusNext.schema", true, SecretRequestTableType(), TableDocNone, 0, NULL },
@@ -98,7 +99,7 @@ const UnitViewInfo * UnitView()
     };
     static const UnitViewInfo info = { "nexuswirenext", 0x2f2450356481543cull,
         0, NULL,
-        17, tables,
+        18, tables,
         3, enums,
         0, NULL,
         1, unions,
