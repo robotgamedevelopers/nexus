@@ -5,13 +5,17 @@
 // With --compare, the shot is then compared with a golden image (matches below), and the exit says whether it matched.
 //
 //   nexus_ios_shot STATE OUT.png WIDTH HEIGHT RATIO [--lost] [--tab N] [--status TEXT] [--text-steps N]
-//                  [--ask-server TEXT] [--compare GOLDEN.png]
+//                  [--ask-server TEXT] [--accounts menu|dialog] [--compare GOLDEN.png]
 //
 // STATE `-` is none: the window before the server has sent anything, with no tab. --status sets the link's line (what
 // FrameHost::pollLink writes, sync::linkStatus). The text scale is the one an iOS window starts at
 // (style.h kDefaultTextSteps), or --text-steps. --ask-server shows the server dialog (server_choice.h) as at first
-// launch, with TEXT typed in its field and, when TEXT is not an address, the reason under it.
+// launch, with TEXT typed in its field and, when TEXT is not an address, the reason under it. --accounts gives every AI
+// of the state three accounts (two signed in, the first current, and one that needs signing in) and shows the account
+// menu (docs/accounts.md, "Switching accounts"): menu, a finger pressed on the active AI's tab and slid straight down
+// onto the second account (routeAccountMenu, as the window feeds it the pointer); dialog, the /account dialog.
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,8 +27,11 @@
 #include "pr/compress_select.h"
 #include "pr/font_set.h"
 #include "pr/png.h"
+#include "pr/layout_query.h"
 #include "pr/text_font.h"
+#include "pr/ui.h"
 
+#include "account_menu.h"
 #include "frame_host.h"
 #include "model.h"
 #include "offscreen.h"
@@ -34,6 +41,43 @@
 #include "view.h"
 
 namespace {
+
+// The state with three accounts for every AI it shows, the first current in each session: the menu's rows.
+nexus::sync::Sessions withAccounts(const nexus::sync::Sessions& held) {
+    using nexus::sync::AccountChoice;
+    const std::vector<AccountChoice> accounts{
+        {"home", "Home", false, "person@home.example"},
+        {"work", "Work", false, "a.person.with.a.long.work.address@robotgamedevelopers.example"},
+        {"spare", "Spare", true, "spare@example.test"},
+    };
+    std::vector<nexus::sync::SessionRef> sessions;
+    std::vector<std::string> names;
+    for (const auto& s : held.sessions()) {
+        auto copy = std::make_shared<nexus::sync::SessionView>(*s);
+        copy->info.account = "home";
+        sessions.push_back(copy);
+        if (std::find(names.begin(), names.end(), s->info.aiName) == names.end()) names.push_back(s->info.aiName);
+    }
+    nexus::sync::Sessions out = held;
+    out.replaceSessions(std::move(sessions));
+    std::vector<nexus::sync::ServerAI> ais;
+    if (held.aisKnown()) {
+        for (const auto& f : held.ais()) ais.push_back({f.name, accounts});
+    } else {
+        for (const auto& name : names) ais.push_back({name, accounts});
+    }
+    out.setAIs(std::move(ais));
+    return out;
+}
+
+PrAppEvent pointer(PrAppEventKind kind, PrVec2 at) {
+    PrAppEvent e{};
+    e.kind = kind;
+    e.pointer.position = at;
+    e.pointer.primary = true;
+    e.pointer.type = PrAppPointerType_Touch;
+    return e;
+}
 
 // The RGBA8 pixels of the PNG at `path`, as the shot writes them (4 channels of 8 bits). False, with why, if not.
 bool readPng(const char* path, std::vector<uint8_t>* pixels, PrUVec2* extent, std::string* why) {
@@ -114,7 +158,7 @@ struct FirstLaunch : nexus::ServerChoice {
 int main(int argc, char** argv) {
     if (argc < 6) {
         std::fprintf(stderr, "usage: nexus_ios_shot STATE|- OUT.png WIDTH HEIGHT RATIO [--lost] [--tab N] [--status TEXT] "
-            "[--text-steps N] [--ask-server TEXT] [--compare GOLDEN.png]\n");
+            "[--text-steps N] [--ask-server TEXT] [--accounts menu|dialog] [--compare GOLDEN.png]\n");
         return 2;
     }
     const std::string state = argv[1];
@@ -128,6 +172,7 @@ int main(int argc, char** argv) {
     const char* golden = nullptr;
     const char* status = nullptr;
     const char* askServer = nullptr;
+    const char* accounts = nullptr;
     int textSteps = nexus::style::kDefaultTextSteps;
     for (int i = 6; i < argc; ++i) {
         if (std::strcmp(argv[i], "--lost") == 0) {
@@ -140,6 +185,9 @@ int main(int argc, char** argv) {
             textSteps = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--ask-server") == 0 && i + 1 < argc) {
             askServer = argv[++i];
+        } else if (std::strcmp(argv[i], "--accounts") == 0 && i + 1 < argc &&
+                   (std::strcmp(argv[i + 1], "menu") == 0 || std::strcmp(argv[i + 1], "dialog") == 0)) {
+            accounts = argv[++i];
         } else if (std::strcmp(argv[i], "--compare") == 0 && i + 1 < argc) {
             golden = argv[++i];
         } else {
@@ -156,6 +204,13 @@ int main(int argc, char** argv) {
     if (state != "-" && !nexus::readStateAt(state, &held, &why)) {
         std::fprintf(stderr, "nexus_ios_shot: %s\n", why.c_str());
         return 2;
+    }
+    if (accounts != nullptr) {
+        if (state == "-") {
+            std::fprintf(stderr, "nexus_ios_shot: --accounts needs a state\n");
+            return 2;
+        }
+        held = withAccounts(held);
     }
     // No sprint tab on iOS (platform.h NEXUS_PROCESSES).
     nexus::Model model({}, false);
@@ -194,6 +249,29 @@ int main(int argc, char** argv) {
         nexus::OffscreenFrame off(view, fonts, PrVec2{width, height}, ratio, false);
         // Enough frames for every query to read a layout, as the desktop's screenshot draws.
         for (int i = 0; i < 4; ++i)
+            off.frame();
+        if (accounts != nullptr && std::strcmp(accounts, "dialog") == 0) {
+            if (!nexus::openAccountDialog(view, nexus::AccountMenuView::Dialog::Account))
+                std::fprintf(stderr, "nexus_ios_shot: the /account dialog did not open\n");
+        } else if (accounts != nullptr) {
+            PrLayoutTree* tree = prUiTree(off.ui());
+            if (view.menuAnchor == kPrLayoutNodeNone || !prLayoutNodeIsValid(tree, view.menuAnchor)) {
+                std::fprintf(stderr, "nexus_ios_shot: the active tab is not an AI's\n");
+                return 1;
+            }
+            const PrRect tab = prLayoutRectToPx(prLayoutNodeBounds(tree, view.menuAnchor, PrLayoutCoordinates_Viewport));
+            const PrVec2 press{(tab.left + tab.right) / 2, (tab.top + tab.bottom) / 2};
+            nexus::routeAccountMenu(view, off.ui(), pointer(PrAppEventKind_PointerDown, press));
+            off.frame();
+            const auto& rows = view.accounts.layout.rows;
+            if (rows.size() < 2) {
+                std::fprintf(stderr, "nexus_ios_shot: the account menu did not open\n");
+                return 1;
+            }
+            nexus::routeAccountMenu(view, off.ui(),
+                                    pointer(PrAppEventKind_PointerMove, PrVec2{press.x, (rows[1].top + rows[1].bottom) / 2}));
+        }
+        for (int i = 0; accounts != nullptr && i < 4; ++i)
             off.frame();
         code = off.write(out, false) ? 0 : 1;
     }

@@ -198,7 +198,7 @@ only when Claude reports that email for the login just completed. A mismatch or 
 leaves the selected slot awaiting sign-in.
 
 To clear an existing Nexus login, open the AI tab, type `/logout`
-in the AI's prompt, and press **Enter**. Finish or stop active work using that login and finish
+in the AI's prompt, press **Enter**, and confirm. Finish or stop active work using that login and finish
 or cancel an in-progress sign-in first. This removes the Nexus credential for that account across
 the AIs that share it. Other account slots and the sign-in session in your browser are independent.
 Press **Enter** on the sign-in card to enroll that account again.
@@ -206,6 +206,28 @@ Press **Enter** on the sign-in card to enroll that account again.
 A configured Claude email also applies to existing accounts at upgrade. An older `setup-token`
 contains no email that Nexus can verify. The first use requires one browser sign-in to establish
 the identity for that slot. The upgrade preserves the old credential file and conversation history.
+
+### Switching accounts
+
+An AI can keep several accounts signed in at once and move between them without signing in again.
+
+- **The menu under the tab.** Press the active AI's tab (on iPhone, the AI's name at the top of its page). The
+  menu opens at once, just below the tab's highlight, its left edge on the highlight's. It lists the AI's
+  signed-in accounts, the current one marked, and last **Sign in to another account…**. Keep the finger down,
+  slide onto an account and lift: the AI switches to it. Lift anywhere else and the menu closes with no change;
+  no menu stays open for a tap. Slide mostly sideways instead and the menu closes and the tab moves, as a drag of
+  a tab always did. A press on another tab is unchanged: a tap switches to it, a drag moves it. The tab and its
+  label look exactly the same throughout.
+- **`/account`** opens the same list as a dialog. Its last row runs `/login`.
+- **`/login`** signs in another of the AI's linked accounts without signing out first. The AI stays on its
+  current account while the sign-in runs; a cancelled or failed sign-in leaves everything as it was. When the
+  sign-in completes, the AI switches to the new account at once.
+- **`/logout`** asks first, naming the email, then deletes that account's saved login. If the AI was on it, the
+  AI moves to its next signed-in account, or shows the sign-in prompt when there is none.
+
+After a switch the old account's login stays saved, so the menu or `/account` switches back with no sign-in. The
+menu's look is the client policy's `account_menu` ([policy.md](policy.md#the-account-menu)). The gesture is
+modelled in `models/AccountMenu.tla`, and the code's traces are checked against it.
 
 ## ais.json
 
