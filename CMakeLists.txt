@@ -672,7 +672,8 @@ if(NEXUS_TAILSCALE)
     add_subdirectory(tests/tailscale)
 endif()
 # The watch's core, its tests and models, and on macOS with the link the phone's relay host (watch/CMakeLists.txt).
-if(NOT WIN32)
+# Not in the iOS tree: its models run on the build machine (watch/tests/tlc.cmake), which an iOS build cannot run.
+if(NOT WIN32 AND NOT NEXUS_IOS)
     add_subdirectory(watch)
 endif()
 # Each test's tier (tier_pr or tier_nightly, cmake/tiers.cmake and tests/tiers.txt), given once every test above is
