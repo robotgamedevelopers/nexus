@@ -1610,7 +1610,8 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
             // models/SignInPaste.tla CodeWith: the desk takes it from the flow's holder alone, once, while its process
             // waits; any other is refused with a plain line in the tab it came from. The code is in no line.
             std::string refusal;
-            // The account the code is for: its flow's, while there is one; else the one the window's tab names.
+            // The account the code is for: its flow's, while there is one; once the flow is gone, the one the window's
+            // own action names (its word alone; the notice still goes only into a session on that account).
             std::string account = signInFlowAccount(action.request).first;
             if (account.empty()) {
                 account = action.account;

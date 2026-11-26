@@ -486,9 +486,11 @@ private:
     bool pasteInstead() const;
     void askPasteLogin(const std::string& account);
     void noteAccount(const std::string& account, const std::string& text);  // a notice in each session on it
-    // A sign-in refusal as a notice in `session`, the one the window acted in, only when that session is on `account`,
-    // the account the sign-in is for: the id comes from the window and is checked, never trusted. Otherwise a log line
-    // and no notice.
+    // A sign-in refusal as a notice in `session`, the one the window acted in, only when that session is on `account`:
+    // the session id comes from the window and is checked, never trusted. The caller passes the live flow's account,
+    // or, once the flow is gone, the account the window's own action names (then it is the window's word alone, and
+    // the check only keeps the notice in a session on the account the window said). Otherwise a log line and no
+    // notice.
     void signInRefusal(SessionId session, const std::string& account, const std::string& text);
     // The account and provider of live flow `id`; empty when none.
     std::pair<std::string, std::string> signInFlowAccount(std::uint64_t id) const;
