@@ -2491,13 +2491,13 @@ bool anyTextHas(const std::vector<std::string>& texts, const std::string& part) 
 // terminals and the board are serviced unseen. Typing reaches nothing; Return asks the system, Escape hides. Unlocked
 // again, the same window shows the AIs' names and the draft, so the checks above can see them when they are there.
 void lockedWindowDrawsOnlyTheLockScreen() {
-    Harness h(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}, true, true);
+    Harness h(std::vector<AIInfo>{AIInfo{"alex", "m1"}, AIInfo{"emma", "m2"}}, true, true);
     h.commandT();
     const std::size_t terminal = h.active().id;
     CHECK(h.active().kind == TabKind::Terminal);
     CHECK(h.model.select_tab(1));
     h.frame();
-    CHECK(h.active().kind == TabKind::Friend);
+    CHECK(h.active().kind == TabKind::AI);
     h.type("secret plan");
     const std::string draft = h.active().draft;
     CHECK(draft == "secret plan");
