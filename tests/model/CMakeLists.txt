@@ -79,6 +79,8 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below. CAP s caps it at
 # s instead, nightly or not; a per-commit cap stays well inside the CI job's 2 minutes (.github/workflows/ci.yml, the
 # model shards, says how the per-commit caps and worker counts were measured).
+# The caps apply to a local run alone: the nightly, the one place these checks run in CI, configures
+# NEXUS_TLC_UNCAPPED, which drops every cap and ctest timeout (CMakeLists.txt).
 # With SEED, the walk is trace_walk (the window's model, FRIENDS friends); with LINKWALK, it is tests/sync's link_walk
 # (the link, WINDOWS windows), and FAULTY names one of its faults (applier, mirror, tail). Called from tests/sync too.
 # With SEED and LABEL, the walk is label_walk (a terminal tab's label, FRIENDS remotes).
@@ -154,7 +156,7 @@ function(tlc_test name module cfg expect)
     if(T_CAP)
         set(cap ${T_CAP})
     endif()
-    math(EXPR ctest_timeout "${cap} + 30")
+    nexus_tlc_limits(${cap} cap ctest_timeout)
     set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${models_dir}
              -DMODULE=${module} -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=${T_WORKERS} -DCAP=${cap})
     if(T_PROPERTY)
@@ -229,7 +231,7 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DCHURN=ON)
     endif()
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${tlc_script})
-    set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
+    set_tests_properties(${name} PROPERTIES LABELS ${label} ${ctest_timeout} PROCESSORS ${T_WORKERS})
 endfunction()
 
 tlc_test(tlc_bus_delivery_spec BusDelivery BusDelivery.cfg pass)

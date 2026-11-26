@@ -425,6 +425,22 @@ if(WIN32 AND NOT NEXUS_WINDOW)
 endif()
 
 enable_testing()
+# The TLC model checks run in the nightly alone, and a nightly test has no time limit (only per-commit unit and
+# functional tests have one, 2 minutes): there, NEXUS_TLC_UNCAPPED=ON drops each check's cap and ctest's timeout, and a
+# check runs until TLC finishes. A configure without it (a local run) keeps each check's cap.
+option(NEXUS_TLC_UNCAPPED "Run the TLC model checks with no time cap (the nightly)" OFF)
+# nexus_tlc_limits(<cap> <cap-var> <timeout-var>): <cap-var> is the cap tlc.cmake applies (0 for none), and
+# <timeout-var> the TIMEOUT property for set_tests_properties (empty for none).
+function(nexus_tlc_limits cap cap_var timeout_var)
+    if(NEXUS_TLC_UNCAPPED)
+        set(${cap_var} 0 PARENT_SCOPE)
+        set(${timeout_var} "" PARENT_SCOPE)
+    else()
+        math(EXPR timeout "${cap} + 30")
+        set(${cap_var} ${cap} PARENT_SCOPE)
+        set(${timeout_var} TIMEOUT ${timeout} PARENT_SCOPE)
+    endif()
+endfunction()
 if(TARGET nexus_policy)
     add_executable(policy_reload_test tests/policy/reload.cpp)
     target_link_libraries(policy_reload_test PRIVATE nexus_policy)
