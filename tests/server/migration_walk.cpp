@@ -321,7 +321,7 @@ struct Walk {
 
     std::string oldSnapBytes;
     std::string oldLogBytes;
-    std::string oldDriversBytes = "driver claude /usr/bin/node /d/main.js --account main\nfriend ada claude\n";
+    std::string oldDriversBytes = "driver claude /usr/bin/node /d/main.js --account main\nai ada claude\n";
     std::string newLogBytes;
 
     std::string oldSrv = "sock";

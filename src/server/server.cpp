@@ -328,7 +328,7 @@ bool positive(const std::string& num, std::size_t digits, std::uint64_t* out) {
     return *out != 0;
 }
 
-// One window's link: a mosh session, with the client it named. (The sessions with friends are the hub's.)
+// One window's link: a mosh session, with the client it named. (The sessions with AIs are the hub's.)
 struct Link {
     std::uint64_t id;
     std::string client;     // empty: a session that did not name its client
@@ -471,7 +471,7 @@ StartOrder::Outcome Server::openStore(std::string* why) {
         store_.size() == 1 ? "" : "s", static_cast<unsigned long long>(r.records), r.records == 1 ? "" : "s",
         static_cast<unsigned long long>(r.cut_bytes));
     if (r.migrated > 0) {
-        std::fprintf(stderr, "nexus-server: store %s: its %llu friend tab%s read as session%s, one each, and "
+        std::fprintf(stderr, "nexus-server: store %s: its %llu AI tab%s read as session%s, one each, and "
             "written in the sessions format\n", paths_.store.c_str(), static_cast<unsigned long long>(r.migrated),
             r.migrated == 1 ? "" : "s", r.migrated == 1 ? "" : "s");
     }
@@ -487,12 +487,12 @@ StartOrder::Outcome Server::openStore(std::string* why) {
 // dialog, the accounts (whose adoption commits to the journal), and last the drivers restored (which may commit and
 // start a driver for a queued prompt).
 bool Server::restoreAll(std::string* why) {
-    // The machine a friend's instance names to run here: the config's, else the short host name.
+    // The machine an AI's instance names to run here: the config's, else the short host name.
     const std::string host = hostName();
     const std::string machine = serverMachine(settings_.machine, host);
     if (machine.empty()) {
         std::fprintf(stderr, "nexus-server: this machine has no name (gethostname failed, and the config sets no "
-            "machine), so no friend's instance runs here; set `machine <name>` in %s\n", paths_.config.c_str());
+            "machine), so no AI's instance runs here; set `machine <name>` in %s\n", paths_.config.c_str());
     }
     if (!paths_.self.empty()) verifiedHelper_ = store::dir_of(paths_.self) + "/nexus-claude-auth";
     const char* path = std::getenv("PATH");
@@ -518,7 +518,7 @@ bool Server::restoreAll(std::string* why) {
         return std::any_of(links_.begin(), links_.end(),
                            [](const Link& l) { return l.link->format() >= sync::kSecretsFormat; });
     }, [] { return static_cast<std::uint64_t>(nowMs()); });
-    // The accounts and friends: what the config repository's HEAD holds (server/config_repo.h). The sessions are
+    // The accounts and AIs: what the config repository's HEAD holds (server/config_repo.h). The sessions are
     // settled against them before any driver starts.
     config_ = std::make_unique<ConfigRepo>([this] { return dirNow("nexus-config"); });
     hub_->signOutWith([this](const accounts::Account& account) -> std::string {
@@ -560,9 +560,12 @@ bool Server::restoreAll(std::string* why) {
     accounts::Registry registry;
     std::vector<std::string> report;
     const bool opened = config_->open(&configWhy);
+    if (opened && !config_->moved().empty()) {
+        std::fprintf(stderr, "nexus-server: config: %s\n", config_->moved().c_str());
+    }
     if (!opened) {
-        std::fprintf(stderr, "nexus-server: config: %s; the server holds no accounts and no friends list, so no "
-            "friend's driver starts and no prompt is sent; queued prompts are kept\n", configWhy.c_str());
+        std::fprintf(stderr, "nexus-server: config: %s; the server holds no accounts and no AIs list, so no "
+            "AI's driver starts and no prompt is sent; queued prompts are kept\n", configWhy.c_str());
     } else if (!config_->hasAccounts() && !config_->pending(&configWhy)) {
         // A server from before accounts: its accounts are what the drivers file passed with --account, so that no
         // session moves (server/driver_table.h accountsFromDrivers), committed as an upgrade.
@@ -574,12 +577,12 @@ bool Server::restoreAll(std::string* why) {
             text = all.str();
         }
         const accounts::Registry seed = accountsFromDrivers(parseDriverTable(text, paths_.home), machine);
-        if (!seed.accounts.empty() || !seed.friends.empty()) {
+        if (!seed.accounts.empty() || !seed.ais.empty()) {
             std::string why;
-            if (config_->keepSeed(seed, "upgrade: the accounts and friends taken from the drivers file (its --account "
-                              "values, and each friend's directory on this machine as its instance), so that every "
+            if (config_->keepSeed(seed, "upgrade: the accounts and AIs taken from the drivers file (its --account "
+                              "values, and each AI's directory on this machine as its instance), so that every "
                               "session runs as it ran before", &why)) {
-                std::fprintf(stderr, "nexus-server: config: accounts.json and friends.json made from %s\n",
+                std::fprintf(stderr, "nexus-server: config: accounts.json and ais.json made from %s\n",
                     paths_.drivers.c_str());
             } else {
                 std::fprintf(stderr, "nexus-server: config: the accounts in %s were not taken: %s\n",
@@ -593,8 +596,8 @@ bool Server::restoreAll(std::string* why) {
         for (const std::string& l : report) {
             std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
         }
-        std::fprintf(stderr, "nexus-server: config: the committed accounts and friends do not read, so the server "
-            "holds none until `nexus-server config reload` applies good ones; until then no friend's driver starts "
+        std::fprintf(stderr, "nexus-server: config: the committed accounts and AIs do not read, so the server "
+            "holds none until `nexus-server config reload` applies good ones; until then no AI's driver starts "
             "and no prompt is sent, and queued prompts are kept\n");
         hub_->keepWith(config_.get());
     } else {
@@ -605,7 +608,7 @@ bool Server::restoreAll(std::string* why) {
             std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
         }
         if (config_->adopting()) {
-            // The sessions from before accounts ran on their friend's --account: they keep it. Until all have, the
+            // The sessions from before accounts ran on their AI's --account: they keep it. Until all have, the
             // mark stays, so a server stopped part way (a store that failed) adopts the rest at its next start.
             for (const std::string& l : hub_->adoptDefaults()) {
                 std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
@@ -618,11 +621,11 @@ bool Server::restoreAll(std::string* why) {
             std::string adoptWhy;
             if (!config_->adopted(&adoptWhy)) {
                 std::fprintf(stderr, "nexus-server: config: %s; until it is removed, each start gives every session "
-                    "on no account its friend's default account again\n", adoptWhy.c_str());
+                    "on no account its AI's default account again\n", adoptWhy.c_str());
             }
         }
-        std::fprintf(stderr, "nexus-server: config: %zu account%s and %zu friend%s from %s\n", registry.accounts.size(),
-            registry.accounts.size() == 1 ? "" : "s", registry.friends.size(), registry.friends.size() == 1 ? "" : "s",
+        std::fprintf(stderr, "nexus-server: config: %zu account%s and %zu AI%s from %s\n", registry.accounts.size(),
+            registry.accounts.size() == 1 ? "" : "s", registry.ais.size(), registry.ais.size() == 1 ? "" : "s",
             config_->dir().c_str());
     }
     // In-app sign-in, once the accounts are held: each claude account with no login is offered for a browser sign-in.
@@ -639,7 +642,7 @@ bool Server::restoreAll(std::string* why) {
         }
     }
     if (!drivers_->start(nowMs())) {
-        *why = "the store failed while the friends' drivers were restored; restart the server";
+        *why = "the store failed while the AIs' drivers were restored; restart the server";
         return false;
     }
     services_ = std::make_unique<ServiceProcesses>(paths_.self, [this] { return dirNow("service-leases"); });
@@ -1025,7 +1028,7 @@ void Server::configApply(int fd, const std::string& request) {
         lines.push_back("the server has no config repository");
     } else if (request == "config reload") {
         ok = config_->working(&next, &lines);
-        message = "reload: the hand edit of accounts.json and friends.json applied (the person's or their AI's)";
+        message = "reload: the hand edit of accounts.json and ais.json applied (the person's or their AI's)";
     } else {
         const std::string commit = request.substr(std::string("config restore ").size());
         ok = config_->restoring(commit, &next, &lines);
@@ -1053,7 +1056,7 @@ void Server::configApply(int fd, const std::string& request) {
         std::fprintf(stderr, "nexus-server: config %s: %s%s\n", request.c_str() + 7, ok ? "applied: " : "refused: ",
             l.c_str());
     }
-    reply += ok ? "OK\n" : "ERROR nothing was applied; the server keeps the accounts and friends it had\n";
+    reply += ok ? "OK\n" : "ERROR nothing was applied; the server keeps the accounts and AIs it had\n";
     writeAll(fd, reply);
 }
 
@@ -1707,7 +1710,7 @@ bool ask(const Paths& p, const std::string& request, const std::string& self, st
 } // namespace
 
 bool paths(const std::string& dir, Paths* out, std::string* why) {
-    // HOME is needed with --dir too: a friend's directory in the drivers file may start with ~, and a driver finds its
+    // HOME is needed with --dir too: an AI's directory in the drivers file may start with ~, and a driver finds its
     // account under it.
     std::string defaultDir;
     if (!serverHome(std::getenv("HOME"), &out->home, &out->top, &defaultDir, why)) {
@@ -1787,7 +1790,7 @@ int config(const Paths& p, const std::vector<std::string>& args) {
         return 1;
     };
     if (verb == "path" && args.size() == 1) {
-        std::printf("%s\n%s\n%s\n", repo.dir().c_str(), repo.accountsPath().c_str(), repo.friendsPath().c_str());
+        std::printf("%s\n%s\n%s\n", repo.dir().c_str(), repo.accountsPath().c_str(), repo.aisPath().c_str());
         return 0;
     }
     if (verb == "sign-in" && args.size() == 2) {
@@ -1827,7 +1830,7 @@ int config(const Paths& p, const std::vector<std::string>& args) {
     }
     if (verb != "reload" && verb != "restore" && access((repo.dir() + "/.git").c_str(), F_OK) != 0) {
         return fail(repo.dir() + " is not made yet: nexus-server makes it when it starts (`nexus-server new` starts "
-            "it); write accounts.json and friends.json there (docs/accounts.md), and the first start takes them");
+            "it); write accounts.json and ais.json there (docs/accounts.md), and the first start takes them");
     }
     if (verb == "check" && args.size() == 1) {
         accounts::Registry working;
@@ -1908,7 +1911,7 @@ int config(const Paths& p, const std::vector<std::string>& args) {
                          "       nexus-server config restore <commit> [--dir DIR]\n"
                          "       nexus-server config remote [<url> | --clear] [--dir DIR]\n"
                          "       nexus-server config sign-in <account> [--dir DIR]\n"
-                         "The accounts and friends are DIR/nexus-config/accounts.json and friends.json\n"
+                         "The accounts and AIs are DIR/nexus-config/accounts.json and ais.json\n"
                          "(docs/accounts.md)\n");
     return 2;
 }

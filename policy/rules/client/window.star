@@ -56,7 +56,7 @@ def _bind(shortcuts, chord, command):
 # A fork orders groups, assigns tab types and grants each group's operations.
 _BUILTINS = [
     {"id": "dashboards", "types": ["sprint"], "closable": False},
-    {"id": "friends", "types": ["friend"], "closable": False},
+    {"id": "ais", "types": ["ai"], "closable": False},
     {"id": "terminals", "types": ["terminal"], "closable": True},
 ]
 
@@ -94,10 +94,10 @@ def _panels(state):
         return ["terminal"]
     if state["tab"] == "sprint":
         return ["board"]
-    if state["tab"] == "friend" and state["prompt_open"] and state.get("needs_sign_in", False):
+    if state["tab"] == "ai" and state["prompt_open"] and state.get("needs_sign_in", False):
         return ["account", "prompt"]
     panels = ["transcript"]
-    if state["tab"] == "friend":
+    if state["tab"] == "ai":
         if state["prompt_open"]:
             panels.extend(["account", "prompt"])
         elif state["has_status"]:
@@ -107,6 +107,8 @@ def _panels(state):
 def handle(event, state, config):
     if event == "overlay":
         return config.get("overlay_hotkey", {"modifiers": "Command", "code": "Backquote"})
+    if event == "lock":
+        return {"idle_minutes": config.get("lock_idle_minutes", 10)}
     if event == "window":
         shortcuts = _shortcuts()
         count = state.get("tab_count", 0)
@@ -117,7 +119,7 @@ def handle(event, state, config):
                 shortcuts = _bind(shortcuts, chord, ["select_tab", target])
             for chord, direction in config.get("tab_reorder", {"Command+Shift+ArrowLeft": -1, "Command+Shift+ArrowRight": 1}).items():
                 shortcuts = _bind(shortcuts, chord, ["move_tab", direction])
-        if state["tab"] == "friend":
+        if state["tab"] == "ai":
             for chord, command in config.get("account_shortcuts", {}).items():
                 shortcuts = _bind(shortcuts, chord, ["account_command", command])
             default_picker = {} if "account_shortcuts" in config else {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"}
@@ -164,7 +166,7 @@ def handle(event, state, config):
         account_button = ""
         model_button = ""
         offer = state.get("limit_offer")
-        if state["tab"] == "friend" and offer:
+        if state["tab"] == "ai" and offer:
             panels = ["transcript", "limit_choice"]
             account = offer["account"]
             model = offer["model"]
@@ -202,9 +204,9 @@ def handle(event, state, config):
                 shortcuts = _bind(shortcuts, chord, ["account_picker", command])
         account = state.get("sign_in_account") or {}
         provider = account.get("provider", "")
-        directory = config.get("nova_friends", {})
-        friend = directory.get("friends", {}).get(account.get("friend", ""), {})
-        provider = provider or friend.get("harness", "")
+        directory = config.get("nova_ais", {})
+        ai = directory.get("ais", {}).get(account.get("ai", ""), {})
+        provider = provider or ai.get("harness", "")
         display = directory.get("providers", {}).get(provider, provider)
         window = {
             "sign_in_heading": "Please sign in to " + display if display else "Please sign in",
@@ -233,10 +235,10 @@ def handle(event, state, config):
         window["prompt_command"] = bool(words) and (words[0] == "/help" or words[0] in config.get("prompt_commands", _COMMAND_HELP.keys()))
         tabs = state.get("ui", {}).get("tabs", [])
         if config.get("centered_account_menu", False) or config.get("tab_labels"):
-            window["tab_titles"] = [(t["label"][:1].upper() + t["label"][1:]) if t["kind"] == "friend" else config.get("tab_labels", {}).get(t["kind"], t["label"]) for t in tabs]
+            window["tab_titles"] = [(t["label"][:1].upper() + t["label"][1:]) if t["kind"] == "ai" else config.get("tab_labels", {}).get(t["kind"], t["label"]) for t in tabs]
         if config.get("centered_account_menu", False):
             window = account_window(window, state, config)
-        if state["tab"] == "friend" and state["prompt_open"]:
+        if state["tab"] == "ai" and state["prompt_open"]:
             ui = state.get("ui", {})
             draft = ui.get("draft", "")
             catalog = ui.get("catalog", {})
@@ -285,18 +287,18 @@ def handle(event, state, config):
                     else:
                         continue
                     window["shortcuts"] = _bind(window["shortcuts"], "Tab", ["replace_draft", command + next_value])
-        if state["tab"] == "friend" and state["prompt_open"] and not window.get("account_items"):
+        if state["tab"] == "ai" and state["prompt_open"] and not window.get("account_items"):
             for chord, direction in config.get("transcript_scroll_keys", {
                     "Control+ArrowUp": "top", "Control+ArrowDown": "bottom",
                     "PageUp": "page_up", "PageDown": "page_down"}).items():
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["scroll_transcript", direction])
-        if state["tab"] == "friend" and state["prompt_open"] and not state.get("account_picker_open") and not state.get("ui", {}).get("choice_kind"):
+        if state["tab"] == "ai" and state["prompt_open"] and not state.get("account_picker_open") and not state.get("ui", {}).get("choice_kind"):
             if state.get("ui", {}).get("draft") == "/login":
                 for chord in ["Enter", "Command+Enter"]:
                     window["shortcuts"] = _bind(window["shortcuts"], chord, ["account_picker", "open"])
             for chord in config.get("clear_draft_keys", ["Command+Backspace", "Command+Delete"]):
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["clear_composer"])
-        if state["tab"] == "friend" and state.get("needs_sign_in"):
+        if state["tab"] == "ai" and state.get("needs_sign_in"):
             if state.get("ui", {}).get("help_visible") and state.get("ui", {}).get("dismissed") and not state.get("account_picker_open"):
                 window["panels"] = ["transcript", "prompt"]
                 window["account_items"] = []

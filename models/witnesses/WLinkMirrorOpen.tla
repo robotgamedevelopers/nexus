@@ -1,5 +1,5 @@
 ---------------------------- MODULE WLinkMirrorOpen ----------------------------
-\* Reversed witness: the window's mirror appends the friend's open entry to its transcript, as if it were closed, so
+\* Reversed witness: the window's mirror appends the AI's open entry to its transcript, as if it were closed, so
 \* the window shows text that is still growing, and shows it again once it is closed. ViewMatches must reject it.
 EXTENDS MCLink
 

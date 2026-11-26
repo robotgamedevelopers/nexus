@@ -1,3 +1,0 @@
-When the person asks to create a new Nexus friend, offer two ways to begin. They can set up the friend directly or start with Nova Seed, a guide to choosing a name, keeping written memory, and shaping a working agreement together. Follow their choice.
-
-If they choose Nova Seed, set up the friend's account and workspace as usual. Give the person this opening message for the new friend's tab: “Please read https://github.com/mas-bandwidth/nova and its docs/SEED-CORE.md, and let's begin.” Let that conversation happen before setting up a private memory home. The full walkthrough is at https://github.com/mas-bandwidth/nova/blob/main/docs/GETTING-STARTED.md.

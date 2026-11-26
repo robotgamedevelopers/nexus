@@ -160,7 +160,7 @@ bool writeMock(const Paths& p, const mock::Options& o, std::string* serverComman
     if (!writeFile(p.server + "/drivers", mock::driversFor(o, NEXUS_MOCK_FAKE_DRIVER, p.scripts, p.work), why) ||
             !writeFile(p.server + "/config", mock::serverConfigFor(o, claude), why) ||
             !writeFile(p.server + "/nexus-config/accounts.json", accounts::accountsText(registry), why) ||
-            !writeFile(p.server + "/nexus-config/friends.json", accounts::friendsText(registry), why))
+            !writeFile(p.server + "/nexus-config/ais.json", accounts::aisText(registry), why))
         return false;
     return mock::serverCommandFor(NEXUS_MOCK_SERVER, p.home, p.server, serverCommand, why) &&
         writeFile(p.command, *serverCommand + "\n", why);
@@ -184,17 +184,17 @@ bool seed(mock::Client& c, const mock::Options& o, std::string* why) {
     for (const std::string& name : o.ais) {
         sync::Action a;
         a.kind = sync::ActionKind::Ensure;
-        a.friendName = name;
+        a.aiName = name;
         c.session->add(a);
     }
     if (o.signIn) {
         sync::Action a;
         a.kind = sync::ActionKind::Ensure;
-        a.friendName = mock::kSignInName;
+        a.aiName = mock::kSignInName;
         c.session->add(a);
     }
     const bool started = c.until([&] {
-        if (!c.session->state().friendsKnown())
+        if (!c.session->state().aisKnown())
             return false;
         for (std::size_t i = 0; i < seeded; ++i)
             if (sessionOf(c, o.ais[i]) == nullptr)
@@ -304,21 +304,21 @@ int writeState(const Paths& p, const std::string& out) {
     bool ensured = false;
     const bool ok = c.until([&] {
         const sync::Sessions& s = c.session->state();
-        if (!s.friendsKnown())
+        if (!s.aisKnown())
             return false;
         if (!ensured) {
-            for (const sync::ServerFriend& f : s.friends()) {
+            for (const sync::ServerAI& f : s.ais()) {
                 sync::Action a;
                 a.kind = sync::ActionKind::Ensure;
-                a.friendName = f.name;
+                a.aiName = f.name;
                 c.session->add(a);
             }
             ensured = true;
         }
         // The server makes sessions for its first sync::Limits::sessions AIs only (seed above).
-        const std::size_t sessions = std::min(s.friends().size(), sync::Limits{}.sessions);
+        const std::size_t sessions = std::min(s.ais().size(), sync::Limits{}.sessions);
         for (std::size_t i = 0; i < sessions; ++i)
-            if (s.first(s.friends()[i].name) == nullptr)
+            if (s.first(s.ais()[i].name) == nullptr)
                 return false;
         return c.session->allAcknowledged();
     }, kStallSeconds, &why);

@@ -5,34 +5,34 @@
 (*                                                                         *)
 (* tests/model/trace_walk.cpp drives the code with a seeded random walk    *)
 (* and writes WindowTraceData.tla beside this module. It defines           *)
-(*   TraceSprint, TraceFriends, TraceArrivals, TraceIdx, TraceDrafts,      *)
+(*   TraceSprint, TraceAIs, TraceArrivals, TraceIdx, TraceDrafts,      *)
 (*     TraceBlank, TraceEntries: whether the walk made the model with the  *)
-(*     sprint tab, the friends it made it with, the friends add_friend is  *)
-(*     tried with (empty unless the friends churn), and the arguments it   *)
+(*     sprint tab, the AIs it made it with, the AIs add_ai is  *)
+(*     tried with (empty unless the AIs churn), and the arguments it   *)
 (*     draws from, and                                                     *)
 (*   Trace: one record per step. Trace[1] is the constructed model (op     *)
 (*     "init"); each later record is the operation called, its arguments,  *)
 (*     the value the code returned, and the code's whole state after it:   *)
 (*     the order (each position's Tab::id), the selection history (ids,    *)
-(*     most recent last) and, by position, each tab's kind, friend, draft, *)
-(*     transcript and queue; for add, add_friend and remove_friend, the id *)
-(*     of the tab; and for add_friend, the friend it was given.            *)
+(*     most recent last) and, by position, each tab's kind, AI, draft, *)
+(*     transcript and queue; for add, add_ai and remove_ai, the id *)
+(*     of the tab; and for add_ai, the AI it was given.            *)
 (*                                                                         *)
 (* Each step of this spec takes the Window action the record names, with   *)
 (* the record's arguments. The invariant TraceMatches then requires the    *)
 (* spec's state and return value to equal what the code recorded. A step   *)
 (* whose arguments lie outside the spec's domains has no successor, which  *)
 (* TLC reports as a deadlock. The property WindowSpec checks the behaviour *)
-(* against Window's Init and next-state relation with the friends coming   *)
-(* and going (NextFriendsWith), which is Next when TraceArrivals is empty  *)
-(* and the trace removes no friend, and every Window property is checked  *)
+(* against Window's Init and next-state relation with the AIs coming   *)
+(* and going (NextAIsWith), which is Next when TraceArrivals is empty  *)
+(* and the trace removes no AI, and every Window property is checked  *)
 (* on the trace as well.                                                   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, WindowTraceData
 
-VARIABLES friends, order, active, transcript, draft, queue, nextId, history, last, l
+VARIABLES ais, order, active, transcript, draft, queue, nextId, history, last, l
 
-W == INSTANCE Window WITH FriendList <- TraceFriends, Idx <- TraceIdx, Drafts <- TraceDrafts,
+W == INSTANCE Window WITH AIList <- TraceAIs, Idx <- TraceIdx, Drafts <- TraceDrafts,
                           Blank <- TraceBlank, AppendEntries <- TraceEntries, Sprint <- TraceSprint
 
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
@@ -41,9 +41,9 @@ ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 AsTabs(s) == [p \in 0 .. (Len(s) - 1) |-> s[p + 1]]
 
 \* the spec's state equals the state the code recorded at step k, and so does the return value. The code records its
-\* tabs by position: the order (each position's id) must be the spec's, each tab's kind the kind of its id, a friend's
-\* tab must hold the spec's state of that friend (by its id), and the sprint tab's or a terminal's no name, model, draft,
-\* transcript or queue. Every friend the spec holds stands in the order (W!NoTabLost), so the friends match as well.
+\* tabs by position: the order (each position's id) must be the spec's, each tab's kind the kind of its id, an AI's
+\* tab must hold the spec's state of that AI (by its id), and the sprint tab's or a terminal's no name, model, draft,
+\* transcript or queue. Every AI the spec holds stands in the order (W!NoTabLost), so the AIs match as well.
 Matches(k) ==
     LET s == Trace[k] IN
     /\ order = AsTabs(s.order)
@@ -51,12 +51,12 @@ Matches(k) ==
     /\ history = s.history
     /\ \A p \in W!Tabs :
         /\ s.kind[p + 1] = W!TabKind(order[p])
-        /\ IF W!TabKind(order[p]) = "Friend"
-           THEN /\ friends[order[p]] = s.friends[p + 1]
+        /\ IF W!TabKind(order[p]) = "AI"
+           THEN /\ ais[order[p]] = s.ais[p + 1]
                 /\ draft[order[p]] = s.draft[p + 1]
                 /\ transcript[order[p]] = s.transcript[p + 1]
                 /\ queue[order[p]] = s.queue[p + 1]
-           ELSE /\ s.friends[p + 1] = [name |-> "", model |-> ""]
+           ELSE /\ s.ais[p + 1] = [name |-> "", model |-> ""]
                 /\ s.draft[p + 1] = ""
                 /\ s.transcript[p + 1] = <<>>
                 /\ s.queue[p + 1] = <<>>
@@ -78,12 +78,12 @@ Step(s) ==
          [] s.op = "move"      -> s.j \in TraceIdx /\ W!MoveTab(s.i, s.j)
          [] s.op = "add"       -> W!AddTerminal
          [] s.op = "close"     -> W!CloseTab(s.i)
-         [] s.op = "add_friend" -> s.friend \in TraceArrivals /\ W!AddFriend(s.friend)
-         [] s.op = "remove_friend" -> W!RemoveFriend(s.i)
+         [] s.op = "add_ai" -> s.ai \in TraceArrivals /\ W!AddAI(s.ai)
+         [] s.op = "remove_ai" -> W!RemoveAI(s.i)
          [] OTHER              -> FALSE
 
-traceVars == <<friends, order, active, transcript, draft, queue, nextId, history, last, l>>
-windowVars == <<friends, order, active, transcript, draft, queue, nextId, history, last>>
+traceVars == <<ais, order, active, transcript, draft, queue, nextId, history, last, l>>
+windowVars == <<ais, order, active, transcript, draft, queue, nextId, history, last>>
 
 TraceInit == l = 1 /\ W!Init
 
@@ -98,7 +98,7 @@ Done == l = Len(Trace) /\ UNCHANGED traceVars
 TraceSpec == TraceInit /\ [][TraceNext \/ Done]_traceVars
 
 \* Window's own spec and properties, checked on the trace
-WindowSpec == W!Init /\ [][W!NextFriendsWith(TraceArrivals)]_windowVars
+WindowSpec == W!Init /\ [][W!NextAIsWith(TraceArrivals)]_windowVars
 TypeOK == W!TypeOK
 ActiveValid == W!ActiveValid
 SelectExact == W!SelectExact
@@ -125,7 +125,7 @@ AddAppends == W!AddAppends
 AddFreshId == W!AddFreshId
 NextIdGrows == W!NextIdGrows
 CloseRemovesExactly == W!CloseRemovesExactly
-CloseKeepsFriends == W!CloseKeepsFriends
+CloseKeepsAIs == W!CloseKeepsAIs
 CloseActiveRule == W!CloseActiveRule
 SelectMovesToEnd == W!SelectMovesToEnd
 CloseForgets == W!CloseForgets
@@ -135,15 +135,15 @@ HistoryEndsActive == W!HistoryEndsActive
 MovePlaces == W!MovePlaces
 MoveKeepsTabs == W!MoveKeepsTabs
 OnlyMoveReorders == W!OnlyMoveReorders
-ActiveFriendKept == W!ActiveFriendKept
+ActiveAIKept == W!ActiveAIKept
 RefusedChangesNothing == W!RefusedChangesNothing
 TranscriptsOnlyGrow == W!TranscriptsOnlyGrow
 QueuesOnlyGrow == W!QueuesOnlyGrow
-FriendsFixed == W!FriendsFixed
+AIsFixed == W!AIsFixed
 NamesOnce == W!NamesOnce
-AddFriendExact == W!AddFriendExact
-RemoveFriendExact == W!RemoveFriendExact
-FriendOpsKeepOthers == W!FriendOpsKeepOthers
+AddAIExact == W!AddAIExact
+RemoveAIExact == W!RemoveAIExact
+AIOpsKeepOthers == W!AIOpsKeepOthers
 RemoveForgets == W!RemoveForgets
 RemoveActiveRule == W!RemoveActiveRule
 

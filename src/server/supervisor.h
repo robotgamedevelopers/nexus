@@ -15,7 +15,7 @@
 // increasing and never reused across driver and server restarts; each prompt written at most once, never again after
 // its turn is cut; a prompt that arrives while the driver cannot take it waits, in order, up to a bound; a message for
 // a turn that is not open has no effect on the session; a driver that exits or is ended with a turn open has that turn
-// cut, with a notice that whether the friend got the prompt is unknown; consecutive failed starts stop the starting of
+// cut, with a notice that whether the AI got the prompt is unknown; consecutive failed starts stop the starting of
 // drivers until the person's next prompt. There is no deadline on a working turn: a turn may run for hours. Each send
 // carries the session's model and effort as they are when it is written, so a change of them never reaches a turn
 // already open; a change of account ends the driver once no turn is open, never counted as a failed start, and the next
@@ -27,7 +27,17 @@
 // waits like a prompt sent (shown as the person's entry): one per turn, oldest first, each once. A stop is written
 // only for the open turn, at most once for it, and never waits behind anything.
 //
-// The open turn's text not yet in the session (gathered()) is the friend's text block as it grows: the caller shows it
+// Steering (docs/driver-protocol.md, "Steering a turn"; models/Steering.tla, bound to this code by tests/driver/
+// steering_walk.cpp): a message the person writes into a turn that runs goes to the driver as a steer or a follow-up
+// only when the driver's hello named that kind (and settled), the turn is open, not being stopped and not settled;
+// otherwise it waits as the next prompt, never a kind the driver did not name. The supervisor keeps each written into
+// the open turn and the driver's last whole queue report; an id that leaves the reported queue was taken in by the
+// harness. A driver that named settled writes settled before the turn's done: the next send still waits for the done
+// (sequence rule 3). At the done, each written into the turn that the driver never took in waits again, first, in the
+// order written; at a cut (the driver gone), it is cut with the turn. This state is the server's alone, in memory: a
+// turn open across a restart is cut, and with it what was written into it.
+//
+// The open turn's text not yet in the session (gathered()) is the AI's text block as it grows: the caller shows it
 // as an entry still open, kept in memory only. It goes into the session, durable, when the block ends (its text-end, a
 // tool, the turn's done or cut) or reaches the entry limit; a server that crashes loses at most that one block, and the
 // turn is cut with its notice when the server starts again.
@@ -38,6 +48,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -67,11 +78,11 @@ constexpr int kMaxFailedStarts = 3;
 // MiB, and an entry stays far within the hub's text limit.
 constexpr std::size_t kReportBytes = 1024;
 
-// Which friend, how to start its driver, and the bounds.
+// Which AI, how to start its driver, and the bounds.
 struct Config {
-    std::string name;                   // the friend's name, as the notices say it
+    std::string name;                   // the AI's name, as the notices say it
     std::vector<std::string> command;   // the driver's program and its arguments, before --cwd and --resume; empty
-                                        // while the friend has no driver configured, and then nothing is taken
+                                        // while the AI has no driver configured, and then nothing is taken
     std::string cwd;                    // the directory the harness works in
     std::string configured;             // where the driver is configured, for the fixes notices give
     std::string model;                  // the session's model and effort, written with each send (empty: the
@@ -87,10 +98,10 @@ struct Config {
     // (accounts::limitedFor) and given at each start. Tightened, an open turn is stopped and the driver ended; loosened,
     // the driver is ended once no turn is open. Limited unless the server says otherwise: the safe direction.
     bool limited = true;
-    // More directories a limited driver keeps the AI out of (friends.json "limit_keeps_out", accounts::Registry
+    // More directories a limited driver keeps the AI out of (ais.json "limit_keeps_out", accounts::Registry
     // keepsOut), given at each limited start as `--keep-out <dir>`, each once. Only ever more kept out.
     std::vector<std::string> keepsOut{};
-    bool present = true;                // the session's friend is in friends.json (setPresent): else nothing runs
+    bool present = true;                // the session's AI is in ais.json (setPresent): else nothing runs
     Timing timing;
     int maxFailedStarts = kMaxFailedStarts;
     std::size_t maxWaiting = 8;             // prompts waiting, at most (the hub's queue limits)
@@ -114,7 +125,7 @@ struct Command {
     std::string line;                   // Write: one protocol line, its newline included
 };
 
-// An entry to append to the session: the person's prompt; the friend's text; a line for a tool the friend used; an
+// An entry to append to the session: the person's prompt; the AI's text; a line for a tool the AI used; an
 // error the driver reported for the turn; the turn stopped; the turn cut short; any other notice. `turn` is the turn it
 // belongs to (0 for none).
 struct Effect {
@@ -164,7 +175,13 @@ public:
     Output resetContext(bool compact, Millis now);
     Output refreshSandbox(bool tightened, Millis now);
     Output retireIdleLogin(Millis now);
-    // The person stopped the friend's work: a stop for the open turn, if one is open and no stop is out; while the
+    // The person wrote `text` into the turn that runs: a steer (taken in after the tool calls running, before the next
+    // model call) or a follow-up (taken in only when the turn would otherwise settle). Written to the driver when it
+    // takes that kind and the turn is open, not stopping and not settled; otherwise it is a prompt (prompt()), waiting
+    // for the next turn, with a notice when a steer could not be taken because the driver does not take steers.
+    Output steer(const std::string& text, Millis now);
+    Output followUp(const std::string& text, Millis now);
+    // The person stopped the AI's work: a stop for the open turn, if one is open and no stop is out; while the
     // driver starts, the turn about to begin is cancelled. Otherwise nothing: no stop is kept for a later turn.
     Output stop(Millis now);
     // A message the driver wrote.
@@ -181,7 +198,7 @@ public:
     Output shutdown(Millis now);
 
     // The driver's command, for the next start: empty when none is configured, and then no queued prompt is taken
-    // and the friend shows down (activity()). With one configured again, what waits for it goes on (the
+    // and the AI shows down (activity()). With one configured again, what waits for it goes on (the
     // oldest queued prompt is taken), as at every step.
     Output configure(std::vector<std::string> command, std::string cwd, std::string configured, Millis now);
     // The person set the session's model and effort: the next send is written after a settings line that gives them
@@ -202,20 +219,20 @@ public:
     // instance is elsewhere, is ended quietly once no turn is open, like an account change; the next starts in `cwd`.
     // The harness keeps its sessions by directory and account. When either changes, the next driver starts afresh,
     // its first send carrying a summary of the conversation so far (Config::summarize), with a notice. While not here,
-    // no queued prompt is taken, no driver is started, and the friend shows down unless a turn runs on.
+    // no queued prompt is taken, no driver is started, and the AI shows down unless a turn runs on.
     Output setPlace(std::string cwd, bool here, Millis now);
-    // The session's limit changed (its friend's "limit", accounts::limitedFor): a driver started under the other one is
+    // The session's limit changed (its AI's "limit", accounts::limitedFor): a driver started under the other one is
     // ended quietly once no turn is open, like a change of place (an open turn runs to its end first); the next starts
     // under this one.
     Output setLimited(bool limited, Millis now);
-    // The directories a limited driver keeps out changed (friends.json "limit_keeps_out"): as a change of the limit. A
+    // The directories a limited driver keeps out changed (ais.json "limit_keeps_out"): as a change of the limit. A
     // limited driver not keeping out every one of them is weaker than the session's limit: a turn open on it is stopped
     // now and the driver ended; one keeping out more than them is ended once no turn is open.
     Output setKeepsOut(std::vector<std::string> keepsOut, Millis now);
-    // The session's friend was taken out of friends.json (`present` false) or put back (true), by a reload
-    // (models/Supervisor.tla RemoveFriend, AddBack). Taken out, what runs is stopped and the driver ended: an open turn
+    // The session's AI was taken out of ais.json (`present` false) or put back (true), by a reload
+    // (models/Supervisor.tla RemoveAI, AddBack). Taken out, what runs is stopped and the driver ended: an open turn
     // gets the person's stop (stop(): the turn ends at its done, or is cut at the stop's deadline), and the driver is
-    // ended once no turn is open; a driver still starting is ended at once. While the friend is out no driver starts and
+    // ended once no turn is open; a driver still starting is ended at once. While the AI is out no driver starts and
     // nothing queued is taken: the waiting prompts and the queue are kept, and go on once it is back. The server refuses
     // a send first (Drivers::send). Nothing when it is already so.
     Output setPresent(bool present, Millis now);
@@ -226,7 +243,7 @@ public:
     Stage stage() const { return stage_; }
     bool alive() const { return phase_ != Phase::None; }
     bool gathering() const { return !gathered_.empty(); }   // text of the open turn not yet in the session
-    const std::string& gathered() const { return gathered_; }   // that text: the friend's block, still open
+    const std::string& gathered() const { return gathered_; }   // that text: the AI's block, still open
     const std::vector<std::string>& queue() const { return queue_; }    // the session's queue, oldest first
     bool finished() const { return finished_; }             // the driver alive finished a turn
     int failedStarts() const { return failed_; }
@@ -244,18 +261,35 @@ public:
     bool limited() const { return config_.limited; }                // the next driver starts limited
     bool driverLimited() const { return driverLimited_; }           // the alive driver was started limited
     bool here() const { return config_.here; }                           // the session's instance is on this machine
-    bool present() const { return config_.present; }                     // the session's friend is in friends.json
+    bool present() const { return config_.present; }                     // the session's AI is in ais.json
     bool retiring() const { return retiring_; }     // the driver is being ended for an account change
     const std::string& openPrompt() const { return openPrompt_; }
-    // What the friend is doing, for the window's state cursor (models/Supervisor.tla Activity): Down while starting is
+    // What the AI is doing, for the window's state cursor (models/Supervisor.tla Activity): Down while starting is
     // held back (failed starts, or no credential); otherwise Busy while a turn is open or about to begin (a prompt
-    // waits with the instance here and the friend in friends.json, or a driver starts); otherwise Down when no driver is
+    // waits with the instance here and the AI in ais.json, or a driver starts); otherwise Down when no driver is
     // configured (nothing queued is taken, and a prompt reaches no driver), or the instance is on another machine (no
-    // driver starts here), or the friend is not in friends.json (nothing runs for it), or when
+    // driver starts here), or the AI is not in ais.json (nothing runs for it), or when
     // the last driver failed (crashed, broke the protocol, missed a deadline) and none has
     // said hello since, unless the server is stopping; otherwise Idle, which is only ever with
-    // nothing running, nothing waiting and nothing queued that will be taken: the friend is waiting for the person.
+    // nothing running, nothing waiting and nothing queued that will be taken: the AI is waiting for the person.
     sync::Activity activity() const;
+
+    // Steering, for the window and the walk: what was written into the open turn (oldest first), the driver's last
+    // whole queue report, each id the driver reported and the harness has since taken in, whether the open turn has
+    // settled, and which kinds the driver alive named.
+    struct Written {
+        std::uint64_t id = 0;
+        bool followUp = false;
+        std::string text;
+    };
+    const std::vector<Written>& written() const { return written_; }
+    const driver::Queue& reported() const { return reported_; }
+    bool taken(std::uint64_t id) const;
+    const std::set<std::uint64_t>& everReported() const { return everReported_; }
+    bool settledTurn() const { return settled_; }
+    bool driverSteers() const { return driverSteers_; }
+    bool driverFollowsUp() const { return driverFollowsUp_; }
+    bool driverSettles() const { return driverSettles_; }
     std::uint32_t activeAgents() const { return childAgents_ + (state_.openTurn != 0); }
 
 private:
@@ -264,6 +298,14 @@ private:
     void receive(const driver::DriverMessage& message, Millis now);
     void flush();
     void cutOpen();
+    Output into(const std::string& text, bool followUp, Millis now);
+    bool steering(const driver::DriverMessage& message, std::uint64_t open, Millis now);
+    void giveBack();
+    // Whether one more message of text fits the waiting limits, counting the prompts waiting and what was written into
+    // the open turn and not seen taken in (any of which may wait again at done): empty when it fits, else why not.
+    std::string fits(const std::string& text) const;
+    void cutWritten();
+    void clearSteering();
     void clearContinuation();
     void abandon(const std::string& why);
     void end(const std::string& why, Millis now);
@@ -308,6 +350,14 @@ private:
     std::string driverEffort_;
     bool sandboxChanged_ = false;
     bool retiring_ = false;             // it is being ended for a change of account or place (or a setting put back)
+    bool driverSteers_ = false;         // the alive driver's hello named steer, follow-up, settled
+    bool driverFollowsUp_ = false;
+    bool driverSettles_ = false;
+    std::uint64_t nextWritten_ = 1;     // the next steer or follow-up's id: from 1, never reused in this server
+    std::vector<Written> written_;      // written into the open turn, oldest first
+    driver::Queue reported_;            // the driver's last whole queue report for the open turn
+    std::set<std::uint64_t> everReported_;  // every id it reported for the open turn
+    bool settled_ = false;              // the open turn's settled has arrived
     Output out_;                        // the output of the event in progress
 };
 

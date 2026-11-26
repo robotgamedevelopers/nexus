@@ -491,7 +491,7 @@ void test('a file not made yet resolves through its nearest folder that is', () 
     assert.equal(realOf('/nowhere/at/all', { realpath: () => { throw new Error('ENOENT'); } }), '/nowhere/at/all');
 });
 
-void test('a limited friend\'s sandbox reads none of HOME and the data roots but its directory, its state and its programs', () => {
+void test('a limited AI\'s sandbox reads none of HOME and the data roots but its directory, its state and its programs', () => {
     const exists = (p: string): boolean => p !== '/srv';
     const env = { PATH: '/var/h/.local/bin:/usr/bin:/home/linuxbrew/.linuxbrew/bin:/var/h/.ssh/bin', TMPDIR: '/var/t/' };
     // The working directory as prepare resolved it, once: the one path checked, allowed and given to Claude.
@@ -571,7 +571,7 @@ void test('a PATH folder under a denied root is allowed as that folder only; its
     assert.ok(!fromEnv.denyRead.includes('/data/x'));
 });
 
-void test('a limited friend reads single named start-up files, never a folder and never a credential store', () => {
+void test('a limited AI reads single named start-up files, never a folder and never a credential store', () => {
     const l = limitOf('/home/me', '/home/me/w', '/home/me/.nexus/c', ['/home/me/tools/credentials', '/opt/x/.git-credentials'],
         'linux', { PATH: '/home/me/.netrc' }, '/usr/bin/node', (p) => p, () => true);
     for (const f of kLimitedReadsUnderHome as readonly string[]) {
@@ -585,7 +585,7 @@ void test('a limited friend reads single named start-up files, never a folder an
     assert.ok(l.allowRead.includes('/home/me/.config/git/config'));
 });
 
-void test('a limited friend\'s sandbox, deny rules and settings', () => {
+void test('a limited AI\'s sandbox, deny rules and settings', () => {
     const l = limitOf('/h', '/h/w', '/h/.nexus/server/harness/claude/main', [], 'linux', {}, '/n/node', (p) => p, () => true);
     const s = wallSandbox(wall, ['/h', '/w'], 4321, l);
     assert.deepEqual(s.filesystem.allowWrite, l.allowWrite);
@@ -600,7 +600,7 @@ void test('a limited friend\'s sandbox, deny rules and settings', () => {
     assert.ok(!wallDenyRules(wall).includes('Read(//h/.ssh/**)'));
 });
 
-void test('the hook refuses a limited friend\'s file tools every path outside its directory, by where it resolves', () => {
+void test('the hook refuses a limited AI\'s file tools every path outside its directory, by where it resolves', () => {
     const d = fakeFs({ '/w/a.c': '1:1', '/w/sub/b.c': '1:2', '/h/notes': '1:3', '/h/.ssh/id': '1:4', '/c/projects/-w/m.md': '1:5' },
         { '/w/out': '/h' });
     const limit = { roots: ['/w'], reads: ['/c/projects/-w'] };
@@ -612,7 +612,7 @@ void test('the hook refuses a limited friend\'s file tools every path outside it
         ['Glob', { pattern: '**/*', path: '..' }], ['Write', { file_path: '/h/new', content: 'x' }],
         ['Write', { file_path: 'out/new', content: 'x' }], ['Edit', { file_path: '/c/projects/-w/m.md', old_string: 'a', new_string: 'b' }],
         ['NotebookEdit', { notebook_path: '/tmp/x.ipynb', new_source: 'x' }]] as const) {
-        assert.match(refuseL(tool, input) ?? '', /limits this friend to its directory, \/w/, `${tool} ${JSON.stringify(input)}`);
+        assert.match(refuseL(tool, input) ?? '', /limits this AI to its directory, \/w/, `${tool} ${JSON.stringify(input)}`);
     }
     for (const [tool, input] of [['Read', { file_path: 'a.c' }], ['Read', { file_path: '/w/sub/b.c' }], ['Grep', { pattern: 'x' }],
         ['Grep', { pattern: 'x', path: 'sub' }], ['Glob', { pattern: '**/*.c' }], ['Write', { file_path: 'new.c', content: 'x' }],
@@ -622,7 +622,7 @@ void test('the hook refuses a limited friend\'s file tools every path outside it
     }
     // Unlimited, the same reads outside go on.
     assert.equal(toolRefusal('Read', { file_path: '/h/notes' }, wall, '/w', '/h', d), undefined);
-    // The secret dialog's MCP tool opens no file and runs no command: allowed on both unlimited and limited friends.
+    // The secret dialog's MCP tool opens no file and runs no command: allowed on both unlimited and limited AIs.
     for (const name of ['nexus_ask_secret', 'mcp__nexus__nexus_ask_secret']) {
         const args = { account: 'main', what: 'oauth-token', why: 'the login expired' };
         assert.equal(toolRefusal(name, args, wall, '/w', '/h', d), undefined, name);

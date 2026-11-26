@@ -1,6 +1,6 @@
 -------------------------- MODULE WSupIdleWhileWaiting --------------------------
 \* Reversed witness: the state cursor's activity forgets the prompts that wait, so a prompt sent while a driver is
-\* being ended for an account change shows the friend idle, as if waiting for the person. IdleWaitsForPerson must
+\* being ended for an account change shows the AI idle, as if waiting for the person. IdleWaitsForPerson must
 \* reject it.
 EXTENDS MCSupervisor
 

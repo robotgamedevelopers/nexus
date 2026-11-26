@@ -8,7 +8,7 @@ BrokenSend(i) ==
     THEN Send(i)
     ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
          /\ draft' = (IF i \in Tabs THEN [draft EXCEPT ![At(i)] = ""] ELSE draft)
-         /\ UNCHANGED <<friends, order, active, transcript, queue>>
+         /\ UNCHANGED <<ais, order, active, transcript, queue>>
 
 BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, BrokenSend, Queue, AppendEntry, MoveTab)]_vars
 =============================================================================

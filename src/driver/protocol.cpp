@@ -135,6 +135,20 @@ public:
         prJsonWriterEndArray(w_);
         return *this;
     }
+    Writer& numbers(std::string_view key, const std::vector<std::uint64_t>& values) {
+        prJsonWriterKey(w_, pr(key));
+        prJsonWriterBeginArray(w_);
+        for (const std::uint64_t v : values) {
+            prJsonWriterNumber(w_, double(v));
+        }
+        prJsonWriterEndArray(w_);
+        return *this;
+    }
+    Writer& boolean(std::string_view key, bool value) {
+        prJsonWriterKey(w_, pr(key));
+        prJsonWriterBool(w_, value);
+        return *this;
+    }
     Writer& begin(std::string_view key) {
         prJsonWriterKey(w_, pr(key));
         prJsonWriterBeginObject(w_);
@@ -197,6 +211,12 @@ struct ServerEncoder {
             w.str("reason", m.reason);
         }
     }
+    void operator()(const Steer& m) {
+        w.str("kind", "steer").turn(m.turn).num("id", double(m.id)).str("text", m.text);
+    }
+    void operator()(const FollowUp& m) {
+        w.str("kind", "follow-up").turn(m.turn).num("id", double(m.id)).str("text", m.text);
+    }
     void operator()(const Unknown&) { refuseUnknown(w); }
 };
 
@@ -241,6 +261,10 @@ struct DriverEncoder {
         w.str("kind", "ask-secret").num("ask", double(m.ask)).str("account", m.account).str("what", m.what)
             .str("why", m.why);
     }
+    void operator()(const Queue& m) {
+        w.str("kind", "queue").turn(m.turn).numbers("steer", m.steer).numbers("follow_up", m.followUp);
+    }
+    void operator()(const Settled& m) { w.str("kind", "settled").turn(m.turn).boolean("aborted", m.aborted); }
     void operator()(const Unknown&) { refuseUnknown(w); }
 
     void count(std::string_view key, const std::optional<std::uint64_t>& v) {
@@ -316,6 +340,48 @@ public:
             out.emplace_back(view(prJsonString(doc_, e)));
         }
         return out;
+    }
+
+    // An array of ids: whole numbers from 1 to kMaxInteger, strictly increasing (a queue is oldest first, and the server
+    // numbers what it writes in order), at most kMaxQueued of them.
+    std::vector<std::uint64_t> ids(std::string_view key) {
+        std::vector<std::uint64_t> out;
+        const PrJsonValueIndex v = member(key);
+        const std::string bad = std::string("has \"") + std::string(key) + "\" that is not an array of ids (whole numbers "
+            "from 1, strictly increasing, at most " + std::to_string(kMaxQueued) + ")";
+        if (v == kPrJsonMissing) {
+            fail(std::string("has no \"") + std::string(key) + "\"");
+            return out;
+        }
+        if (prJsonKind(doc_, v) != PrJsonKind_Array) {
+            fail(bad);
+            return out;
+        }
+        for (PrJsonValueIndex e = prJsonFirst(doc_, v); e != kPrJsonMissing; e = prJsonAfter(doc_, v, e)) {
+            const double d = prJsonNumber(doc_, e, -1);
+            if (prJsonKind(doc_, e) != PrJsonKind_Number || d != std::floor(d) || d < 1 || d > double(kMaxInteger) ||
+                    (!out.empty() && std::uint64_t(d) <= out.back()) || out.size() == kMaxQueued) {
+                fail(bad);
+                return {};
+            }
+            out.push_back(std::uint64_t(d));
+        }
+        return out;
+    }
+
+    bool boolean(std::string_view key, bool required) {
+        const PrJsonValueIndex v = member(key);
+        if (v == kPrJsonMissing) {
+            if (required) {
+                fail(std::string("has no \"") + std::string(key) + "\"");
+            }
+            return false;
+        }
+        if (prJsonKind(doc_, v) != PrJsonKind_True && prJsonKind(doc_, v) != PrJsonKind_False) {
+            fail(std::string("has \"") + std::string(key) + "\" that is not true or false");
+            return false;
+        }
+        return prJsonKind(doc_, v) == PrJsonKind_True;
     }
 
     std::optional<double> amount(std::string_view key) {
@@ -536,6 +602,15 @@ Decoded<ServerMessage> decodeServerMessage(std::string_view line) {
         }
         return result<ServerMessage>(std::move(m), f);
     }
+    if (p.kind == "steer" || p.kind == "follow-up") {
+        const std::uint64_t turn = f.turn();
+        const std::uint64_t id = f.integer("id", true, 1, kMaxInteger).value_or(0);
+        std::string text = f.str("text", true);
+        if (p.kind == "steer") {
+            return result<ServerMessage>(Steer{turn, id, std::move(text)}, f);
+        }
+        return result<ServerMessage>(FollowUp{turn, id, std::move(text)}, f);
+    }
     return result<ServerMessage>(Unknown{p.kind}, f);
 }
 
@@ -637,6 +712,19 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
             f.fail("has a \"why\" with a control character or a line break; a reason is one line");
         }
         return result<DriverMessage>(std::move(m), f);
+    }
+    if (kind == "queue") {
+        Queue m;
+        m.turn = f.turn();
+        m.steer = f.ids("steer");
+        m.followUp = f.ids("follow_up");
+        return result<DriverMessage>(std::move(m), f);
+    }
+    if (kind == "settled") {
+        Settled m;
+        m.turn = f.turn();
+        m.aborted = f.boolean("aborted", true);
+        return result<DriverMessage>(m, f);
     }
     return result<DriverMessage>(Unknown{kind}, f);
 }

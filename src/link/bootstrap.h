@@ -59,6 +59,10 @@ struct Bootstrap {
     // server from before it ignores (it starts one when none runs, as before). The window's link sets it once it has
     // heard a server (sync/redial.h).
     bool askRunning = false;
+    // Run the command on this machine, in the login shell, with no ssh (`/bin/sh -c` and the line ssh would run):
+    // nexus-link-relay's --local, for the window on Windows whose server is the one in WSL2, beside the relay. The host
+    // is then only a name for messages.
+    bool local = false;
 };
 
 // The variable that tells nexus-server new to ask only a running server.
@@ -67,7 +71,7 @@ inline const char* const kAskRunningVariable = "NEXUS_ASK_RUNNING";
 // The Hello the bootstrap states, if it states one.
 bool statesHello(const Bootstrap& b, sync::Hello* out);
 
-// The ssh command that runs it: no terminal, never a password prompt (BatchMode: the window has no terminal to ask in).
+// The ssh command that runs it (with local, /bin/sh -c and the same line): no terminal, never a password prompt (BatchMode: the window has no terminal to ask in).
 // The command runs under `env NEXUS_STATE_FORMAT=<n>` when the bootstrap states a format, `NEXUS_HELLO=<hello>` when
 // it states a Hello, and `NEXUS_ASK_RUNNING=1` with askRunning; `--client <id> --next <n>` follows it when the
 // bootstrap names a client.

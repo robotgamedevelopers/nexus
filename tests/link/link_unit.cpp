@@ -154,6 +154,22 @@ void bootstrap_command_shape() {
     CHECK(bootstrapCommand(b).arguments.back() == remoteLine({"nexus-server", "new"}));
 }
 
+// The relay's local bootstrap (nexus-link-relay --local, on Windows): the same line in /bin/sh on this machine, no ssh.
+void bootstrap_command_local() {
+    Bootstrap b;
+    b.host = "localhost";
+    b.local = true;
+    b.client = "window-0123456789abcdef";
+    const Command c = bootstrapCommand(b);
+    CHECK(c.program == "/bin/sh");
+    const std::vector<std::string> want = {"-c",
+        remoteLine({"env", "NEXUS_STATE_FORMAT=" + std::to_string(sync::kStateFormat),
+                    "NEXUS_HELLO=" + sync::helloText(sync::kHello), "nexus-server", "new", "--client",
+                    "window-0123456789abcdef", "--next", "1"})};
+    CHECK(c.arguments == want);
+    CHECK(c.shown.find("ssh") == std::string::npos);
+}
+
 // A link making its session again names its client and its first action, and asks only a running server: the variable
 // after the format's and Hello's, and the client after the command.
 // A client's server command (the mock's): its words in place of nexus-server new, the client's own after them.
@@ -288,6 +304,7 @@ const Case kCases[] = {
     {"bootstrap_command_shape", bootstrap_command_shape},
     {"server_command_words", server_command_words},
     {"bootstrap_command_reconnect", bootstrap_command_reconnect},
+    {"bootstrap_command_local", bootstrap_command_local},
     {"bootstrap_reads_connect_line", bootstrap_reads_connect_line},
     {"bootstrap_failures_say_why_without_key", bootstrap_failures_say_why_without_key},
     {"resolve_host_uses_ssh_hostname", resolve_host_uses_ssh_hostname},

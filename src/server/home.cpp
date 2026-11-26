@@ -38,7 +38,7 @@ bool readServerConfig(const std::string& text, const std::string& path, ServerSe
             out->machine = machine->second;
         } else {
             errors.push_back(path + ": machine " + machine->second + " is not a host name: 1 to 253 letters, digits, "
-                "'-' or '.', not starting with '-' or '.', as a friend's instance names it (docs/accounts.md)");
+                "'-' or '.', not starting with '-' or '.', as an AI's instance names it (docs/accounts.md)");
         }
     }
     auto claude = c.values.find("claude");

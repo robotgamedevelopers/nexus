@@ -18,7 +18,7 @@ namespace {
 
 using nexus::Entry;
 using nexus::EntryKind;
-using nexus::FriendInfo;
+using nexus::AIInfo;
 using nexus::Model;
 using nexus::Tab;
 
@@ -34,7 +34,7 @@ int failures = 0;
 
 const std::size_t kHuge = std::numeric_limits<std::size_t>::max();
 
-std::vector<FriendInfo> three() {
+std::vector<AIInfo> three() {
     return {{"ada", "m1"}, {"bo", "m2"}, {"cy", "m3"}};
 }
 
@@ -64,7 +64,7 @@ bool same(const Model& a, const Model& b) {
     return true;
 }
 
-void construct_one_tab_per_friend_in_order() {
+void construct_one_tab_per_ai_in_order() {
     Model m(three());
     CHECK(m.tab_count() == 3);
     CHECK(m.active() == 0);
@@ -78,7 +78,7 @@ void construct_one_tab_per_friend_in_order() {
     }
 }
 
-void empty_friend_list_refuses_everything() {
+void empty_ai_list_refuses_everything() {
     Model m({});
     CHECK(m.tab_count() == 0);
     CHECK(m.active() == 0);
@@ -86,7 +86,7 @@ void empty_friend_list_refuses_everything() {
     CHECK(!m.set_draft(0, "hi"));
     CHECK(!m.send(0));
     CHECK(!m.queue(0));
-    CHECK(!m.append(0, Entry{EntryKind::Friend, "x"}));
+    CHECK(!m.append(0, Entry{EntryKind::AI, "x"}));
     CHECK(!m.move_tab(0, 0));
     CHECK(m.tab_count() == 0);
     CHECK(m.active() == 0);
@@ -95,7 +95,7 @@ void empty_friend_list_refuses_everything() {
 void select_in_range_changes_only_active() {
     Model m(three());
     m.set_draft(0, "keep");
-    m.append(1, Entry{EntryKind::Friend, "hello"});
+    m.append(1, Entry{EntryKind::AI, "hello"});
     Model before = m;
     CHECK(m.select_tab(2));
     CHECK(m.active() == 2);
@@ -157,7 +157,7 @@ void send_appends_person_and_clears_that_draft() {
 
 void queue_appends_to_that_tabs_queue_not_the_transcript() {
     Model m(three());
-    m.append(1, Entry{EntryKind::Friend, "earlier"});
+    m.append(1, Entry{EntryKind::AI, "earlier"});
     m.set_draft(2, "other");
     m.set_draft(1, "later");
     CHECK(m.queue(1));
@@ -166,7 +166,7 @@ void queue_appends_to_that_tabs_queue_not_the_transcript() {
     CHECK((m.tab(1).queue == std::vector<std::string>{"later", "after that"})); // in order
     CHECK(m.tab(1).draft.empty());
     CHECK(m.tab(1).transcript.size() == 1);   // the transcript is as it was
-    CHECK(same_entry(m.tab(1).transcript[0], Entry{EntryKind::Friend, "earlier"}));
+    CHECK(same_entry(m.tab(1).transcript[0], Entry{EntryKind::AI, "earlier"}));
     CHECK(m.tab(0).queue.empty() && m.tab(2).queue.empty());
     CHECK(m.tab(2).draft == "other");
     CHECK(m.active() == 0);
@@ -179,7 +179,7 @@ void only_queue_touches_a_queue() {
     const std::vector<std::string> held = m.tab(0).queue;
     m.set_draft(0, "now");
     m.send(0);
-    m.append(0, Entry{EntryKind::Friend, "reply"});
+    m.append(0, Entry{EntryKind::AI, "reply"});
     m.select_tab(2);
     m.set_draft(0, "draft");
     CHECK(m.tab(0).queue == held);
@@ -263,11 +263,11 @@ void send_out_of_range_changes_nothing() {
 void append_adds_that_entry_to_that_tab() {
     Model m(three());
     m.set_draft(2, "draft stays");
-    CHECK(m.append(2, Entry{EntryKind::Friend, "reply"}));
+    CHECK(m.append(2, Entry{EntryKind::AI, "reply"}));
     CHECK(m.append(2, Entry{EntryKind::Notice, ""}));
     CHECK(m.append(2, Entry{EntryKind::Person, " "})); // append takes any entry; only send and queue refuse whitespace
     CHECK(m.tab(2).transcript.size() == 3);
-    CHECK(same_entry(m.tab(2).transcript[0], Entry{EntryKind::Friend, "reply"}));
+    CHECK(same_entry(m.tab(2).transcript[0], Entry{EntryKind::AI, "reply"}));
     CHECK(same_entry(m.tab(2).transcript[1], Entry{EntryKind::Notice, ""}));
     CHECK(same_entry(m.tab(2).transcript[2], Entry{EntryKind::Person, " "}));
     CHECK(m.tab(2).draft == "draft stays");
@@ -277,8 +277,8 @@ void append_adds_that_entry_to_that_tab() {
 void append_out_of_range_changes_nothing() {
     Model m(three());
     Model before = m;
-    CHECK(!m.append(3, Entry{EntryKind::Friend, "x"}));
-    CHECK(!m.append(kHuge, Entry{EntryKind::Friend, "x"}));
+    CHECK(!m.append(3, Entry{EntryKind::AI, "x"}));
+    CHECK(!m.append(kHuge, Entry{EntryKind::AI, "x"}));
     CHECK(same(m, before));
 }
 
@@ -286,7 +286,7 @@ void transcripts_only_grow() {
     Model m(three());
     m.set_draft(0, "one");
     m.send(0);
-    m.append(0, Entry{EntryKind::Friend, "two"});
+    m.append(0, Entry{EntryKind::AI, "two"});
     m.set_draft(0, "three");
     m.queue(0);
     const std::vector<Entry> first(m.tab(0).transcript);
@@ -311,14 +311,14 @@ void large_transcript_keeps_order() {
             m.set_draft(0, std::to_string(k));
             CHECK(m.send(0));
         } else {
-            CHECK(m.append(0, Entry{EntryKind::Friend, std::to_string(k)}));
+            CHECK(m.append(0, Entry{EntryKind::AI, std::to_string(k)}));
         }
     }
     CHECK(m.tab(0).transcript.size() == n);
     bool ordered = true;
     for (std::size_t k = 0; k < n; ++k) {
         const Entry& e = m.tab(0).transcript[k];
-        ordered = ordered && e.text == std::to_string(k) && e.kind == (k % 2 == 0 ? EntryKind::Person : EntryKind::Friend);
+        ordered = ordered && e.text == std::to_string(k) && e.kind == (k % 2 == 0 ? EntryKind::Person : EntryKind::AI);
     }
     CHECK(ordered);
     CHECK(m.tab(1).transcript.empty());
@@ -334,7 +334,7 @@ void large_draft_round_trips() {
     CHECK(m.tab(0).transcript[0].text == big);
 }
 
-// the friends' names in tab order, joined by spaces
+// the AIs' names in tab order, joined by spaces
 std::string names(const Model& m) {
     std::string out;
     for (std::size_t j = 0; j < m.tab_count(); ++j)
@@ -342,15 +342,15 @@ std::string names(const Model& m) {
     return out;
 }
 
-std::vector<FriendInfo> friendsOne() {
+std::vector<AIInfo> aisOne() {
     return {{"ada", "m1"}};
 }
 
-std::vector<FriendInfo> five() {
+std::vector<AIInfo> five() {
     return {{"a", "m"}, {"b", "m"}, {"c", "m"}, {"d", "m"}, {"e", "m"}};
 }
 
-void construct_gives_each_tab_its_friends_id() {
+void construct_gives_each_tab_its_ais_id() {
     Model m(three());
     for (std::size_t j = 0; j < 3; ++j)
         CHECK(m.tab(j).id == j);
@@ -400,7 +400,7 @@ void move_to_itself_is_true_and_changes_nothing() {
 void move_carries_everything_the_tab_holds() {
     Model m(three());
     for (std::size_t j = 0; j < 3; ++j) {
-        m.append(j, Entry{EntryKind::Friend, "reply " + std::to_string(j)});
+        m.append(j, Entry{EntryKind::AI, "reply " + std::to_string(j)});
         m.set_draft(j, "held " + std::to_string(j));
         m.queue(j);
         m.set_draft(j, "draft " + std::to_string(j));
@@ -410,14 +410,14 @@ void move_carries_everything_the_tab_holds() {
     CHECK(same_tab(m.tab(0), before.tab(2)));
     CHECK(same_tab(m.tab(1), before.tab(0)));
     CHECK(same_tab(m.tab(2), before.tab(1)));
-    // and operations by position now address the friend standing there
+    // and operations by position now address the AI standing there
     CHECK(m.send(0));
     CHECK(m.tab(0).name == "cy" && m.tab(0).transcript.back().text == "draft 2");
     CHECK(before.tab(0).transcript.size() == m.tab(1).transcript.size());
 }
 
-// The active tab stays the same friend, wherever it moves and whatever moves around it.
-void move_keeps_the_active_friend() {
+// The active tab stays the same AI, wherever it moves and whatever moves around it.
+void move_keeps_the_active_ai() {
     for (std::size_t from = 0; from < 5; ++from) {
         for (std::size_t to = 0; to < 5; ++to) {
             for (std::size_t a = 0; a < 5; ++a) {
@@ -515,7 +515,7 @@ void ids_are_never_reused() {
     CHECK(none.add_terminal() == 1);
 }
 
-void close_refuses_a_friend_and_out_of_range() {
+void close_refuses_a_ai_and_out_of_range() {
     Model m(three());
     m.add_terminal();
     m.set_draft(0, "x");
@@ -529,7 +529,7 @@ void close_refuses_a_friend_and_out_of_range() {
 }
 
 void close_removes_exactly_that_tab() {
-    Model m(friendsOne());
+    Model m(aisOne());
     m.add_terminal();   // id 1
     m.add_terminal();   // id 2
     m.add_terminal();   // id 3
@@ -551,7 +551,7 @@ std::string history(const Model& m) {
 }
 
 void close_active_goes_back_to_the_tab_selected_before() {
-    Model m(friendsOne());
+    Model m(aisOne());
     m.add_terminal();   // 1
     m.add_terminal();   // 2
     m.add_terminal();   // 3
@@ -569,18 +569,18 @@ void close_active_goes_back_to_the_tab_selected_before() {
     CHECK(none.tab_count() == 0 && none.active() == 0 && history(none).empty());   // none left
 }
 
-// The owner's case: friend, terminal, sprint, terminal; each close goes back to the tab selected before, whatever its
+// The owner's case: AI, terminal, sprint, terminal; each close goes back to the tab selected before, whatever its
 // kind and wherever it stands, not to the tab beside it.
 void close_goes_back_across_kinds() {
-    Model m(three(), true);   // sprint 3, then friends 0 1 2
+    Model m(three(), true);   // sprint 3, then AIs 0 1 2
     CHECK(history(m) == "3");
-    m.select_tab(1);          // friend ada, id 0
+    m.select_tab(1);          // AI ada, id 0
     m.add_terminal();         // terminal 1, id 4, at 4
     m.select_tab(0);          // the sprint tab
     m.add_terminal();         // terminal 2, id 5, at 5
     CHECK(history(m) == "0 4 3 5");
     CHECK(m.close_tab(5));
-    CHECK(m.active() == 0 && m.tab(0).kind == TabKind::Sprint);   // not friend cy, beside it
+    CHECK(m.active() == 0 && m.tab(0).kind == TabKind::Sprint);   // not AI cy, beside it
     CHECK(m.select_tab(4));
     CHECK(m.close_tab(4));
     CHECK(m.active() == 0);   // the sprint tab again: selected after ada
@@ -595,7 +595,7 @@ void close_goes_back_across_kinds() {
 
 // A closed tab is skipped: it left the history when it closed.
 void close_skips_closed_tabs() {
-    Model m(friendsOne());
+    Model m(aisOne());
     m.add_terminal();   // 1
     m.add_terminal();   // 2
     m.add_terminal();   // 3
@@ -625,7 +625,7 @@ void history_follows_selection_only() {
     m.send(2);
     m.set_draft(2, "later");
     m.queue(2);
-    m.append(2, Entry{EntryKind::Friend, "ok"});
+    m.append(2, Entry{EntryKind::AI, "ok"});
     CHECK(m.move_tab(2, 1));
     CHECK(history(m) == "4 3 1");
     CHECK(m.tab(m.active()).id == m.selection_history().back());
@@ -633,19 +633,19 @@ void history_follows_selection_only() {
     CHECK(history(m) == "4 3 1");
     Model none({});
     CHECK(history(none).empty());
-    Model friendsOnly(three());
-    CHECK(history(friendsOnly) == "0");
+    Model aisOnly(three());
+    CHECK(history(aisOnly) == "0");
 }
 
 void a_terminal_takes_no_text() {
     Model m(three());
-    m.set_draft(0, "friend's");
+    m.set_draft(0, "ai's");
     m.add_terminal();
     const Model before = m;
     CHECK(!m.set_draft(3, "hi"));
     CHECK(!m.send(3));
     CHECK(!m.queue(3));
-    CHECK(!m.append(3, Entry{EntryKind::Friend, "x"}));
+    CHECK(!m.append(3, Entry{EntryKind::AI, "x"}));
     CHECK(same(m, before));
     CHECK(m.select_tab(3) && m.select_tab(0));   // select treats every kind alike
 }
@@ -656,21 +656,21 @@ void moves_stay_in_their_zone() {
     m.add_terminal();   // 4
     m.select_tab(1);
     const Model before = m;
-    CHECK(!m.move_tab(3, 0));   // a terminal before a friend
-    CHECK(!m.move_tab(4, 2));   // a terminal between friends
-    CHECK(!m.move_tab(0, 3));   // a friend behind a terminal
+    CHECK(!m.move_tab(3, 0));   // a terminal before an AI
+    CHECK(!m.move_tab(4, 2));   // a terminal between AIs
+    CHECK(!m.move_tab(0, 3));   // an AI behind a terminal
     CHECK(!m.move_tab(2, 4));
     CHECK(same(m, before));
     CHECK(m.move_tab(4, 3));    // terminals among themselves
     CHECK(ids(m) == "0 1 2 4 3");
-    CHECK(m.move_tab(0, 2));    // friends among themselves
+    CHECK(m.move_tab(0, 2));    // AIs among themselves
     CHECK(ids(m) == "1 2 0 4 3");
     CHECK(m.tab(m.active()).id == 1);
 }
 
 // ---- The sprint tab ----
 
-void sprint_tab_is_first_and_active_with_the_friends_after() {
+void sprint_tab_is_first_and_active_with_the_ais_after() {
     Model m(three(), true);
     CHECK(m.tab_count() == 4);
     CHECK(m.active() == 0);
@@ -678,7 +678,7 @@ void sprint_tab_is_first_and_active_with_the_friends_after() {
     CHECK(m.tab(0).name.empty() && m.tab(0).model.empty() && m.tab(0).transcript.empty() && m.tab(0).queue.empty());
     CHECK(ids(m) == "3 0 1 2");
     CHECK(m.tab(1).name == "ada" && m.tab(2).name == "bo" && m.tab(3).name == "cy");
-    CHECK(m.tab(1).kind == TabKind::Friend);
+    CHECK(m.tab(1).kind == TabKind::AI);
 }
 
 void sprint_tab_takes_no_text() {
@@ -688,9 +688,9 @@ void sprint_tab_takes_no_text() {
     CHECK(!m.set_draft(0, "hi"));
     CHECK(!m.send(0));
     CHECK(!m.queue(0));
-    CHECK(!m.append(0, Entry{EntryKind::Friend, "x"}));
+    CHECK(!m.append(0, Entry{EntryKind::AI, "x"}));
     CHECK(same(m, before));
-    CHECK(m.send(1));   // the friend after it still sends
+    CHECK(m.send(1));   // the AI after it still sends
 }
 
 void sprint_tab_never_moves() {
@@ -698,15 +698,15 @@ void sprint_tab_never_moves() {
     m.add_terminal();   // 4
     m.select_tab(2);
     const Model before = m;
-    CHECK(!m.move_tab(0, 1));   // dragged onto a friend
+    CHECK(!m.move_tab(0, 1));   // dragged onto an AI
     CHECK(!m.move_tab(0, 3));
     CHECK(!m.move_tab(0, 4));   // onto a terminal
-    CHECK(!m.move_tab(1, 0));   // a friend dropped in front of it
+    CHECK(!m.move_tab(1, 0));   // an AI dropped in front of it
     CHECK(!m.move_tab(4, 0));   // a terminal dropped in front of it
     CHECK(same(m, before));
     CHECK(m.move_tab(0, 0));    // onto itself: in its zone, and nothing changes
     CHECK(same(m, before));
-    CHECK(m.move_tab(1, 3));    // the friends still move among themselves behind it
+    CHECK(m.move_tab(1, 3));    // the AIs still move among themselves behind it
     CHECK(ids(m) == "3 1 2 0 4" && m.tab(m.active()).id == 1);
 }
 
@@ -715,14 +715,14 @@ void sprint_tab_never_closes() {
     const Model before = m;
     CHECK(!m.close_tab(0));
     CHECK(same(m, before));
-    CHECK(m.add_terminal() == 4);   // the first id after the friends' and the sprint tab's
+    CHECK(m.add_terminal() == 4);   // the first id after the AIs' and the sprint tab's
     CHECK(m.add_terminal() == 5);
     CHECK(m.close_tab(5) && m.close_tab(4));
     CHECK(ids(m) == "3 0 1 2" && m.active() == 0);   // back to the sprint tab, selected before both terminals
     CHECK(!m.close_tab(0));
 }
 
-void sprint_tab_alone_without_friends() {
+void sprint_tab_alone_without_ais() {
     Model m({}, true);
     CHECK(m.tab_count() == 1 && m.tab(0).kind == TabKind::Sprint && m.tab(0).id == 0 && m.active() == 0);
     CHECK(m.add_terminal() == 1);
@@ -732,88 +732,88 @@ void sprint_tab_alone_without_friends() {
     CHECK(!m.close_tab(0) && !m.set_draft(0, "x") && m.select_tab(0));
 }
 
-// ---- Friends from the server's list (Window.tla AddFriend, RemoveFriend) ----
+// ---- AIs from the server's list (Window.tla AddAI, RemoveAI) ----
 
-// A friend's tab goes at the end of the friends' zone, before every terminal, with a new id, holding nothing; the
+// An AI's tab goes at the end of the AIs' zone, before every terminal, with a new id, holding nothing; the
 // active tab stays active and the history is untouched.
-void add_friend_goes_to_the_end_of_the_friends() {
+void add_ai_goes_to_the_end_of_the_ais() {
     Model m({{"ada", "m1"}}, true);
     CHECK(m.add_terminal() == 2);
     CHECK(history(m) == "1 2" && m.active() == 2);
-    CHECK(m.add_friend({"bo", ""}));
+    CHECK(m.add_ai({"bo", ""}));
     CHECK(ids(m) == "1 0 3 2");
-    CHECK(m.tab(2).name == "bo" && m.tab(2).kind == TabKind::Friend && m.tab(2).transcript.empty());
+    CHECK(m.tab(2).name == "bo" && m.tab(2).kind == TabKind::AI && m.tab(2).transcript.empty());
     CHECK(m.tab(2).draft.empty() && m.tab(2).queue.empty());
     CHECK(m.active() == 3 && m.tab(3).id == 2);   // the terminal, shifted right
     CHECK(history(m) == "1 2");
-    CHECK(m.add_terminal() == 4);   // the ids go on after the friend's
+    CHECK(m.add_terminal() == 4);   // the ids go on after the AI's
 }
 
 // The first tab in an empty strip is active, and the history.
-void add_friend_to_an_empty_strip_selects_it() {
+void add_ai_to_an_empty_strip_selects_it() {
     Model m({});
-    CHECK(m.add_friend({"ada", ""}));
+    CHECK(m.add_ai({"ada", ""}));
     CHECK(m.tab_count() == 1 && m.active() == 0 && m.tab(0).id == 0 && history(m) == "0");
-    CHECK(m.add_friend({"bo", ""}));
+    CHECK(m.add_ai({"bo", ""}));
     CHECK(ids(m) == "0 1" && m.active() == 0 && history(m) == "0");
 }
 
-void add_friend_refuses_an_empty_or_standing_name() {
+void add_ai_refuses_an_empty_or_standing_name() {
     Model m(three());
     const Model before = m;
-    CHECK(!m.add_friend({"", "m"}));
-    CHECK(!m.add_friend({"bo", "other"}));
+    CHECK(!m.add_ai({"", "m"}));
+    CHECK(!m.add_ai({"bo", "other"}));
     CHECK(same(m, before));
 }
 
-// Removing a friend's tab takes its transcript, draft and queue with it; the tabs after it shift left.
-void remove_friend_removes_exactly_that_tab() {
+// Removing an AI's tab takes its transcript, draft and queue with it; the tabs after it shift left.
+void remove_ai_removes_exactly_that_tab() {
     Model m(three(), true);
-    CHECK(m.append(2, Entry{EntryKind::Friend, "said"}));
+    CHECK(m.append(2, Entry{EntryKind::AI, "said"}));
     CHECK(m.set_draft(2, "unsent"));
-    CHECK(m.remove_friend(2));
+    CHECK(m.remove_ai(2));
     CHECK(ids(m) == "3 0 2" && names(m) == " ada cy" && m.active() == 0);
     CHECK(history(m) == "3");
-    CHECK(m.add_friend({"bo", ""}));   // back: a new tab, empty, with a new id
+    CHECK(m.add_ai({"bo", ""}));   // back: a new tab, empty, with a new id
     CHECK(ids(m) == "3 0 2 4" && m.tab(3).transcript.empty() && m.tab(3).draft.empty());
 }
 
-// An active friend's tab removed: the tab selected before it shows, by close's rule.
-void remove_active_friend_goes_back_to_the_tab_selected_before() {
+// An active AI's tab removed: the tab selected before it shows, by close's rule.
+void remove_active_ai_goes_back_to_the_tab_selected_before() {
     Model m(three(), true);
     CHECK(m.select_tab(3) && m.select_tab(2));
     CHECK(history(m) == "3 2 1");
-    CHECK(m.remove_friend(2));
+    CHECK(m.remove_ai(2));
     CHECK(m.tab(m.active()).id == 2 && history(m) == "3 2");
 }
 
-// With no tab left in the history, the tab now at its place shows and is the history: a friend's tab that arrived
+// With no tab left in the history, the tab now at its place shows and is the history: an AI's tab that arrived
 // while a terminal was active, and was never selected, once the terminal closes (the counterexample TLC found in
-// MCWindowFriendsEmpty.cfg before Window.tla's ClosedHistory).
+// MCWindowAIsEmpty.cfg before Window.tla's ClosedHistory).
 void close_with_an_empty_history_enters_the_tab_that_shows() {
     Model m({});
     CHECK(m.add_terminal() == 0);
-    CHECK(m.add_friend({"ada", ""}));
+    CHECK(m.add_ai({"ada", ""}));
     CHECK(ids(m) == "1 0" && m.active() == 1 && history(m) == "0");
     CHECK(m.close_tab(1));
     CHECK(ids(m) == "1" && m.active() == 0 && history(m) == "1");
     CHECK(m.tab(m.active()).id == m.selection_history().back());
     Model n({});
-    CHECK(n.add_friend({"ada", ""}) && n.add_friend({"bo", ""}));
-    CHECK(n.remove_friend(0));
+    CHECK(n.add_ai({"ada", ""}) && n.add_ai({"bo", ""}));
+    CHECK(n.remove_ai(0));
     CHECK(ids(n) == "1" && n.active() == 0 && history(n) == "1");
-    CHECK(n.remove_friend(0));
+    CHECK(n.remove_ai(0));
     CHECK(n.tab_count() == 0 && n.active() == 0 && history(n).empty());
 }
 
-void remove_friend_refuses_every_other_tab() {
+void remove_ai_refuses_every_other_tab() {
     Model m(three(), true);
     CHECK(m.add_terminal() == 4);
     const Model before = m;
-    CHECK(!m.remove_friend(0));   // the sprint tab
-    CHECK(!m.remove_friend(4));   // a terminal
-    CHECK(!m.remove_friend(5));
-    CHECK(!m.remove_friend(kHuge));
+    CHECK(!m.remove_ai(0));   // the sprint tab
+    CHECK(!m.remove_ai(4));   // a terminal
+    CHECK(!m.remove_ai(5));
+    CHECK(!m.remove_ai(kHuge));
     CHECK(same(m, before));
 }
 
@@ -866,7 +866,7 @@ void cursor_colours() {
 }
 
 void fork_restore_accepts_only_reachable_groups() {
-    std::vector<nexus::TabGroup> groups{{"A", {"friend"}, false, {"B"}}, {"B", {"left"}, false, {"A"}},
+    std::vector<nexus::TabGroup> groups{{"A", {"ai"}, false, {"B"}}, {"B", {"left"}, false, {"A"}},
                                         {"C", {"right"}, false, {"B"}}};
     Model m({{"first", ""}});
     m.set_tab_groups(groups);
@@ -898,8 +898,8 @@ struct Case {
 
 const Case kCases[] = {
     {"fork_restore_accepts_only_reachable_groups", fork_restore_accepts_only_reachable_groups},
-    {"construct_one_tab_per_friend_in_order", construct_one_tab_per_friend_in_order},
-    {"empty_friend_list_refuses_everything", empty_friend_list_refuses_everything},
+    {"construct_one_tab_per_ai_in_order", construct_one_tab_per_ai_in_order},
+    {"empty_ai_list_refuses_everything", empty_ai_list_refuses_everything},
     {"select_in_range_changes_only_active", select_in_range_changes_only_active},
     {"select_out_of_range_changes_nothing", select_out_of_range_changes_nothing},
     {"set_draft_changes_only_that_draft", set_draft_changes_only_that_draft},
@@ -918,19 +918,19 @@ const Case kCases[] = {
     {"transcripts_only_grow", transcripts_only_grow},
     {"large_transcript_keeps_order", large_transcript_keeps_order},
     {"large_draft_round_trips", large_draft_round_trips},
-    {"construct_gives_each_tab_its_friends_id", construct_gives_each_tab_its_friends_id},
+    {"construct_gives_each_tab_its_ais_id", construct_gives_each_tab_its_ais_id},
     {"move_first_to_last_and_last_to_first", move_first_to_last_and_last_to_first},
     {"move_shifts_the_tabs_between", move_shifts_the_tabs_between},
     {"move_adjacent_swaps", move_adjacent_swaps},
     {"move_to_itself_is_true_and_changes_nothing", move_to_itself_is_true_and_changes_nothing},
     {"move_carries_everything_the_tab_holds", move_carries_everything_the_tab_holds},
-    {"move_keeps_the_active_friend", move_keeps_the_active_friend},
+    {"move_keeps_the_active_ai", move_keeps_the_active_ai},
     {"repeated_moves_are_a_permutation", repeated_moves_are_a_permutation},
     {"move_out_of_range_changes_nothing", move_out_of_range_changes_nothing},
     {"move_with_one_tab_or_none", move_with_one_tab_or_none},
     {"add_terminal_appends_selects_and_returns_a_new_id", add_terminal_appends_selects_and_returns_a_new_id},
     {"ids_are_never_reused", ids_are_never_reused},
-    {"close_refuses_a_friend_and_out_of_range", close_refuses_a_friend_and_out_of_range},
+    {"close_refuses_a_ai_and_out_of_range", close_refuses_a_ai_and_out_of_range},
     {"close_removes_exactly_that_tab", close_removes_exactly_that_tab},
     {"close_active_goes_back_to_the_tab_selected_before", close_active_goes_back_to_the_tab_selected_before},
     {"close_goes_back_across_kinds", close_goes_back_across_kinds},
@@ -938,19 +938,19 @@ const Case kCases[] = {
     {"history_follows_selection_only", history_follows_selection_only},
     {"a_terminal_takes_no_text", a_terminal_takes_no_text},
     {"moves_stay_in_their_zone", moves_stay_in_their_zone},
-    {"sprint_tab_is_first_and_active_with_the_friends_after", sprint_tab_is_first_and_active_with_the_friends_after},
+    {"sprint_tab_is_first_and_active_with_the_ais_after", sprint_tab_is_first_and_active_with_the_ais_after},
     {"sprint_tab_takes_no_text", sprint_tab_takes_no_text},
     {"sprint_tab_never_moves", sprint_tab_never_moves},
     {"sprint_tab_never_closes", sprint_tab_never_closes},
-    {"sprint_tab_alone_without_friends", sprint_tab_alone_without_friends},
-    {"add_friend_goes_to_the_end_of_the_friends", add_friend_goes_to_the_end_of_the_friends},
-    {"add_friend_to_an_empty_strip_selects_it", add_friend_to_an_empty_strip_selects_it},
-    {"add_friend_refuses_an_empty_or_standing_name", add_friend_refuses_an_empty_or_standing_name},
-    {"remove_friend_removes_exactly_that_tab", remove_friend_removes_exactly_that_tab},
-    {"remove_active_friend_goes_back_to_the_tab_selected_before",
-        remove_active_friend_goes_back_to_the_tab_selected_before},
+    {"sprint_tab_alone_without_ais", sprint_tab_alone_without_ais},
+    {"add_ai_goes_to_the_end_of_the_ais", add_ai_goes_to_the_end_of_the_ais},
+    {"add_ai_to_an_empty_strip_selects_it", add_ai_to_an_empty_strip_selects_it},
+    {"add_ai_refuses_an_empty_or_standing_name", add_ai_refuses_an_empty_or_standing_name},
+    {"remove_ai_removes_exactly_that_tab", remove_ai_removes_exactly_that_tab},
+    {"remove_active_ai_goes_back_to_the_tab_selected_before",
+        remove_active_ai_goes_back_to_the_tab_selected_before},
     {"close_with_an_empty_history_enters_the_tab_that_shows", close_with_an_empty_history_enters_the_tab_that_shows},
-    {"remove_friend_refuses_every_other_tab", remove_friend_refuses_every_other_tab},
+    {"remove_ai_refuses_every_other_tab", remove_ai_refuses_every_other_tab},
     {"cursor_breathes_once_a_breath", cursor_breathes_once_a_breath},
     {"cursor_colours", cursor_colours},
 };

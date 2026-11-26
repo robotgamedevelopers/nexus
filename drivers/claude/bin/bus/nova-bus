@@ -1,6 +1,6 @@
 #!/bin/sh
 if [ "$1" = hook ]; then
-    if [ "$2" = --as ] && [ "$3" = "$NEXUS_BUS_FRIEND" ]; then
+    if [ "$2" = --as ] && [ "$3" = "$NEXUS_BUS_AI" ]; then
         if [ "$#" = 3 ] || { [ "$#" = 5 ] && [ "$4" = --harness ] && [ "$5" = claude ]; }; then
             # Monitor can start with stdin at EOF. Read only the granted socket.
             exec /usr/bin/python3 -I -c '
@@ -18,7 +18,7 @@ except OSError as error:
 ' "$NEXUS_BUS_LISTENER"
         fi
     fi
-    echo "Use hook --as $NEXUS_BUS_FRIEND with the granted listener." >&2
+    echo "Use hook --as $NEXUS_BUS_AI with the granted listener." >&2
     exit 2
 fi
 exec "$HOME/.local/bin/nova-bus" "$@"

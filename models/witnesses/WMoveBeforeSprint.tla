@@ -1,17 +1,17 @@
 -------------------------- MODULE WMoveBeforeSprint --------------------------
-\* Reversed witness: the move rule takes the sprint tab for a friend's (one
-\* zone for both), so a friend can be dropped onto position 0 and the sprint
+\* Reversed witness: the move rule takes the sprint tab for an AI's (one
+\* zone for both), so an AI can be dropped onto position 0 and the sprint
 \* tab is pushed behind it. SprintFirst must reject it.
 EXTENDS MCWindow
 
-FriendZone(id) == IF TabKind(id) = "Sprint" THEN 1 ELSE Zone(id)
+AIZone(id) == IF TabKind(id) = "Sprint" THEN 1 ELSE Zone(id)
 
 BrokenMove(from, to) ==
-    IF from \in Tabs /\ to \in Tabs /\ FriendZone(At(from)) = FriendZone(At(to))
+    IF from \in Tabs /\ to \in Tabs /\ AIZone(At(from)) = AIZone(At(to))
     THEN /\ order' = Moved(order, from, to)
          /\ active' = MovedIndex(active, from, to)
          /\ last' = DidMove(from, to, TRUE)
-         /\ UNCHANGED <<friends, transcript, draft, queue, nextId>>
+         /\ UNCHANGED <<ais, transcript, draft, queue, nextId>>
     ELSE /\ last' = DidMove(from, to, FALSE)
          /\ UNCHANGED model
 

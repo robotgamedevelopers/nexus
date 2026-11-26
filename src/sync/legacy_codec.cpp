@@ -12,13 +12,13 @@ std::string named(SessionId id) {
     return "session " + std::to_string(id);
 }
 
-// EntryKind on the wire: Person 0, Friend 1, Notice 2, Tool 3 (from format 2). Format 1 has no Tool: a tool line goes
-// to a window of format 1 as the friend's text, as servers before format 2 sent it. A kind this build does not know (a
+// EntryKind on the wire: Person 0, AI 1, Notice 2, Tool 3 (from format 2). Format 1 has no Tool: a tool line goes
+// to a window of format 1 as the AI's text, as servers before format 2 sent it. A kind this build does not know (a
 // later server's) is read as a notice, which the window draws as a plain dim line.
 std::uint8_t kindOnWire(EntryKind k, std::uint32_t format) {
     if (k == EntryKind::Bus) return static_cast<std::uint8_t>(EntryKind::Notice);
     if (format < 2 && k == EntryKind::Tool) {
-        return static_cast<std::uint8_t>(EntryKind::Friend);
+        return static_cast<std::uint8_t>(EntryKind::AI);
     }
     return static_cast<std::uint8_t>(k);
 }
@@ -29,7 +29,7 @@ EntryKind kindRead(std::uint8_t k) {
 
 // Activity on the wire, from format 2: Idle 0, Busy 1, Down 2. Format 1 carries none, and a session of it reads idle:
 // that server cannot say, and idle claims least (the person may send, which is always safe, where busy would have them
-// wait on nothing). A value this build does not know (a later server's) reads busy: the server said the friend is
+// wait on nothing). A value this build does not know (a later server's) reads busy: the server said the AI is
 // neither idle nor down, so not waiting on the person.
 Activity activityRead(std::uint8_t a) {
     return a <= static_cast<std::uint8_t>(Activity::Down) ? static_cast<Activity>(a) : Activity::Busy;
@@ -49,14 +49,14 @@ void writeEntry(Writer& w, const EntryChange& e, std::uint32_t format) {
     }
 }
 
-// One changed session: what it is (its friend, harness, account, model and effort); from format 2 its activity; its
+// One changed session: what it is (its AI, harness, account, model and effort); from format 2 its activity; its
 // first index; keepFrom; the entries from there to the end; then a byte, 1 if the queue changed, and if so the queue.
 // From format 2 the whole is framed by its length, and fields added since go after the queue, each only ever
-// appended: its instance (empty: the friend's default instance). A window of format 1 is not sent the instance.
+// appended: its instance (empty: the AI's default instance). A window of format 1 is not sent the instance.
 void writeSession(Writer& w, const SessionChange& s, std::uint32_t format) {
     Writer body;
     Writer& out = format < 2 ? w : body;
-    out.str(s.info.friendName);
+    out.str(s.info.aiName);
     out.str(s.info.harness);
     out.str(s.info.account);
     out.str(s.info.model);
@@ -109,7 +109,7 @@ SessionChange readFields(Reader& r, std::size_t left, SessionId id, std::uint32_
     s.id = id;
     s.changed = true;
     const std::string name = named(id);
-    s.info.friendName = r.str();
+    s.info.aiName = r.str();
     s.info.harness = r.str();
     s.info.account = r.str();
     s.info.model = r.str();
@@ -160,7 +160,7 @@ SessionChange readSession(Reader& r, std::size_t left, SessionId id, std::uint32
 }
 
 // The open secret requests, from format 3, after the sessions: how many, then each framed by its length (its id,
-// account, what is asked, the asker's session and friend, and the asker's reason; fields a later format adds go after
+// account, what is asked, the asker's session and AI, and the asker's reason; fields a later format adds go after
 // them).
 void writeRequests(Writer& w, const std::vector<SecretRequest>& requests) {
     w.u64(requests.size());
@@ -209,7 +209,7 @@ bool isSignIn(ActionKind kind) {
         kind == ActionKind::SignInOpened || kind == ActionKind::SignInCallback;
 }
 
-// One action in format 3: its kind, then its fields framed by their length (its session, friend, text, account,
+// One action in format 3: its kind, then its fields framed by their length (its session, AI, text, account,
 // request and value), so that a later format appends fields and a reader skips what it does not know. A sign-in's
 // action goes as a stop naming session 0 and nothing else, which every server refuses and counts, so that the numbers
 // stay unbroken and nothing of the sign-in leaves on a link of 1 to 3.
@@ -228,7 +228,7 @@ void encodeFramed(Writer& w, const Action& a) {
     }
     Writer frame;
     frame.u64(a.session);
-    frame.str(a.friendName);
+    frame.str(a.aiName);
     frame.str(a.text);
     frame.str(a.account);
     frame.u64(a.request);
@@ -252,7 +252,7 @@ void encodeUnframed(Writer& w, const Action& a) {
     }
     w.byte(static_cast<std::uint8_t>(a.kind));
     w.u64(a.session);
-    w.str(a.friendName);
+    w.str(a.aiName);
     w.str(a.text);
     if (a.kind >= ActionKind::AddAccount) {
         w.str(a.account);    // only the account actions carry it, so the older kinds' bytes are as they were
@@ -362,7 +362,7 @@ std::vector<Action> readActionsLegacy(const std::string& diff, std::uint32_t for
             a.kind = static_cast<ActionKind>(kind);
             Reader f(frame);
             a.session = f.u64();
-            a.friendName = f.str();
+            a.aiName = f.str();
             a.text = f.str();
             a.account = f.str();
             a.request = f.u64();
@@ -380,7 +380,7 @@ std::vector<Action> readActionsLegacy(const std::string& diff, std::uint32_t for
         }
         a.kind = static_cast<ActionKind>(kind);
         a.session = r.u64();
-        a.friendName = r.str();
+        a.aiName = r.str();
         a.text = r.str();
         if (a.kind >= ActionKind::AddAccount) {
             a.account = r.str();
