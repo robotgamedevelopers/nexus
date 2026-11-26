@@ -7,7 +7,10 @@
 #   mac-asan     Debug with AddressSanitizer and UndefinedBehaviorSanitizer, without the window, its logic and the link
 #   ios-device, ios-simulator   iOS arm64 (cmake/ios.cmake: the client alone) for devices or the simulator, Debug at -O0
 #                without debug information: no LTO, asserts on; ios.yml's builds
-#   linux-release, linux-asan   the same on Linux with clang and lld (no window, no window logic, no link: CMakeLists.txt)
+#   linux-release  the same on Linux with clang and lld: no window (CMakeLists.txt), but its logic, the link and
+#                  nexus-server; named ON so a build directory configured without them turns them on; no sandbox tools
+#                  (claude-driver-wall-linux builds those)
+#   linux-asan     Debug with the sanitizers on Linux, with clang and lld, without the window, its logic and the link
 # Warnings are errors: CMakeLists.txt sets the flags.
 name: nexus-build
 description: Configure and build nexus on a GitHub-hosted runner
@@ -74,6 +77,7 @@ runs:
         asan=("-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
               "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined")
         off=(-DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF)
+        linux_server=(-DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=ON -DNEXUS_LINK=ON -DNEXUS_SANDBOX_TOOLS=OFF)
         case "$CONFIG" in
           mac-release)
             cmake -S . -B build ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Release "${launch[@]}" \
@@ -94,7 +98,7 @@ runs:
               -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
               -DCMAKE_C_FLAGS_DEBUG=-O0 -DCMAKE_CXX_FLAGS_DEBUG=-O0 -DCMAKE_OBJC_FLAGS_DEBUG=-O0 -DCMAKE_OBJCXX_FLAGS_DEBUG=-O0 ;;
           linux-release)
-            CC=clang CXX=clang++ cmake -S . -B build ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Release "${off[@]}" "${launch[@]}" \
+            CC=clang CXX=clang++ cmake -S . -B build ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Release "${linux_server[@]}" "${launch[@]}" \
               -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto" ;;
           linux-asan)
             CC=clang CXX=clang++ cmake -S . -B build ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Debug "${off[@]}" "${launch[@]}" \

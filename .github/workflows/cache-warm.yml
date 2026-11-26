@@ -61,7 +61,7 @@ jobs:
           - cache: linux-release
             os: ubuntu-24.04
             config: linux-release
-            apt: ""
+            apt: libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev
             targets: ""
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

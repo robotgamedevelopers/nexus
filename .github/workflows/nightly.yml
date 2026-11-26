@@ -445,8 +445,8 @@ jobs:
   # Windows' functional tests, inside WSL2: on Windows the overlay stays native and everything else (nexus-server, the
   # link, the drivers and their tests) runs as the Linux build inside WSL2 (AGENTS.md, platform targets). So these run
   # on captain's WSL2 runners (label wsl2: Linux runners inside captain's WSL2 distro, from the fleet's record), with
-  # the same configure as ci.yml's build-linux, and so with what Prax lets Linux build at its pin (no window logic, so
-  # no link and no nexus-server yet: ci.yml's build-linux says why). The first step refuses to run anywhere but WSL2.
+  # the defaults' configure, as on Linux: the window's logic, the link and nexus-server (and the sandbox's bubblewrap
+  # and socat), all but the window. The first step refuses to run anywhere but WSL2.
   # Caches as ci.yml's build-linux's, under ~/.cache/nexus-ci inside the distro.
   wsl2-functional:
     runs-on: [self-hosted, nexus-nightly, Linux, X64, wsl2]
@@ -493,10 +493,15 @@ jobs:
           else
             echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
           fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF "${launcher[@]}" \
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "${launcher[@]}" \
             -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto"
+          for option in NEXUS_WINDOW_LOGIC NEXUS_LINK NEXUS_SANDBOX_TOOLS; do
+            [ "$(sed -n "s/^$option:BOOL=//p" build/CMakeCache.txt)" = ON ] || { echo "::error::$option is not ON inside WSL2"; exit 1; }
+          done
       - name: Build
         run: cmake --build build --parallel "$JOBS"
+      - name: nexus-server is built
+        run: test -x build/nexus-server
       - name: Functional tests
         run: bash .github/ctest.sh --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure
       - name: ccache hits in this job
@@ -1180,15 +1185,35 @@ jobs:
         uses: ./.github/actions/hosted-caches
         with:
           name: linux-release
-          apt: ""
+          apt: libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev openssh-server
       - name: Configure and build
         uses: ./.github/actions/nexus-build
         with:
           config: linux-release
+      # The link's functional tests reach this machine over `ssh localhost` without a password prompt
+      # (tests/link/CMakeLists.txt): a key made here, for this job only, authorized for the runner's own login.
+      - name: Passwordless ssh to this machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          if [ ! -f ~/.ssh/id_ed25519 ]; then ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519; fi
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          chmod go-w ~
+          if ! nc -z -w 2 127.0.0.1 22; then
+            sudo systemctl start ssh
+          fi
+          ssh-keyscan -T 5 localhost 127.0.0.1 >> ~/.ssh/known_hosts
+          ssh -o BatchMode=yes localhost true
+          echo "ssh localhost works for $(id -un)"
+      # The server lock under contention runs in server-lock (macOS) and inside WSL2 (wsl2-functional), as macos-debug
+      # leaves it out too.
       - name: The tier_nightly tests
         run: >-
           bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
-          -j "$TEST_JOBS" --output-on-failure
+          -E '^server_lock_functional$' -j "$TEST_JOBS" --output-on-failure
 
   # Windows, as ci.yml's windows job builds it, on hosted Windows: the unit tests too slow for a pull request. The WSL2
   # terminal test needs a WSL2 distribution, which hosted Windows lacks: wsl2-terminal runs it on captain.

@@ -1102,9 +1102,14 @@ void enrollment_files(const std::filesystem::path& home) {
     const std::string account = "A.test_1-2";
     const auto harness = home / ".nexus/server/harness";
     fs::create_directories(harness);
+    // The lookup refuses an ancestor others can write to, so the modes are set here rather than left to the umask,
+    // which is 0002 on Ubuntu (and so in WSL2): directories made under it are group-writable, and every lookup failed.
+    for (const auto& ancestor : {home, home / ".nexus", home / ".nexus/server", harness})
+        CHECK(::chmod(ancestor.c_str(), 0755) == 0);
     for (const char* provider : {"codex", "antigravity", "grok", "muse"}) {
         const auto dir = harness / provider / account;
         fs::create_directories(dir);
+        CHECK(::chmod(dir.parent_path().c_str(), 0755) == 0);
         CHECK(::chmod(dir.c_str(), 0700) == 0);
         const auto receipt = dir / ".nexus-enrolled";
         const auto enrolled = [&] { return server::hasEnrollment(home.string(), provider, account); };
