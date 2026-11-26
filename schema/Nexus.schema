@@ -142,6 +142,13 @@ table SignInOffer
     url      *bytes
 }
 
+// A dashboard the server offers (sync/dashboards.h): the tab's name and the page's http:// or https:// address.
+table Dashboard
+{
+    name *string
+    url  *string
+}
+
 // A sessions diff (Sessions::diff_from): every session in the state, in id order. A session the state diffed from
 // holds and this one lacks is not named, which removes it. Then every open secret request, oldest first, whole in
 // every diff (a few short lines). Then the server's AIs, only in a diff where they changed from the state diffed
@@ -149,7 +156,8 @@ table SignInOffer
 // server holding no AIs file it could read, and the window shows the AIs of the sessions it holds) and
 // AIs the list, whole, in its ais.json's order. Absent ais_sent (no change, or a server from before the
 // list) reads false: the reader keeps the AIs it held. Then, from format 5 and only on a link of 5 or later, the
-// live sign-in flows in id order, whole in every diff.
+// live sign-in flows in id order, whole in every diff. Then the dashboards the server offers (its config's
+// `dashboard` lines, sync/dashboards.h), in order, whole in every diff; a window shows the first today.
 table SessionsDiff
 {
     sessions      []SessionChange
@@ -159,6 +167,7 @@ table SessionsDiff
     ais_sent  bool | was = "friends_sent"
     signins       []SignInOffer
     next_action   uint64
+    dashboards    []Dashboard
 }
 
 // ---- The actions, window to server (src/sync/actions.h) ----

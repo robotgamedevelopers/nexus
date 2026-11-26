@@ -194,6 +194,13 @@ struct FrameHost {
     PrUi* ui = nullptr;                     // the window's tree's context, while the window is open; null cuts nothing
     // One round of the window under `root`.
     void build(PrKit* kit, PrLayoutNode root);
+    // One round of the window under `root`, inside a box of its own, `box` px, in every frame (iOS, main_ios.cpp): the
+    // viewport less its safe area, and only the room above the on-screen keyboard while one covers its foot
+    // (keyboard_room.h contentBox). view->extent is that box. The box is there with the keyboard and without it, so the
+    // window's nodes stay the same nodes as it comes and goes: built straight into the root while no keyboard showed,
+    // they were new each time it rose or fell, the prompt took the focus anew, and the keyboard went down and up
+    // every frame (tests/window/test_keyboard_frames.cpp).
+    void buildAbove(PrKit* kit, PrLayoutNode root, PrVec2 box);
 
     // Saves the terminal tabs and the selected tab if they changed (and the window keeps them).
     void keepTerminals();
@@ -208,6 +215,11 @@ private:
     // Actions the link lost before the server acknowledged them (LinkState::cut): a message among them goes back to its
     // tab as a pending message, and the problem line says what happened. Never silent.
     void showCut(const std::vector<std::uint64_t>& cut);
+    // A press, followed until it is a tap (released within kTapSlop of where it went down) or not (View::tapEndsEditing).
+    void watchTap(const PrAppEvent& e);
+    bool tapping_ = false;
+    PrVec2 tapDown_{};
+    std::size_t tapTab_ = ~std::size_t(0);      // the active tab's id when the prompt was dismissed
     std::vector<StagedFile> stagedFiles_;
     unsigned stagedCount_ = 0, pasteFrame_ = 0;
     std::future<void> uploadWorker_;

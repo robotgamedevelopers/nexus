@@ -1351,6 +1351,31 @@ jobs:
           bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
           -E '^server_lock_functional$' -j "$TEST_JOBS" --output-on-failure
 
+  # iOS, the simulator build whole (ios.yml's builds only what its tier_pr tests run), on the fleet Mac: the shots,
+  # their reversed witnesses and the in-app ssh end to end, on a simulator device.
+  ios-nightly:
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: fleet-ios-simulator
+          require: "false"
+          brew: ninja
+      - name: Rust's iOS standard library
+        shell: bash
+        run: rustup target add --toolchain "$RUSTUP_TOOLCHAIN" aarch64-apple-ios aarch64-apple-ios-sim
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: ios-simulator
+      - name: The tier_nightly tests on a simulator device
+        run: bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -j "$TEST_JOBS" --output-on-failure
+
   # Windows, as ci.yml's windows job builds it, on a fleet Windows runner: the unit tests too slow for a pull request. The WSL2
   # terminal test needs a WSL2 distribution, which hosted Windows lacks: wsl2-terminal runs it on captain.
   windows-nightly:

@@ -1,0 +1,81 @@
+#!/bin/sh
+# Sign a device build of the iOS app (cmake/ios.cmake, built for iphoneos) for a paired iPhone or iPad, install it,
+# launch it, and take a screenshot of the device's screen (docs/ios.md). Signing is Xcode's own: the development
+# certificate in the keychain and a team provisioning profile for the app's identifier, which Xcode makes the first
+# time (automatic signing, through a stub project's build with -allowProvisioningUpdates). Nothing here reads, prints
+# or copies a credential, and nothing is copied off the device but the screenshot.
+#
+#   tools/ios-device-run TEAM_ID DEVICE_UDID BUILD_DIR OUT_DIR [-- APP_ARGUMENTS...]
+#
+# OUT_DIR gets the signed nexus.app, the logs, and screen.png.
+set -eu
+[ $# -ge 4 ] || { echo "usage: tools/ios-device-run TEAM_ID DEVICE_UDID BUILD_DIR OUT_DIR [-- APP_ARGUMENTS...]" >&2; exit 2; }
+team=$1
+device=$2
+build=$3
+out=$4
+shift 4
+[ "${1:-}" != "--" ] || shift
+bundle=com.robotgamedevelopers.nexus
+profiles="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+mkdir -p "$out"
+[ -d "$build/nexus.app" ] || { echo "ios-device-run: no $build/nexus.app (build cmake/ios.cmake for iphoneos)" >&2; exit 1; }
+
+# A profile for TEAM.bundle that lists the device and has not expired.
+find_profile() {
+    for p in "$profiles"/*.mobileprovision; do
+        [ -f "$p" ] || continue
+        security cms -D -i "$p" > "$out/profile.plist" 2>/dev/null || continue
+        id=$(plutil -extract Entitlements.application-identifier raw -o - "$out/profile.plist" 2>/dev/null || true)
+        [ "$id" = "$team.$bundle" ] || continue
+        grep -q "<string>$device</string>" "$out/profile.plist" || continue
+        expires=$(plutil -extract ExpirationDate raw -o - "$out/profile.plist")
+        [ "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \< "$expires" ] || continue
+        echo "$p"
+        return 0
+    done
+    return 1
+}
+
+if ! profile=$(find_profile); then
+    echo "ios-device-run: no profile for $team.$bundle on $device; asking Xcode to make one"
+    stub="$out/profile-stub"
+    mkdir -p "$stub"
+    cat > "$stub/CMakeLists.txt" <<EOF
+cmake_minimum_required(VERSION 3.24)
+project(nexus_profile_stub LANGUAGES C)
+add_executable(stub MACOSX_BUNDLE main.c)
+set_target_properties(stub PROPERTIES OUTPUT_NAME nexus
+    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER $bundle XCODE_ATTRIBUTE_CODE_SIGN_STYLE Automatic
+    XCODE_ATTRIBUTE_DEVELOPMENT_TEAM $team XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Apple Development"
+    XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2" XCODE_ATTRIBUTE_GENERATE_INFOPLIST_FILE YES)
+EOF
+    echo 'int main(void) { return 0; }' > "$stub/main.c"
+    cmake -S "$stub" -B "$stub/build" -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
+        > "$out/stub-configure.log"
+    xcodebuild -project "$stub/build/nexus_profile_stub.xcodeproj" -scheme stub -configuration Release -sdk iphoneos \
+        -destination "id=$device" -allowProvisioningUpdates build > "$out/stub-build.log" 2>&1 ||
+        { echo "ios-device-run: Xcode made no profile (see $out/stub-build.log)" >&2; exit 1; }
+    profile=$(find_profile) || { echo "ios-device-run: still no profile for $team.$bundle on $device" >&2; exit 1; }
+fi
+
+# The profile's own certificate signs, and its entitlements are the app's.
+security cms -D -i "$profile" > "$out/profile.plist"
+plutil -extract DeveloperCertificates.0 raw -o - "$out/profile.plist" | base64 -d > "$out/certificate.der"
+identity=$(openssl x509 -inform der -in "$out/certificate.der" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g')
+plutil -extract Entitlements xml1 -o "$out/entitlements.plist" "$out/profile.plist"
+for key in keychain-access-groups com.apple.developer.associated-domains; do
+    plutil -remove "$key" "$out/entitlements.plist" 2>/dev/null || true
+done
+
+rm -rf "$out/nexus.app"
+cp -R "$build/nexus.app" "$out/nexus.app"
+cp "$profile" "$out/nexus.app/embedded.mobileprovision"
+codesign --force --sign "$identity" --entitlements "$out/entitlements.plist" --timestamp=none "$out/nexus.app" \
+    > "$out/codesign.log" 2>&1 || { cat "$out/codesign.log" >&2; exit 1; }
+
+xcrun devicectl device install app --device "$device" "$out/nexus.app" > "$out/install.log" 2>&1 ||
+    { cat "$out/install.log" >&2; exit 1; }
+xcrun devicectl device process launch --device "$device" --terminate-existing "$bundle" "$@" > "$out/launch.log" 2>&1 ||
+    { cat "$out/launch.log" >&2; exit 1; }
+echo "ios-device-run: installed and launched $bundle on $device"
