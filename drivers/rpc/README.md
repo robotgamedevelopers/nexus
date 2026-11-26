@@ -50,8 +50,11 @@ enrollment for these four providers needs a window connected to the server over
 loopback. The server probes the account-specific enrollment receipt on restart.
 The driver checks the actual subscription before sending the prompt.
 
-Run `python3 -m unittest discover -s drivers/rpc -v` from the repository root. The
-tests run real adapter processes and scripted vendor peers with temporary account homes.
+Run `python3 .github/python-tests.py --tier pr --start drivers/rpc` from the repository
+root (each PR runs this), and `--tier native` on a Mac with the vendors' CLIs (the nightly
+runs this). The tests run real adapter processes and scripted vendor peers with temporary
+account homes. A skipped test fails the run; `.github/python-native-tests.txt` lists the
+tests that need a real Mac.
 
 ### Subscription exhaustion
 
