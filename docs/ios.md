@@ -36,6 +36,14 @@ To see the app in the simulator: `xcrun simctl install booted build-ios-sim/nexu
 state file, as `nexus --screenshot --state FILE` draws it on the desktop. `--server USER@HOST --ssh-port N` links to a
 server whose sshd answers on port N in place of 22: an sshd of a test's own, beside the simulator.
 
+## On an iPhone: Talk to your AIs
+
+On an iPhone the app opens on a menu of your tabs with a microphone at the bottom: say an AI's name and what to
+ask, and the reply comes back on the menu, spoken. Speech is recognized on the phone and sent as an ordinary prompt.
+An AI's own page has the way back, the transcript and the prompt, whose microphone is plain dictation. The form comes
+from the client policy by device idiom; an iPad keeps the desktop's strip. See [voice.md](voice.md) for the form, the
+voice turn, its tests (`ctest -L speech` on a simulator) and how a watch reuses it.
+
 ## Reaching the server
 
 The app reaches nexus-server as the desktop window does: over ssh it runs `nexus-server new` on the server's machine, then
@@ -118,3 +126,16 @@ The window is laid out inside the safe area, clear of the status bar and the hom
 keyboard shows, in the room above it, so the prompt sits at the safe area's foot or just above the keyboard. A tap
 outside the prompt's box ends editing and lowers the keyboard, as in other apps; a drag or a scroll, a tap in the
 prompt's box and a tap on a tab do not, and the draft stays. A tap in the prompt's box, or a key typed, edits again.
+
+## For Prax
+
+What nexus works around on iOS, for Prax to take up (Prax stays pinned; nexus does not patch it):
+
+- Studio's window panel pads its content to the safe area but stays the screen's height, so a window of full height
+  runs past the home indicator; and it does not leave room for the on-screen keyboard (`PrAppFrame.keyboard`). nexus
+  builds its window in a box of its own from `PrAppFrame.safeArea` and `keyboard` (src/keyboard_room.h contentBox,
+  FrameHost::buildAbove).
+- A button has no accessibility label: the back chevron on an AI's page should read "Back" to VoiceOver.
+- Text has no ellipsis: nexus shortens a long title from the last layout's measure (src/view.cpp fitPhoneTitle).
+- The UIKit backend sends touches as pointer events with no scrolling, so the menu's scroll is nexus's own
+  (src/finger_scroll.h).

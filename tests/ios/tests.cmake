@@ -118,3 +118,24 @@ add_test(NAME ios_ssh_functional COMMAND ios_ssh_functional ${sshd_dir})
 set_tests_properties(ios_sshd_start PROPERTIES LABELS "functional;ios" TIMEOUT 30 FIXTURES_SETUP ios_sshd)
 set_tests_properties(ios_sshd_stop PROPERTIES LABELS "functional;ios" TIMEOUT 30 FIXTURES_CLEANUP ios_sshd)
 set_tests_properties(ios_ssh_functional PROPERTIES LABELS "functional;ios" TIMEOUT 60 FIXTURES_REQUIRED ios_sshd)
+
+# ios_voice_named, ios_voice_current: the voice's recognizer and matcher on a simulator, on recorded speech
+# (tests/ios/audio, made with `say`): "Ada, how is the sprint going?" goes to ada with the name taken off, and "What is
+# left on the board?" names no one and goes to the AI showing (tests/ios/voice_functional.sh, which says how to allow
+# speech recognition once on the simulator). ios_voice_planted, the reversed witness: with no ada among the AIs, the
+# same speech must not be routed to ada (it fails on a refusal too, never passing by the recognizer not running). Label
+# `speech`, not `ios`: speech recognition needs the app allowed once by a tap on that simulator, which a CI runner
+# cannot give, so these run where a person has: ctest -L speech. NEXUS_IOS_SIM_DEVICE picks the simulator; "booted" by
+# default. Serial: each relaunches the one app on the one simulator.
+if(NEXUS_IOS_SIMULATOR)
+    set(NEXUS_IOS_SIM_DEVICE booted CACHE STRING "The simulator the iOS voice tests run on: a UDID or booted")
+    set(voice_audio ${PROJECT_SOURCE_DIR}/tests/ios/audio)
+    function(nexus_ios_voice_test name audio names expected)
+        add_test(NAME ${name} COMMAND sh ${PROJECT_SOURCE_DIR}/tests/ios/voice_functional.sh ${NEXUS_IOS_SIM_DEVICE}
+            $<TARGET_BUNDLE_DIR:nexus_ios> ${voice_audio}/${audio} ${names} ${expected} ${ARGN})
+        set_tests_properties(${name} PROPERTIES LABELS "functional;speech" TIMEOUT 120 RUN_SERIAL TRUE)
+    endfunction()
+    nexus_ios_voice_test(ios_voice_named ada.m4a "ada,emma" "route: named ada | how is the sprint going?")
+    nexus_ios_voice_test(ios_voice_current none.m4a "ada,emma" "route: current  | What is left on the board?")
+    nexus_ios_voice_test(ios_voice_planted ada.m4a "emma" "route: named ada | how is the sprint going?" planted)
+endif()

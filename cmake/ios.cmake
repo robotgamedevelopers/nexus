@@ -104,7 +104,7 @@ function(nexus_ios_targets)
         src/native_tabs.cpp src/font_prefetch.cpp)
     target_include_directories(nexus_ios_view PUBLIC src)
     target_compile_options(nexus_ios_view PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_ios_view PUBLIC nexus_policy nexus_ios_logic nexus_sync nexus_hitch
+    target_link_libraries(nexus_ios_view PUBLIC nexus_policy nexus_ios_logic nexus_sync nexus_hitch nexus_scroll
         prax::markdown prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app
         prax::core_cpp)
 
@@ -139,10 +139,24 @@ function(nexus_ios_targets)
 
     # The app: one window filling its scene, on iPhone and iPad (cmake/ios_info.plist.in), signed ad hoc as the
     # simulator requires. A device needs the developer's signature (NEXUS_IOS_TEAM below, docs/ios.md).
+    # Voice (docs/voice.md): the matcher and the voice turn (nexus_voice, pure C++), the OS's speech behind its seam
+    # (src/voice/speech.h, Apple's Speech and AVFoundation), and the window's glue (src/voice_window.h). The first two
+    # take no Prax and no window, so that a watch client links them alone.
+    add_library(nexus_ios_speech STATIC src/voice/speech_apple.mm)
+    set_source_files_properties(src/voice/speech_apple.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_include_directories(nexus_ios_speech PUBLIC src)
+    target_compile_options(nexus_ios_speech PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_ios_speech PUBLIC nexus_voice "-framework Speech" "-framework AVFoundation"
+        "-framework Foundation")
+    add_library(nexus_ios_voice STATIC src/voice_window.cpp)
+    target_compile_options(nexus_ios_voice PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_ios_voice PUBLIC nexus_ios_view nexus_voice)
+
     add_executable(nexus_ios MACOSX_BUNDLE src/main_ios.cpp src/platform_ios.mm)
     set_source_files_properties(src/platform_ios.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_compile_options(nexus_ios PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_ios PRIVATE nexus_ios_frame nexus_ios_view nexus_ios_link prax::studio_app prax::app_select
+    target_link_libraries(nexus_ios PRIVATE nexus_ios_frame nexus_ios_view nexus_ios_link nexus_ios_voice nexus_ios_speech
+        prax::studio_app prax::app_select
         prax::gpu_select prax::draw_select prax::image_select prax::compress_select "-framework UIKit")
     set_target_properties(nexus_ios PROPERTIES
         OUTPUT_NAME nexus

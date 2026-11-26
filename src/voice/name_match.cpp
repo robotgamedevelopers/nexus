@@ -159,6 +159,62 @@ Found matchAt(const std::vector<Word>& said, std::size_t at, std::size_t limit,
     return found;
 }
 
+// How a run of folded letters sounds, coarsely, for names the recognizer spells as words it knows ("Zhi Ya Wen" heard
+// as "She Yawen"): the hushed and hissed initials zh, ch, sh, j, q, x, z and s are one sound, and i and e are one
+// vowel. The words are joined first, so the split the recognizer chooses ("Ya Wen", "Yawen") does not matter.
+std::string soundOf(std::string_view joined) {
+    std::string key;
+    for (std::size_t i = 0; i < joined.size(); ++i) {
+        const char c = joined[i];
+        const char next = i + 1 < joined.size() ? joined[i + 1] : '\0';
+        if ((c == 'z' || c == 'c' || c == 's') && next == 'h') {
+            key += 'S';
+            ++i;
+        } else if (c == 'j' || c == 'q' || c == 'x' || c == 'z' || c == 's') {
+            key += 'S';
+        } else if (c == 'i' || c == 'e') {
+            key += 'E';
+        } else {
+            key += c;
+        }
+    }
+    return key;
+}
+
+std::string joined(const std::vector<std::string>& form) {
+    std::string out;
+    for (const auto& w : form) out += w;
+    return out;
+}
+
+// The AIs one of whose spoken forms of two words or more sounds like the words at [at, at + n), for some n up to one
+// more than the form's words, with `length` the n that matched. Only forms of several words take part: a name of
+// one word is matched as spelled, or one letter off (route), and a sound alone is too loose for it. The sound must be
+// equal, not near, and at least six long, so ordinary speech does not name an AI.
+Found soundsAt(const std::vector<Word>& said, std::size_t at, const std::vector<std::vector<std::vector<std::string>>>& forms,
+    const std::vector<SpokenAI>& ais, bool endsAtEnd) {
+    Found found;
+    for (std::size_t f = 0; f < ais.size(); ++f) {
+        for (const auto& form : forms[f]) {
+            if (form.size() < 2) continue;
+            const auto sound = soundOf(joined(form));
+            if (sound.size() < 6) continue;
+            std::string heard;
+            for (std::size_t n = 1; n <= form.size() + 1 && at + n <= said.size(); ++n) {
+                heard += said[at + n - 1].folded;
+                if (endsAtEnd && at + n != said.size()) continue;
+                if (soundOf(heard) != sound) continue;
+                if (std::find(found.ais.begin(), found.ais.end(), ais[f].name) == found.ais.end()) {
+                    found.ais.push_back(ais[f].name);
+                    found.length = std::max(found.length, n);
+                }
+                break;
+            }
+        }
+    }
+    return found;
+}
+
 } // namespace
 
 std::vector<std::string> foldedWords(std::string_view text) {
@@ -223,6 +279,24 @@ Routing route(std::string_view transcript, const std::vector<SpokenAI>& ais) {
     for (std::size_t at = 1; at < said.size(); ++at) {
         if (!said[at - 1].commaAfter) continue;
         const auto found = matchAt(said, at, said.size(), forms, ais, true);
+        if (found.ais.size() > 1) return ambiguous(found.ais);
+        if (found.ais.size() == 1) {
+            const auto before = trim(transcript.substr(0, said[at].begin), std::string_view(" \t\r\n,"));
+            const auto after = trim(transcript.substr(said.back().end), kSpace);
+            return named(found.ais.front(), std::string(before) + std::string(after));
+        }
+    }
+    // A name of several words that sounds right though spelled otherwise, at the start or at the end after a comma:
+    // the recognizer's spelling of a name it does not know ("She Yawen, ..." is zhi ya wen).
+    for (std::size_t at = 0; at < said.size() && at <= 2; ++at) {
+        const auto found = soundsAt(said, at, forms, ais, false);
+        if (found.ais.size() > 1) return ambiguous(found.ais);
+        if (found.ais.size() == 1) return named(found.ais.front(), after(at + found.length));
+        if (!greeting(said[at].folded)) break;
+    }
+    for (std::size_t at = 1; at < said.size(); ++at) {
+        if (!said[at - 1].commaAfter) continue;
+        const auto found = soundsAt(said, at, forms, ais, true);
         if (found.ais.size() > 1) return ambiguous(found.ais);
         if (found.ais.size() == 1) {
             const auto before = trim(transcript.substr(0, said[at].begin), std::string_view(" \t\r\n,"));

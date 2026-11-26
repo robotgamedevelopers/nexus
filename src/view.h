@@ -27,6 +27,7 @@
 #include "chat_markdown.h"
 #include "chat_selection.h"
 #include "cursor.h"
+#include "finger_scroll.h"
 #include "hitch.h"
 #include "model.h"
 #include "window_app.h"
@@ -174,6 +175,24 @@ struct TranscriptItems {
     int steps = 0;                              // the text scale the heights were laid out at
 };
 
+// The voice panel's side of the window (src/voice_window.h, docs/voice.md): what the microphone is doing, what it
+// heard as it forms, the one line saying who the prompt went to or why nothing was sent, and the person's choice of
+// how replies come back. Unset in View, the panel shows that this build has no voice.
+struct VoicePanel {
+    bool listening = false;     // the microphone is on (or its final transcript is still to come)
+    bool asking = false;        // the OS is asking the person for the microphone and speech recognition
+    bool speaking = false;      // a reply is being spoken
+    std::string heard;          // the transcript as it forms
+    std::string line;           // who the last prompt went to, or why nothing was heard, sent or allowed
+    bool trouble = false;       // the line says what went wrong (the prompt's dictation shows only that)
+    // On the menu: the AI the last prompt from the menu went to, its reply so far, and the way into its tab.
+    std::string to;
+    std::string toTitle;
+    std::string replyText;
+    std::function<void()> press;   // the microphone button
+    std::function<void()> openTo;  // opens `to`'s tab
+};
+
 struct View {
     std::function<void(const Chirp&)> playChirp;
     struct GlyphTrail {
@@ -305,6 +324,24 @@ struct View {
     std::string cutDraft;
     bool cutComing = false;
     bool cutFollow = false;
+    // The phone's form (docs/voice.md): the device's idiom ("desktop", "pad" or "phone"), which the client policy reads
+    // as ui.idiom to choose its panels, and whether the phone shows its menu of tabs (ui.menu) rather than one tab.
+    std::string idiom = "desktop";
+    bool phoneMenu = true;
+    VoicePanel* voice = nullptr;
+    // The phone's list of AIs: its scroll under the finger, and its viewport and content from the last layout (their
+    // heights give the scroll's range; the viewport's bounds which presses it takes).
+    FingerScroll menuScroll;
+    PrLayoutNode menuViewport = kPrLayoutNodeNone;
+    PrLayoutNode menuContent = kPrLayoutNodeNone;
+    PrLayoutNode promptMic = kPrLayoutNodeNone;  // the phone prompt's microphone, inside the prompt's box
+    // An AI's page on the phone: its back chevron and its title, centred on the window's width under the chevron; the
+    // title as shown (shortened with an ellipsis to the room both sides of the chevron leave) and its full text.
+    PrLayoutNode phoneBackButton = kPrLayoutNodeNone;
+    PrLayoutNode phoneTitle = kPrLayoutNodeNone;
+    PrLayoutNode phoneTitleRoom = kPrLayoutNodeNone;
+    std::string phoneTitleFull, phoneTitleShown;
+    bool phoneTitleFitting = false;             // the shown title was shortened this frame: lay out again
     bool promptOpen = true;                     // false: no prompt on an AI's tab (before the server is reached)
     std::string status;                         // one plain line where the prompt stands (the link's state); empty,
                                                 // none

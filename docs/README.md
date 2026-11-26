@@ -8,7 +8,7 @@ For a first install, point your current AI harness at the repository and ask it 
 
 The client and server can run on the same Apple silicon Mac with macOS 26 or newer. An always-on server can keep working while the laptop sleeps. Start with the harness you already use. You can add AIs or other harnesses later. [Accounts and AIs](accounts.md)
 
-Windows has native window code and WSL2 terminal support. The connected Windows client, Wayland and Android clients are still development work. The iPhone and iPad app is in progress ([ios.md](ios.md)). The [Apple Watch app](watch.md) talks to your AIs by voice through the iPhone. The proposed heads-down timer and away report are also on the [roadmap](ROADMAP.md).
+Windows has native window code and WSL2 terminal support. The connected Windows client, Wayland and Android clients are still development work. The iPhone and iPad app is in progress ([ios.md](ios.md)); on an iPhone you talk to your AIs by voice ([voice.md](voice.md)). The [Apple Watch app](watch.md) talks to your AIs by voice through the iPhone. The proposed heads-down timer and away report are also on the [roadmap](ROADMAP.md).
 
 ## The window today
 

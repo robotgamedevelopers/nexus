@@ -11,6 +11,9 @@
 // that matches wins; two AIs matching with forms of the same length is ambiguous, and nothing is guessed. A word
 // of three letters or more, one letter away from exactly one AI's one-word form of four letters or more and
 // followed by a comma (the recognizer's mark of a name being called), names that AI as well ("Ema, ..." is emma).
+// A spoken form of two words or more also answers to words that sound the same, joined however the recognizer splits
+// them: zh, ch, sh, j, q, x, z and s are one sound and i and e one vowel ("She Yawen" is zhi ya wen); the sound
+// must be equal and six letters or more, in the same places a spelled name is looked for, after spelled matches fail.
 // The prompt starts at the word after the name: the marks between ("Emma, ", "Emma — ") go.
 #pragma once
 

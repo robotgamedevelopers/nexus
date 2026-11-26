@@ -11,6 +11,7 @@
 #include "pr/draw_list.h"
 #include "pr/json.h"
 #include "pr/kit_choice.h"
+#include "pr/kit_box.h"
 #include "pr/kit_button.h"
 #include "pr/kit_icon.h"
 #include "pr/kit_input.h"
@@ -623,6 +624,213 @@ struct Builder {
             label(element(parent, Part::CaptionBubble), text, appearance);
     }
 
+    // The phone's list of AIs (docs/voice.md): one row per tab, in the strip's order and with its titles, centred in
+    // the room above the microphone while the rows fit, and under the finger (FingerScroll) when they do not; a tap on
+    // a row opens its tab. Below, the microphone: a prompt spoken here goes to the AI named (or the first), and who it
+    // went to and the reply show here, with the way into that AI's tab.
+    void phoneMenu(PrLayoutNode window) {
+        PrKitBoxStyle screen{};
+        screen.place.flex = PrKitFlex_Fill;
+        screen.align = PrKitAlign_Stretch;
+        const auto root = prKitBox(kit, window, {.key = prHashString(sv("phone-menu"), 0)}, screen);
+
+        // The range: the content's height less the viewport's, from the last layout.
+        auto height = [&](PrLayoutNode node) {
+            if (node == kPrLayoutNodeNone || !prLayoutNodeIsValid(tree, node)) return 0.f;
+            const PrRect r = prLayoutRectToPx(prLayoutNodeBounds(tree, node, PrLayoutCoordinates_Layout));
+            return std::max(0.f, r.bottom - r.top);
+        };
+        const float viewH = height(view.menuViewport), contentH = height(view.menuContent);
+        if (viewH > 0) view.menuScroll.setRange(contentH - viewH, viewH);
+        view.menuScroll.frame(view.time);
+
+        PrKitBoxStyle viewport{};
+        viewport.overflow = PrKitOverflow_Clip;
+        viewport.place.flex = PrKitFlex_Fill;
+        viewport.align = PrKitAlign_Stretch;
+        const auto clip = prKitBox(kit, root, {.key = prHashString(sv("phone-menu-viewport"), 0)}, viewport);
+        view.menuViewport = clip;
+        PrKitBoxStyle column{};
+        column.justify = PrKitJustify_Center;
+        column.align = PrKitAlign_Center;
+        column.gap = 0.25f * kLinePitch * k();
+        column.padding = {0.5f * kLinePitch * k(), kLinePitch * k(), 0.5f * kLinePitch * k(), kLinePitch * k()};
+        column.place.minHeight = prKitPercent(100);
+        column.place.flex = PrKitFlex_Fixed;
+        column.place.margin.top = -float(view.menuScroll.offset());
+        const auto list = prKitBox(kit, clip, {.key = prHashString(sv("phone-menu-list"), 0)}, column);
+        view.menuContent = list;
+        if (model.tab_count() == 0) {
+            caption(list, "No AIs yet: the server sends them once it is reached.",
+                textStyle(PrKitTextRole_Body, kStatusTone, PrKitTextAlign_Center));
+        }
+        const auto& titles = view.windowApp.surface.tabTitles;
+        std::vector<std::size_t> rows;
+        if (const auto& order = view.windowApp.surface.menuTabs) {
+            for (const auto i : *order)
+                if (i < model.tab_count()) rows.push_back(i);
+        } else {
+            for (std::size_t i = 0; i < model.tab_count(); ++i) rows.push_back(i);
+        }
+        for (const auto i : rows) {
+            const auto& tab = model.tab(i);
+            const std::string title = i < titles.size() ? titles[i] : std::string(label(tab));
+            const auto row = prKitButton(kit, list, {.key = prHashString(sv("menu/" + std::to_string(tab.id)), 0)},
+                                         {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Lg});
+            PrKitPlace place{};
+            place.height = prKitPx(1.9f * kLinePitch * k());
+            place.flex = PrKitFlex_Fixed;
+            prKitPlace(kit, row, place);
+            label(row, title, textStyle(PrKitTextRole_Title, kChatTone));
+            if (!asking && prKitActivated(kit, row) && !view.menuScroll.dragging()) {
+                model.select_tab(i);
+                view.phoneMenu = false;
+            }
+        }
+        // The policy's own rows after the tabs (menu_rows): each runs its window command as its shortcut would.
+        for (const auto& extra : view.windowApp.surface.menuRows) {
+            const auto row = prKitButton(kit, list, {.key = prHashString(sv("menu-row/" + extra.title), 0)},
+                                         {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Lg});
+            PrKitPlace place{};
+            place.height = prKitPx(1.9f * kLinePitch * k());
+            place.flex = PrKitFlex_Fixed;
+            prKitPlace(kit, row, place);
+            label(row, extra.title, textStyle(PrKitTextRole_Title, kChatTone));
+            if (!asking && prKitActivated(kit, row) && !view.menuScroll.dragging()) {
+                view.phoneMenu = false;
+                shortcut(extra.command);
+            }
+        }
+        if (view.voice && view.windowApp.surface.voiceMic) menuTalk(root);
+    }
+
+    // The list's microphone, at the bottom in reach of the thumb: what is heard as it forms, who the prompt went to and
+    // the reply, the way into that AI's tab, and the button.
+    void menuTalk(PrLayoutNode root) {
+        const auto& voice = *view.voice;
+        PrKitBoxStyle area{};
+        area.align = PrKitAlign_Center;
+        area.gap = 0.25f * kLinePitch * k();
+        area.padding = {0.25f * kLinePitch * k(), kLinePitch * k(), 1.25f * kLinePitch * k(), kLinePitch * k()};
+        area.place.flex = PrKitFlex_Fixed;
+        const auto bottom = prKitBox(kit, root, {.key = prHashString(sv("phone-menu-talk"), 0)}, area);
+        auto body = textStyle(PrKitTextRole_Body, kChatTone, PrKitTextAlign_Center);
+        body.wrap = PrKitWrap_Wrap;
+        const auto small = textStyle(PrKitTextRole_BodySmall, kStatusTone, PrKitTextAlign_Center);
+        if (voice.listening) {
+            if (!voice.heard.empty()) caption(bottom, voice.heard, body);
+        } else if (!voice.to.empty()) {
+            caption(bottom, voice.line, small);
+            if (!voice.replyText.empty()) {
+                // The reply's end, as much as fits a few lines: the whole of it is in the AI's tab.
+                std::string tail = voice.replyText;
+                constexpr std::size_t kTail = 280;
+                if (tail.size() > kTail) {
+                    std::size_t cut = tail.size() - kTail;
+                    while (cut < tail.size() && (static_cast<unsigned char>(tail[cut]) & 0xC0) == 0x80) ++cut;
+                    tail = "\u2026" + tail.substr(cut);
+                }
+                caption(bottom, tail, body);
+            }
+            const auto open = prKitButton(kit, bottom, {.key = prHashString(sv("phone-menu-open"), 0),
+                                                        .text = sv("Open " + voice.toTitle),
+                                                        .icon = PrStudioIconKind_ChevronRight},
+                                          {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Sm});
+            if (!asking && prKitActivated(kit, open) && voice.openTo) voice.openTo();
+        } else if (!voice.line.empty()) {
+            caption(bottom, voice.line, small);
+        }
+        const char* say = voice.asking ? "Allow\u2026" : voice.listening ? "Done" : voice.speaking ? "Talk over" : "Talk";
+        const auto mic = prKitButton(kit, bottom, {.key = prHashString(sv("phone-menu-mic"), 0), .text = sv(say),
+                                                   .icon = PrStudioIconKind(voice.listening ? PrStudioIconKind_Stop : PrStudioIconKind_Audio),
+                                                   .selected = voice.listening},
+                                     {.variant = PrKitButtonVariant_Primary, .size = PrKitControlSize_Lg});
+        if (!asking && prKitActivated(kit, mic) && voice.press) voice.press();
+    }
+
+    // The way back from a tab to the phone's menu: a back chevron alone (no words), laid over the bar, and the AI's
+    // title centred on the window's width whatever the chevron's, kept clear of it by the same room on both sides, and
+    // shortened at its end with an ellipsis when it does not fit that room.
+    void phoneBack(PrLayoutNode window) {
+        const float edge = 0.5f * kLinePitch * k();
+        const float clear = edge + 2.2f * kLinePitch * k();  // the chevron's room, kept on both sides of the title
+        PrKitBoxStyle bar{};
+        bar.align = PrKitAlign_Stretch;
+        const auto stack = prKitStack(kit, window, {.key = prHashString(sv("phone-back"), 0)}, bar);
+        PrKitBoxStyle room{};
+        room.direction = PrKitDirection_Row;
+        room.justify = PrKitJustify_Center;
+        room.align = PrKitAlign_Center;
+        room.padding = {0.25f * kLinePitch * k(), clear, 0, clear};
+        room.place.minHeight = prKitPx(2.2f * kLinePitch * k());
+        room.overflow = PrKitOverflow_Clip;
+        const auto titleRoom = prKitBox(kit, stack, {.key = prHashString(sv("phone-title-room"), 0)}, room);
+        view.phoneTitleRoom = titleRoom;
+        const PrLayoutNode lastTitle = view.phoneTitle;  // the last layout's, which fitPhoneTitle measures
+        view.phoneTitle = kPrLayoutNodeNone;
+        if (model.tab_count()) {
+            const auto& tab = model.tab(model.active());
+            const auto& titles = view.windowApp.surface.tabTitles;
+            const std::string title = model.active() < titles.size() ? titles[model.active()] : std::string(label(tab));
+            fitPhoneTitle(title, lastTitle);
+            auto style = textStyle(PrKitTextRole_Heading, kChatTone, PrKitTextAlign_Center);
+            style.wrap = PrKitWrap_Nowrap;
+            view.phoneTitle = label(titleRoom, view.phoneTitleShown, style);
+            PrKitPlace whole{};
+            whole.flex = PrKitFlex_Fixed;  // never squeezed: a title wider than its room is shortened, above
+            prKitPlace(kit, view.phoneTitle, whole);
+        }
+        PrKitBoxStyle over{};
+        over.direction = PrKitDirection_Row;
+        over.align = PrKitAlign_Center;
+        over.padding = {0.25f * kLinePitch * k(), 0, 0, edge};
+        const auto layer = prKitLayer(kit, stack, {.key = prHashString(sv("phone-back-layer"), 0)}, over);
+        // Icon only: Prax has no accessibility label to give it ("Back"; docs/ios.md, For Prax).
+        const auto back = prKitButton(kit, layer, {.key = prHashString(sv("phone-back-button"), 0),
+                                                   .icon = PrStudioIconKind_ChevronLeft},
+                                      {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Lg});
+        view.phoneBackButton = back;
+        if (!asking && prKitActivated(kit, back)) view.phoneMenu = true;
+    }
+
+    // The title as shown: the whole title while it fits the room the last layout gave it; else as many of its
+    // characters as fit, then an ellipsis, measured from the last layout (the next one checks it again).
+    void fitPhoneTitle(const std::string& title, PrLayoutNode shownNode) {
+        view.phoneTitleFitting = false;
+        if (title != view.phoneTitleFull) {
+            view.phoneTitleFull = title;
+            view.phoneTitleShown = title;
+            return;
+        }
+        auto width = [&](PrLayoutNode node) {
+            if (node == kPrLayoutNodeNone || !prLayoutNodeIsValid(tree, node)) return 0.f;
+            const PrRect r = prLayoutRectToPx(prLayoutNodeBounds(tree, node, PrLayoutCoordinates_Layout));
+            return std::max(0.f, r.right - r.left);
+        };
+        const float shown = width(shownNode);
+        float room = width(view.phoneTitleRoom);
+        if (room <= 0 || shown <= 0) return;
+        room -= 2 * (0.5f * kLinePitch * k() + 2.2f * kLinePitch * k());
+        if (shown <= room + 0.5f || view.phoneTitleShown.size() <= 1) return;
+        // Characters (UTF-8 lead bytes) in what is shown, less the ellipsis: keep the share that fits, then one fewer.
+        const std::string& now = view.phoneTitleShown;
+        const bool ellipsis = now.size() >= 3 && now.compare(now.size() - 3, 3, "\u2026") == 0;
+        const std::string body = ellipsis ? now.substr(0, now.size() - 3) : now;
+        std::size_t chars = 0;
+        for (unsigned char c : body) chars += (c & 0xC0) != 0x80;
+        std::size_t keep = std::size_t(float(chars) * room / shown);
+        keep = keep > 1 ? keep - 1 : 1;
+        std::size_t at = 0, seen = 0;
+        while (at < body.size()) {
+            if ((static_cast<unsigned char>(body[at]) & 0xC0) != 0x80 && seen++ == keep) break;
+            ++at;
+        }
+        std::string cut = body.substr(0, at);
+        while (!cut.empty() && cut.back() == ' ') cut.pop_back();
+        view.phoneTitleShown = cut + "\u2026";
+        view.phoneTitleFitting = view.phoneTitleShown != now;
+    }
+
     void limitPanel(PrLayoutNode parent) {
         const auto& app = view.windowApp;
         if (!app.limitOffer.request) return;
@@ -819,6 +1027,24 @@ struct Builder {
         place.margin.bottom = (oneLineArea(k()) - side) / 2;
         place.flex = PrKitFlex_Fixed;
         prKitPlace(kit, node, place);
+    }
+
+    // The phone prompt's microphone (docs/voice.md), inside the prompt's rounded box at its right end: plain
+    // dictation into the prompt, as the words form; the person edits and sends. Stop while it listens.
+    void promptMic(PrLayoutNode box) {
+        view.promptMic = kPrLayoutNodeNone;
+        if (!view.voice || !view.windowApp.surface.voiceMic || view.phoneMenu || pickerInput) return;
+        const auto& voice = *view.voice;
+        const auto mic = prKitButton(kit, box, {.key = prHashString(sv("prompt-mic"), 0),
+                                                .icon = PrStudioIconKind(voice.listening ? PrStudioIconKind_Stop : PrStudioIconKind_Audio),
+                                                .selected = voice.listening || voice.asking},
+                                     {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Md});
+        PrKitPlace place{};
+        place.flex = PrKitFlex_Fixed;
+        place.margin.bottom = std::max(0.f, (oneLineArea(k()) - kPlusSide * k()) / 2);
+        prKitPlace(kit, mic, place);
+        view.promptMic = mic;
+        if (!asking && prKitActivated(kit, mic) && voice.press) voice.press();
     }
 
     // Takes the kit text area's own frame off: the kit draws a text area with a square frame (3 px corners), a border in
@@ -2148,6 +2374,12 @@ struct Builder {
         // The prompt's rounded box, holding the plus and the text area: the kit has no rounded text area and no slot
         // for an icon inside one (frameless). Enter sends and Command-Enter queues, captured on the box, so the area
         // never sees them; every other Enter (Shift-Enter among them) goes to the area, which breaks the line (pr/ui.h).
+        // The prompt's dictation says only what went wrong (a refused microphone, a recognizer that stopped), above it.
+        if (view.voice && view.voice->trouble && !view.phoneMenu && view.windowApp.surface.voiceMic) {
+            auto why = textStyle(PrKitTextRole_BodySmall, kNoticeTone, PrKitTextAlign_Center);
+            why.wrap = PrKitWrap_Wrap;
+            caption(footer, view.voice->line, why);
+        }
         PrLayoutNode box = element(footer, Part::Prompt);
         view.promptBox = box;
         bool send = !pickerInput && prUiKeyCaptured(ui, box, PrAppKey_Enter, 0);
@@ -2179,6 +2411,7 @@ struct Builder {
         fill.flex = PrKitFlex_Fill;
         prKitPlace(kit, edit, fill);
         frameless(edit);
+        promptMic(box);
         // The area's value (its first child) is read off the last layout, so a round that builds the area for the
         // first time (a switch from a tab with no prompt, or a tab chosen before the frame) finds none. It reads the
         // area's extent then, which the round's layout changes, so the frame runs another round and shows the value
@@ -2208,7 +2441,8 @@ struct Builder {
         }
         view.prompt = edit;
         // The focus is the secret dialog's while it shows (secretDialog).
-        if (!pickerInput && asking == nullptr && prUiFocus(ui) != edit && !view.promptDismissed)
+        if (!pickerInput && asking == nullptr && view.windowApp.surface.focusPrompt && prUiFocus(ui) != edit &&
+            !view.promptDismissed)
             prUiSetFocus(ui, edit);
         PrStringView changed{};
         const bool coming = view.cutComing;
@@ -2481,6 +2715,18 @@ struct Builder {
         // A new terminal can be opened now (Terminals::available): the phone's list offers its New terminal row.
         prJsonWriterKey(w, sv("terminals"));
         prJsonWriterBool(w, view.terminals != nullptr && view.terminals->available());
+        field("idiom", view.idiom);
+        prJsonWriterKey(w, sv("menu"));
+        prJsonWriterBool(w, view.phoneMenu);
+        if (view.voice) {
+            prJsonWriterKey(w, sv("voice"));
+            prJsonWriterBeginObject(w);
+            prJsonWriterKey(w, sv("listening"));
+            prJsonWriterBool(w, view.voice->listening);
+            prJsonWriterKey(w, sv("speaking"));
+            prJsonWriterBool(w, view.voice->speaking);
+            prJsonWriterEndObject(w);
+        }
         prJsonWriterKey(w, sv("dismissed"));
         prJsonWriterBool(w, view.dismissedSignIn.has_value());
         prJsonWriterKey(w, sv("help_visible"));
@@ -2757,6 +3003,8 @@ struct Builder {
                             view.serverChoice->change();
                     }
                     break;
+                case Panel::Menu: phoneMenu(window); break;
+                case Panel::Back: phoneBack(window); break;
             }
         }
         if (!view.extensionProblem.empty() && model.tab_count() && model.tab(model.active()).kind == TabKind::Extension)
@@ -2934,7 +3182,10 @@ PrStringView cutText(PrStringView text, std::size_t room) {
 bool windowWantsFrame(const View& view) {
     return view.look->prompt != view.windowApp.surface.prompt || view.look->tabs != view.windowApp.surface.tabs || view.look->transcriptStyle != view.windowApp.transcriptStyle ||
            view.look->messageCard != view.windowApp.messageCard || view.look->textSteps != view.askedTextSteps ||
-           (view.look->overlay && view.look->overlayOpacity != view.windowApp.overlayOpacity) || view.breathing || view.energyAnimating || view.cutComing;
+           (view.look->overlay && view.look->overlayOpacity != view.windowApp.overlayOpacity) || view.breathing || view.energyAnimating || view.cutComing ||
+           (view.phoneMenu && (view.menuScroll.moving() || view.menuScroll.dragging())) || view.phoneTitleFitting ||
+           // The speech's words and its end arrive from another thread, read each frame: frames go on while it is under way.
+           (view.voice && (view.voice->listening || view.voice->asking || view.voice->speaking));
 }
 
 // Forward margin drags through the native editor so its UTF-8 selection, clipboard and editing agree.
@@ -2959,6 +3210,11 @@ bool routePromptPointer(View& view, PrUi* ui, const PrAppEvent& event) {
         if (selected.anchor != selected.caret && !(event.modifiers & PrAppModifierFlag_Shift))
             prUiTextEditSetSelection(ui, edit, {selected.caret, selected.caret});
         if (p.x < panel.left || p.x >= panel.right || p.y < panel.top || p.y >= panel.bottom) return false;
+        // The phone prompt's microphone is a button in the box: its press is its own, not the text's margin.
+        if (view.promptMic != kPrLayoutNodeNone && prLayoutNodeIsValid(tree, view.promptMic)) {
+            const auto mic = prLayoutRectToPx(prLayoutNodeBounds(tree, view.promptMic, coords));
+            if (p.x >= mic.left && p.x < mic.right && p.y >= mic.top && p.y < mic.bottom) return false;
+        }
         view.promptPointerDown = true;
     }
     const auto field = prLayoutRectToPx(prLayoutNodeBounds(tree, edit, coords));

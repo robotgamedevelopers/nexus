@@ -60,6 +60,18 @@ bool accountAction(std::string_view action) {
     return op == "focus" || op == "select" || op == "sign_in";
 }
 
+// A window command that takes no argument, by its name.
+bool plainCommand(std::string_view op, WindowCommand& out) {
+    if (op == "open_terminal") out = WindowCommand::OpenTerminal;
+    else if (op == "close_terminal") out = WindowCommand::CloseTerminal;
+    else if (op == "close_tab") out = WindowCommand::CloseTab;
+    else if (op == "invoke_service") out = WindowCommand::InvokeService;
+    else if (op == "clear_composer") out = WindowCommand::ClearComposer;
+    else if (op == "stop") out = WindowCommand::Stop;
+    else return false;
+    return true;
+}
+
 bool shortcut(const PrJson* d, Index row, Shortcut& out) {
     if (prJsonKind(d, row) != PrJsonKind_Array ||
             !chord(stringAt(d, prJsonElement(d, row, 0)), out.key, out.modifiers))
@@ -112,13 +124,44 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == std::string::npos));
     }
     if (prJsonCount(d, row) != 2) return false;
-    if (op == "open_terminal") out.command = WindowCommand::OpenTerminal;
-    else if (op == "close_terminal") out.command = WindowCommand::CloseTerminal;
-    else if (op == "close_tab") out.command = WindowCommand::CloseTab;
-    else if (op == "invoke_service") out.command = WindowCommand::InvokeService;
-    else if (op == "clear_composer") out.command = WindowCommand::ClearComposer;
-    else if (op == "stop") out.command = WindowCommand::Stop;
-    else return false;
+    return plainCommand(op, out.command);
+}
+
+// The phone list's extra rows (docs/policy.md, The iPhone's form): menu_rows, at most 8, each {"title": "...",
+// "command": "<a window command that takes no argument>"}, run as a shortcut runs it. Absent: none. Malformed: refused.
+bool readMenuRowsIn(const PrJson* d, std::vector<MenuRow>& rows, std::string& why) {
+    rows.clear();
+    const auto list = prJsonMember(d, 0, {"menu_rows", 9});
+    if (list == kPrJsonMissing) return true;
+    if (prJsonKind(d, list) != PrJsonKind_Array || prJsonCount(d, list) > 8) {
+        why = "menu_rows must be a list of at most 8 rows";
+        return false;
+    }
+    for (uint32_t i = 0; i < prJsonCount(d, list); ++i) {
+        const auto row = prJsonElement(d, list, i);
+        const auto title = prJsonMember(d, row, {"title", 5});
+        const auto command = prJsonMember(d, row, {"command", 7});
+        MenuRow out;
+        if (prJsonKind(d, row) != PrJsonKind_Object || prJsonCount(d, row) != 2 ||
+                prJsonKind(d, title) != PrJsonKind_String || prJsonKind(d, command) != PrJsonKind_String) {
+            why = "menu_rows[" + std::to_string(i) + "] must be {\"title\": text, \"command\": name} and nothing else";
+            return false;
+        }
+        out.title = std::string(stringAt(d, title));
+        const auto name = stringAt(d, command);
+        if (out.title.empty() || out.title.size() > 128 ||
+                std::any_of(out.title.begin(), out.title.end(), [](unsigned char c) { return c < 32 || c == 127; })) {
+            why = "menu_rows[" + std::to_string(i) + "].title must be 1 to 128 bytes of one line";
+            return false;
+        }
+        if (!plainCommand(name, out.command.command)) {
+            why = "menu_rows[" + std::to_string(i) + "].command \"" + std::string(name).substr(0, 64) +
+                  "\" is not a window command that takes no argument (open_terminal, close_terminal, close_tab, "
+                  "invoke_service, clear_composer, stop)";
+            return false;
+        }
+        rows.push_back(std::move(out));
+    }
     return true;
 }
 
@@ -431,7 +474,25 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
             !readFlag(doc, box, {"show_plus", 9}, prompt.showPlus))) return false;
     if (!readFlag(doc, 0, {"prompt_command", 14}, surface.promptCommand) ||
             !readFlag(doc, 0, {"show_tabs", 9}, surface.showTabs) ||
-            !readFlag(doc, 0, {"reorder_tabs", 12}, surface.reorderTabs)) return false;
+            !readFlag(doc, 0, {"reorder_tabs", 12}, surface.reorderTabs) ||
+            !readFlag(doc, 0, {"focus_prompt", 12}, surface.focusPrompt) ||
+            !readFlag(doc, 0, {"voice_mic", 9}, surface.voiceMic)) return false;
+    const auto names = prJsonMember(doc, 0, {"voice_names", 11});
+    if (names != kPrJsonMissing) {
+        if (prJsonKind(doc, names) != PrJsonKind_Object || prJsonCount(doc, names) > 256) return false;
+        for (auto at = prJsonFirst(doc, names); at != kPrJsonMissing; at = prJsonAfter(doc, names, at)) {
+            const auto key = stringAt(doc, at);
+            const auto forms = prJsonMember(doc, names, {key.data(), key.size()});
+            if (prJsonKind(doc, forms) != PrJsonKind_Array || prJsonCount(doc, forms) > 16 || key.empty() || key.size() > 64)
+                return false;
+            auto& list = surface.voiceNames[std::string(key)];
+            for (uint32_t j = 0; j < prJsonCount(doc, forms); ++j) {
+                const auto form = stringAt(doc, prJsonElement(doc, forms, j));
+                if (form.empty() || form.size() > 128) return false;
+                list.emplace_back(form);
+            }
+        }
+    }
     const auto titles = prJsonMember(doc, 0, {"tab_titles", 10});
     if (titles != kPrJsonMissing) {
         if (prJsonKind(doc, titles) != PrJsonKind_Array || prJsonCount(doc, titles) > 1024) return false;
@@ -439,6 +500,17 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
             auto text = stringAt(doc, prJsonElement(doc, titles, i));
             if (text.size() > 512) return false;
             surface.tabTitles.emplace_back(text);
+        }
+    }
+    // The phone's list (docs/voice.md): which tabs it shows, by index, in its order.
+    const auto rows = prJsonMember(doc, 0, {"menu_tabs", 9});
+    if (rows != kPrJsonMissing) {
+        if (prJsonKind(doc, rows) != PrJsonKind_Array || prJsonCount(doc, rows) > 1024) return false;
+        surface.menuTabs.emplace();
+        for (uint32_t i = 0; i < prJsonCount(doc, rows); ++i) {
+            const double at = prJsonNumber(doc, prJsonElement(doc, rows, i), -1);
+            if (at < 0 || at >= 1024 || at != double(std::size_t(at))) return false;
+            surface.menuTabs->push_back(std::size_t(at));
         }
     }
     const auto items = prJsonMember(doc, 0, {"account_items", 13});
@@ -456,6 +528,19 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
     }
     return true;
 }
+
+} // namespace
+
+bool readMenuRows(std::string_view json, std::vector<MenuRow>& rows, std::string& why) {
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    if (!prJsonParse(doc.get(), {json.data(), json.size()}, nullptr)) {
+        why = "not JSON";
+        return false;
+    }
+    return readMenuRowsIn(doc.get(), rows, why);
+}
+
+namespace {
 
 bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen, MessageCardStyle& card,
     TranscriptStyle& transcript, std::vector<Shortcut>& keys, std::vector<Panel>& panels, std::map<std::string, TabType>& types,
@@ -476,6 +561,7 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
         why = "invalid tab_style, prompt_style, window flag, tab_titles or account_items; check the client window contract in docs/policy.md";
         return false;
     }
+    if (!readMenuRowsIn(d, surface.menuRows, why)) return false;
     centered = signInOnSelect = false;
     if (!readFlag(d, 0, {"centered_account_menu", 21}, centered) ||
         !readFlag(d, 0, {"sign_in_on_select", 17}, signInOnSelect)) {
@@ -501,8 +587,8 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
     const auto rows = prJsonMember(d, 0, {"shortcuts", 9});
     const auto list = prJsonMember(d, 0, {"panels", 6});
     if (prJsonKind(d, rows) != PrJsonKind_Array || prJsonKind(d, list) != PrJsonKind_Array ||
-            prJsonCount(d, rows) > 128 || prJsonCount(d, list) > 5) {
-        why = "return arrays of up to 128 shortcuts and 5 panels";
+            prJsonCount(d, rows) > 128 || prJsonCount(d, list) > 6) {
+        why = "return arrays of up to 128 shortcuts and 6 panels";
         return false;
     }
     const auto records = prJsonMember(d, 0, {"tab_types", 9});
@@ -564,6 +650,8 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
             panel = Panel::LimitChoice;
         }
         else if (name == "status") panel = Panel::Status;
+        else if (name == "menu") panel = Panel::Menu;
+        else if (name == "back" && tab != "empty") panel = Panel::Back;
         else if (name == "service_reply" && tab == "extension") panel = Panel::ServiceReply;
         else if (name == "native" && tab == "extension") panel = Panel::Native;
         else if (name == "text_area" && tab == "extension") panel = Panel::TextArea;
