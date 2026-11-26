@@ -276,7 +276,9 @@ bool open(void* context, PrStudioWindow* window) {
     PrKitTheme theme = windowTheme(a.fonts, false);
     prKitSetTheme(prStudioWindowKit(window), &theme);
     a.urls = std::make_unique<UrlOpener>(systemBrowser(prStudioWindowApp(window)));
-    a.view.openLink = a.urls->handle();
+    // A page's link that arrives while nexus is locked is not opened (ios_lock.h openWhileUnlocked).
+    const auto logLine = [](const std::string& line) { std::fprintf(stderr, "nexus: %s\n", line.c_str()); };
+    a.view.openLink = openWhileUnlocked(*a.lock, a.urls->handle(), logLine);
     a.host.signIn.openUrl = a.urls->handle();
     if (a.iosLock->drawsContent()) a.host.signIn.shown();   // locked, a sign-in waits for the unlock
     a.host.ui = prStudioWindowUi(window);
@@ -293,7 +295,7 @@ bool open(void* context, PrStudioWindow* window) {
         board.window = prStudioWindowAppWindow(window);
         if (!a.home.empty()) board.storageDirectory = a.home + "/dashboard-storage";
         board.initialExtent = {1000, 780};
-        board.open = a.urls->handle();
+        board.open = openWhileUnlocked(*a.lock, a.urls->handle(), logLine);
         board.fromServer = true;
         a.board = std::make_unique<PraxBoard>(board);
         a.view.board = a.board.get();
@@ -338,6 +340,8 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     const bool known = prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok;
     a.view.columnScale = known && regularWidth(surface) ? style::kRegularWidthColumn : 1;
     a.view.fullWidthReplies = known && !regularWidth(surface);
+    // The cover comes off once the frame before this one, drawn since the app came back, has been presented.
+    a.iosLock->frameBegins();
     // The authenticator's answers, then the time: the frame draws the lock screen unless the lock is unlocked now.
     a.iosLock->notices(a.lockInbox->mail.take(), f->time);
     a.iosLock->tick(f->time);

@@ -42,17 +42,23 @@ void IosLock::lifecycle(IosLifecycle now) {
     switch (now) {
     case IosLifecycle::Background:
         // Covered before the system takes the app switcher's snapshot, which follows this event.
+        uncoverPending_ = false;
         setCover(true);
         relock(LockReason::Background);
         break;
     case IosLifecycle::Inactive:
         // The app's own prompt makes it inactive while it is up: that is the lock at work, not the person leaving.
         if (lock_.state() == LockState::Prompting) break;
+        uncoverPending_ = false;
         setCover(true);
         if (lock_.state() == LockState::Unlocked) relock(LockReason::SessionSwitch);
         break;
     case IosLifecycle::Active:
-        setCover(false);
+        // Not uncovered yet: the layer still holds the frame drawn before the relock (frameBegins).
+        if (covered_) {
+            uncoverPending_ = true;
+            drawnSinceActive_ = false;
+        }
         if (was != IosLifecycle::Active && lock_.state() == LockState::Locked && promptsWhenActive(lock_.reason()))
             unlock();
         break;
@@ -99,6 +105,28 @@ bool IosLock::input(double now, bool deliberate) {
     const bool delivered = lock_.input(now);
     step({IosLockStep::Op::Input, 0, LockAnswer::Failed, LockReason::None, now, delivered});
     return delivered;
+}
+
+void IosLock::frameBegins() {
+    if (!uncoverPending_) return;
+    if (!drawnSinceActive_) {
+        drawnSinceActive_ = true;   // this frame is drawn with the lock as it is now
+        return;
+    }
+    uncoverPending_ = false;        // and has been presented: the old frame is gone from the layer
+    setCover(false);
+}
+
+std::function<void(const std::string&)> openWhileUnlocked(const ClientLock& lock,
+                                                          std::function<void(const std::string&)> open,
+                                                          std::function<void(const std::string&)> log) {
+    return [&lock, open = std::move(open), log = std::move(log)](const std::string& url) {
+        if (!lock.drawsContent()) {
+            if (log) log("a link was not opened: nexus is locked");
+            return;
+        }
+        if (open) open(url);
+    };
 }
 
 bool IosLock::frame() {

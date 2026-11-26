@@ -13,7 +13,8 @@
 //   idle_timeout_locks                        tick() does nothing
 //   passing_input_keeps_nothing_unlocked      input(now, false) starts the idle time again
 //   no_prompt_unless_active                   unlock() does not check that the app is active
-//   active_uncovers                           Active does not take the cover away
+//   active_uncovers                           Active takes the cover away at once, or frameBegins() never does
+//   links_open_only_unlocked                  openWhileUnlocked opens while locked
 //   launch_asks_once_active                   the first Active does not ask
 //
 // Usage: ios_lock_unit
@@ -115,10 +116,12 @@ void inactive_while_unlocked_relocks() {
     CHECK(!glue.drawsContent());
     CHECK(lock.reason() == LockReason::SessionSwitch);
     CHECK(glue.covered());
-    // Back: uncovered, and asked again at once.
+    // Back: asked again at once, and uncovered once the lock screen's frame has been presented.
     glue.lifecycle(IosLifecycle::Active);
-    CHECK(!glue.covered());
     CHECK(sys.requests == (std::vector<std::uint64_t>{1, 2}));
+    glue.frameBegins();
+    glue.frameBegins();
+    CHECK(!glue.covered());
 }
 
 void background_overtakes_the_prompt() {
@@ -251,9 +254,51 @@ void active_uncovers() {
     glue.lifecycle(IosLifecycle::Background);
     CHECK(glue.covered());
     CHECK(sys.covers == std::vector<bool>{true});
+    // Back: the window's layer still holds the last frame drawn before the relock, so the cover stays while the lock
+    // screen's frame is drawn, and comes off at the next frame, once that one has been presented.
     glue.lifecycle(IosLifecycle::Active);
+    CHECK(glue.covered());
+    glue.frameBegins();
+    CHECK(glue.covered());
+    glue.frameBegins();
     CHECK(!glue.covered());
     CHECK(sys.covers == (std::vector<bool>{true, false}));
+    // Leaving again before that frame: the cover stays on, and a frame that begins does not take it away.
+    glue.lifecycle(IosLifecycle::Background);
+    glue.lifecycle(IosLifecycle::Active);
+    glue.frameBegins();
+    glue.lifecycle(IosLifecycle::Background);
+    glue.frameBegins();
+    glue.frameBegins();
+    CHECK(glue.covered());
+    // Launched: nothing was covered, and nothing is to take away.
+    ClientLock lock2(kIdle);
+    System sys2;
+    IosLock glue2(lock2, sys2.make());
+    glue2.lifecycle(IosLifecycle::Active);
+    glue2.frameBegins();
+    glue2.frameBegins();
+    CHECK(sys2.covers.empty());
+}
+
+// A link (the board's, a transcript's) opens only while nexus draws its content: locked, it is dropped and said.
+void links_open_only_unlocked() {
+    ClientLock lock(kIdle);
+    System sys;
+    IosLock glue(lock, sys.make());
+    std::vector<std::string> opened, logged;
+    const auto open = openWhileUnlocked(lock, [&](const std::string& url) { opened.push_back(url); },
+                                        [&](const std::string& line) { logged.push_back(line); });
+    open("https://example.com/a");                       // at launch, before the owner's authentication
+    CHECK(opened.empty());
+    CHECK(logged.size() == 1);
+    unlockedAt(glue, 1);
+    open("https://example.com/b");
+    CHECK(opened == std::vector<std::string>{"https://example.com/b"});
+    glue.lifecycle(IosLifecycle::Background);            // a link queued as the app left is not opened later
+    open("https://example.com/c");
+    CHECK(opened.size() == 1);
+    CHECK(logged.size() == 2);
 }
 
 void reasons_that_prompt() {
@@ -283,6 +328,7 @@ int main() {
     passing_input_keeps_nothing_unlocked();
     no_prompt_unless_active();
     active_uncovers();
+    links_open_only_unlocked();
     reasons_that_prompt();
     if (failures != 0) {
         std::fprintf(stderr, "ios_lock_unit: %d check(s) failed\n", failures);

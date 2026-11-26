@@ -10,9 +10,10 @@
 //   the app inactive (app switcher, Control Centre,    relock(SessionSwitch), covered; except while the app's own
 //     a call) while unlocked                             prompt is up, which is what makes the app inactive then
 //   the device's screen locked (protected data goes)  relock(ScreenLock), cancelling a prompt that is up
-//   the app active again                              uncovered; and, if a relock locked it (or it just launched), the
-//                                                       prompt is asked for at once; after a refusal or the idle
-//                                                       timeout the lock screen waits for a tap
+//   the app active again                              if a relock locked it (or it just launched), the prompt is
+//                                                       asked for at once; after a refusal or the idle timeout the
+//                                                       lock screen waits for a tap; the cover stays until a frame
+//                                                       drawn since then has been presented (frameBegins)
 //   the lock screen tapped (View::unlock)             prompt()
 //   the authenticator's answer (LockNotice)           answer(attempt, answer, now)
 //   time (a timer each second)                        tick(now)
@@ -85,6 +86,12 @@ public:
     // A frame: whether it draws nexus's content (unlocked), or the lock screen alone.
     bool frame();
 
+    // A frame begins (main_ios.cpp beginFrame, after the swap chain's wait, so the frame before it has been presented).
+    // The cover put on when the app left is taken away only at the second frame to begin since the app became active
+    // again: the window's layer still holds the last frame drawn before the relock (no frame is drawn in the
+    // background), and uncovered at once it would show for a frame, under the system's prompt.
+    void frameBegins();
+
     bool drawsContent() const { return lock_.drawsContent(); }
     bool covered() const { return covered_; }
     const std::string& detail() const { return detail_; }
@@ -101,6 +108,8 @@ private:
     IosLockSystem system_;
     IosLifecycle lifecycle_ = IosLifecycle::Inactive;  // until the app says (main_ios.cpp open)
     bool covered_ = false;
+    bool uncoverPending_ = false;        // active again while covered: uncovered once a frame since has been presented
+    bool drawnSinceActive_ = false;      // a frame has begun since the app became active again
     double lastTick_ = 0;                // the time of the last tick: time starts after 0
     std::string detail_;
 };
@@ -114,5 +123,12 @@ bool promptsWhenActive(LockReason why);
 // (lock_ios.mm). The app switcher's snapshot is of what shows once the app is in the background: covered, it shows
 // nothing of nexus.
 void iosCoverWindow(const PrSurface& surface, bool on);
+
+// A URL opener that opens nothing while `lock` does not draw nexus's content, and logs that it did not: a page's link
+// (the board's, a transcript's) that arrives while the app is locked is dropped, never kept to open later (as the
+// desktop's window_lock.h openUnlessLocked).
+std::function<void(const std::string&)> openWhileUnlocked(const ClientLock& lock,
+                                                          std::function<void(const std::string&)> open,
+                                                          std::function<void(const std::string&)> log);
 
 } // namespace nexus
