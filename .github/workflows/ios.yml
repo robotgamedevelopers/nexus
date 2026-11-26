@@ -1,17 +1,21 @@
-# iOS and iPadOS (cmake/ios.cmake, docs/ios.md): the client built for devices and for the simulator, and the
-# simulator build's tests run on a simulator device (Prax's runner, ctest's emulator). In a workflow of its own, beside
-# ci.yml, with ci.yml's rules: each per-commit job finishes in 2 minutes, warnings are errors (CMakeLists.txt), and
-# compiles go through the machine's ccache with Prax's downloads kept per runner (ci.yml's opening comment says how).
+# iOS and iPadOS (cmake/ios.cmake, docs/ios.md): the client built for devices and for the simulator, and the simulator
+# build's tests run on a simulator device (Prax's runner, ctest's emulator). In a workflow of its own, beside ci.yml,
+# with ci.yml's rules: GitHub-hosted runners only (no fleet runner and no secret per pull request), each job finishes
+# in 2 minutes, warnings are errors (CMakeLists.txt), and the build starts from cache-warm's cache for its target
+# (ios-device, ios-simulator: .github/actions/hosted-caches), so only what the pull request changed is rebuilt.
 #
-# The runners labelled `services` have Xcode, its Metal toolchain, an iOS simulator runtime, and rustup with the
-# aarch64-apple-ios and aarch64-apple-ios-sim targets, which Starlark's iOS build needs (cmake/ios.cmake).
+# Per pull request the iOS builds are Debug at -O0 without debug information (nexus-build's ios-device and
+# ios-simulator): no LTO (Prax turns it on for Release only) and asserts on, as ci.yml's macOS build.
+#
+# The iOS port is not on main yet (it is on port/ios, pull request #88), so main has no iOS build (no cmake/ios.cmake)
+# and this workflow runs on no push or pull request: a job that would only skip is not defined, and nothing in CI is
+# skipped. Dispatched by hand on a tree without the port, its build fails. The port brings back the push and
+# pull_request triggers with cmake/ios.cmake. Until the port is on main, cache-warm builds the iOS caches from
+# port/ios.
 
 name: ios
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -23,56 +27,34 @@ concurrency:
 
 jobs:
   ios:
-    # a pull request from a fork never runs on the fleet's runners
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, macOS, ARM64, services]
+    runs-on: macos-26
     name: ios-${{ matrix.target }}
     timeout-minutes: 2
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Devices (arm64): the app and the shot build, signed ad hoc; nothing runs.
-          - target: device
-            sysroot: iphoneos
-          # The simulator: the same, and the unit tests and the iOS tests run on a simulator device.
-          - target: simulator
-            sysroot: iphonesimulator
+        # Devices (arm64): the app and the shot build, signed ad hoc; nothing runs. The simulator: the same, and the
+        # unit tests and the iOS tests run on a simulator device.
+        target: [device, simulator]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Caches outside the workspace
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: ios-${{ matrix.target }}
+          brew: ninja
+      # Starlark (cmake/policy.cmake) is built for the iOS target with the pinned Rust; its standard library for the
+      # targets is in the restored toolchain (cache-warm adds it), so this only checks.
+      - name: Rust's iOS standard library
         shell: bash
-        run: |
-          set -euo pipefail
-          caches="$HOME/Library/Caches/nexus-ci"
-          mkdir -p "$caches/ccache" "$caches/$RUNNER_NAME/prax-downloads"
-          {
-            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
-            echo "CCACHE_DIR=$caches/ccache"
-            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
-            echo "CCACHE_MAXSIZE=4G"
-            echo "JOBS=$(sh .github/job-cores.sh)"
-            echo "CARGO_BUILD_JOBS=$(sh .github/job-cores.sh)"
-            echo "TEST_JOBS=$(sysctl -n hw.ncpu)"
-          } >> "$GITHUB_ENV"
-      - name: Configure (Release, ${{ matrix.sysroot }})
-        shell: bash
-        run: |
-          set -euo pipefail
-          launcher=()
-          if command -v ccache >/dev/null; then
-            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-                      -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache)
-          else
-            echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
-          fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=${{ matrix.sysroot }} -DCMAKE_OSX_ARCHITECTURES=arm64 "${launcher[@]}"
-      - name: Build
-        run: cmake --build build --parallel "$JOBS"
+        run: rustup target add --toolchain "$RUSTUP_TOOLCHAIN" aarch64-apple-ios aarch64-apple-ios-sim
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: ios-${{ matrix.target }}
       - name: Unit and iOS tests on a simulator device
         if: matrix.target == 'simulator'
-        run: ctest --test-dir build -L 'unit|ios' -j "$TEST_JOBS" --output-on-failure --no-tests=error
+        run: bash .github/ctest.sh --test-dir build -L 'unit|ios' -j "$TEST_JOBS" --output-on-failure

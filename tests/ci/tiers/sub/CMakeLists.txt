@@ -1,0 +1,5 @@
+add_test(NAME functional_one COMMAND ${CMAKE_COMMAND} -E true)
+set_tests_properties(functional_one PROPERTIES LABELS functional)
+add_test(NAME happy_path COMMAND ${CMAKE_COMMAND} -E true)
+set_tests_properties(happy_path PROPERTIES LABELS functional)
+add_test(NAME no_label COMMAND ${CMAKE_COMMAND} -E true)

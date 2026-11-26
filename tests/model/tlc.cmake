@@ -65,11 +65,12 @@
 #   GO          with TSWALK: a go command, 1.21 or newer
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
-#   CAP         optional: the cap on the TLC run in seconds, 60 unless given
+#   CAP         optional: the cap on the TLC run in seconds, 60 unless given; 0 for none (NEXUS_TLC_UNCAPPED)
 #   SPLIT       optional: rest:<name>, every property of the cfg but one, or as:<name>=<part>, a part of it alone (below)
 #   TEMPORALCFG optional: append this cfg fragment, relative to MODELS, to an as:<name>=<part> check
 #
-# The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at CAP seconds.
+# The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at CAP seconds,
+# unless CAP is 0.
 
 cmake_minimum_required(VERSION 3.28)
 
@@ -512,6 +513,11 @@ endif()
 if(NOT DEFINED CAP OR "${CAP}" STREQUAL "")
     set(CAP 60)
 endif()
+# CAP 0 (NEXUS_TLC_UNCAPPED, the nightly): no cap, and TLC runs until it finishes.
+set(cap_arg)
+if(CAP GREATER 0)
+    set(cap_arg TIMEOUT ${CAP})
+endif()
 include("${CMAKE_CURRENT_LIST_DIR}/tlc-workers.cmake")
 set(jvm ${tlc_jvm})
 set(flags -workers ${tlc_workers} -metadir "${WORK}/meta" -config "${cfg_name}")
@@ -522,7 +528,7 @@ endif()
 execute_process(
     COMMAND "${java}" ${jvm} "-Djava.io.tmpdir=${WORK}/tmp" -cp "${jar}" tlc2.TLC ${flags} "${MODULE}.tla"
     WORKING_DIRECTORY "${WORK}"
-    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT ${CAP})
+    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out ${cap_arg})
 file(WRITE "${WORK}/tlc.log" "${out}")
 
 string(REGEX MATCH "generated, [0-9,]+ distinct states found" states "${out}")

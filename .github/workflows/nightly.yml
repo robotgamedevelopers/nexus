@@ -15,10 +15,12 @@ concurrency:
 
 jobs:
   # The largest instances, on the fleet Mac. On the hosted macos-26 image (3 cores, Prax built cold each night) it ran
-  # past its 30 minutes on 2026-11-25 (run 45683088547) and was cut off. A nightly has no time limit; GitHub's default
-  # for a job (6 hours) is the only one.
+  # past its 30 minutes on 2026-11-25 (run 45683088547) and was cut off. A nightly has no time limit: the model jobs
+  # configure with NEXUS_TLC_UNCAPPED (CMakeLists.txt), so no check has a cap, and each job's 360 minutes is a safety
+  # net for a hung runner, not a budget.
   model-large:
     runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -46,16 +48,16 @@ jobs:
           echo "TEST_JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
       # Without the link's transport (mosh and protobuf), which no check program uses.
       - name: Configure (Release)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_TLC_UNCAPPED=ON
       - name: Build the model checks
         run: cmake --build build --parallel "$JOBS" --target model_checks
       - name: The largest instances
-        run: ctest --test-dir build -L '^model_nightly$' -j "$TEST_JOBS" --output-on-failure
+        run: bash .github/ctest.sh --test-dir build -L '^model_nightly$' -j "$TEST_JOBS" --output-on-failure
 
   model:
     # Keep the compiled trace walks and the CPU-intensive specs on prebuilt runners.
     runs-on: ${{ (matrix.build || matrix.prebuilt) && fromJSON('["self-hosted","nexus-nightly","Linux","X64","tlc"]') || 'ubuntu-24.04' }}
-    timeout-minutes: 15
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -79,14 +81,14 @@ jobs:
             run: '^tlc_supervisor_signin_temporal_1$'
           - shard: supervisor-signin-2
             run: '^tlc_supervisor_signin_temporal_2$'
-          - shard: supervisor-ai-1
-            run: '^tlc_supervisor_ai_temporal_1$'
-          - shard: supervisor-ai-2
-            run: '^tlc_supervisor_ai_temporal_2$'
+          - shard: supervisor-friend-1
+            run: '^tlc_supervisor_friend_temporal_1$'
+          - shard: supervisor-friend-2
+            run: '^tlc_supervisor_friend_temporal_2$'
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
             build: supervisor_walk
-            skip: '^tlc_supervisor_(switch_|place_|signin_|ai_)?temporal_[0-9]+$'
+            skip: '^tlc_supervisor_(switch_|place_|signin_|friend_)?temporal_[0-9]+$'
           - shard: link-ensure
             prebuilt: true
             run: '^tlc_link_ensure$'
@@ -106,9 +108,14 @@ jobs:
           - shard: accounts-rest
             run: '^tlc_accounts_'
             build: accounts_walk
+          # The journal (models/store/Journal.tla): its spec alone (49 s on four workers of an idle 16-thread bench,
+          # 2026-11-26), beside the witnesses and the code's walks with their faults, so the two run at once.
+          - shard: journal-spec
+            run: '^tlc_journal_spec$'
           - shard: journal
             run: '^tlc_journal'
             build: journal_walk
+            skip: '^tlc_journal_spec$'
           # The store's lock and the start-up order (models/store/StoreLock.tla): its instances, witnesses and the
           # code's walks.
           - shard: store-lock
@@ -190,12 +197,12 @@ jobs:
           - shard: tailscale-rest
             run: '^tlc_tailscale_'
             skip: '^tlc_tailscale_spec(_keys|_certs)?$'
-          # The window's AIs from the server's list (MCWindowAIs, 39,465 states on four workers), alone: in the
+          # The window's friends from the server's list (MCWindowFriends, 39,465 states on four workers), alone: in the
           # window shard it ran past its 60 s.
-          - shard: window-ais
-            run: '^tlc_spec_ais$'
-          # The AI strip's shared-file instance (MCAIStripShared, 150,016 states) in its own shard on eight
-          # workers, then its single-window spec and its code's walks against AIStripTrace.tla, and their faults.
+          - shard: window-friends
+            run: '^tlc_spec_friends$'
+          # The friend strip's shared-file instance (MCFriendStripShared, 150,016 states) in its own shard on eight
+          # workers, then its single-window spec and its code's walks against FriendStripTrace.tla, and their faults.
           - shard: strip-shared
             run: '^tlc_spec_strip_shared$'
           - shard: strip-rest
@@ -240,7 +247,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk service_process_functional
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_ais$|signin|reconnect|loop_pass|bus_delivery)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass|bus_delivery)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang
@@ -330,7 +337,7 @@ jobs:
           fi
           npm ci --omit=optional --no-audit --no-fund
           npm run build
-      # Without the window, its logic and the link's transport, which no check program uses (as build-and-unit-linux).
+      # Without the window, its logic and the link's transport, which no check program uses (as ci.yml's build-linux).
       - name: Configure (Release)
         shell: bash
         run: |
@@ -340,7 +347,7 @@ jobs:
             launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
           fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF \
-            -DCMAKE_LINKER_TYPE=LLD "${launcher[@]}"
+            -DCMAKE_LINKER_TYPE=LLD -DNEXUS_TLC_UNCAPPED=ON "${launcher[@]}"
       # Only the walks this shard's trace checks run (`build`); a shard of specs and witnesses alone builds nothing.
       - name: Build the shard's walks
         if: matrix.build
@@ -364,13 +371,13 @@ jobs:
           select=()
           if [ -n "$RUN" ]; then select+=(-R "$RUN"); fi
           if [ -n "$SKIP" ]; then select+=(-E "$SKIP"); fi
-          ctest --test-dir build -L '^model$' "${select[@]}" -j "$TEST_JOBS" --output-on-failure --no-tests=error
+          bash .github/ctest.sh --test-dir build -L '^model$' "${select[@]}" -j "$TEST_JOBS" --output-on-failure
 
   # The tab label's trace checks (TabLabelTrace.tla), whose walk needs the window's logic: on macOS, as the model job
   # ran them before it moved to Linux.
   model-window:
     runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
-    timeout-minutes: 15
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -426,21 +433,21 @@ jobs:
             launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
                       -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache)
           fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF "${launcher[@]}"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_TLC_UNCAPPED=ON "${launcher[@]}"
       - name: Build the label and account-picker trace programs
         run: cmake --build build --parallel "$JOBS" --target label_walk account_picker_trace
       - name: Check tab-label and account-picker traces
         run: |
           for family in label_trace window_account_picker_trace; do
-            ctest --test-dir build -L '^model$' -R "^tlc_${family}" -j "$TEST_JOBS" --output-on-failure --no-tests=error || exit 1
+            bash .github/ctest.sh --test-dir build -L '^model$' -R "^tlc_${family}" -j "$TEST_JOBS" --output-on-failure || exit 1
           done
 
   # Windows' functional tests, inside WSL2: on Windows the overlay stays native and everything else (nexus-server, the
   # link, the drivers and their tests) runs as the Linux build inside WSL2 (AGENTS.md, platform targets). So these run
   # on captain's WSL2 runners (label wsl2: Linux runners inside captain's WSL2 distro, from the fleet's record), with
-  # the same configure as build-and-unit-linux, and so with what Prax lets Linux build at its pin (no window logic, so
-  # no link and no nexus-server yet: build-and-unit-linux says why). The first step refuses to run anywhere but WSL2.
-  # Caches as build-and-unit-linux's, under ~/.cache/nexus-ci inside the distro.
+  # the same configure as ci.yml's build-linux, and so with what Prax lets Linux build at its pin (no window logic, so
+  # no link and no nexus-server yet: ci.yml's build-linux says why). The first step refuses to run anywhere but WSL2.
+  # Caches as ci.yml's build-linux's, under ~/.cache/nexus-ci inside the distro.
   wsl2-functional:
     runs-on: [self-hosted, nexus-nightly, Linux, X64, wsl2]
     timeout-minutes: 15
@@ -491,7 +498,7 @@ jobs:
       - name: Build
         run: cmake --build build --parallel "$JOBS"
       - name: Functional tests
-        run: ctest --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure --no-tests=error
+        run: bash .github/ctest.sh --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure
       - name: ccache hits in this job
         if: always()
         shell: bash
@@ -508,10 +515,10 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_WINDOW=OFF
           cmake --build build --parallel "$(sh .github/job-cores.sh)" --target server_lock
-          ctest --test-dir build -R '^server_lock_functional$' --output-on-failure --no-tests=error
+          bash .github/ctest.sh --test-dir build -R '^server_lock_functional$' --output-on-failure
 
-  # The Claude driver's token wall inside captain's WSL2 (ci.yml's claude-driver-wall-linux runs it on hosted Ubuntu
-  # per commit; WSL2 needs the fleet, so it runs here).
+  # The Claude driver's token wall inside captain's WSL2 (claude-driver-wall-linux below runs it on hosted Ubuntu
+  # too; WSL2 needs the fleet).
   claude-driver-wall-wsl2:
     strategy:
       fail-fast: false
@@ -601,16 +608,20 @@ jobs:
           NEXUS_WALL_FRESH_PROFILE: '1'
           NEXUS_WALL_RUN: ${{ matrix.run }}
         # Where this runner's own login reaches hulk, ssh there must work from the sandbox too, and from there no
-        # login back to this machine; a runner with no fleet login skips that probe.
+        # login back to this machine. A runner with no login to hulk fails the job by name (the rest of the wall still
+        # runs first): no probe is ever skipped.
         run: |
           if ssh -o BatchMode=yes -o ConnectTimeout=5 hulk true 2>/dev/null; then
             export NEXUS_WALL_SSH_HOST=hulk NEXUS_WALL_SSH_BACK="$(hostname -s)"
+            ssh_out=ran
           else
-            echo "no login to hulk from $(hostname -s) as $(id -un): the ssh-out probe is skipped"
+            echo "::error title=ssh-out probe::no login to hulk from $(hostname -s) as $(id -un): the token wall's ssh-out probe cannot run, and no probe is skipped; the fleet gives this runner's login a key for hulk"
+            ssh_out=missing
           fi
           # Separate runner workspaces still share /tmp/.mcp.json during SDK setup.
           # Serialize just this test on each Linux host, including across workflow runs.
           flock "$HOME/.cache/nexus-ci/claude-wall.lock" npm run test:functional
+          [ "$ssh_out" = ran ]
 
   # The WSL2 terminal test (wsl2-terminal below), built with MSVC on a GitHub-hosted Windows runner as ci.yml's windows
   # job builds it (.github/actions/windows-build, from cache-warm's cache when there is one; no limit here).
@@ -673,7 +684,7 @@ jobs:
 
   # The frame budget (docs/frame-budget.md): the frame thread timed on the real clock, against budgets set on the fleet's
   # Macs, so on a fleet Mac (a shared 3-core hosted VM is not that machine; ci.yml says so). Built Release with the
-  # link, as ci.yml's build-and-unit, then run alone, with every nova-reserve slot on this host when it can have them
+  # link, as ci.yml's build-macos, then run alone, with every nova-reserve slot on this host when it can have them
   # within 20 s; else shared.
   frame-budget:
     runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
@@ -696,7 +707,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          frames=(ctest --test-dir build -R '^window_frame_budget$' --output-on-failure --no-tests=error)
+          frames=(bash .github/ctest.sh --test-dir build -R '^window_frame_budget$' --output-on-failure)
           if command -v nova-reserve >/dev/null; then
             held="$RUNNER_TEMP/frame-budget-held"
             rm -f "$held"
@@ -711,15 +722,953 @@ jobs:
           fi
           "${frames[@]}"
 
-  # The Tailscale shim on Windows and on macOS with its x86_64 slice under Rosetta (tailscale.yml), with no time limit:
-  # restoring Windows's primed cache alone takes most of a per-commit job's 2 minutes on the hosted image, and the
-  # x86_64 build and run do not fit beside the arm64 one, so ci.yml runs macOS arm64 and Linux and this runs the rest.
-  # It saves the primed caches again when the pins changed.
-  tailscale-windows-and-rosetta:
+  # The Tailscale shim on Windows (tailscale-windows.yml), with no time limit: restoring its primed cache alone took 83 s
+  # on the hosted Windows image (docs/tailscale.md), which does not fit a per-commit job's 2 minutes, so no per-commit
+  # workflow calls it and it runs here. It saves the primed cache again when the pins changed.
+  tailscale-windows:
+    uses: ./.github/workflows/tailscale-windows.yml
+    permissions:
+      contents: read
+    with:
+      prime: true
+      save: true
+
+  # The shim on macOS with its x86_64 slice under Rosetta, and on Linux (tailscale.yml), with no time limit: the x86_64
+  # build and run do not fit beside the arm64 one in a per-commit job, so ci.yml runs macOS arm64 and Linux and this
+  # runs both slices. It saves the primed caches again when the pins changed.
+  tailscale-rosetta:
     uses: ./.github/workflows/tailscale.yml
     permissions:
       contents: read
     with:
       prime: true
       save: true
-      linux: false
+      # Its unit tests run per pull request (ci.yml); here its functional tests.
+      tests: '^functional$'
+
+  # From ci.yml, so that a pull request asks for few hosted macOS runners (about five run at once for the
+  # organisation): the macOS sanitizers, the Claude driver and its token wall on the fleet Mac, with no time limit. Their
+  # Linux forms run here too, on hosted Ubuntu. The sanitizers restore no hosted cache (one built by another Xcode does not
+  # configure here): ccache in ~/nexus-ci on the machine keeps their rebuilds short.
+  # The model and its check programs built Debug with AddressSanitizer and UndefinedBehaviorSanitizer, which stop at
+  # the first report: the unit tests, and the trace walks (the window's on every AI count, the overlay's) with every
+  # fault (no TLC); the same for the link's states (src/sync) and their walks, and the store (store_test, durable_test
+  # and journal_walk). Configured without the link's transport (NEXUS_LINK=OFF: mosh and protobuf), which these programs
+  # do not use.
+  sanitizers-macos:
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    name: sanitizers-macos (${{ matrix.part }}${{ matrix.half && format(' {0} of 4', matrix.half) || '' }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: units
+            targets: >-
+              model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
+              store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
+              nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
+          # The walks in four quarters (every fourth walk each): together they take over two minutes on the image's 3 cores.
+          - part: walks
+            half: 1
+            targets: >-
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+              migration_walk takeover_walk
+          - part: walks
+            half: 2
+            targets: >-
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+              migration_walk takeover_walk
+          - part: walks
+            half: 3
+            targets: >-
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+              migration_walk takeover_walk
+          - part: walks
+            half: 4
+            targets: >-
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+              migration_walk takeover_walk
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: fleet-mac-asan-${{ matrix.part }}
+          require: "false"
+          brew: ninja
+      - name: Configure and build the programs for this part
+        uses: ./.github/actions/nexus-build
+        with:
+          config: mac-asan
+          targets: ${{ matrix.targets }}
+      # Each program runs in memory (MemFs where it has files; no sockets, processes or shared paths), so they run at
+      # once, at most TEST_JOBS at a time, each with its own output under units/; a failure shows its program and output.
+      - name: Unit tests under the sanitizers
+        if: matrix.part == 'units'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p units
+          printf '%s\n' \
+            build/tests/model/model_test \
+            build/tests/model/overlay_test \
+            build/tests/window/nexus_terminal_watch_tests \
+            build/tests/sync/sync_test \
+            build/tests/sync/redial_test \
+            build/tests/server/secrets_test \
+            build/tests/server/signin_test \
+            build/tests/store/store_test \
+            build/tests/store/durable_test \
+            build/tests/driver/driver_protocol_test \
+            build/tests/server/supervisor_test \
+            build/tests/server/server_pass_test \
+            build/tests/server/builds_test \
+            build/tests/server/handover_test \
+            build/tests/server/supervision_test \
+            build/tests/server/migration_test \
+            build/tests/server/takeover_test \
+            build/tests/wire/wire_test \
+            build/tests/wire/nexus_versions_test \
+            | xargs -P "$TEST_JOBS" -I{} sh -c 'out="units/$(basename "$1").out"; "$1" >"$out" 2>&1 || { echo "::error::unit failed: $1"; cat "$out"; exit 1; }' _ {}
+          echo "19 unit programs passed"
+      - name: Trace walks under the sanitizers
+        if: matrix.part == 'walks'
+        shell: bash
+        env:
+          HALF: ${{ matrix.half }}
+        run: |
+          set -euo pipefail
+          # Bash 3.2-compatible parallel walk runner (macOS /bin/bash has no `wait -n`, and `set -u` rejects empty
+          # `${arr[@]}`): runs up to TEST_JOBS walks concurrently in isolated directories under $RUNNER_TEMP/nexus-walks
+          # (outside $GITHUB_WORKSPACE, so a SIGKILLed 0555 build directory never breaks the next checkout), checking
+          # every exit status.
+          walks_root="$RUNNER_TEMP/nexus-walks"
+          if [ -e "$walks_root" ]; then chmod -R u+w "$walks_root"; fi
+          rm -rf "$walks_root"
+          launched=0
+          in_batch=0
+          batch_pids=()
+          flush_walks() {
+            if [ "$in_batch" -gt 0 ]; then
+              for pid in "${batch_pids[@]}"; do
+                wait "$pid"
+              done
+            fi
+            batch_pids=()
+            in_batch=0
+          }
+          # This job runs every fourth walk: HALF 1 the first, fifth, ...; HALF 2 the second, sixth, ...; and so on
+          listed=0
+          walk() {
+            listed=$((listed + 1))
+            if [ $((listed % 4)) -ne $((HALF % 4)) ]; then return 0; fi
+            local dir="$walks_root/$launched"
+            mkdir -p "$dir"
+            ( "$@" "$dir/trace.tla" >"$dir/output" 2>&1 || { echo "::error::walk failed: $*"; cat "$dir/output"; exit 1; } ) &
+            batch_pids+=($!)
+            in_batch=$((in_batch + 1))
+            launched=$((launched + 1))
+            if [ "$in_batch" -ge "$TEST_JOBS" ]; then
+              flush_walks
+            fi
+          }
+          for seed in 1 2 3; do
+            walk build/tests/model/overlay_walk "$seed" 1000
+            walk build/tests/model/watch_walk "$seed" 1000
+          done
+          for fault in --faulty-hide-unkeyed --faulty-hotkey-hides; do
+            walk build/tests/model/overlay_walk 1 1000 "$fault"
+          done
+          for fault in --faulty-aba --faulty-stale; do
+            walk build/tests/model/watch_walk 1 1000 "$fault"
+          done
+          for friends in 0 1 2 3; do
+            for seed in 1 2 3 4 5 6 7 8; do
+              walk build/tests/model/trace_walk "$seed" 1000 "$friends"
+            done
+            walk build/tests/model/trace_walk 1 1000 "$friends" --no-sprint
+          done
+          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
+            walk build/tests/model/trace_walk 1 1000 3 "$fault"
+          done
+          walk build/tests/model/trace_walk 10 1000 3 --friends-churn
+          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn
+          walk build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend
+          for seed in 1 2 3; do
+            walk build/tests/model/strip_walk "$seed" 400 2
+          done
+          walk build/tests/model/strip_walk 4 400 3
+          for fault in --faulty-forget --faulty-wait; do
+            walk build/tests/model/strip_walk 1 400 2 "$fault"
+          done
+          for windows in 1 2 3 4; do
+            for seed in 1 2 3 4; do
+              walk build/tests/sync/link_walk "$seed" 1000 "$windows"
+            done
+          done
+          for fault in --faulty-applier --faulty-mirror --faulty-tail; do
+            walk build/tests/sync/link_walk 1 1000 2 "$fault"
+          done
+          for seed in 1 2 3 4; do
+            walk build/tests/sync/reconnect_walk "$seed" 1000
+          done
+          for fault in --faulty-cached --faulty-no-reset; do
+            walk build/tests/sync/reconnect_walk 1 1000 "$fault"
+          done
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/sync/secrets_walk "$seed" 2000
+            walk build/tests/sync/secrets_walk "$seed" 2000 --format 4
+            walk build/tests/sync/secrets_walk "$seed" 2000 --format 5
+          done
+          walk build/tests/sync/secrets_walk 9 2000 --faulty-store-late
+          for fault in --faulty-echo --faulty-driver --faulty-driver-echo; do
+            walk build/tests/sync/secrets_walk 1 2000 "$fault"
+          done
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/sync/signin_walk "$seed" 6000
+          done
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/store/journal_walk "$seed" 1000
+          done
+          for fault in accept-torn cut-too-far no-truncate no-sync; do
+            walk build/tests/store/journal_walk 1 1000 --fault "$fault"
+          done
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/server/supervisor_walk "$seed" 1000
+          done
+          for fault in --faulty-turn --faulty-resume; do
+            walk build/tests/server/supervisor_walk 1 1000 "$fault"
+          done
+          for seed in 13 14 15; do
+            walk build/tests/server/supervisor_walk "$seed" 600 --friends-churn
+          done
+          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove
+          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/server/pass_walk "$seed" 250
+          done
+          for fault in release-before-flush state-before-flush tick-before-flush no-hold release-on-fail; do
+            walk build/tests/server/pass_walk 1 80 --fault "$fault"
+          done
+          for seed in 1 2 3 4 5; do
+            walk build/tests/store/store_lock_walk "$seed" 2000
+          done
+          for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy --faulty-no-gate; do
+            walk build/tests/store/store_lock_walk 1 2000 "$fault"
+          done
+          # Real-file takeover walks bounded for APFS F_FULLFSYNC (sanitizers-linux and the model shards run the full
+          # 800, 600, 350, 300 and 120 step counts).
+          for seed in 1 2 3; do
+            walk build/tests/server/builds_walk "$seed" 300
+          done
+          for fault_seed in no-lock:1 no-sync:1 tested-program-only:1 reuse-tmp:1 prune-in-use:6 two-renames:1; do
+            walk build/tests/server/builds_walk "${fault_seed#*:}" 300 --fault "${fault_seed%%:*}"
+          done
+          for seed in 1 2 3; do
+            walk build/tests/server/handover_walk "$seed" 200
+          done
+          for fault_seed in no-lock:1 no-sync:1 in-memory-only:1 overwrite-prev:2 no-rollback:1 stop-cuts:1 allow-untested:1 serve-broken:1; do
+            walk build/tests/server/handover_walk "${fault_seed#*:}" 200 --fault "${fault_seed%%:*}"
+          done
+          for seed in 1 2 3; do
+            walk build/tests/server/supervision_walk "$seed" 120
+          done
+          for fault_seed in no-sup-lock:1 no-handover-lock:1 drain-stops:1 stop-restarts:1 no-post-start-rollback:1 ping-pong-rollback:2 no-halt-bound:2 in-memory-state:1 serve-untested:1; do
+            walk build/tests/server/supervision_walk "${fault_seed#*:}" 120 --fault "${fault_seed%%:*}"
+          done
+          for seed in 1 2 3 4; do
+            walk build/tests/server/migration_walk "$seed" 100
+          done
+          for fault_seed in no-lock:1 ignore-live-old:1 clobber-new:1 no-sync:3 no-plan:3 leave-old:3 blind-back:1 multihop:1 refuse-unknown-change:1; do
+            walk build/tests/server/migration_walk "${fault_seed#*:}" 100 --fault "${fault_seed%%:*}"
+          done
+          for seed in 1 2 3 4; do
+            walk build/tests/server/takeover_walk "$seed" 40
+          done
+          for fault in ignore-live-old skip-migration serve-untested no-handover-lock blind-rollback drain-cuts-turn stop-restarts drain-stops version-only-rollback spin-on-format-refusal blame-build-for-live-old; do
+            walk build/tests/server/takeover_walk 1 40 --fault "$fault"
+          done
+          flush_walks
+          if [ -e "$walks_root" ]; then chmod -R u+w "$walks_root"; fi
+          rm -rf "$walks_root"
+          echo "$launched of $listed walks passed (quarter $HALF; the other three jobs run the rest)"
+
+  claude-driver-macos:
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Node from the runner's machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
+            echo "::error::no node or npm on $(hostname -s)'s runner PATH; the fleet installs Node (sdk/bin) on its runners"
+            exit 1
+          fi
+          echo "node $(node --version), npm $(npm --version) on $(hostname -s)"
+          if [ "$RUNNER_OS" = macOS ]; then caches="$HOME/Library/Caches"; else caches="$HOME/.cache"; fi
+          downloads="$caches/nexus-ci/$RUNNER_NAME/prax-downloads"
+          mkdir -p "$downloads"
+          echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
+          echo "JOBS=$(sh .github/job-cores.sh)" >> "$GITHUB_ENV"
+          echo "TEST_JOBS=$(getconf _NPROCESSORS_ONLN)" >> "$GITHUB_ENV"
+      - name: Install the pinned packages
+        working-directory: drivers/claude
+        run: npm ci --omit=optional --no-audit --no-fund
+      - name: Compile, lint and unit tests
+        working-directory: drivers/claude
+        run: npm run check
+      # Clang, as the other builds use: Prax does not build with the image's GCC.
+      - name: Configure (the protocol and the conformance test only)
+        env:
+          CC: clang
+          CXX: clang++
+        shell: bash
+        run: |
+          set -euo pipefail
+          # On Linux the Release build is ThinLTO, which only LLD links: the image's LLVM 18 linker, as hosted-caches links it.
+          linker=()
+          if [ "$RUNNER_OS" = Linux ]; then
+            if [ ! -e /usr/bin/ld.lld ] && [ -x /usr/bin/ld.lld-18 ]; then sudo ln -s ld.lld-18 /usr/bin/ld.lld; fi
+            linker=(-DCMAKE_LINKER_TYPE=LLD)
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF ${linker[@]+"${linker[@]}"}
+      - name: Build the conformance test
+        run: cmake --build build --parallel "$JOBS" --target driver_conformance_test
+      - name: Conformance of the Claude driver
+        run: bash .github/ctest.sh --test-dir build -L claude_driver -j "$TEST_JOBS" --output-on-failure
+
+  # The Claude driver's token wall (drivers/claude/src/wall.ts, docs/secrets.md "The token wall"), end to end: the real
+  # Claude executable the pinned SDK ships (so npm ci with the optional per-platform package here), on a fake token,
+  # against a fake Messages API on 127.0.0.1, in the OS sandbox, trying every way an AI could read its login. Spends
+  # nothing and reaches no outside service. The test's runs in three jobs (NEXUS_WALL_RUN): the whole
+  # wall, the wall without its hook, and together a friend limited to its directory with the hook and without it (two
+  # short runs in one job: the setup is the cost).
+  claude-driver-wall-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [whole-wall, without-the-hook, "limited,limited-nohook"]
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Node from the runner's machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
+            echo "::error::no node or npm on $(hostname -s)'s runner PATH; the fleet installs Node (sdk/bin) on its runners"
+            exit 1
+          fi
+          echo "node $(node --version), npm $(npm --version) on $(hostname -s)"
+      - name: Install the pinned packages, with the Claude executable
+        working-directory: drivers/claude
+        run: npm ci --no-audit --no-fund
+      - name: Compile
+        working-directory: drivers/claude
+        run: npm run build
+      - name: The token wall
+        working-directory: drivers/claude
+        env:
+          NEXUS_WALL_REPORT: '1'
+          NEXUS_WALL_RUN: ${{ matrix.run }}
+        # Where this runner's own login reaches hulk, ssh there must work from the sandbox too, and from there no
+        # login back to this machine. A runner with no login to hulk fails the job by name (the rest of the wall still
+        # runs first): no probe is ever skipped.
+        run: |
+          if ssh -o BatchMode=yes -o ConnectTimeout=5 hulk true 2>/dev/null; then
+            export NEXUS_WALL_SSH_HOST=hulk NEXUS_WALL_SSH_BACK="$(hostname -s)"
+            ssh_out=ran
+          else
+            echo "::error title=ssh-out probe::no login to hulk from $(hostname -s) as $(id -un): the token wall's ssh-out probe cannot run, and no probe is skipped; the fleet gives this runner's login a key for hulk"
+            ssh_out=missing
+          fi
+          npm run test:functional
+          [ "$ssh_out" = ran ]
+
+  # The macOS Release build, with Prax's ThinLTO, and its unit and functional tests, on the fleet Mac with no time
+  # limit: ci.yml builds Debug per pull request (no LTO, whose link alone took about 36 s on a hosted runner). The frame
+  # budget and the server lock under contention have their own jobs above. Hosted caches are made by Xcode 26 and do not
+  # fit this Mac's Xcode, so it starts from what is on this machine.
+  macos-release:
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: fleet-mac-release
+          require: "false"
+          brew: ninja protobuf
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: mac-release
+      - name: Unit tests
+        run: bash .github/ctest.sh --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
+      # The link's functional tests reach this machine over `ssh localhost` as the runner's login, which this Mac allows.
+      - name: Functional tests
+        run: >-
+          bash .github/ctest.sh --test-dir build -L functional
+          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional)$'
+          -j "$TEST_JOBS" --output-on-failure
+      # The paced injected hitch measures Release's frame budgets (tests/window/CMakeLists.txt, unchanged), so it runs
+      # here in the Release build rather than in ci.yml's Debug build; alone, so no other test shares the clock. A run
+      # that finds no such test fails (.github/ctest.sh).
+      - name: The paced injected hitch (Release's frame budgets)
+        run: >-
+          bash .github/ctest.sh --test-dir build -R '^window_frame_budget_injected_paced$' --output-on-failure
+
+  # The tier_nightly tests (tests/tiers.txt, docs/ci-tiers.md): every test a pull request does not run, on each
+  # configuration a pull request builds, with no time limit. The model checks (model, model_nightly) run in the model
+  # jobs above and the Claude driver's conformance (claude_driver) in claude-driver-macos and claude-driver-linux; the
+  # frame budgets and the server lock under contention, which time the real clock, in their own jobs (frame-budget,
+  # macos-release, server-lock).
+  #
+  # macOS Debug, as a pull request builds it (asserts on), on the fleet Mac. The link's tests reach this machine over
+  # `ssh localhost` as the runner's login, which this Mac allows.
+  macos-debug:
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: fleet-mac-debug
+          require: "false"
+          brew: ninja protobuf
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: mac-debug
+      - name: The tier_nightly tests
+        run: >-
+          bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
+          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional)$'
+          -j "$TEST_JOBS" --output-on-failure
+
+  # Linux, as ci.yml's build-linux builds it, on hosted Ubuntu.
+  linux-nightly:
+    runs-on: ubuntu-24.04
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: linux-release
+          apt: ""
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: linux-release
+      - name: The tier_nightly tests
+        run: >-
+          bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
+          -j "$TEST_JOBS" --output-on-failure
+
+  # Windows, as ci.yml's windows job builds it, on hosted Windows: the unit tests too slow for a pull request. The WSL2
+  # terminal test needs a WSL2 distribution, which hosted Windows lacks: wsl2-terminal runs it on captain.
+  windows-nightly:
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Caches, configure and build
+        uses: ./.github/actions/windows-build
+      - name: The tier_nightly tests
+        run: |
+          & ./.github/ctest.ps1 --test-dir "$env:NEXUS_BUILD" -C Release -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver|wsl2_terminal)$' -j $env:TEST_JOBS --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }
+
+  # The protocol's conformance cases against the Claude driver as a process (ctest -L claude_driver) on hosted Ubuntu,
+  # as claude-driver-macos runs them on the fleet Mac; ci.yml's claude-driver runs the driver's own unit tests per pull
+  # request.
+  claude-driver-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Node from the runner's machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
+            echo "::error::no node or npm on $(hostname -s)'s runner PATH"
+            exit 1
+          fi
+          echo "node $(node --version), npm $(npm --version) on $(hostname -s)"
+          downloads="$HOME/.cache/nexus-ci/$RUNNER_NAME/prax-downloads"
+          mkdir -p "$downloads"
+          echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
+          echo "JOBS=$(sh .github/job-cores.sh)" >> "$GITHUB_ENV"
+          echo "TEST_JOBS=$(getconf _NPROCESSORS_ONLN)" >> "$GITHUB_ENV"
+      - name: Install the pinned packages
+        working-directory: drivers/claude
+        run: npm ci --omit=optional --no-audit --no-fund
+      - name: Build the driver
+        working-directory: drivers/claude
+        run: npm run check
+      # Clang, as the other builds use: Prax does not build with the image's GCC. The Release build is ThinLTO, which
+      # only LLD links: the image's LLVM 18 linker.
+      - name: Configure (the protocol and the conformance test only)
+        env:
+          CC: clang
+          CXX: clang++
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -e /usr/bin/ld.lld ] && [ -x /usr/bin/ld.lld-18 ]; then sudo ln -s ld.lld-18 /usr/bin/ld.lld; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DCMAKE_LINKER_TYPE=LLD
+      - name: Build the conformance test
+        run: cmake --build build --parallel "$JOBS" --target driver_conformance_test
+      - name: Conformance of the Claude driver
+        run: bash .github/ctest.sh --test-dir build -L claude_driver -j "$TEST_JOBS" --output-on-failure
+
+  # The same wall on Linux, where Claude's sandbox is bubblewrap and socat, both built by nexus from pinned sources
+  # (cmake/sandbox.cmake) and found by the driver (drivers/claude/src/tools.ts), with nothing installed for them: on an
+  # Ubuntu bench (the tlc runners are the amd benches, never WSL2), whose AppArmor lets a program make user namespaces
+  # only with a profile, which the driver loads for nexus's bwrap through passwordless sudo (the test unloads it first
+  # where sudo -n can, NEXUS_WALL_FRESH_PROFILE, so that the real step runs each time). On GitHub-hosted Ubuntu, from
+  # ci.yml (the happy path per pull request leaves it here); the same wall inside captain's WSL2 is claude-driver-wall-wsl2.
+  claude-driver-wall-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        where: [ubuntu]
+        # The unlimited runs each in a job of its own: on WSL2 under load one run took 52 s, two past the cap. The two
+        # limited runs share one: each took seconds on macOS (2026-11-15); WSL2 under load is the one to watch.
+        run: [whole-wall, without-the-hook, "limited,limited-nohook"]
+        include:
+          - where: ubuntu
+            labels: ubuntu-24.04
+    runs-on: ${{ matrix.labels }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Where this runs, and caches outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          kernel=$(cat /proc/sys/kernel/osrelease)
+          case "$kernel" in *microsoft*|*WSL2*) wsl=wsl2 ;; *) wsl=ubuntu ;; esac
+          if [ "$wsl" != "${{ matrix.where }}" ]; then
+            echo "::error::$(hostname -s) (kernel $kernel) is not a ${{ matrix.where }} machine"
+            exit 1
+          fi
+          restrict=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo none)
+          echo "$(hostname -s): kernel $kernel; apparmor_restrict_unprivileged_userns: $restrict; passwordless sudo: $(sudo -n true 2>/dev/null && echo yes || echo no)"
+          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
+            echo "::error::no node or npm on $(hostname -s)'s runner PATH; the fleet installs Node (sdk/bin) on its runners"
+            exit 1
+          fi
+          # The runs' directories under a temporary directory of this runner's own: two Claude sandboxes at once whose
+          # working directories share an ancestor a few levels up fail each other's commands now and then (bwrap:
+          # Can't find source path .../runner-tmp/.mcp.json; two jobs on amd-2, 2026-11-15). Always under /tmp (never an
+          # inherited TMPDIR such as ~/.cache/runner-tmp, which pushes Unix domain socket paths past sun_path's 108-byte
+          # limit on long runner names).
+          runner_dir=${RUNNER_NAME// /_}
+          own="/tmp/$runner_dir"
+          mkdir -p "$own"
+          echo "TMPDIR=$own" >> "$GITHUB_ENV"
+          caches="$HOME/.cache/nexus-ci"
+          mkdir -p "$caches/$runner_dir/prax-downloads"
+          {
+            echo "SANDBOX_BUILD=$caches/$runner_dir/sandbox-build"
+            echo "PR_DOWNLOAD_DIR=$caches/$runner_dir/prax-downloads"
+            echo "NEXUS_SANDBOX_BIN=$caches/$runner_dir/sandbox-build/sandbox"
+          } >> "$GITHUB_ENV"
+      - name: Build bubblewrap and socat
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$SANDBOX_BUILD" -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF \
+            -DNEXUS_WINDOW_LOGIC=OFF -DNEXUS_SANDBOX_TOOLS=ON > /dev/null
+          cmake --build "$SANDBOX_BUILD" --target nexus_sandbox_tools --parallel "$(sh .github/job-cores.sh)"
+          "$NEXUS_SANDBOX_BIN/bwrap/bwrap" --version
+          "$NEXUS_SANDBOX_BIN/socat/socat" -V | head -2
+      - name: Install the pinned packages, with the Claude executable
+        working-directory: drivers/claude
+        # Installed once per lockfile on each runner and kept beside its other caches: WSL2's install took 24 to 47 s
+        # when it asked the registry each time, and 26 to 38 s from npm's cache on a loaded captain (Ubuntu: 4 s).
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$HOME/.cache/nexus-ci/$RUNNER_NAME/claude-driver-packages"
+          kept="$base/$(sha256sum package-lock.json | cut -c1-16)"
+          if [ ! -d "$kept/node_modules" ]; then
+            npm ci --prefer-offline --no-audit --no-fund
+            rm -rf "$base"
+            mkdir -p "$kept"
+            mv node_modules "$kept/node_modules"
+          fi
+          rm -rf node_modules
+          ln -s "$kept/node_modules" node_modules
+      - name: Compile
+        working-directory: drivers/claude
+        run: npm run build
+      - name: The token wall
+        working-directory: drivers/claude
+        env:
+          NEXUS_WALL_REPORT: '1'
+          NEXUS_WALL_FRESH_PROFILE: '1'
+          NEXUS_WALL_RUN: ${{ matrix.run }}
+        # Where this runner's own login reaches hulk, ssh there must work from the sandbox too, and from there no
+        # login back to this machine; a runner with no fleet login skips that probe.
+        run: |
+          if ssh -o BatchMode=yes -o ConnectTimeout=5 hulk true 2>/dev/null; then
+            export NEXUS_WALL_SSH_HOST=hulk NEXUS_WALL_SSH_BACK="$(hostname -s)"
+          else
+            echo "no login to hulk from $(hostname -s) as $(id -un): the ssh-out probe is skipped"
+          fi
+          # Separate runner workspaces still share /tmp/.mcp.json during SDK setup.
+          # Serialize just this test on each Linux host, including across workflow runs.
+          flock "$HOME/.cache/nexus-ci/claude-wall.lock" npm run test:functional
+
+
+
+  # The macOS sanitizers job's programs and walks on Linux, with clang's AddressSanitizer and UndefinedBehaviorSanitizer.
+  # One build, shared: build-linux-asan builds every program the parts run and uploads the build tree; three parts run
+  # in parallel: the unit programs, and the trace walks with their faults in two halves. From ci.yml (the happy path per
+  # pull request leaves it here).
+  build-linux-asan:
+    runs-on: ubuntu-24.04
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: linux-asan
+          apt: ""
+      - name: Configure and build the programs the parts run
+        uses: ./.github/actions/nexus-build
+        with:
+          config: linux-asan
+          targets: >-
+            model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
+            store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
+            nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
+            overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+            journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+            migration_walk takeover_walk
+      - name: Share the build tree
+        uses: ./.github/actions/build-share
+        with:
+          name: build-linux-asan
+
+  sanitizers-linux:
+    needs: build-linux-asan
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: units
+          # The walks in two halves (every other walk each): together they took past 2 minutes on the image's 4 cores.
+          - part: walks
+            half: 1
+          - part: walks
+            half: 2
+    name: sanitizers-linux (${{ matrix.part }}${{ matrix.half && format(' {0} of 2', matrix.half) || '' }})
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: The build tree
+        uses: ./.github/actions/build-fetch
+        with:
+          name: build-linux-asan
+      # Every unit program here runs in memory (MemFs where it has files; no sockets, processes or shared paths), so
+      # they are independent: they run at once, at most TEST_JOBS at a time, each with its own output under units/.
+      - name: Unit tests under the sanitizers
+        if: matrix.part == 'units'
+        shell: bash
+        run: |
+          set -euo pipefail
+          launched=0
+          running=0
+          unit() {
+            local dir="units/$launched"
+            mkdir -p "$dir"
+            ( "$@" >"$dir/output" 2>&1 || { echo "::error::unit failed: $*"; cat "$dir/output"; exit 1; } ) &
+            launched=$((launched + 1))
+            running=$((running + 1))
+            if [ "$running" -ge "$TEST_JOBS" ]; then
+              wait -n
+              running=$((running - 1))
+            fi
+          }
+          unit build/tests/model/model_test
+          unit build/tests/model/overlay_test
+          unit build/tests/window/nexus_terminal_watch_tests
+          unit build/tests/sync/sync_test
+          unit build/tests/sync/redial_test
+          # the secret dialog: every unit group, the leak test among them
+          unit build/tests/server/secrets_test
+          # in-app sign-in: every unit group, the leak test among them
+          unit build/tests/server/signin_test
+          # the store: every unit group (MemFs, crashes at every write and sync, the lock, the start-up order), and
+          # the server's tabs on it
+          unit build/tests/store/store_test
+          unit build/tests/store/durable_test
+          # the driver protocol: every group (the parser and the reader over every chunking)
+          unit build/tests/driver/driver_protocol_test
+          # the driver supervisor: every group
+          unit build/tests/server/supervisor_test
+          unit build/tests/server/server_pass_test
+          # placement: every group (the manifest, the hash, the evidence, the formats rule, the names, prune's choice)
+          unit build/tests/server/builds_test
+          # handover: every group (drain, state, handover, rollback, MemFs crash sweep, refusals)
+          unit build/tests/server/handover_test
+          # supervision: every group (state, units, lifecycle, post-start rollback, dual-fail shunning, MemFs crashes)
+          unit build/tests/server/supervision_test
+          # layer 5 migration and store format against rollback
+          unit build/tests/server/migration_test
+          # layer 6 end-to-end takeover composition seams
+          unit build/tests/server/takeover_test
+          # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
+          # schema's own tables and in nexus's state and actions
+          unit build/tests/wire/wire_test
+          unit build/tests/wire/nexus_versions_test
+          while [ "$running" -gt 0 ]; do
+            wait -n
+            running=$((running - 1))
+          done
+          echo "$launched unit programs passed"
+      # Each walk drives its code in memory (MemFs where it has files; the store lock's walk on real files in a store
+      # directory beside its own trace) and writes only the trace it is given, so they are independent: they run at
+      # once, at most TEST_JOBS at a time, each in a directory of its own under $RUNNER_TEMP/nexus-walks (outside
+      # $GITHUB_WORKSPACE, so a SIGKILLed 0555 build directory never breaks the next checkout) holding its trace and its
+      # output. Any failure fails the step, with that walk's command and output.
+      - name: Trace walks and their faults under the sanitizers
+        if: matrix.part == 'walks'
+        shell: bash
+        env:
+          HALF: ${{ matrix.half }}
+        run: |
+          set -euo pipefail
+          walks_root="$RUNNER_TEMP/nexus-walks"
+          if [ -e "$walks_root" ]; then chmod -R u+w "$walks_root"; fi
+          rm -rf "$walks_root"
+          launched=0
+          running=0
+          # This job runs every other walk: HALF 1 the first, third, ...; HALF 2 the second, fourth, ...
+          listed=0
+          walk() {
+            listed=$((listed + 1))
+            if [ $((listed % 2)) -ne $((HALF % 2)) ]; then return 0; fi
+            local dir="$walks_root/$launched"
+            mkdir -p "$dir"
+            ( "$@" "$dir/trace.tla" >"$dir/output" 2>&1 || { echo "::error::walk failed: $*"; cat "$dir/output"; exit 1; } ) &
+            launched=$((launched + 1))
+            running=$((running + 1))
+            if [ "$running" -ge "$TEST_JOBS" ]; then
+              wait -n
+              running=$((running - 1))
+            fi
+          }
+          for seed in 1 2 3; do
+            walk build/tests/model/overlay_walk "$seed" 1000
+            walk build/tests/model/watch_walk "$seed" 1000
+          done
+          for fault in --faulty-hide-unkeyed --faulty-hotkey-hides; do
+            walk build/tests/model/overlay_walk 1 1000 "$fault"
+          done
+          for fault in --faulty-aba --faulty-stale; do
+            walk build/tests/model/watch_walk 1 1000 "$fault"
+          done
+          for friends in 0 1 2 3; do
+            for seed in 1 2 3 4 5 6 7 8; do
+              walk build/tests/model/trace_walk "$seed" 1000 "$friends"
+            done
+            walk build/tests/model/trace_walk 1 1000 "$friends" --no-sprint
+          done
+          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
+            walk build/tests/model/trace_walk 1 1000 3 "$fault"
+          done
+          # the friends coming and going, and the friend strip's walks and faults
+          walk build/tests/model/trace_walk 10 1000 3 --friends-churn
+          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn
+          walk build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend
+          for seed in 1 2 3; do
+            walk build/tests/model/strip_walk "$seed" 400 2
+          done
+          walk build/tests/model/strip_walk 4 400 3
+          for fault in --faulty-forget --faulty-wait; do
+            walk build/tests/model/strip_walk 1 400 2 "$fault"
+          done
+          for windows in 1 2 3 4; do
+            for seed in 1 2 3 4; do
+              walk build/tests/sync/link_walk "$seed" 1000 "$windows"
+            done
+          done
+          for fault in --faulty-applier --faulty-mirror --faulty-tail; do
+            walk build/tests/sync/link_walk 1 1000 2 "$fault"
+          done
+          # the link making its session again: its walks and faults
+          for seed in 1 2 3 4; do
+            walk build/tests/sync/reconnect_walk "$seed" 1000
+          done
+          for fault in --faulty-cached --faulty-no-reset; do
+            walk build/tests/sync/reconnect_walk 1 1000 "$fault"
+          done
+          # the secret dialog's walks, each failing if a value's bytes reach anything but the keeper
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/sync/secrets_walk "$seed" 2000
+            walk build/tests/sync/secrets_walk "$seed" 2000 --format 4
+            walk build/tests/sync/secrets_walk "$seed" 2000 --format 5
+          done
+          walk build/tests/sync/secrets_walk 9 2000 --faulty-store-late
+          for fault in --faulty-echo --faulty-driver --faulty-driver-echo; do
+            walk build/tests/sync/secrets_walk 1 2000 "$fault"
+          done
+          # in-app sign-in's walks, each failing if a log line holds a URL, a state, a code or a login
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/sync/signin_walk "$seed" 6000
+          done
+          # the journal's walks
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/store/journal_walk "$seed" 1000
+          done
+          for fault in accept-torn cut-too-far no-truncate no-sync; do
+            walk build/tests/store/journal_walk 1 1000 --fault "$fault"
+          done
+          # the store's lock and the start-up order: their walks and the faulty orders
+          for seed in 1 2 3 4 5; do
+            walk build/tests/store/store_lock_walk "$seed" 2000
+          done
+          for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy --faulty-no-gate; do
+            walk build/tests/store/store_lock_walk 1 2000 "$fault"
+          done
+          # the driver supervisor's walks and their faults
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/server/supervisor_walk "$seed" 1000
+          done
+          for fault in --faulty-turn --faulty-resume; do
+            walk build/tests/server/supervisor_walk 1 1000 "$fault"
+          done
+          # the friend taken out of friends.json and put back, and a start holding no friends list, and their faults
+          for seed in 13 14 15; do
+            walk build/tests/server/supervisor_walk "$seed" 600 --friends-churn
+          done
+          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove
+          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown
+          # placement's walks on real files (each in walk-files beside its trace) and their faults, at the seeds the
+          # trace checks use (tests/server/CMakeLists.txt)
+          for seed in 1 2 3; do
+            walk build/tests/server/builds_walk "$seed" 800
+          done
+          for fault_seed in no-lock:1 no-sync:1 tested-program-only:1 reuse-tmp:1 prune-in-use:6 two-renames:1; do
+            walk build/tests/server/builds_walk "${fault_seed#*:}" 800 --fault "${fault_seed%%:*}"
+          done
+          # one pass of nexus-server's loop: its walks and their faults
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/server/pass_walk "$seed" 250
+          done
+          for fault in release-before-flush state-before-flush tick-before-flush no-hold release-on-fail; do
+            walk build/tests/server/pass_walk 1 80 --fault "$fault"
+          done
+          # handover's walks on real files and OS locks, and their faults
+          for seed in 1 2 3; do
+            walk build/tests/server/handover_walk "$seed" 600
+          done
+          for fault_seed in no-lock:1 no-sync:1 in-memory-only:1 overwrite-prev:2 no-rollback:1 stop-cuts:1 allow-untested:1 serve-broken:1; do
+            walk build/tests/server/handover_walk "${fault_seed#*:}" 600 --fault "${fault_seed%%:*}"
+          done
+          # supervision's walks on real files and OS locks, and their faults
+          for seed in 1 2 3; do
+            walk build/tests/server/supervision_walk "$seed" 350
+          done
+          for fault_seed in no-sup-lock:1 no-handover-lock:1 drain-stops:1 stop-restarts:1 no-post-start-rollback:1 ping-pong-rollback:2 no-halt-bound:2 in-memory-state:1 serve-untested:1; do
+            walk build/tests/server/supervision_walk "${fault_seed#*:}" 350 --fault "${fault_seed%%:*}"
+          done
+          # layer 5 migration's walks on real files and their faults
+          for seed in 1 2 3 4; do
+            walk build/tests/server/migration_walk "$seed" 300
+          done
+          for fault_seed in no-lock:1 ignore-live-old:1 clobber-new:1 no-sync:3 no-plan:3 leave-old:3 blind-back:1 multihop:1 refuse-unknown-change:1; do
+            walk build/tests/server/migration_walk "${fault_seed#*:}" 300 --fault "${fault_seed%%:*}"
+          done
+          # layer 6 end-to-end takeover walks across all five layers and their eleven faults
+          for seed in 1 2 3 4; do
+            walk build/tests/server/takeover_walk "$seed" 120
+          done
+          for fault in ignore-live-old skip-migration serve-untested no-handover-lock blind-rollback drain-cuts-turn stop-restarts drain-stops version-only-rollback spin-on-format-refusal blame-build-for-live-old; do
+            walk build/tests/server/takeover_walk 1 120 --fault "$fault"
+          done
+          while [ "$running" -gt 0 ]; do
+            wait -n
+            running=$((running - 1))
+          done
+          if [ -e "$walks_root" ]; then chmod -R u+w "$walks_root"; fi
+          rm -rf "$walks_root"
+          echo "$launched of $listed walks passed (half $HALF; the other job runs the rest)"
+
+
+  # The Python tests that need a real Mac (.github/python-native-tests.txt): macOS Seatbelt, APFS's case-insensitive
+  # file system, and the vendors' own CLIs (codex, grok, agy, and Muse through NEXUS_TEST_MUSE_BINARY), which the
+  # fleet installs on its Mac runners. server-policy runs every other Python test on each PR. No test here needs a key
+  # or a sign-in. .github/python-tests.py fails on any skip, so a CLI missing from the runner fails this job by name.
+  python-native:
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: The vendors' CLIs on the runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for cli in codex grok agy muse; do
+            if path=$(command -v "$cli"); then echo "$cli: $path"; else missing+=("$cli"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error title=python-native::no ${missing[*]} on $(hostname -s)'s runner PATH: the fleet installs them on its Mac runners; their tests below fail by name"
+          fi
+          if path=$(command -v muse); then echo "NEXUS_TEST_MUSE_BINARY=$path" >> "$GITHUB_ENV"; fi
+      - name: The native tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime=$(mktemp -d "$RUNNER_TEMP/nexus-native.XXXXXX")
+          trap 'rm -rf "$runtime"' EXIT
+          python3 -m venv "$runtime"
+          "$runtime/bin/python" -I -m pip --disable-pip-version-check install ./policy ./drivers/rpc
+          "$runtime/bin/python" .github/python-tests.py --tier native --start drivers/rpc

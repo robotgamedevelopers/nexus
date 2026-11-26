@@ -73,7 +73,7 @@ function(store_tlc_test name module cfg expect)
         set(label model_nightly)
         set(cap 300)
     endif()
-    math(EXPR ctest_timeout "${cap} + 30")
+    nexus_tlc_limits(${cap} cap ctest_timeout)
     set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${store_models} -DMODULE=${module} -DCFG=${cfg}
              -DEXPECT=${expect} -DWORKERS=${T_WORKERS} -DCAP=${cap})
     if(T_PROPERTY)
@@ -89,7 +89,7 @@ function(store_tlc_test name module cfg expect)
         endif()
     endif()
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${store_tlc})
-    set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
+    set_tests_properties(${name} PROPERTIES LABELS ${label} ${ctest_timeout} PROCESSORS ${T_WORKERS})
 endfunction()
 
 # The spec, every invariant, no error: four writes (310k states), and records of two lengths. Eight TLC workers on the

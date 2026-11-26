@@ -238,6 +238,10 @@ Exit statuses of `nexus-server handover`: `0` ok (for `resume`, recovered to `SE
 refused (not placed, untested, incompatible formats, no current build); `4` lock busy; `5` target failed to serve and
 rolled back to `previous`.
 
+Handover does not touch `<server dir>/policy.bundle.json`. If the server has one, apply it again from the new build's
+commit after the handover ([docs/policy.md](policy.md#after-deploying-a-build)); until then the new build warns at
+its start and on `nexus-server status` that the applied bundle is not the one it packages.
+
 ## Supervision
 
 Layer 4 (`docs/roadmap.sexp`, `takeover-supervision`; `src/server/supervision.h`, `src/server/supervise_state.h`,

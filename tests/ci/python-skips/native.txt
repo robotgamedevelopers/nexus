@@ -1,0 +1,2 @@
+# planted: the native tier of the passes directory
+tests/ci/python-skips/passes test_ok.Ok.test_native

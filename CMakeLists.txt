@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.28)
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
 set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0 CACHE STRING "Oldest macOS the build runs on")
 
-project(nexus VERSION 0.2.1 LANGUAGES C CXX)
+project(nexus VERSION 0.2.2 LANGUAGES C CXX)
 # The app's platform layer (src/platform_mac.mm) is Objective-C++.
 if(APPLE)
     enable_language(OBJCXX)
@@ -430,6 +430,22 @@ if(WIN32 AND NOT NEXUS_WINDOW)
 endif()
 
 enable_testing()
+# The TLC model checks run in the nightly alone, and a nightly test has no time limit (only per-commit unit and
+# functional tests have one, 2 minutes): there, NEXUS_TLC_UNCAPPED=ON drops each check's cap and ctest's timeout, and a
+# check runs until TLC finishes. A configure without it (a local run) keeps each check's cap.
+option(NEXUS_TLC_UNCAPPED "Run the TLC model checks with no time cap (the nightly)" OFF)
+# nexus_tlc_limits(<cap> <cap-var> <timeout-var>): <cap-var> is the cap tlc.cmake applies (0 for none), and
+# <timeout-var> the TIMEOUT property for set_tests_properties (empty for none).
+function(nexus_tlc_limits cap cap_var timeout_var)
+    if(NEXUS_TLC_UNCAPPED)
+        set(${cap_var} 0 PARENT_SCOPE)
+        set(${timeout_var} "" PARENT_SCOPE)
+    else()
+        math(EXPR timeout "${cap} + 30")
+        set(${cap_var} ${cap} PARENT_SCOPE)
+        set(${timeout_var} TIMEOUT ${timeout} PARENT_SCOPE)
+    endif()
+endfunction()
 # The policy tool runs on the build machine, so the reload check runs in the desktop trees; an iOS tree builds for a
 # simulator or a device, where a test is a program the simulator runner starts (tests/ios).
 if(TARGET nexus_policy AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
@@ -444,6 +460,17 @@ if(TARGET nexus_policy AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
         "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/policy-old-names" "-DRULES=${PROJECT_SOURCE_DIR}/policy/rules"
         -P "${PROJECT_SOURCE_DIR}/tests/policy/old_names.cmake")
     set_tests_properties(policy_functional_old_names PROPERTIES LABELS functional TIMEOUT 30)
+    # An applied bundle that is not the one the binary packages: the comparison, and what apply writes from this commit.
+    add_executable(policy_stale_bundle_test tests/policy/stale_bundle.cpp)
+    target_link_libraries(policy_stale_bundle_test PRIVATE nexus_policy)
+    target_compile_options(policy_stale_bundle_test PRIVATE ${NEXUS_WARNINGS})
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/policy-stale-bundle-test")
+    add_test(NAME policy_unit_stale_bundle COMMAND policy_stale_bundle_test
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/policy-stale-bundle-test")
+    add_test(NAME policy_unit_stale_bundle_applied COMMAND ${CMAKE_COMMAND}
+        "-DTOOL=${policy_tool}" "-DCHECK=$<TARGET_FILE:policy_stale_bundle_test>" "-DRULES=${PROJECT_SOURCE_DIR}/policy/rules"
+        "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/policy-stale-bundle-applied" -P "${PROJECT_SOURCE_DIR}/tests/policy/stale_bundle_apply.cmake")
+    set_tests_properties(policy_unit_stale_bundle policy_unit_stale_bundle_applied PROPERTIES LABELS unit TIMEOUT 30)
 endif()
 add_subdirectory(tests/model)
 add_subdirectory(tests/sync)
@@ -461,3 +488,6 @@ endif()
 if(NEXUS_TAILSCALE)
     add_subdirectory(tests/tailscale)
 endif()
+# Each test's tier (tier_pr or tier_nightly, cmake/tiers.cmake and tests/tiers.txt), given once every test above is
+# registered.
+include(cmake/tiers.cmake)

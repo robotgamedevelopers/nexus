@@ -799,7 +799,11 @@ void largeDashboardRefresh(bool reuse) {
         h.model.select_tab(1); h.frame();
         h.board->prepare(h.extent);
         h.view.pendingBoardId = h.model.tab(0).id;
-        h.frames(5);
+        // The board is shown once its page is prepared, which waits on the page's fetch from the server's thread: that
+        // is real time, which frame() does not wait for, so five frames were not always enough (PR #127's macOS Debug
+        // run: active() was still 1). Up to 200 frames (10 s on the test's clock) for the switch.
+        for (int f = 0; f < 200 && h.model.active() != 0; ++f)
+            h.frame();
         CHECK(h.model.active() == 0);
     }
     CHECK(h.server.pages == (reuse ? 1 : 6) && h.server.polls == 6);

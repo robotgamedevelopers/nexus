@@ -44,6 +44,26 @@ directory and the WSL user's server directory. On separate machines, check out t
 apply locally. To roll back, revert the policy commit and apply again. Without an applied bundle, each host
 uses the rules packaged with its binary.
 
+An applied bundle runs in place of the packaged rules, including after a new build is deployed. When the client or
+the server starts, and on `nexus-server status`, each compares its `policy.bundle.json` by content with what
+`nexus-policy apply <side> policy/rules` writes from its own build's commit: the entry point, every module it loads
+and `config.json`. If they differ, it prints one line beginning `WARNING:` that names the file, the first
+difference, and the fix: apply again from the build's commit, or remove the file to use the packaged rules. The
+client also shows that line at the end of the transcript. The host still starts with the applied bundle.
+
+### After deploying a build
+
+After placing and handing over a new server build, or installing a new client, apply each side again from the same
+commit's `policy/rules`, but only on a host that already has a `policy.bundle.json`:
+
+```sh
+test -f ~/.nexus/server/policy.bundle.json && build/nexus-policy apply server policy/rules
+test -f ~/.nexus/client/policy.bundle.json && build/nexus-policy apply client policy/rules
+```
+
+A host without a bundle already uses the new build's packaged rules. Then check that `nexus-server status` and the
+client's start print no `WARNING:` line.
+
 ## Start with the keyboard-driven client
 
 Copy `policy/rules/` into your own profile directory. Use
