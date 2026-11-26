@@ -67,7 +67,7 @@ struct Window {
     PrUi* ui = nullptr;
     PrKit* kit = nullptr;
     Look look;
-    Model model{std::vector<FriendInfo>{}, true};
+    Model model{std::vector<AIInfo>{}, true};
     View view;
     std::unique_ptr<RemoteTerminals> terminals;
     FrameHost host;
