@@ -119,6 +119,24 @@ LinkView viewOf(const link::ClientLink::Snapshot& s) {
         }
         v.sessions.push_back(std::move(ls));
     }
+    // Each AI's accounts (sync::ServerFriend::accounts), and the one its first session runs on: the session the relay
+    // sends its prompts and account switches to.
+    for (const sync::ServerFriend& f : s.sessions.friends()) {
+        AiAccounts ai;
+        ai.aiName = f.name;
+        for (const sync::AccountChoice& a : f.accounts)
+            ai.accounts.push_back(AccountOption{a.name, a.label, a.email, !a.needsSignIn});
+        const sync::SessionView* first = nullptr;
+        for (const sync::SessionRef& ref : s.sessions.sessions()) {
+            if (ref->info.friendName == f.name && (first == nullptr || ref->id < first->id))
+                first = ref.get();
+        }
+        if (first != nullptr)
+            ai.current = !first->info.account.empty() ? first->info.account
+                : first->info.primaryAccount             ? first->info.primaryAccount->name
+                                                         : std::string();
+        v.rosters.push_back(std::move(ai));
+    }
     v.sent = s.sent;
     v.acknowledged = s.acknowledged;
     return v;
@@ -126,10 +144,12 @@ LinkView viewOf(const link::ClientLink::Snapshot& s) {
 
 sync::Action actionOf(const LinkAction& a) {
     sync::Action out;
-    out.kind = a.kind == LinkAction::Kind::Ensure ? sync::ActionKind::Ensure : sync::ActionKind::Send;
+    out.kind = a.kind == LinkAction::Kind::Ensure ? sync::ActionKind::Ensure
+        : a.kind == LinkAction::Kind::SetAccount  ? sync::ActionKind::SetAccount
+                                                  : sync::ActionKind::Send;
     out.session = a.session;
     out.friendName = a.kind == LinkAction::Kind::Ensure ? a.aiName : std::string();
-    out.text = a.text;
+    out.text = a.text;      // Send: the words; SetAccount: the account
     return out;
 }
 

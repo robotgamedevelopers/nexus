@@ -6,6 +6,9 @@
 // must reject the trace.
 //
 //   relay_walk <seed> <steps> <out RelayTraceData.tla> [forget-handed | ack-early | vouch-all]
+//   relay_walk <seed> <steps> <out AccountSwitchTraceData.tla> [switch-early | switch-current]
+//
+// The module asked for picks the walk: the prompts' (RelayTrace.tla) or the account switch's (AccountSwitchTrace.tla).
 
 #include <algorithm>
 #include <cstdio>
@@ -13,6 +16,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <random>
 #include <set>
 #include <sstream>
@@ -58,6 +62,186 @@ std::string seq(const C& c) {
 using Nums = std::set<std::uint64_t>;
 using Answer = std::pair<std::uint64_t, std::uint64_t>;   // uncertain, applied
 
+// The account switch's walk (AccountSwitch.tla): one AI ("e") with accounts a and b signed in and d not, on a at first.
+// The walk picks accounts for the person, carries the watch's frames and the phone's answers over the same lossy
+// carrier, plays the link (it delivers what a run handed, in any order, and acknowledges all once all are delivered;
+// the server's account is whatever it delivered last) and restarts the phone.
+using Choice = std::pair<std::uint64_t, std::string>;     // num, account; {0, ""} for none
+using Said = std::pair<std::uint64_t, std::string>;       // an answer: switched, current
+
+constexpr std::uint64_t kMaxChoice = 5;
+const std::vector<std::string> kAccounts{"a", "b", "d"};
+
+std::string str(const std::string& s) {
+    return "\"" + s + "\"";
+}
+
+std::string choiceTla(const Choice& c) {
+    return "[num |-> " + std::to_string(c.first) + ", acct |-> " + str(c.second) + "]";
+}
+
+std::string saidTla(const Said& m) {
+    return "[switched |-> " + std::to_string(m.first) + ", current |-> " + str(m.second) + "]";
+}
+
+template <class C, class F>
+std::string setOf(const C& c, F f) {
+    std::string o = "{";
+    bool first = true;
+    for (const auto& x : c) {
+        o += (first ? "" : ", ") + f(x);
+        first = false;
+    }
+    return o + "}";
+}
+
+Choice choiceOf(const std::optional<AccountSwitch>& a) {
+    return a ? Choice{a->num, a->account} : Choice{0, ""};
+}
+
+int accountWalk(unsigned long seed, long steps, const char* path, const std::string& args) {
+    std::mt19937_64 rng(seed);
+    const auto pick = [&](std::size_t n) { return static_cast<std::size_t>(rng() % n); };
+
+    WatchLink watch{"w"};
+    std::uint64_t epoch = 1;
+    auto relay = std::make_unique<PhoneRelay>(PhoneRelay::Persisted{"w", 0}, epoch);
+    relay->setUnlocked(true);
+    std::string server = "a";
+    Nums applied;
+    std::set<Choice> chosen, linkQ, runQ;
+    std::map<Choice, WatchFrame> reqs;
+    std::map<Said, PhoneFrame> resps;
+    std::uint64_t crashes = 0, linkSent = 0;
+
+    const auto view = [&](bool acknowledged) {
+        LinkView v;
+        v.phase = LinkPhase::Connected;
+        v.aisKnown = true;
+        v.ais = {"e"};
+        LinkSession s;
+        s.id = 1;
+        s.aiName = "e";
+        s.activity = LinkSession::Activity::Idle;
+        v.sessions = {s};
+        v.rosters = {AiAccounts{"e", server, {{"a", "A", "a@example.com", true}, {"b", "", "", true},
+                                              {"d", "D", "", false}}}};
+        v.sent = linkSent;
+        v.acknowledged = acknowledged;
+        return v;
+    };
+    const auto shown = [&] {
+        for (const AiAccounts& r : watch.rosters()) {
+            if (r.aiName == "e")
+                return r.current;
+        }
+        return std::string();
+    };
+    const auto state = [&] {
+        const auto c = [](const Choice& x) { return choiceTla(x); };
+        std::ostringstream o;
+        o << "[server |-> " << str(server) << ", applied |-> " << set(applied) << ", chosen |-> " << setOf(chosen, c)
+          << ", choice |-> " << choiceTla(choiceOf(watch.accountSwitch())) << ", shown |-> " << str(shown())
+          << ", reqs |-> " << setOf(reqs, [](const auto& kv) { return choiceTla(kv.first); })
+          << ", resps |-> " << setOf(resps, [](const auto& kv) { return saidTla(kv.first); })
+          << ", seen |-> " << relay->switchSeen() << ", waiting |-> " << choiceTla(choiceOf(relay->switchWaiting()))
+          << ", inflight |-> "
+          << choiceTla(relay->switchInflight() ? choiceOf(relay->switchInflight()->first) : Choice{0, ""})
+          << ", runQ |-> " << setOf(runQ, c) << ", switched |-> " << relay->switched()
+          << ", view |-> " << str(relay->currentAccount("e")) << ", linkQ |-> " << setOf(linkQ, c)
+          << ", crashes |-> " << crashes << "]";
+        return o.str();
+    };
+    const auto record = [&](const std::string& act, const std::string& a, const Choice& r, const Said& m,
+                            const Choice& x) {
+        return "[act |-> " + str(act) + ", a |-> " + str(a) + ", r |-> " + choiceTla(r) + ", m |-> " + saidTla(m) +
+            ", x |-> " + choiceTla(x) + ", s |-> " + state() + "]";
+    };
+
+    std::vector<std::string> trace{record("init", "", {0, ""}, {0, ""}, {0, ""})};
+    for (long k = 0; k < steps; ++k) {
+        std::string act, a;
+        Choice r{0, ""}, x{0, ""};
+        Said m{0, ""};
+        const std::size_t e = pick(13);
+        if (e == 0 && chosen.size() < kMaxChoice) {
+            a = kAccounts[pick(kAccounts.size())];
+            std::string why;
+            if (!watch.choose("e", a, &why))
+                continue;       // the current one, or not signed in: nothing changes
+            act = "choose";
+            chosen.insert(choiceOf(watch.accountSwitch()));
+        } else if (e == 1 && reqs.size() < kMaxMsgs) {
+            act = "send";
+            r = choiceOf(watch.accountSwitch());
+            reqs[r] = watch.frame();
+        } else if (e == 2 && !reqs.empty()) {
+            act = "receive";
+            auto it = std::next(reqs.begin(), static_cast<long>(pick(reqs.size())));
+            r = it->first;
+            const PhoneFrame f = relay->exchange(it->second).reply;
+            if (resps.size() < kMaxMsgs)
+                resps.emplace(Said{f.switched, f.rosters.empty() ? "" : f.rosters[0].current}, f);
+        } else if ((e == 3 && relay->switchWaiting()) || (e == 4 && !relay->switchWaiting())) {
+            act = relay->switchWaiting() ? "hand" : "look";
+            for (const LinkAction& l : relay->link(view(false))) {
+                ++linkSent;
+                linkQ.insert(Choice{l.prompt, l.text});
+                runQ.insert(Choice{l.prompt, l.text});
+            }
+        } else if (e == 5 && !linkQ.empty()) {
+            act = "deliver";
+            x = *std::next(linkQ.begin(), static_cast<long>(pick(linkQ.size())));
+            linkQ.erase(x);
+            server = x.second;
+            applied.insert(x.first);
+        } else if (e == 6 && relay->switchInflight() && !relay->switchWaiting() &&
+                   std::none_of(runQ.begin(), runQ.end(), [&](const Choice& c) { return linkQ.count(c); })) {
+            act = "ack";
+            relay->link(view(true));
+        } else if (e == 7 && !resps.empty()) {
+            act = "take";
+            auto it = std::next(resps.begin(), static_cast<long>(pick(resps.size())));
+            m = it->first;
+            watch.take(it->second);
+        } else if (e == 8 || e == 12) {
+            act = "roundtrip";
+            watch.take(relay->exchange(watch.frame()).reply);
+        } else if (e == 9 && crashes < kMaxCrash && pick(4) == 0) {
+            act = "crash";
+            ++crashes;
+            relay = std::make_unique<PhoneRelay>(relay->persisted(), ++epoch);
+            relay->setUnlocked(true);
+            runQ.clear();
+            linkSent = 0;
+        } else if (e == 10 && !reqs.empty()) {
+            act = "losereq";
+            auto it = std::next(reqs.begin(), static_cast<long>(pick(reqs.size())));
+            r = it->first;
+            reqs.erase(it);
+        } else if (e == 11 && !resps.empty()) {
+            act = "loseresp";
+            auto it = std::next(resps.begin(), static_cast<long>(pick(resps.size())));
+            m = it->first;
+            resps.erase(it);
+        } else {
+            continue;
+        }
+        trace.push_back(record(act, a, r, m, x));
+    }
+
+    std::ofstream out(path);
+    out << "------------------------ MODULE AccountSwitchTraceData ------------------------\n"
+        << "\\* Written by relay_walk " << args << ": one walk of the real WatchLink and PhoneRelay switching accounts.\n"
+        << "TraceAccounts == {\"a\", \"b\", \"d\"}\nTraceSignedIn == {\"a\", \"b\"}\nTraceStart == \"a\"\n"
+        << "TraceMaxChoice == " << kMaxChoice << "\nTraceMaxCrash == " << kMaxCrash << "\nTraceMaxMsgs == " << kMaxMsgs
+        << "\nTrace == <<\n";
+    for (std::size_t k = 0; k < trace.size(); ++k)
+        out << "  " << trace[k] << (k + 1 < trace.size() ? ",\n" : "\n");
+    out << ">>\n=============================================================================\n";
+    return out ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -74,6 +258,13 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "relay_walk: built without NEXUS_WATCH_FAULTS: no fault %s\n", argv[4]);
         return 2;
 #endif
+    }
+    const std::string outPath = argv[3];
+    const std::string accountData = "AccountSwitchTraceData.tla";
+    if (outPath.size() >= accountData.size() &&
+        outPath.compare(outPath.size() - accountData.size(), accountData.size(), accountData) == 0) {
+        return accountWalk(seed, steps, argv[3],
+                           std::string(argv[1]) + " " + argv[2] + (argc == 5 ? std::string(" ") + argv[4] : ""));
     }
     std::mt19937_64 rng(seed);
     const auto pick = [&](std::size_t n) { return static_cast<std::size_t>(rng() % n); };

@@ -15,6 +15,8 @@ struct nw_client {
     VoiceTurn turn;
     bool reached = false;       // the server reached since launch (screen.h's settle)
     uint64_t now = 0;           // the latest time the app gave
+    std::string remembered = {};  // the first AI of the last launch's list (nw_remember_ai)
+    bool aisKnown = false;      // the phone has sent the server's list
 };
 
 namespace {
@@ -125,8 +127,10 @@ int nw_take(nw_client* c, const char* data, size_t len) {
         return 0;
     }
     WatchLink::Taken t = c->link.take(f);
-    if (t.aisKnown || !t.ais.empty())
+    if (t.aisKnown || !t.ais.empty()) {
         c->turn.setAis(t.ais);
+        c->aisKnown = true;
+    }
     if (t.link == LinkPhase::Connected) {
         c->turn.back();
         c->reached = true;
@@ -152,6 +156,9 @@ int nw_take(nw_client* c, const char* data, size_t len) {
             break;
         case Event::Kind::Notice:
             c->turn.reply(e.aiName, e.text, true);
+            break;
+        case Event::Kind::AccountRefused:
+            c->turn.says().push_back(Say{Say::Kind::Notice, e.text, e.aiName});
             break;
         }
     }
@@ -233,6 +240,56 @@ void nw_screen(const nw_client* c, const char* notice, const char* lock_why, con
 
 size_t nw_saved(const nw_client* c, char** out) {
     return bytes(c->link.save(), out);
+}
+
+char* nw_shown_ai(const nw_client* c) {
+    if (!c->turn.current().empty())
+        return dup(c->turn.current());
+    if (!c->aisKnown)
+        return dup(c->remembered);
+    return dup(c->turn.ais().empty() ? std::string() : c->turn.ais().front());
+}
+
+void nw_remember_ai(nw_client* c, const char* first_ai) {
+    c->remembered = first_ai ? first_ai : "";
+}
+
+int nw_ais_known(const nw_client* c) {
+    return c->aisKnown ? 1 : 0;
+}
+
+size_t nw_account_count(const nw_client* c, const char* ai) {
+    return c->link.accounts(ai ? ai : "").size();
+}
+
+int nw_account(const nw_client* c, const char* ai, size_t i, char** account, char** shown, int* current,
+               int* switching) {
+    const std::vector<AccountRow> rows = c->link.accounts(ai ? ai : "");
+    if (i >= rows.size())
+        return 0;
+    *account = dup(rows[i].account);
+    *shown = dup(rows[i].shown);
+    *current = rows[i].current ? 1 : 0;
+    *switching = rows[i].switching ? 1 : 0;
+    return 1;
+}
+
+int nw_choose_account(nw_client* c, const char* ai, const char* account) {
+    const std::string name = ai ? ai : "";
+    const std::string chosen = account ? account : "";
+    std::string why;
+    if (!c->link.choose(name, chosen, &why)) {
+        if (!why.empty())
+            c->turn.says().push_back(Say{Say::Kind::Notice, why, name});
+        return 0;
+    }
+    std::string shown = chosen;
+    for (const AccountRow& r : c->link.accounts(name)) {
+        if (r.account == chosen)
+            shown = r.shown;
+    }
+    c->turn.says().push_back(Say{Say::Kind::Cue, "Switching " + name + " to " + shown + ".", name});
+    return 1;
 }
 
 } // extern "C"

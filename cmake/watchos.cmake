@@ -44,7 +44,7 @@ set(NEXUS_WATCH_TEAM "" CACHE STRING "Code-signing identity for a device build; 
 
 set(app "${PROJECT_SOURCE_DIR}/watch/app")
 add_executable(nexus_watch_app MACOSX_BUNDLE ${app}/NexusWatchApp.swift ${app}/Client.swift ${app}/Voice.swift
-    ${app}/Carrier.swift ${app}/Lock.swift)
+    ${app}/Carrier.swift ${app}/Lock.swift ${app}/AccountList.swift)
 set_target_properties(nexus_watch_app PROPERTIES
     OUTPUT_NAME nexus
     MACOSX_BUNDLE_INFO_PLIST "${app}/Info.plist.in"

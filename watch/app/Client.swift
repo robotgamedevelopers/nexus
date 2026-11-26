@@ -12,7 +12,10 @@ struct Options {
     var speakFiles: [URL] = []  // --speak-file <file>[,<file>...]: the recordings holds send, in place of the microphone
     var voiceTo: URL?       // --voice-to <dir>: what is said goes to files there, not the speaker
     var log: URL?           // --log <file>: each phase, say and reply, a line each, for the test
-    var drive: [String] = []    // --drive "<step>;<step>...": wait:<s>, press, release, lock, unlock (the wrist)
+    var drive: [String] = []    // --drive "<step>;<step>...": wait:<s>, press, release, lock, unlock (the wrist),
+                                // accounts (opens the account list)
+    var cannedPhone: URL?   // --canned-phone <file>: every frame is answered with this phone frame (no relay), so
+                            // the screens can be seen with a server's state: watch/tests/data/accounts.phoneframe
 
     static func fromArguments() -> Options {
         var o = Options()
@@ -29,6 +32,7 @@ struct Options {
             case "--voice-to": o.voiceTo = v.map { URL(fileURLWithPath: $0, isDirectory: true) }; args.removeFirst()
             case "--log": o.log = v.map { URL(fileURLWithPath: $0) }; args.removeFirst()
             case "--drive": o.drive = (v ?? "").split(separator: ";").map(String.init); args.removeFirst()
+            case "--canned-phone": o.cannedPhone = v.map { URL(fileURLWithPath: $0) }; args.removeFirst()
             default: break
             }
         }
@@ -50,6 +54,10 @@ final class Client: ObservableObject {
     @Published private(set) var replyFrom = ""
     @Published private(set) var status = ""      // the screen's status line (nw_screen)
     @Published private(set) var problem = ""     // the last notice, or why there is no server: shown as well as said
+    @Published private(set) var shownAi = ""     // the AI talked to last, else the first: its name opens its accounts
+    @Published private(set) var accounts: [AccountItem] = []
+    @Published private(set) var aisKnown = false  // the phone has sent the list: an empty one means none
+    @Published var showingAccounts = false
     private var reply = ""
     private var notice = ""
 
@@ -80,7 +88,13 @@ final class Client: ObservableObject {
         c = saved.withUnsafeBytes { raw in
             nw_client_new(id, raw.bindMemory(to: CChar.self).baseAddress, saved.count)
         }
+        nw_remember_ai(c, defaults.string(forKey: "first-ai") ?? "")    // still frames: last launch's name at once
+#if NEXUS_WATCH_TEST_OPTIONS && targetEnvironment(simulator)
+        carrier = options.relay.map { LoopbackCarrier(url: $0) as Carrier }
+            ?? options.cannedPhone.map { CannedCarrier(file: $0) as Carrier } ?? PhoneCarrier()
+#else
         carrier = options.relay.map { LoopbackCarrier(url: $0) as Carrier } ?? PhoneCarrier()
+#endif
         recorder.testFiles = options.speakFiles
         if let dir = options.voiceTo {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -183,6 +197,15 @@ final class Client: ObservableObject {
         exchange()
     }
 
+    // The person chose an account from the list: the core decides whether there is anything to send (the current one
+    // sends nothing) and says why it cannot when it cannot.
+    func chooseAccount(_ account: String) {
+        let sent = nw_choose_account(c, shownAi, account) != 0
+        log(sent ? "account \(shownAi): \(account)" : "account \(shownAi): \(account) not sent")
+        refresh()
+        if sent { exchange() }
+    }
+
     func resume() { nw_resume(c); refresh() }
     func dismiss() { speaker.stop(); nw_dismiss(c); refresh() }
 
@@ -229,6 +252,22 @@ final class Client: ObservableObject {
         phase = p
         current = take(nw_current(c))
         why = take(nw_why(c))
+        let known = nw_ais_known(c) != 0
+        if known != aisKnown { aisKnown = known }
+        let ai = take(nw_shown_ai(c))
+        if ai != shownAi { shownAi = ai }
+        var rows: [AccountItem] = []
+        for i in 0..<nw_account_count(c, shownAi) {
+            var account: UnsafeMutablePointer<CChar>?
+            var shown: UnsafeMutablePointer<CChar>?
+            var isCurrent: Int32 = 0
+            var switching: Int32 = 0
+            if nw_account(c, shownAi, i, &account, &shown, &isCurrent, &switching) != 0 {
+                rows.append(AccountItem(account: take(account), shown: take(shown), current: isCurrent != 0,
+                                        switching: switching != 0))
+            }
+        }
+        if rows != accounts { accounts = rows }
         var kind: Int32 = 0
         var text: UnsafeMutablePointer<CChar>?
         while nw_next_say(c, &kind, &text) != 0 {
@@ -297,6 +336,12 @@ final class Client: ObservableObject {
         let n = nw_saved(c, &bytes)
         UserDefaults.standard.set(Data(bytes: bytes!, count: n), forKey: "outbox")
         nw_free(bytes)
+        if nw_ais_known(c) != 0 {
+            let first = nw_ai_count(c) > 0 ? take(nw_ai(c, 0)) : ""
+            if UserDefaults.standard.string(forKey: "first-ai") != first {
+                UserDefaults.standard.set(first, forKey: "first-ai")
+            }
+        }
     }
 
     private func log(_ line: String) {
@@ -326,6 +371,8 @@ final class Client: ObservableObject {
             } else if step == "unlock" {
                 nw_unlock(c)
                 refresh()
+            } else if step == "accounts" {
+                showingAccounts = true
             }
             log("drove \(step)")
         }
