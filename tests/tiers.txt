@@ -16,6 +16,7 @@ ais_functional_fable_switch_account         pr       NEXUS_SERVER_PARTS  # switc
 sprint_board                                pr       NEXUS_WINDOW        # the dashboard tab
 window_state_screenshot                     pr       NEXUS_WINDOW+NEXUS_LINK  # the window drawn from a state
 window_ios_state_shot_iphone                pr       NEXUS_IOS           # iOS: the window drawn from a state, on a simulator
+terminals_functional_create                 pr       NEXUS_SERVER_PARTS+UNIX  # a terminal on the server: a shell on a real pseudoterminal
 
 # Fast unit tests named here so they cannot drop out of the pull request tier.
 policy_unit_stale_bundle                    pr       NEXUS_POLICY_TOOL_TESTS            # the stale applied-bundle warning's comparison
