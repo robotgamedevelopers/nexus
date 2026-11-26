@@ -1072,7 +1072,7 @@ PrAppEvent forPrax(const PrAppEvent& e) {
     const bool keyEvent = e.kind == PrAppEventKind_KeyDown || e.kind == PrAppEventKind_KeyUp;
     if ((style::kCommand & PrAppModifierFlag_Alt) != 0 && keyEvent && (e.modifiers & style::kCommand) != 0 &&
         (e.keyboard.key == PrAppKey_Up || e.keyboard.key == PrAppKey_Down)) {
-        out.keyboard.key = e.keyboard.key == PrAppKey_Up ? PrAppKey_Home : PrAppKey_End;
+        out.keyboard.key = static_cast<PrAppKey>(e.keyboard.key == PrAppKey_Up ? PrAppKey_Home : PrAppKey_End);
         out.modifiers = static_cast<PrAppModifierFlags>(e.modifiers & ~style::kCommand);
     }
     return out;

@@ -1,6 +1,7 @@
 # build_unit_lto: the record CMakeLists.txt writes after adding Prax (prax-ipo.txt: NEXUS_LTO=<value>, then each Prax
 # target and its INTERPROCEDURAL_OPTIMIZATION_RELEASE) agrees with the option. With NEXUS_LTO off no Prax target may keep
-# whole-program optimisation; with it on, Prax's own setting stands, so at least one does.
+# whole-program optimisation; with it on, Prax's own setting stands, whatever it is (none in a Debug configure, where
+# Prax sets none).
 #   cmake -DRECORD=<build>/prax-ipo.txt -P lto_check.cmake
 file(STRINGS "${RECORD}" lines)
 list(POP_FRONT lines first)
@@ -20,13 +21,7 @@ if(count EQUAL 0)
     message(FATAL_ERROR "${RECORD} names no Prax target")
 endif()
 list(LENGTH on kept)
-if(lto)
-    if(kept EQUAL 0)
-        message(FATAL_ERROR "NEXUS_LTO is on, and none of ${count} Prax targets has whole-program optimisation")
-    endif()
-else()
-    if(NOT kept EQUAL 0)
-        message(FATAL_ERROR "NEXUS_LTO is off, and ${kept} of ${count} Prax targets keep whole-program optimisation: ${on}")
-    endif()
+if(NOT lto AND NOT kept EQUAL 0)
+    message(FATAL_ERROR "NEXUS_LTO is off, and ${kept} of ${count} Prax targets keep whole-program optimisation: ${on}")
 endif()
 message(STATUS "NEXUS_LTO=${lto}: ${kept} of ${count} Prax targets with whole-program optimisation")
