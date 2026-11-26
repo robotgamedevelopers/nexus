@@ -1,4 +1,5 @@
 #include "policy/host.h"
+#include "policy/stale.h"
 
 #include <algorithm>
 #include <charconv>

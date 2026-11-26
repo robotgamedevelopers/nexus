@@ -4,6 +4,7 @@
 //   policy_stale_bundle_test            the comparison: no bundle, equal, a differing source, a differing config
 //   policy_stale_bundle_test DIR        the bundles `nexus-policy apply <side> policy/rules DIR/<side>` wrote are equal
 #include "policy/host.h"
+#include "policy/stale.h"
 
 #include <cstdio>
 #include <fstream>

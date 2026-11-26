@@ -107,6 +107,7 @@
 
 #if NEXUS_LINK
 #include "link/client_port.h"
+#include "policy/stale.h"
 #include "sync/client.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"

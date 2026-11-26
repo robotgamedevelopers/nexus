@@ -26,6 +26,7 @@
 #include "link/bootstrap.h"
 #include "link/mosh_link.h"
 #include "policy/host.h"
+#include "policy/stale.h"
 #include "server/builds.h"
 #include "server/bus_inbox.h"
 #include "server/config_repo.h"

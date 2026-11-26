@@ -34,14 +34,6 @@ private:
 bool messagePlan(Host& host, const std::string& path, bool client, const char* intent,
     const MessageState& state, MessagePlan& out, std::string& why);
 
-// An applied bundle runs in place of the rules this binary packages. When the bundle at `path` (a host's
-// policy.bundle.json) is not what `nexus-policy apply <side> policy/rules` writes from this build's commit, by content,
-// this returns one line naming the file, how it differs, and the fix; it returns an empty string when the file is
-// absent or the same. It warns; nothing refuses to start over it.
-std::string staleBundle(const char* side, const std::string& path);
-// The bundle `nexus-policy apply <side> policy/rules` writes from this build's commit, as JSON (for the tests).
-std::string packagedBundle(const char* side, std::string& why);
-
 int textZoom(Host& host, const std::string& path, int current, int delta, int low, int high);
 // Returns an empty string when the bundle disables the fallback or returns an invalid model.
 std::string modelAfterLimit(Host& host, const std::string& path, const std::string& friendName,
