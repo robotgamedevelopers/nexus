@@ -1097,8 +1097,6 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
     return true;    // committed: applied, whatever the store did after
 }
 
-// The registry becomes `next`; an account it no longer holds loses its sign-in, and one it did not hold before is
-// probed (probeSignInWith).
 // Two email addresses the same, as Claude compares them: ASCII letters in either case, nothing else folded.
 static bool sameAddress(const std::string& a, const std::string& b) {
     auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c; };
@@ -1111,6 +1109,8 @@ static bool sameLogin(const accounts::Account* previous, const accounts::Account
         (current.provider != "claude" || previous->email == current.email);
 }
 
+// The registry becomes `next`; an account it no longer holds loses its sign-in, and one it did not hold before is
+// probed (probeSignInWith).
 void Hub::take(accounts::Registry next) {
     std::optional<accounts::Registry> was = std::move(accounts_);
     accounts_ = std::move(next);
