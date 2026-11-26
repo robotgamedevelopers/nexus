@@ -12,7 +12,7 @@
 #               and WORK/WALK_OUT
 #   WALK_OUT    optional: the trace module the walk writes, JournalTraceData.tla unless given
 #   WORKERS     optional: TLC's worker count, 2 unless given
-#   CAP         optional: the cap on the TLC run in seconds, 60 unless given
+#   CAP         optional: the cap on the TLC run in seconds, 60 unless given; 0 for none (NEXUS_TLC_UNCAPPED)
 #
 # The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH.
 
@@ -64,13 +64,18 @@ endif()
 if(NOT DEFINED CAP OR "${CAP}" STREQUAL "")
     set(CAP 60)
 endif()
+# CAP 0 (NEXUS_TLC_UNCAPPED, the nightly): no cap, and TLC runs until it finishes.
+set(cap_arg)
+if(CAP GREATER 0)
+    set(cap_arg TIMEOUT ${CAP})
+endif()
 include("${CMAKE_CURRENT_LIST_DIR}/../model/tlc-workers.cmake")
 
 execute_process(
     COMMAND "${java}" ${tlc_jvm} "-Djava.io.tmpdir=${WORK}/tmp" -cp "${jar}" tlc2.TLC
             -workers ${tlc_workers} -metadir "${WORK}/meta" -config "${cfg_name}" "${MODULE}.tla"
     WORKING_DIRECTORY "${WORK}"
-    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT ${CAP})
+    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out ${cap_arg})
 file(WRITE "${WORK}/tlc.log" "${out}")
 
 string(REGEX MATCH "generated, [0-9,]+ distinct states found" states "${out}")

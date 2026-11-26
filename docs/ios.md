@@ -15,7 +15,7 @@ with the iOS targets (`rustup target add aarch64-apple-ios aarch64-apple-ios-sim
 cmake -S . -B build-ios-sim -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator \
   -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_TYPE=Release
 cmake --build build-ios-sim -j "$(sysctl -n hw.ncpu)"
-ctest --test-dir build-ios-sim -L 'unit|ios' -j "$(sysctl -n hw.ncpu)"
+ctest --test-dir build-ios-sim -j "$(sysctl -n hw.ncpu)"
 
 # Devices (arm64)
 cmake -S . -B build-ios -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -28,7 +28,8 @@ SHA-256 (`cmake/ios_link.cmake`): protobuf's lite runtime with protoc for the Ma
 
 The app is `build-ios*/nexus.app`, signed ad hoc as the simulator requires. The simulator build's tests run on a
 simulator device through Prax's runner (ctest's emulator), which boots an available iOS device unless
-`PR_SIMULATOR_DEVICE` names one. CI builds both and runs the tests (`.github/workflows/ios.yml`).
+`PR_SIMULATOR_DEVICE` names one. CI builds both on every pull request and runs the tier_pr tests on a simulator
+device (`.github/workflows/ios.yml`); the nightly runs the rest (nightly.yml ios-nightly, docs/ci-tiers.md).
 
 To see the app in the simulator: `xcrun simctl install booted build-ios-sim/nexus.app`, then
 `xcrun simctl launch booted com.robotgamedevelopers.nexus`. With `--state FILE` after the identifier it shows a server's

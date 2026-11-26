@@ -25,6 +25,8 @@
 
 #include "link/bootstrap.h"
 #include "link/mosh_link.h"
+#include "policy/host.h"
+#include "policy/stale.h"
 #include "server/builds.h"
 #include "server/bus_inbox.h"
 #include "server/config_repo.h"
@@ -1419,6 +1421,11 @@ int Server::run() {
         std::fprintf(stderr, "nexus-server: %s\n", errnoText("cannot open " + paths_.dir).c_str());
         return kFailedExit;
     }
+    // An applied bundle runs in place of the rules this build packages; one older than the build refused every
+    // message after a deploy (docs/policy.md). Said once at the start, and by `status`; it never stops the start.
+    if (const auto stale = policy::staleBundle("server", dirNow("policy.bundle.json")); !stale.empty()) {
+        std::fprintf(stderr, "nexus-server: %s\n", stale.c_str());
+    }
     // The start, in its order (server/start_order.h, models/store/StoreLock.tla), each step through take_step, the
     // dispatch the trace walk runs too: the socket asked, the store's lock and its replay (waiting, a bounded time,
     // while a writer holds the lock and no server answers), the socket bound, and only then the drivers restored. No
@@ -2133,6 +2140,9 @@ int status(const Paths& p) {
     std::printf("%s\n", first.c_str());
     if (!second.empty()) {
         std::printf("%s\n", second.c_str());
+    }
+    if (const auto stale = policy::staleBundle("server", p.dir + "/policy.bundle.json"); !stale.empty()) {
+        std::fprintf(stderr, "nexus-server: %s\n", stale.c_str());
     }
     return first == kServingReply ? 0 : 1;
 }

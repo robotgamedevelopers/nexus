@@ -1,7 +1,7 @@
 # Tests of the link over mosh's transport (src/link) and of nexus-server (src/server), with two labels:
 #   unit        link_unit: the CONNECT line, the ssh command line, and the bootstrap over a fake command runner
 #   functional  link_e2e_*: nexus-server and headless windows over real ssh to this machine and real UDP. They need
-#               `ssh localhost` to work without a password prompt (BatchMode), as it does on the studio's runners.
+#               `ssh localhost` to work without a password prompt (BatchMode); CI on fleet Linux reaches an sshd of the job's own through NEXUS_E2E_SSH (.github/ssh-localhost.sh).
 #               NEXUS_E2E_TAILNET names a second way to reach this same machine (its tailnet address or name); when
 #               set, the round trip runs through it too. server_home_functional: nexus-server's own home under a
 #               HOME of the test's own, with no --dir. server_lock_functional: the store's lock in the real server.

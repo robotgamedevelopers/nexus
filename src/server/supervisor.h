@@ -27,6 +27,16 @@
 // waits like a prompt sent (shown as the person's entry): one per turn, oldest first, each once. A stop is written
 // only for the open turn, at most once for it, and never waits behind anything.
 //
+// Steering (docs/driver-protocol.md, "Steering a turn"; models/Steering.tla, bound to this code by tests/driver/
+// steering_walk.cpp): a message the person writes into a turn that runs goes to the driver as a steer or a follow-up
+// only when the driver's hello named that kind (and settled), the turn is open, not being stopped and not settled;
+// otherwise it waits as the next prompt, never a kind the driver did not name. The supervisor keeps each written into
+// the open turn and the driver's last whole queue report; an id that leaves the reported queue was taken in by the
+// harness. A driver that named settled writes settled before the turn's done: the next send still waits for the done
+// (sequence rule 3). At the done, each written into the turn that the driver never took in waits again, first, in the
+// order written; at a cut (the driver gone), it is cut with the turn. This state is the server's alone, in memory: a
+// turn open across a restart is cut, and with it what was written into it.
+//
 // The open turn's text not yet in the session (gathered()) is the AI's text block as it grows: the caller shows it
 // as an entry still open, kept in memory only. It goes into the session, durable, when the block ends (its text-end, a
 // tool, the turn's done or cut) or reaches the entry limit; a server that crashes loses at most that one block, and the
@@ -38,6 +48,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -164,6 +175,12 @@ public:
     Output resetContext(bool compact, Millis now);
     Output refreshSandbox(bool tightened, Millis now);
     Output retireIdleLogin(Millis now);
+    // The person wrote `text` into the turn that runs: a steer (taken in after the tool calls running, before the next
+    // model call) or a follow-up (taken in only when the turn would otherwise settle). Written to the driver when it
+    // takes that kind and the turn is open, not stopping and not settled; otherwise it is a prompt (prompt()), waiting
+    // for the next turn, with a notice when a steer could not be taken because the driver does not take steers.
+    Output steer(const std::string& text, Millis now);
+    Output followUp(const std::string& text, Millis now);
     // The person stopped the AI's work: a stop for the open turn, if one is open and no stop is out; while the
     // driver starts, the turn about to begin is cancelled. Otherwise nothing: no stop is kept for a later turn.
     Output stop(Millis now);
@@ -256,6 +273,23 @@ public:
     // said hello since, unless the server is stopping; otherwise Idle, which is only ever with
     // nothing running, nothing waiting and nothing queued that will be taken: the AI is waiting for the person.
     sync::Activity activity() const;
+
+    // Steering, for the window and the walk: what was written into the open turn (oldest first), the driver's last
+    // whole queue report, each id the driver reported and the harness has since taken in, whether the open turn has
+    // settled, and which kinds the driver alive named.
+    struct Written {
+        std::uint64_t id = 0;
+        bool followUp = false;
+        std::string text;
+    };
+    const std::vector<Written>& written() const { return written_; }
+    const driver::Queue& reported() const { return reported_; }
+    bool taken(std::uint64_t id) const;
+    const std::set<std::uint64_t>& everReported() const { return everReported_; }
+    bool settledTurn() const { return settled_; }
+    bool driverSteers() const { return driverSteers_; }
+    bool driverFollowsUp() const { return driverFollowsUp_; }
+    bool driverSettles() const { return driverSettles_; }
     std::uint32_t activeAgents() const { return childAgents_ + (state_.openTurn != 0); }
 
 private:
@@ -264,6 +298,14 @@ private:
     void receive(const driver::DriverMessage& message, Millis now);
     void flush();
     void cutOpen();
+    Output into(const std::string& text, bool followUp, Millis now);
+    bool steering(const driver::DriverMessage& message, std::uint64_t open, Millis now);
+    void giveBack();
+    // Whether one more message of text fits the waiting limits, counting the prompts waiting and what was written into
+    // the open turn and not seen taken in (any of which may wait again at done): empty when it fits, else why not.
+    std::string fits(const std::string& text) const;
+    void cutWritten();
+    void clearSteering();
     void clearContinuation();
     void abandon(const std::string& why);
     void end(const std::string& why, Millis now);
@@ -308,6 +350,14 @@ private:
     std::string driverEffort_;
     bool sandboxChanged_ = false;
     bool retiring_ = false;             // it is being ended for a change of account or place (or a setting put back)
+    bool driverSteers_ = false;         // the alive driver's hello named steer, follow-up, settled
+    bool driverFollowsUp_ = false;
+    bool driverSettles_ = false;
+    std::uint64_t nextWritten_ = 1;     // the next steer or follow-up's id: from 1, never reused in this server
+    std::vector<Written> written_;      // written into the open turn, oldest first
+    driver::Queue reported_;            // the driver's last whole queue report for the open turn
+    std::set<std::uint64_t> everReported_;  // every id it reported for the open turn
+    bool settled_ = false;              // the open turn's settled has arrived
     Output out_;                        // the output of the event in progress
 };
 

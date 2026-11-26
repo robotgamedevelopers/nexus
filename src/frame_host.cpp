@@ -196,7 +196,7 @@ bool onThisMachine(const sync::SignInOffer& offer, const void* context) {
 } // namespace
 
 void LinkSignIn::step() {
-    if (port == nullptr) {
+    if (port == nullptr || locked) {
         return;
     }
     // The gate's flow left the state (it ended, or another window took it), or the link was lost: the gate closes.
@@ -269,11 +269,34 @@ void FrameHost::finishUpload() {
     view->problem = std::move(result.error);
 }
 
+void FrameHost::showCut(const std::vector<std::uint64_t>& cut) {
+    std::size_t restored = 0;
+    for (const std::uint64_t number : cut) {
+        auto bubble = std::find_if(view->outgoing.begin(), view->outgoing.end(),
+            [&](const auto& b) { return b.action == number; });
+        if (bubble == view->outgoing.end()) continue;
+        for (std::size_t i = 0; i < model->tab_count(); ++i)
+            if (model->tab(i).id == bubble->tab) model->restore_held(i, bubble->text);
+        view->outgoing.erase(bubble);
+        ++restored;
+    }
+    const std::size_t n = cut.size();
+    view->problem = "The link to the server ended before the server acknowledged " + std::to_string(n) +
+        (n == 1 ? " action" : " actions") + " from this window; " + (n == 1 ? "it" : "they") +
+        " may not have arrived and " + (n == 1 ? "was" : "were") + " not sent again.";
+    if (restored > 0)
+        view->problem += restored == n ? (n == 1 ? " The message is back in its tab: check the conversation, then "
+            "press Enter to send it." : " The messages are back in their tabs: check each conversation, then press "
+            "Enter to send them.") : " The messages among them are back in their tabs: check each conversation, then "
+            "press Enter to send them.";
+}
+
 void FrameHost::pollLink() {
     finishUpload();
     LinkState s;
     if (link == nullptr || !link->poll(&s))
         return;
+    if (!s.cut.empty()) showCut(s.cut);
     // The AIs first, so that an AI's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
         for (const auto& [name, claim] : pendingClaims_) {
@@ -286,16 +309,16 @@ void FrameHost::pollLink() {
                         if (choice.name == name) return choice.needsSignIn;
                 return {};
             };
-            if (needed(accountState_) == true && needed(s.sessions) == false && view->playChirp)
-                view->playChirp(view->windowApp.surface.readyChirp);
+            if (needed(accountState_) == true && needed(s.sessions) == false)
+                view->chirp(view->windowApp.surface.readyChirp);
         }
-        if (phase == sync::LinkPhase::Connected && view->playChirp) {
+        if (phase == sync::LinkPhase::Connected) {
             for (const auto& session : s.sessions.sessions()) {
                 const auto* previous = accountState_.find(session->id);
                 if (!previous) continue;
                 for (auto index = std::max(previous->total(), session->first); index < session->total(); ++index) {
                     if (session->entries[index - session->first]->kind == EntryKind::Person)
-                        view->playChirp(view->windowApp.surface.sendChirp);
+                        view->chirp(view->windowApp.surface.sendChirp);
                 }
             }
         }
@@ -624,7 +647,7 @@ void FrameHost::wire() {
             picker->highlighted = static_cast<std::size_t>(option - picker->options.begin());
             view->accountPicker = std::move(picker);
         } else if (op == "select" || op == "sign_in") {
-            if (view->playChirp) view->playChirp(view->windowApp.surface.confirmChirp);
+            view->chirp(view->windowApp.surface.confirmChirp);
             view->accountPicker.reset();
             if (target != picker->current) {
                 setAccount(picker->session, target);
@@ -904,6 +927,8 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
             if (!choice) signIn.activeAccount->clear();
             else if (*signIn.activeAccount != choice->name) *signIn.activeAccount = choice->name;
         }
+        if (view->lockScreen && !signIn.locked) signIn.lock();
+        else if (!view->lockScreen) signIn.unlock();
         signIn.step();
         if (!signIn.problem.empty()) {
             view->problem = std::move(signIn.problem);
@@ -927,6 +952,9 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
 }
 
 bool FrameHost::stageFile(std::string name, std::string bytes) {
+    // Nothing is staged while locked (View::lockScreen): a clipboard file or image read that finishes after the lock
+    // starts, before the next frame takes the prompt away, lands nowhere.
+    if (view->lockScreen) return false;
     if (!ui || view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt ||
         (view->secrets && view->secrets->showing()) || !model->tab_count()) return false;
 #if !NEXUS_PROCESSES
@@ -961,6 +989,67 @@ bool FrameHost::stageFile(std::string name, std::string bytes) {
     event.input.text = {marker.data(), marker.size()};
     prUiPushEvent(ui, kPrUiViewportMain, &event);
     return true;
+}
+
+bool isInputEvent(const PrAppEvent& e) {
+    switch (e.kind) {
+    case PrAppEventKind_PointerMove:
+    case PrAppEventKind_PointerDown:
+    case PrAppEventKind_PointerUp:
+    case PrAppEventKind_PointerCancel:
+    case PrAppEventKind_PointerEnter:
+    case PrAppEventKind_PointerLeave:
+    case PrAppEventKind_Scroll:
+    case PrAppEventKind_Gesture:
+    case PrAppEventKind_TrackpadTouches:
+    case PrAppEventKind_KeyDown:
+    case PrAppEventKind_KeyUp:
+    case PrAppEventKind_Text:
+    case PrAppEventKind_Paste:
+    case PrAppEventKind_CompositionUpdate:
+    case PrAppEventKind_CompositionEnd:
+    case PrAppEventKind_DragEnter:
+    case PrAppEventKind_DragOver:
+    case PrAppEventKind_DragLeave:
+    case PrAppEventKind_Drop:
+    case PrAppEventKind_DragEnd:
+    case PrAppEventKind_DragPromise:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool lockScreenTakes(const PrAppEvent& e) {
+    switch (e.kind) {
+    case PrAppEventKind_PointerMove:
+    case PrAppEventKind_PointerDown:
+    case PrAppEventKind_PointerUp:
+    case PrAppEventKind_PointerCancel:
+    case PrAppEventKind_PointerEnter:
+    case PrAppEventKind_PointerLeave:
+        return true;
+    case PrAppEventKind_KeyDown:
+    case PrAppEventKind_KeyUp:
+        return (e.modifiers & ~PrAppModifierFlag_CapsLock) == 0 &&
+            (e.keyboard.key == PrAppKey_Enter || e.keyboard.key == PrAppKey_Escape);
+    default:
+        return false;
+    }
+}
+
+bool resetsIdle(const PrAppEvent& e) {
+    switch (e.kind) {
+    case PrAppEventKind_KeyDown:
+    case PrAppEventKind_Text:
+    case PrAppEventKind_PointerDown:
+    case PrAppEventKind_Scroll:
+    case PrAppEventKind_Paste:
+    case PrAppEventKind_Drop:
+        return true;
+    default:
+        return false;
+    }
 }
 
 namespace {
@@ -1026,6 +1115,9 @@ void FrameHost::watchTap(const PrAppEvent& e) {
 
 bool FrameHost::event(const PrAppEvent& e) {
     HitchScope scope(hitch, Phase::Input);
+    // While locked (View::lockScreen) no input reaches anything but the lock screen: no key reaches a terminal's shell,
+    // the Dashboard's page or the prompt, and nothing is pasted or dropped. What is not input (a resize, a timer) passes.
+    if (view->lockScreen && isInputEvent(e)) return !lockScreenTakes(e);
     watchTap(e);
     // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
     // reaches a dashboard tab's page or a terminal's shell, so a value typed or pasted goes only to the field.

@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "style.h"
 #include "test_link_port.h"
 
 namespace {
@@ -560,10 +561,91 @@ void dismissedAIRemainsLocal() {
     CHECK(w.tabOf("bo") < w.model.tab_count());
 }
 
+
+// Locked (View::lockScreen), the host takes and drops every input but the lock screen's own: a typed key, text, a
+// paste, a scroll and a drop never reach the board, a terminal or the prompt. The pointer and unmodified Return and
+// Escape go on to the lock screen; events that are not input (a wake, a timer) pass. Unlocked, the same key goes on.
+void lockedHostDropsInput() {
+    Window w("");
+    const auto make = [](PrAppEventKind kind, PrAppKey key = 0, PrAppModifierFlags modifiers = 0) {
+        PrAppEvent e{};
+        e.kind = kind;
+        e.keyboard.key = key;
+        e.modifiers = modifiers;
+        return e;
+    };
+    w.view.lockScreen = View::LockScreen{"nexus is locked", ""};
+    CHECK(w.host.event(make(PrAppEventKind_KeyDown, PrAppKey('a'))));
+    CHECK(w.host.event(make(PrAppEventKind_Text)));
+    CHECK(w.host.event(make(PrAppEventKind_Paste)));
+    CHECK(w.host.event(make(PrAppEventKind_Scroll)));
+    CHECK(w.host.event(make(PrAppEventKind_Drop)));
+    CHECK(w.host.event(make(PrAppEventKind_CompositionUpdate)));
+    CHECK(w.host.event(make(PrAppEventKind_Gesture)));
+    CHECK(w.host.event(make(PrAppEventKind_TrackpadTouches)));
+    CHECK(w.host.event(make(PrAppEventKind_DragEnter)));
+    CHECK(w.host.event(make(PrAppEventKind_DragOver)));
+    CHECK(w.host.event(make(PrAppEventKind_DragLeave)));
+    CHECK(w.host.event(make(PrAppEventKind_DragPromise)));
+    CHECK(w.host.event(make(PrAppEventKind_KeyDown, PrAppKey_Enter, PrAppModifierFlag_Shift)));
+    CHECK(w.host.event(make(PrAppEventKind_KeyDown, PrAppKey('t'), style::kCommand)));
+    CHECK(!w.host.event(make(PrAppEventKind_KeyDown, PrAppKey_Enter)));
+    CHECK(!w.host.event(make(PrAppEventKind_KeyUp, PrAppKey_Escape)));
+    CHECK(!w.host.event(make(PrAppEventKind_KeyDown, PrAppKey_Enter, PrAppModifierFlag_CapsLock)));
+    CHECK(!w.host.event(make(PrAppEventKind_PointerDown)));
+    CHECK(!w.host.event(make(PrAppEventKind_Wake)));
+    CHECK(!w.host.event(make(PrAppEventKind_Timer)));
+    w.view.lockScreen.reset();
+    CHECK(!w.host.event(make(PrAppEventKind_KeyDown, PrAppKey('a'))));
+}
+// A link that lost actions before the server acknowledged them (LinkState::cut, the native window's link in WSL2 that
+// ended): shown whatever the link's phase, never silent. A message among them goes back to its tab as a pending
+// message; the problem line says how many were lost and that none was sent again.
+void cutActionsAreShown() {
+    Window w("");
+    w.link.ais({"ada"});
+    w.host.pollLink();
+    const auto i = w.tabOf("ada");
+    const auto id = w.model.tab(i).id;
+    w.view.outgoing.push_back({id, 2, "hello across"});
+    w.view.outgoing.push_back({id, 4, "still on its way"});
+    LinkState s = w.link.state;
+    s.phase = sync::LinkPhase::Failed;
+    s.problem = "nexus-link-relay in WSL2 ended (exit 1)";
+    s.cut = {2, 3};
+    w.link.state = s;
+    w.link.changed = true;
+    w.host.pollLink();
+    CHECK(w.model.tab(i).held == "hello across");
+    CHECK(w.view.outgoing.size() == 1 && w.view.outgoing.front().action == 4);
+    CHECK(w.view.problem.find("acknowledged 2 actions") != std::string::npos);
+    CHECK(w.view.problem.find("not sent again") != std::string::npos);
+    CHECK(w.view.problem.find("among them are back") != std::string::npos);
+    // Each cut comes in one poll: a later state without one leaves the tab and the line as they are.
+    s.cut.clear();
+    s.phase = sync::LinkPhase::Connected;
+    w.link.state = s;
+    w.link.changed = true;
+    w.host.pollLink();
+    CHECK(w.model.tab(i).held == "hello across");
+    CHECK(w.view.problem.find("acknowledged 2 actions") != std::string::npos);
+    // One cut action, a message: the line says it is back.
+    w.view.outgoing.push_back({id, 5, "again"});
+    s.cut = {5};
+    w.link.state = s;
+    w.link.changed = true;
+    w.host.pollLink();
+    CHECK(w.model.tab(i).held == "again\nhello across");
+    CHECK(w.view.problem.find("acknowledged 1 action from") != std::string::npos);
+    CHECK(w.view.problem.find("The message is back in its tab") != std::string::npos);
+}
+
 } // namespace
 
 int main() {
     dismissedAIRemainsLocal();
+    lockedHostDropsInput();
+    cutActionsAreShown();
     accountCommandsUseTheActiveConversation();
     automaticAccountIsASelectionMode();
     accountPickerRechecksTheServerRoster();

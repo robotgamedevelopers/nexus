@@ -52,8 +52,12 @@
 #               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance, limit
 #   RECONNECTWALK optional, in place of WALK: tests/sync's reconnect_walk; it is run first and writes
 #               ReconnectTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of cached, no-reset
+#   RELAYWALK   optional, in place of WALK: tests/relay's relay_walk; it is run first and writes
+#               RelayLifeTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of resend, early-end, ack-delivered
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
+#   LOCKWALK    optional, in place of WALK: tests/model's lock_walk program; it is run first and writes
+#               ClientLockTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stale, draw, idle
 #   TSWALK      optional, in place of WALK: the Tailscale shim's lifecycle module (src/tailscale/lifecycle), whose walk
 #               (./walk) runs under GO, offline, with the local toolchain (the module needs no other); it is run
 #               first and writes TailscaleTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of ready, url,
@@ -61,11 +65,12 @@
 #   GO          with TSWALK: a go command, 1.21 or newer
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
-#   CAP         optional: the cap on the TLC run in seconds, 60 unless given
+#   CAP         optional: the cap on the TLC run in seconds, 60 unless given; 0 for none (NEXUS_TLC_UNCAPPED)
 #   SPLIT       optional: rest:<name>, every property of the cfg but one, or as:<name>=<part>, a part of it alone (below)
 #   TEMPORALCFG optional: append this cfg fragment, relative to MODELS, to an as:<name>=<part> check
 #
-# The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at CAP seconds.
+# The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at CAP seconds,
+# unless CAP is 0.
 
 cmake_minimum_required(VERSION 3.28)
 
@@ -265,6 +270,19 @@ elseif(DEFINED RECONNECTWALK AND NOT "${RECONNECTWALK}" STREQUAL "")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "reconnect_walk failed (${walk_rc}): ${walk_out}")
     endif()
+elseif(DEFINED RELAYWALK AND NOT "${RELAYWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "resend" OR FAULTY STREQUAL "early-end" OR FAULTY STREQUAL "ack-delivered")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not resend, early-end or ack-delivered")
+    endif()
+    execute_process(COMMAND "${RELAYWALK}" ${walk_args} "${WORK}/RelayLifeTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "relay_walk failed (${walk_rc}): ${walk_out}")
+    endif()
 elseif(DEFINED SECWALK AND NOT "${SECWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
     if(FAULTY STREQUAL "store-late" OR FAULTY STREQUAL "echo" OR FAULTY STREQUAL "driver" OR
@@ -382,6 +400,19 @@ elseif(DEFINED OVERLAYWALK AND NOT "${OVERLAYWALK}" STREQUAL "")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "overlay_walk failed (${walk_rc}): ${walk_out}")
     endif()
+elseif(DEFINED LOCKWALK AND NOT "${LOCKWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "stale" OR FAULTY STREQUAL "draw" OR FAULTY STREQUAL "idle")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not stale, draw or idle")
+    endif()
+    execute_process(COMMAND "${LOCKWALK}" ${walk_args} "${WORK}/ClientLockTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "lock_walk failed (${walk_rc}): ${walk_out}")
+    endif()
 elseif(DEFINED WATCHWALK AND NOT "${WATCHWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
     if(FAULTY STREQUAL "aba" OR FAULTY STREQUAL "stale")
@@ -482,6 +513,11 @@ endif()
 if(NOT DEFINED CAP OR "${CAP}" STREQUAL "")
     set(CAP 60)
 endif()
+# CAP 0 (NEXUS_TLC_UNCAPPED, the nightly): no cap, and TLC runs until it finishes.
+set(cap_arg)
+if(CAP GREATER 0)
+    set(cap_arg TIMEOUT ${CAP})
+endif()
 include("${CMAKE_CURRENT_LIST_DIR}/tlc-workers.cmake")
 set(jvm ${tlc_jvm})
 set(flags -workers ${tlc_workers} -metadir "${WORK}/meta" -config "${cfg_name}")
@@ -492,7 +528,7 @@ endif()
 execute_process(
     COMMAND "${java}" ${jvm} "-Djava.io.tmpdir=${WORK}/tmp" -cp "${jar}" tlc2.TLC ${flags} "${MODULE}.tla"
     WORKING_DIRECTORY "${WORK}"
-    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT ${CAP})
+    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out ${cap_arg})
 file(WRITE "${WORK}/tlc.log" "${out}")
 
 string(REGEX MATCH "generated, [0-9,]+ distinct states found" states "${out}")

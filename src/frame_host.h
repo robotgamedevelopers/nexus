@@ -29,6 +29,7 @@
 #include "pr/ui.h"
 
 #include "hitch.h"
+#include "link_port.h"
 #include "model.h"
 #include "sync/actions.h"
 #include "sync/client.h"
@@ -50,25 +51,6 @@ class PraxBoard;
 // byte below 0x20, 0x7f and above, and the backslash as \xNN, the rest as it is; at most 80 bytes, cut between two
 // characters, never inside an escape, then "...".
 std::string loggable(std::string_view text);
-
-// The link to nexus-server as the window's frame sees it: the latest state, read without waiting, and actions handed
-// over without waiting. link/client_port.h is the one over the link's thread (link/client.h).
-struct LinkState {
-    sync::LinkPhase phase = sync::LinkPhase::Connecting;
-    std::string problem;                // with Failed: why
-    std::uint64_t heardMsAgo = 0;       // with Connected: since the server was last heard
-    sync::Sessions sessions;            // the server's latest state
-    bool loopback = false;              // link connected to a numeric loopback address
-};
-
-struct LinkPort {
-    virtual ~LinkPort() = default;
-    // The latest state; true if it changed since the last call that returned true. Never waits.
-    virtual bool poll(LinkState* out) = 0;
-    virtual void requestHistory(sync::SessionId, std::uint64_t, std::uint64_t) {}
-    // An action for the server, in order. Never waits.
-    virtual std::uint64_t send(sync::Action action) = 0;
-};
 
 // The secret dialog over the link (view.h Secrets, docs/secrets.md): the requests come in the server's state, and the
 // dialog shows the oldest the window has not answered (sync/secrets.h SecretPrompt). The value is held in the prompt
@@ -114,7 +96,13 @@ public:
     void lost();
     // The overlay was shown: the window may claim one flow.
     void shown() { opener.shown(); }
-    // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open.
+    // The client lock locked the window (client_lock.h): the claim a show allowed is taken back, and no step runs (no
+    // claim, no URL opened, no callback sent up) until it is unlocked; the owner's next show allows one again.
+    void lock() { locked = true; opener.hidden(); }
+    void unlock() { locked = false; }
+    bool locked = false;
+    // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open. None
+    // while locked.
     void step();
     bool gateOpen() const { return gate_ != nullptr; }
 
@@ -122,6 +110,16 @@ private:
     std::unique_ptr<SignInGate> gate_;
     std::uint64_t gateFlow_ = 0;
 };
+
+// The client lock's input gate (FrameHost::event, View::lockScreen). isInputEvent: the person's input (pointer, scroll,
+// keys, text, paste, composition, drag and drop), as against the window's and the app's own events. lockScreenTakes:
+// the input a locked window lets through to its lock screen: the pointer, and Return and Escape with no modifier.
+// resetsIdle: the person's deliberate input, which starts the lock's idle time again (a key, text, a press, a scroll, a
+// paste, a drop); a pointer passing over the window, a drag passing over it, a gesture or a touch on the trackpad does
+// not, so that nothing but the person's act keeps the window unlocked.
+bool isInputEvent(const PrAppEvent& e);
+bool lockScreenTakes(const PrAppEvent& e);
+bool resetsIdle(const PrAppEvent& e);
 
 inline constexpr size_t kMaxAttachmentBytes = 32 * 1024 * 1024;
 struct StagedFile {
@@ -218,6 +216,9 @@ struct FrameHost {
     std::string dashboardUrl(const std::string& name) const;
 
 private:
+    // Actions the link lost before the server acknowledged them (LinkState::cut): a message among them goes back to its
+    // tab as a pending message, and the problem line says what happened. Never silent.
+    void showCut(const std::vector<std::uint64_t>& cut);
     // A press, followed until it is a tap (released within kTapSlop of where it went down) or not (View::tapEndsEditing).
     void watchTap(const PrAppEvent& e);
     bool tapping_ = false;

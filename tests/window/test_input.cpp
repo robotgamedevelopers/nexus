@@ -1346,7 +1346,7 @@ void markdownListsAndLinks() {
     if (!first || !second || !nested) return;
     PrLayoutRect lines[16]{};
     auto boxes = [&](PrLayoutNode node, size_t size) {
-        return prLayoutNodeTextRangeBoxes(h.tree, node, 0, size, PrLayoutCoordinates_Viewport, lines, 16);
+        return prLayoutNodeTextRangeBoxes(h.tree, node, 0, static_cast<uint32_t>(size), PrLayoutCoordinates_Viewport, lines, 16);
     };
     CHECK(boxes(first, words.size()) >= 2);
     float x = prLayoutUnitToPx(lines[0].left);
@@ -1402,7 +1402,7 @@ void longInlineCommandWrapsInTheReply() {
             PrLayoutRect word{};
             CHECK(body && heading);
             if (!body || !heading) return PrVec2{};
-            CHECK(prLayoutNodeTextRangeBoxes(h.tree, body, prose.find("wrapper:"), prose.size(),
+            CHECK(prLayoutNodeTextRangeBoxes(h.tree, body, static_cast<uint32_t>(prose.find("wrapper:")), static_cast<uint32_t>(prose.size()),
                 PrLayoutCoordinates_Viewport, &word, 1) == 1);
             return PrVec2{prLayoutUnitToPx(word.left) - h.bounds(heading).left,
                 prLayoutUnitToPx(word.top) - h.bounds(heading).top};
@@ -1414,7 +1414,7 @@ void longInlineCommandWrapsInTheReply() {
         CHECK(code);
         if (!code) continue;
         PrLayoutRect lines[64]{};
-        const auto count = prLayoutNodeTextRangeBoxes(h.tree, code, 0, command.size(),
+        const auto count = prLayoutNodeTextRangeBoxes(h.tree, code, 0, static_cast<uint32_t>(command.size()),
             PrLayoutCoordinates_Viewport, lines, 64);
         CHECK(count > 1 && count < 64);
         const auto reply = h.bounds(prLayoutNodeFirstChild(h.tree, entries[1]));
@@ -2221,6 +2221,28 @@ Harness withSprint(std::size_t ais = 2) {
     return Harness(aisNamed(ais), false, true);
 }
 
+// An AI's tab chosen from a dashboard tab, which has no prompt, before the frame, as a selection the server or a
+// restored window makes: the frame's first round builds the prompt with no value in the last layout. The frame runs
+// another round, so that its first frame shows the value in the bold weight, and Prax's debug build does not stop on
+// a value of another frame (Builder::prompt).
+void aPromptShownFirstIsBoldInItsFirstFrame() {
+    Harness h = withSprint(2);
+    h.view.windowApp.surface.prompt.bold = true;
+    h.model.select_tab(0);
+    h.frame();
+    h.frame();
+    CHECK(h.active().kind == TabKind::Dashboard);
+    h.model.select_tab(1);
+    h.frame();
+    CHECK(h.active().kind != TabKind::Dashboard && h.view.prompt != kPrLayoutNodeNone);
+    const auto value = prLayoutNodeFirstChild(h.tree, h.view.prompt);
+    CHECK(value != kPrLayoutNodeNone);
+    if (value == kPrLayoutNodeNone) return;
+    const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, value));
+    const auto font = prLayoutFontStyleRecord(h.tree, record.groups[PrLayoutGroup_Font]).font;
+    CHECK(font && prTextFontStyle(font).weight == 700);
+}
+
 // Real key events, the production frame host and the actual Prax menu. Only the transport is fake.
 void accountPickerIsAnExplicitChoice() {
     Harness h(aisNamed(2), true, true);
@@ -2253,7 +2275,8 @@ void accountPickerIsAnExplicitChoice() {
     h.view.activateSignIn = [&] { ++signIns; return true; };
     link.sent.clear();
     const auto arrow = [&](bool next, PrAppModifierFlags modifiers) {
-        h.key(next ? PrAppKey_Down : PrAppKey_Up, next ? PrAppKeyCode_ArrowDown : PrAppKeyCode_ArrowUp, modifiers);
+        h.key(static_cast<PrAppKey>(next ? PrAppKey_Down : PrAppKey_Up),
+            static_cast<PrAppKeyCode>(next ? PrAppKeyCode_ArrowDown : PrAppKeyCode_ArrowUp), modifiers);
         h.frame();
     };
     const auto preview = [&](const std::string& wanted, const std::string& current) {
@@ -2450,6 +2473,103 @@ void arrowsFollowTheActiveTab() {
     h.frame();
     right();
     CHECK(h.model.active() == count - 1);
+}
+
+// ---- The client lock (client_lock.h, View::lockScreen) ----
+
+// Every text in the window's tree.
+std::vector<std::string> allTexts(const Harness& h) {
+    std::vector<std::string> out;
+    textsUnder(h, prLayoutTreeRoot(h.tree), out);
+    return out;
+}
+
+bool anyTextHas(const std::vector<std::string>& texts, const std::string& part) {
+    for (const auto& t : texts)
+        if (t.find(part) != std::string::npos) return true;
+    return false;
+}
+
+// Locked, the window draws the lock screen and nothing else (Glenn, 2026-11-25: "no dashboard, no talk to ais, no
+// terminals. nothing."): no tab strip and no AI's name, no transcript, prompt or draft, no terminal, no Dashboard. The
+// terminals and the board are serviced unseen. Typing reaches nothing; Return asks the system, Escape hides. Unlocked
+// again, the same window shows the AIs' names and the draft, so the checks above can see them when they are there.
+void lockedWindowDrawsOnlyTheLockScreen() {
+    Harness h(std::vector<AIInfo>{AIInfo{"alex", "m1"}, AIInfo{"emma", "m2"}}, true, true);
+    h.commandT();
+    const std::size_t terminal = h.active().id;
+    CHECK(h.active().kind == TabKind::Terminal);
+    CHECK(h.model.select_tab(1));
+    h.frame();
+    CHECK(h.active().kind == TabKind::AI);
+    h.type("secret plan");
+    const std::string draft = h.active().draft;
+    CHECK(draft == "secret plan");
+    // Shown unlocked: the names and the draft are drawn.
+    auto texts = allTexts(h);
+    CHECK(anyTextHas(texts, "alex") && anyTextHas(texts, "emma") && anyTextHas(texts, "secret plan"));
+
+    int unlocks = 0;
+    h.view.unlock = [&] { ++unlocks; };
+    h.view.lockScreen = View::LockScreen{"nexus is locked", "Press Return or click here to unlock with Touch ID."};
+    const auto shown = h.terminals.shown.size();
+    const auto boardShows = h.board.shows;
+    const auto boardHiddens = h.board.hiddens;
+    const auto updates = h.terminals.updates[terminal];
+    h.frame();
+    h.frame();
+    texts = allTexts(h);
+    CHECK(texts.size() == 2);
+    CHECK(anyTextHas(texts, "nexus is locked"));
+    CHECK(anyTextHas(texts, "Touch ID"));
+    for (const auto& t : texts)
+        CHECK(t == "nexus is locked" || t == "Press Return or click here to unlock with Touch ID.");
+    CHECK(!anyTextHas(texts, "alex") && !anyTextHas(texts, "emma") && !anyTextHas(texts, "secret"));
+    CHECK(h.view.prompt == kPrLayoutNodeNone && h.view.promptBox == kPrLayoutNodeNone);
+    CHECK(h.view.transcript == kPrLayoutNodeNone && h.view.boardBox == kPrLayoutNodeNone);
+    CHECK(h.terminals.shown.size() == shown);           // no terminal drawn
+    CHECK(h.terminals.updates[terminal] > updates);     // its shell still serviced, unseen
+    CHECK(h.board.shows == boardShows);                 // no Dashboard drawn
+    CHECK(h.board.hiddens > boardHiddens);
+    // Typed text, a tab key and a terminal key reach nothing.
+    h.type("x");
+    h.commandDigit(1);
+    h.commandT();
+    CHECK(h.model.active() == 1 && h.active().draft == draft);
+    CHECK(h.terminals.running.size() == 1);
+    CHECK(unlocks == 0 && h.hides == 0);
+    h.enter();
+    CHECK(unlocks == 1);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    CHECK(h.hides == 1);
+    CHECK(h.active().draft == draft);
+
+    // Unlocked: everything is back, the draft kept.
+    h.view.lockScreen.reset();
+    h.frame();
+    h.frame();
+    texts = allTexts(h);
+    CHECK(anyTextHas(texts, "alex") && anyTextHas(texts, "emma") && anyTextHas(texts, "secret plan"));
+}
+
+// A clipboard file or image whose read finishes after the lock starts, before the next frame takes the prompt away,
+// is not staged into the prompt (FrameHost::stageFile).
+void nothingStagedOnceLocked() {
+    Harness h;
+    FrameHost host;
+    host.view = &h.view;
+    host.model = &h.model;
+    host.ui = h.ui;
+    h.frame();
+    CHECK(host.stageFile("before.txt", "unlocked"));
+    h.frame();
+    const std::string draft = h.active().draft;
+    h.view.lockScreen = View::LockScreen{"nexus is locked", ""};
+    CHECK(!host.stageFile("after.txt", "locked"));
+    CHECK(!host.stageFile("pasted-image.png", "png"));
+    h.view.lockScreen.reset();
+    h.frame();
+    CHECK(h.active().draft == draft);
 }
 
 // ---- Terminal tabs ----
@@ -3192,7 +3312,7 @@ int main(int argc, char** argv) {
         CHECK(h.view.accountRows.size() == 3);
         if (h.view.accountRows.size() != 3) return 1;
         for (unsigned i = 0; i < 3; ++i)
-            CHECK(h.hasText(h.view.accountRows[i], std::string(1, 'a' + i) + "@example.test"));
+            CHECK(h.hasText(h.view.accountRows[i], std::string(1, static_cast<char>('a' + i)) + "@example.test"));
         const auto menu = h.bounds(h.view.accountMenu);
         CHECK(std::abs((menu.left + menu.right) / 2 - h.extent.x / 2) < 2);
         CHECK(std::abs((menu.top + menu.bottom - h.extent.y) / 2) < 2);
@@ -3571,6 +3691,8 @@ int main(int argc, char** argv) {
     textScaleIsClamped();
     textScaleChangesAreSaved();
     textKeysWorkWithCapsLock();
+    lockedWindowDrawsOnlyTheLockScreen();
+    nothingStagedOnceLocked();
     escapeHidesAndCommandEscapeStops();
     escapeWindowedHidesNothing();
     escapeWhileComposingDoesNotHide();
@@ -3586,6 +3708,7 @@ int main(int argc, char** argv) {
     promptIsARoundedBoxHoldingThePlus();
     promptSegmentTracksInsertionAndUsesHeadroom();
     newGlyphsFadeWithoutRelightingOldText();
+    aPromptShownFirstIsBoldInItsFirstFrame();
     noModelUnderThePrompt();
     switchNoticeBubble();
     namedBusBubbles();

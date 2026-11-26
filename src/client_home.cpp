@@ -149,7 +149,7 @@ bool claimClientHome(const std::string& dir, std::string* why) {
     // Keep the handle open until the OS tears down the process, including static destructors.
     why->clear();
 #if defined(_WIN32)
-    const auto path = std::filesystem::u8path(dir) / L"client.lock";
+    const auto path = std::filesystem::path(std::u8string(dir.begin(), dir.end())) / L"client.lock";
     HANDLE lock = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (lock != INVALID_HANDLE_VALUE) return true;

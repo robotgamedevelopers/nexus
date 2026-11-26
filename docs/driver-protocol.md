@@ -61,6 +61,8 @@ standard input first, and ends a driver that does not exit.
 | `stop` | `turn` (required) | stop turn `turn`, if it is the open turn |
 | `settings` | `model` (non-empty string, optional), `effort` (non-empty string, optional); at least one | the model and effort for the turns that follow |
 | `server` | `features` (array of strings, required) | what this server takes beyond version 1, written once, right after the driver's `hello` and before any `send`: `"secrets"` means it takes `ask-secret` (docs/secrets.md). A driver that does not know the kind skips it (rule 8) and never asks. |
+| `steer` | `turn` (required), `id` (whole number from 1, required), `text` (string, required) | a message from the person into the open turn `turn`, taken in after the tool calls running, before the next model call; written only to a driver whose hello names `"steer"` (below, "Steering a turn") |
+| `follow-up` | `turn` (required), `id` (whole number from 1, required), `text` (string, required) | a message from the person into the open turn `turn`, taken in only when the turn would otherwise settle; written only to a driver whose hello names `"follow-up"` (below) |
 | `secret` | `ask` (whole number from 1, required), `outcome` (required: `"stored"` or `"refused"`), `reason` (non-empty string, required with `refused`: `"busy"`, `"no-client"`, `"cancelled"`, `"timeout"` or `"malformed"`; servers before the one-chance rule also sent `"unwritable"`, and `"unconfirmed"` with `stored`, and a driver still reads them) | the one answer to the driver's `ask-secret` numbered `ask`; never the value. `stored` is written only once the value is in its file and the file is durable: a value whose file cannot be written yet is held by the server and written again until it is (docs/secrets.md, "One chance"), so the answer may come long after the paste. `malformed` means what was pasted was not one token (the person is told why); the AI may ask again. |
 
 `settings` came into version 1 after it was first written. A driver that does not know it skips it, as any unknown kind
@@ -83,7 +85,7 @@ reply, is unknown, and the person decides whether to send it again.
 
 | kind | fields | meaning |
 |---|---|---|
-| `hello` | `protocol` (whole number, required: 1), `harness` (non-empty string, required, as `"claude"`), `features` (array of strings, optional) | the first line, always. `features` lists what the driver supports beyond version 1: `"limit"` means it keeps the AI to its directory under `--limit cwd`. The server ends a driver started with `--limit cwd` whose hello does not list `"limit"`, before any `send`, and tells the session why |
+| `hello` | `protocol` (whole number, required: 1), `harness` (non-empty string, required, as `"claude"`), `features` (array of strings, optional) | the first line, always. `features` lists what the driver supports beyond version 1: `"limit"` means it keeps the AI to its directory under `--limit cwd`. The server ends a driver started with `--limit cwd` whose hello does not list `"limit"`, before any `send`, and tells the session why. `"steer"`, `"follow-up"` and `"settled"` are steering (below); a driver that names `"steer"` or `"follow-up"` names `"settled"` too, and the server ends one that does not. A feature the server does not know is skipped |
 | `credential` | `billing` (required: `"subscription"`, `"api-key"` or `"none"`), `plan` (string, optional: the plan's name as the harness reports it) | which credential the harness is using |
 | `session` | `id` (required: 1 to 256 bytes of printable ASCII, no spaces, not starting with `-`) | the harness's session id: what the server passes as `--resume` when it starts the driver again |
 | `text` | `turn`, `delta` (string, required) | a piece of the turn's current text block, appended to it |
@@ -91,6 +93,8 @@ reply, is unknown, and the person decides whether to send it again.
 | `tool` | `turn`, `name` (non-empty string, required), `summary` (string, required) | the AI started using a tool; the summary says what it does, in one line |
 | `done` | `turn`, `outcome` (required: `"ok"`, `"stopped"` or `"error"`), `session_cost_usd` (finite number, zero or more, optional), `usage` (object, optional) | the turn has ended |
 | `error` | `cause` (non-empty string, required), `fix` (non-empty string, required: what a person does about it), `turn` (optional), `code` (string, optional) | something went wrong |
+| `queue` | `turn` (required), `steer` (array of ids, required), `follow_up` (array of ids, required) | the driver's whole queue for turn `turn`: the ids of the steers and of the follow-ups it took and has not yet given its harness, oldest first; written after every change of either list, never a diff (below) |
+| `settled` | `turn` (required), `aborted` (`true` or `false`, required) | turn `turn` has no automatic work left; written once, just before its `done`, by a driver whose hello names `"settled"`; `aborted` when a stop ended it (below) |
 | `ask-secret` | `ask` (whole number from 1, required: the driver's own number, unique within its process), `account` (non-empty string, required), `what` (non-empty string, required: a file the account's provider documents, as `"oauth-token"`), `why` (string, required: one line, no control characters, at most 200 bytes) | ask the person, in nexus's window, for a secret for the account (docs/secrets.md); written only after a `server` line naming `"secrets"`. The server answers with one `secret` line; an ask it cannot take (an account not set up, a file not documented, a `why` past its limit) is refused as a malformed line: no request is made and, as for any line the server refuses, the driver is ended. |
 
 `turn` is required wherever the table names it without saying optional.
@@ -118,6 +122,60 @@ An error's `code` is one of these; an absent code, or one this version does not 
 Every message that belongs to a turn carries that turn's number, so the server can drop messages from a turn it no
 longer waits for (after a restart of either side).
 
+## Steering a turn
+
+A person may write into a turn while it runs, as in pi's RPC mode (pi.dev, MIT), whose steer, follow-up, queue
+update and settled events these follow: a **steer** says "change course now", a **follow-up** says "and after that,
+this". Each driver says in its hello which it can do with its own harness; the server writes a kind only to a driver
+that named it, and never relies on a driver skipping it. A driver that names neither keeps working exactly as before:
+the person's message waits as the next prompt.
+
+- **Ids.** The server numbers each steer and follow-up it writes with an `id` of its own, from 1, strictly increasing
+  within the driver's process (across turns). A queue names messages by these ids, never by their text, so that a
+  queue line stays small.
+- **Turn numbers.** A steer or follow-up carries the number of the open turn it goes into, and consumes no turn
+  number: what the harness does with it is part of that turn, and every message it writes carries that turn's number.
+- **When it goes in.** A steer goes in at the next tool-call boundary (the tool calls the model asked for are done,
+  before its next call), or at the end of a model run: every steer pending goes in together. A follow-up goes in only
+  at the end of a model run with no tool calls and no steer pending, one per model run, oldest first. Each goes to the
+  harness at most once.
+- **The queue.** The driver writes `queue` after every change of its queue, with both lists whole: when it takes a
+  steer or follow-up, and when its harness takes one in. An id leaves the queue only when the harness takes it in, so
+  the server knows from the reports which were taken in. Each list is oldest first, so its ids go up; at most 64 a
+  list (a server writes no more than 64 into one turn).
+- **Settled.** The end of one model run is not the end of the turn while a retry, a compaction, a steer or a
+  follow-up can follow it. A driver that names `"settled"` writes `settled` once a turn has nothing pending and nothing
+  automatic left, and then the turn's `done`; nothing of the turn comes between them, and no `queue` after `settled`.
+  A `stop` of the open turn settles it at once, `aborted`, with its queue left as it was: what that queue held was never
+  given to the harness. A driver that names it writes `settled` before every `done`, steered or not.
+- **`settled` and `done`.** `done` stays the last message of its turn and the one that closes it: sequence rule 3 is
+  unchanged, and the server writes the next `send` only after the open turn's `done`. `settled` is the driver's
+  statement that the turn's queue is final, so a server that reads `done` without `settled` from a driver that named
+  it ends the driver.
+- **Crossing the end.** The server writes a steer or follow-up only while the turn is open and it has read neither
+  `settled` nor `done` for it, and not after a stop. One can still cross the turn's end on the way: a driver ignores a
+  steer or follow-up for a turn that is not open, or that it has settled, and answers it with nothing, as it does a
+  stray `stop`. At the turn's `done` the server takes every message it wrote into the turn that the driver never took
+  in (never queued, or still in the last queue) and puts it first among the waiting prompts, in the order written:
+  each is the next turn's prompt, so nothing the person wrote is lost while the driver lives. If the driver exits with
+  the turn open, what it had not taken in is cut with the turn, with a notice, and never written again.
+- **The waiting limit.** What the server writes into a turn counts against its limit on the prompts waiting for the
+  AI (8 messages, 32 KiB) until the driver reports it taken in, since it waits again if the turn ends first. A steer or
+  follow-up that would not fit is refused when the person writes it, with a notice saying why, so what the server
+  gives back at a turn's `done` always fits and is never cut short.
+- **Refused.** A steer or follow-up to a driver whose hello did not name the kind, for a turn the driver never opened
+  (above the last `send`), or whose `id` is not above the last, is the server's bug: the driver refuses the line (rule
+  4), carrying its `turn`. A `queue` or `settled` from a driver that did not name it, for a turn that is not open, a
+  `queue` naming an id the server did not write into the turn as that kind or one the harness already took in, a
+  second `settled`, anything of the turn but its `done` after `settled`, and a `done` before `settled` are the
+  driver's: the server ends it.
+
+These came into version 1 as kinds an older reader skips (rule 8), offered only to a driver that names them, so the
+version stays 1: an older driver never names them and is never written them, and an older server skips the `queue`
+and `settled` of a newer driver, whose `done` still closes each turn. `models/Steering.tla` is the model, bound to the
+server's supervisor and to the driver's side (`src/driver/steering.h`, which the fake driver plays) by
+`tests/driver/steering_walk.cpp`.
+
 ## Sequence rules
 
 1. The driver's first line is `hello`. The server refuses a driver whose first line is anything else, or whose
@@ -127,7 +185,9 @@ longer waits for (after a restart of either side).
    number of times; the latest `credential` and the latest `session` are the ones that hold. A harness may know its
    session id and credential only once its first turn has started.
 3. At most one turn is open at a time. A `send` opens its turn; the turn's `done` closes it. The server writes the next
-   `send` only after the open turn's `done`.
+   `send` only after the open turn's `done` (from a driver that names `"settled"`, its `settled` comes first: a turn is
+   never closed at the end of one model run while more can follow). A `steer` or `follow-up` goes into the open turn
+   and opens none.
 4. A line from the server that the driver cannot accept is the server's bug, whatever it is: a line the reader refuses
    (malformed, or a known kind with a field missing or wrong, as `{"kind":"send","turn":7}`), or a `send` while a turn
    is open or whose turn is not greater than the last turn this driver process saw. The driver writes one `error` with
@@ -205,6 +265,32 @@ A turn the harness fails, with its cause first:
 > {"kind":"send","turn":3,"prompt":"Go on."}
 < {"kind":"error","cause":"the harness lost its connection","fix":"send the prompt again","turn":3,"code":"harness"}
 < {"kind":"done","turn":3,"outcome":"error"}
+```
+
+A turn steered while it runs, by a driver whose hello named all three: the steer goes in after the tool call, the
+follow-up when the run would otherwise end, then settled and done. A second follow-up, written as the driver settles
+the turn, crosses its end: the driver had already written settled when it read it, so it ignores it, and at the done
+the server sends it as the next turn's prompt:
+
+```
+< {"kind":"hello","protocol":1,"harness":"fake","features":["steer","follow-up","settled"]}
+> {"kind":"send","turn":4,"prompt":"Fix the failing test."}
+< {"kind":"tool","turn":4,"name":"Bash","summary":"ctest -R parser"}
+> {"kind":"steer","turn":4,"id":1,"text":"Only the parser, leave the lexer alone."}
+< {"kind":"queue","turn":4,"steer":[1],"follow_up":[]}
+> {"kind":"follow-up","turn":4,"id":2,"text":"Then run the whole suite."}
+< {"kind":"queue","turn":4,"steer":[1],"follow_up":[2]}
+< {"kind":"queue","turn":4,"steer":[],"follow_up":[2]}
+< {"kind":"text","turn":4,"delta":"Fixed in the parser only."}
+< {"kind":"text-end","turn":4}
+< {"kind":"queue","turn":4,"steer":[],"follow_up":[]}
+< {"kind":"tool","turn":4,"name":"Bash","summary":"ctest"}
+< {"kind":"text","turn":4,"delta":"All pass."}
+< {"kind":"text-end","turn":4}
+> {"kind":"follow-up","turn":4,"id":3,"text":"And commit."}
+< {"kind":"settled","turn":4,"aborted":false}
+< {"kind":"done","turn":4,"outcome":"ok"}
+> {"kind":"send","turn":5,"prompt":"And commit."}
 ```
 
 A driver can emit `{"kind":"child-agents","count":2}` after hello to publish its current number of active child agents. This process-scoped snapshot excludes the parent. Send zero when the last child ends. The supervisor resets the count on driver exit.

@@ -1,16 +1,16 @@
-# Makes the caches ci.yml's GitHub-hosted jobs restore (ci.yml's header says what each holds), on main only, so that
-# every pull request may restore them. It builds with the same steps as the jobs it serves
-# (.github/actions/hosted-caches, nexus-build, windows-build; tailscale.yml with prime) and saves the result under a new
-# key; ci.yml's jobs then restore the newest. It is not a per-commit check and has no 2-minute limit: a cold build of
-# Prax (a new pin) or of the Tailscale shim's Go dependencies does not fit one, and per-commit jobs never build them
-# cold. On every push to main, so a pull request's build starts from main as it is now and rebuilds only what the
-# pull request changed (with a cache from an older main, every file main changed since is rebuilt too, and the hosted
-# per-commit jobs went past 2 minutes on 2026-11-25); daily; and by hand after a Prax or Tailscale pin changes
-# (gh workflow run cache-warm.yml --ref main), before the pull requests that need the new pin run. The Tailscale shim's
-# cache is keyed by its pins alone, so it is made daily and by hand, not on every push.
+# Warms the fleet runners' own build directories for ci.yml and ios.yml, with no 2-minute limit: a cold build (a new
+# runner, a Prax pin change, a Tailscale pin change) does not fit a per-commit job, and per-commit jobs never build cold
+# on purpose. Each runner keeps its build directory per configuration beside its checkout (.github/actions/fleet-build,
+# windows-build), so a warm directory stays warm: a pull request's job then compiles only what changed since the last
+# job on that runner. Nothing is saved to GitHub's cache; nothing here is GitHub-hosted.
 #
-# Each build cache is about 0.5 GB and the repository's caches share one quota, so after saving, a job deletes the
-# older caches of its own name (the one it restored and any before it); a pull request restores the newest.
+# Each job has as many slots as nexus has runners for its OS (Linux: amd-3 and intel, 3 each; macOS: the macbook, 3;
+# Windows: captain, 2), so that with the runners idle GitHub places one slot on every runner. A runner a slot missed is
+# warmed by its first per-commit job (ccache, shared by the machine's runners, makes most of that build hits) or by the
+# next run here. The Tailscale shim's key directory is per machine (tailscale.yml, prime).
+#
+# On every push to main (so the runners follow main), daily, and by hand: `gh workflow run cache-warm.yml --ref main`,
+# after a Prax or Tailscale pin changes, or for a new runner.
 
 name: cache-warm
 
@@ -23,167 +23,117 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 concurrency:
-  group: cache-warm
+  group: cache-warm-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  unix:
-    if: github.ref == 'refs/heads/main'
-    name: ${{ matrix.cache }}
-    runs-on: ${{ matrix.os }}
+  linux:
+    name: linux-release (${{ matrix.slot }})
+    runs-on: [self-hosted, nexus-pr, Linux, X64]
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - cache: mac-release
-            os: macos-26
-            config: mac-release
-            brew: ninja protobuf
-            targets: ""
-          # The caches of ci.yml's build-once jobs (build-macos's Debug build, and build-linux-asan's every program), made
-          # here before ci.yml restores them.
-          - cache: mac-debug
-            os: macos-26
-            config: mac-debug
-            brew: ninja protobuf
-            targets: ""
-          - cache: linux-asan
-            os: ubuntu-24.04
-            config: linux-asan
-            apt: ""
-            targets: >-
-              model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
-              store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
-              nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
-              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
-          - cache: linux-release
-            os: ubuntu-24.04
-            config: linux-release
-            apt: ""
-            targets: ""
-          - cache: linux-asan-units
-            os: ubuntu-24.04
-            config: linux-asan
-            apt: ""
-            targets: >-
-              model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
-              store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
-              nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
-          - cache: linux-asan-walks
-            os: ubuntu-24.04
-            config: linux-asan
-            apt: ""
-            targets: >-
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
-              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
+        slot: [1, 2, 3, 4, 5, 6]
+    env:
+      CC: clang
+      CXX: clang++
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Tools and the newest cache, if any
-        id: caches
-        uses: ./.github/actions/hosted-caches
+      - name: Build directory and caches
+        uses: ./.github/actions/fleet-build
         with:
-          name: ${{ matrix.cache }}
-          require: "false"
-          brew: ${{ matrix.brew }}
-          apt: ${{ matrix.apt }}
-      # cargo runs only when a policy source is newer than its outputs, so a cache could keep crates built by a Rust the
-      # jobs no longer use (the image's, before Rust was pinned), and then every pull request that touches the policy
-      # rebuilt all of them (about 100 s on 4 cores, PR #89 on 2026-11-25). Removing the outputs makes cargo run here,
-      # with the pinned Rust and the jobs' own environment, so the cached target directory matches what they build.
-      - name: The policy crate built by the pinned Rust
-        shell: bash
-        run: rm -f build/policy-rust/release/libnexus_policy_runtime.a build/nexus-policy
+          name: linux-release
       - name: Configure and build
         uses: ./.github/actions/nexus-build
         with:
-          config: ${{ matrix.config }}
-          targets: ${{ matrix.targets }}
+          config: linux-release
+          dir: ${{ env.NEXUS_BUILD }}
+          # As ci.yml builds this directory (NEXUS_LTO off), so it stays warm for the pull requests.
+          lto: "OFF"
       - name: Record the sources the build was made from
-        shell: bash
-        run: bash .github/source-times.sh record build/.nexus-ci-sources
-      # ccache is not kept in the cache. A pull request's build rebuilds only the files whose content changed
-      # (.github/source-times.sh keeps every other file's old time), and ccache cannot hold a result for content it has
-      # not seen: on 2026-11-25 big pull requests' builds hit it in 0 to 4 percent of their compiles (1 of 24, 0 of 28,
-      # 0 of 15). Kept, it only made the cache larger and slower to restore. The sizes are printed for the record.
-      - name: Leave ccache out of the cache
-        shell: bash
-        run: |
-          set -euo pipefail
-          ccache --show-stats
-          rm -rf "${CCACHE_DIR:?}"
-          mkdir -p "$CCACHE_DIR"
-          for path in build "$NEXUS_CACHES"/* ~/.cargo/registry/index ~/.cargo/registry/cache; do
-            if [ -e "$path" ]; then du -sh "$path"; fi
-          done
-      - name: Save
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: |
-            build
-            ~/nexus-ci
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          key: ${{ steps.caches.outputs.key }}
-      - name: Delete this name's older caches
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NAME: ${{ matrix.cache }}
-          KEY: ${{ steps.caches.outputs.key }}
-        run: bash .github/cache-prune.sh "$NAME" "$KEY"
+        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
 
-  # The iOS caches (ios.yml's ios-device and ios-simulator). Until the iOS port is on main, its tree comes from port/ios
-  # (pull request #88), with main's CI steps (.github/actions, source-times.sh, cache-prune.sh) over it, so the cache is
-  # what an iOS pull request rebased onto main builds; once cmake/ios.cmake is on main, main's own tree is built.
-  ios:
-    if: github.ref == 'refs/heads/main'
-    name: ios-${{ matrix.target }}
-    runs-on: macos-26
+  macos:
+    name: mac-debug (${{ matrix.slot }})
+    runs-on: [self-hosted, nexus-pr, macOS, ARM64, xcode]
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
+        slot: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Build directory and caches
+        uses: ./.github/actions/fleet-build
+        with:
+          name: mac-debug
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: mac-debug
+          dir: ${{ env.NEXUS_BUILD }}
+      - name: Record the sources the build was made from
+        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
+
+  watch:
+    name: watch (${{ matrix.slot }})
+    runs-on: [self-hosted, nexus-pr, macOS, ARM64, xcode]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Build directory
+        uses: ./.github/actions/fleet-build
+        with:
+          name: watch
+          rust: "false"
+      - name: The core, the app for the simulator and for a watch
+        run: |
+          set -euo pipefail
+          cmake -S watch -B "$NEXUS_BUILD/core" -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$NEXUS_BUILD/core" --parallel "$JOBS" --target watch_core_test
+          cmake -S . -B "$NEXUS_BUILD/sim" -G Ninja -DCMAKE_SYSTEM_NAME=watchOS -DCMAKE_OSX_SYSROOT=watchsimulator \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$NEXUS_BUILD/sim" --parallel "$JOBS"
+          cmake -S . -B "$NEXUS_BUILD/device" -G Ninja -DCMAKE_SYSTEM_NAME=watchOS -DCMAKE_OSX_SYSROOT=watchos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64_32 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$NEXUS_BUILD/device" --parallel "$JOBS"
+      - name: Record the sources the builds were made from
+        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
+
+  # ios.yml's two builds, each in its own directory (ios-device, ios-simulator), whole.
+  ios:
+    name: ios-${{ matrix.target }} (${{ matrix.slot }})
+    runs-on: [self-hosted, nexus-pr, macOS, ARM64, xcode]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [1, 2, 3]
         target: [device, simulator]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
           submodules: recursive
-      - name: The iOS tree
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f cmake/ios.cmake ]; then
-            echo "main has the iOS port: building main"
-            exit 0
-          fi
-          main=$(git rev-parse HEAD)
-          git fetch --no-tags --depth=1 origin port/ios
-          git checkout -q --detach -f FETCH_HEAD
-          git checkout -q "$main" -- .github/actions .github/source-times.sh .github/cache-prune.sh
-          git submodule update --init --recursive --depth 1
-          if [ ! -f cmake/ios.cmake ]; then
-            echo "::error::neither main nor port/ios has cmake/ios.cmake: there is no iOS tree to build"
-            exit 1
-          fi
-          echo "building port/ios at $(git rev-parse --short FETCH_HEAD) with main's CI steps at $(git rev-parse --short "$main")"
-      - name: Tools and the newest cache, if any
-        id: caches
-        uses: ./.github/actions/hosted-caches
+      - name: Build directory and caches
+        uses: ./.github/actions/fleet-build
         with:
           name: ios-${{ matrix.target }}
-          require: "false"
-          brew: ninja
       - name: Rust's iOS standard library
         shell: bash
         run: rustup target add --toolchain "$RUSTUP_TOOLCHAIN" aarch64-apple-ios aarch64-apple-ios-sim
@@ -191,41 +141,18 @@ jobs:
         uses: ./.github/actions/nexus-build
         with:
           config: ios-${{ matrix.target }}
+          dir: ${{ env.NEXUS_BUILD }}
       - name: Record the sources the build was made from
-        shell: bash
-        run: bash .github/source-times.sh record build/.nexus-ci-sources
-      # ccache is not kept in the cache (the unix job says why); the sizes are printed for the record.
-      - name: Leave ccache out of the cache
-        shell: bash
-        run: |
-          set -euo pipefail
-          ccache --show-stats
-          rm -rf "${CCACHE_DIR:?}"
-          mkdir -p "$CCACHE_DIR"
-          for path in build "$NEXUS_CACHES"/* ~/.cargo/registry/index ~/.cargo/registry/cache; do
-            if [ -e "$path" ]; then du -sh "$path"; fi
-          done
-      - name: Save
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: |
-            build
-            ~/nexus-ci
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          key: ${{ steps.caches.outputs.key }}
-      - name: Delete this name's older caches
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NAME: ios-${{ matrix.target }}
-          KEY: ${{ steps.caches.outputs.key }}
-        run: bash .github/cache-prune.sh "$NAME" "$KEY"
+        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
 
-  windows-release:
-    if: github.ref == 'refs/heads/main'
-    runs-on: windows-2025
+  windows:
+    name: windows-release (${{ matrix.slot }})
+    runs-on: [self-hosted, nexus-pr, Windows, X64]
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [1, 2]
     defaults:
       run:
         shell: pwsh
@@ -233,36 +160,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: The newest cache, if any; configure and build
-        id: build
+      - name: Build directory, configure and build
         uses: ./.github/actions/windows-build
         with:
-          require: "false"
-      - name: Record the sources the build was made from
-        shell: bash
-        run: bash .github/source-times.sh record C:/nexus-ci/sources.txt
-      - name: Save
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: |
-            C:\nexus-ci
-            ~\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc
-            ~\.cargo\registry\index
-            ~\.cargo\registry\cache
-          key: ${{ steps.build.outputs.key }}
-      - name: Delete this name's older caches
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          KEY: ${{ steps.build.outputs.key }}
-        run: bash .github/cache-prune.sh windows-release "$KEY"
+          # As ci.yml builds this directory (NEXUS_LTO off), so it stays warm for the pull requests.
+          lto: "OFF"
 
-  # The Tailscale shim's primed key directory on each OS, built and tested with no time limit, saved for its pins.
+  # The Tailscale shim's primed key directory on each machine (one slot per runner), built and tested with no time limit.
   tailscale:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'push'
     uses: ./.github/workflows/tailscale.yml
     permissions:
       contents: read
     with:
       prime: true
-      save: true
+      tests: '^unit$'
+      rosetta: false
+      macos-slots: "[1, 2, 3]"
+      linux-slots: "[1, 2, 3, 4, 5, 6]"

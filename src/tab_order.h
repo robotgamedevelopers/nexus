@@ -263,7 +263,8 @@ struct KeptDraftsStore {
 };
 
 // The store in kept-drafts.txt beside tab-order.txt, locked by kept-drafts.lock there. `where` is empty if there is no
-// home, and both calls fail saying so. Not on Windows, where the window has no server link: both calls fail there.
+// home, and both calls fail saying so. Not on Windows yet, where the file and its lock are not written: both calls fail
+// there, saying so, and the window keeps that run's drafts in memory only.
 KeptDraftsStore fileKeptDraftsStore();
 // The store in the file at `path`, locked by `path` with ".lock" in place of its ".txt" (or after it).
 KeptDraftsStore fileKeptDraftsStore(std::string path);

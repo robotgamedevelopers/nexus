@@ -1,0 +1,9 @@
+# Planted: not per-commit, so a hosted runner here is only a warning.
+name: nightly
+on:
+  schedule:
+    - cron: "0 3 * * *"
+jobs:
+  hosted:
+    runs-on: ubuntu-24.04
+    steps: [{run: "true"}]

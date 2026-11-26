@@ -1,15 +1,16 @@
 # iOS and iPadOS (cmake/ios.cmake, docs/ios.md): the client built for devices and for the simulator, and the simulator
 # build's tests run on a simulator device (Prax's runner, ctest's emulator). In a workflow of its own, beside ci.yml,
-# with ci.yml's rules: GitHub-hosted runners only (no fleet runner and no secret per pull request), each job finishes
-# in 2 minutes, warnings are errors (CMakeLists.txt), and the build starts from cache-warm's cache for its target
-# (ios-device, ios-simulator: .github/actions/hosted-caches), so only what the pull request changed is rebuilt.
+# with ci.yml's rules: the fleet's own runners only (the fleet Mac, label nexus-pr; never GitHub-hosted ones, and no
+# secret), each job finishes in 2 minutes, warnings are errors (CMakeLists.txt), and each target builds in the runner's
+# own build directory (ios-device, ios-simulator: .github/actions/fleet-build), so only what changed is rebuilt.
 #
 # Per pull request the iOS builds are Debug at -O0 without debug information (nexus-build's ios-device and
 # ios-simulator): no LTO (Prax turns it on for Release only) and asserts on, as ci.yml's macOS build.
 #
-# The iOS port is not on main yet (it is on port/ios, pull request #88). The tree job looks for cmake/ios.cmake and
-# says when this tree has no iOS build, and the iOS jobs then do not run; a pull request of the port, once rebased
-# onto main, has it and runs them. Until the port is on main, cache-warm builds the iOS caches from port/ios.
+# Per pull request: the device and simulator builds, and on a simulator device the tier_pr tests (docs/ci-tiers.md):
+# the fast unit tests and the iOS happy path, the window drawn from a state (tests/tiers.txt). The simulator builds
+# tier_pr_build, what those tests run (cmake/tiers.cmake), as ci.yml's builds do; the device build, which runs no test,
+# builds everything. Every other iOS test is tier_nightly and runs in nightly.yml's ios-nightly.
 
 name: ios
 
@@ -27,32 +28,8 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  tree:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    outputs:
-      ios: ${{ steps.look.outputs.ios }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - name: Does this tree build iOS?
-        id: look
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f cmake/ios.cmake ]; then
-            echo "ios=true" >> "$GITHUB_OUTPUT"
-            echo "cmake/ios.cmake is here: the iOS jobs run"
-          else
-            echo "ios=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::this tree has no iOS build (no cmake/ios.cmake): the iOS jobs do not apply to it"
-          fi
-
   ios:
-    needs: tree
-    if: needs.tree.outputs.ios == 'true'
-    runs-on: macos-26
+    runs-on: [self-hosted, nexus-pr, macOS, ARM64, xcode]
     name: ios-${{ matrix.target }}
     timeout-minutes: 2
     strategy:
@@ -66,13 +43,12 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Tools and caches
-        uses: ./.github/actions/hosted-caches
+      - name: Build directory and caches
+        uses: ./.github/actions/fleet-build
         with:
           name: ios-${{ matrix.target }}
-          brew: ninja
       # Starlark (cmake/policy.cmake) is built for the iOS target with the pinned Rust; its standard library for the
-      # targets is in the restored toolchain (cache-warm adds it), so this only checks.
+      # targets is added to the machine's toolchain once, and after that this only checks.
       - name: Rust's iOS standard library
         shell: bash
         run: rustup target add --toolchain "$RUSTUP_TOOLCHAIN" aarch64-apple-ios aarch64-apple-ios-sim
@@ -80,6 +56,11 @@ jobs:
         uses: ./.github/actions/nexus-build
         with:
           config: ios-${{ matrix.target }}
-      - name: Unit and iOS tests on a simulator device
+          dir: ${{ env.NEXUS_BUILD }}
+          targets: ${{ matrix.target == 'simulator' && 'tier_pr_build' || '' }}
+      - name: Record the sources the build was made from
+        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
+      # The fast unit tests and the iOS happy path (tests/tiers.txt), on a simulator device.
+      - name: The tier_pr tests on a simulator device
         if: matrix.target == 'simulator'
-        run: ctest --test-dir build -L 'unit|ios' -j "$TEST_JOBS" --output-on-failure --no-tests=error
+        run: bash .github/ctest.sh --test-dir "$NEXUS_BUILD" -L '^tier_pr$' -j "$TEST_JOBS" --output-on-failure

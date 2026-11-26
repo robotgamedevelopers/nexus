@@ -15,8 +15,13 @@ add_executable(overlay_test overlay_test.cpp)
 target_link_libraries(overlay_test PRIVATE nexus_model)
 target_compile_options(overlay_test PRIVATE ${warnings})
 
+# The client lock's rules (src/client_lock.h): their unit tests, and the walk whose traces ClientLockTrace.tla checks.
+add_executable(client_lock_test client_lock_test.cpp)
+target_link_libraries(client_lock_test PRIVATE nexus_model)
+target_compile_options(client_lock_test PRIVATE ${warnings})
+
 # Every program the tests run, to build without the rest of the project: cmake --build <dir> --target model_checks
-add_custom_target(model_checks DEPENDS model_test overlay_test)
+add_custom_target(model_checks DEPENDS model_test overlay_test client_lock_test)
 
 # The walks whose traces TLC checks, which run on Linux and macOS only: a native Windows build has no TLC tests
 # (tlc_test below) and so no walks (NEXUS_SERVER_PARTS in CMakeLists.txt).
@@ -48,6 +53,11 @@ if(NEXUS_SERVER_PARTS)
     target_link_libraries(overlay_walk PRIVATE nexus_model)
     target_compile_options(overlay_walk PRIVATE ${warnings})
 
+    # The client lock's walk (src/client_lock.h), for ClientLockTrace.tla.
+    add_executable(lock_walk lock_walk.cpp)
+    target_link_libraries(lock_walk PRIVATE nexus_model)
+    target_compile_options(lock_walk PRIVATE ${warnings})
+
     # The AI strip's walk (src/sync/ai_strip.h), for AIStripTrace.tla.
     add_executable(strip_walk strip_walk.cpp)
     target_link_libraries(strip_walk PRIVATE nexus_sync)
@@ -57,7 +67,7 @@ if(NEXUS_SERVER_PARTS)
     target_link_libraries(watch_walk PRIVATE nexus_terminal_watch)
     target_compile_options(watch_walk PRIVATE ${warnings})
 
-    add_dependencies(model_checks trace_walk glide_walk overlay_walk strip_walk watch_walk)
+    add_dependencies(model_checks trace_walk glide_walk overlay_walk lock_walk strip_walk watch_walk)
 
     # The walk checks that the strip's dashboards are the server's list after each sync_dashboards: shown failing on
     # a model whose sync never removes one (trace_walk --faulty-sync-keep). It must exit with that check's line; a
@@ -72,6 +82,8 @@ add_test(NAME model_unit COMMAND model_test)
 set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
 add_test(NAME overlay_unit COMMAND overlay_test)
 set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
+add_test(NAME client_lock_unit COMMAND client_lock_test)
+set_tests_properties(client_lock_unit PROPERTIES LABELS unit TIMEOUT 30)
 
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n AIS f] [FAULTY <fault>] [BOARDS b] [CHURN]
 #          [BOARDCHURN]
@@ -88,6 +100,8 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below. CAP s caps it at
 # s instead, nightly or not; a per-commit cap stays well inside the CI job's 2 minutes (.github/workflows/ci.yml, the
 # model shards, says how the per-commit caps and worker counts were measured).
+# The caps apply to a local run alone: the nightly, the one place these checks run in CI, configures
+# NEXUS_TLC_UNCAPPED, which drops every cap and ctest timeout (CMakeLists.txt).
 # With SEED, the walk is trace_walk (the window's model, AIS ais); with LINKWALK, it is tests/sync's link_walk
 # (the link, WINDOWS windows), and FAULTY names one of its faults (applier, mirror, tail). Called from tests/sync too.
 # With SEED and LABEL, the walk is label_walk (a terminal tab's label, AIS remotes).
@@ -116,8 +130,8 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options SERVICETRACE PICKERTRACE PLUGINTRACE BOARDCHURN CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
-        SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
+    set(options SERVICETRACE PICKERTRACE PLUGINTRACE BOARDCHURN CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
+        SIGNWALK RECONNECTWALK RELAYWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
     cmake_parse_arguments(T "${options}"
         "CREDITMODE;PROPERTY;SEED;STEPS;AIS;BOARDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
@@ -163,7 +177,7 @@ function(tlc_test name module cfg expect)
     if(T_CAP)
         set(cap ${T_CAP})
     endif()
-    math(EXPR ctest_timeout "${cap} + 30")
+    nexus_tlc_limits(${cap} cap ctest_timeout)
     set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${models_dir}
              -DMODULE=${module} -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=${T_WORKERS} -DCAP=${cap})
     if(T_PROPERTY)
@@ -198,6 +212,8 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DSIGNWALK=$<TARGET_FILE:signin_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_RECONNECTWALK)
         list(APPEND defs -DRECONNECTWALK=$<TARGET_FILE:reconnect_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_RELAYWALK)
+        list(APPEND defs -DRELAYWALK=$<TARGET_FILE:relay_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_SECWALK)
         list(APPEND defs -DSECWALK=$<TARGET_FILE:secrets_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DFORMAT=${T_FORMAT})
     elseif(T_CREDITMODE)
@@ -217,6 +233,8 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DLINKWALK=$<TARGET_FILE:link_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DWINDOWS=${T_WINDOWS})
     elseif(DEFINED T_SEED AND T_OVERLAY)
         list(APPEND defs -DOVERLAYWALK=$<TARGET_FILE:overlay_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(DEFINED T_SEED AND T_LOCKWALK)
+        list(APPEND defs -DLOCKWALK=$<TARGET_FILE:lock_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_WATCHWALK)
         list(APPEND defs -DWATCHWALK=$<TARGET_FILE:watch_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(DEFINED T_SEED AND T_LABEL)
@@ -241,7 +259,7 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DCHURN=ON)
     endif()
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${tlc_script})
-    set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
+    set_tests_properties(${name} PROPERTIES LABELS ${label} ${ctest_timeout} PROCESSORS ${T_WORKERS})
 endfunction()
 
 tlc_test(tlc_bus_delivery_spec BusDelivery BusDelivery.cfg pass)
@@ -510,6 +528,34 @@ tlc_test(tlc_overlay_trace_faulty_hide_unkeyed_rejected OverlayTrace OverlayTrac
          OVERLAY SEED 1 STEPS 1000 FAULTY hide-unkeyed)
 tlc_test(tlc_overlay_trace_faulty_hotkey_hides_rejected OverlayTrace OverlayTrace.cfg invariant PROPERTY TraceMatches
          OVERLAY SEED 1 STEPS 1000 FAULTY hotkey-hides)
+
+# The client lock (ClientLock.tla): the whole state space, a witness per property, code traces, and faulty traces
+# rejected.
+tlc_test(tlc_client_lock_spec ClientLock ClientLock.cfg pass)
+tlc_test(tlc_client_lock_witness_starts_unlocked WClientLockStartsUnlocked WClientLockStartsUnlocked.cfg invariant
+         PROPERTY UnlockedByAuth)
+tlc_test(tlc_client_lock_witness_stale_granted WClientLockStaleGranted WClientLockStaleGranted.cfg action
+         PROPERTY UnlockOnlyByCurrent)
+tlc_test(tlc_client_lock_witness_draws_prompting WClientLockDrawsPrompting WClientLockDrawsPrompting.cfg action
+         PROPERTY ContentOnlyUnlocked)
+tlc_test(tlc_client_lock_witness_input_while_locked WClientLockInputWhileLocked WClientLockInputWhileLocked.cfg action
+         PROPERTY InputOnlyUnlocked)
+tlc_test(tlc_client_lock_witness_relock_keeps_prompt WClientLockRelockKeepsPrompt WClientLockRelockKeepsPrompt.cfg
+         action PROPERTY RelockLocks)
+tlc_test(tlc_client_lock_witness_refusal_silent WClientLockRefusalSilent WClientLockRefusalSilent.cfg action
+         PROPERTY RefusalSaysWhy)
+tlc_test(tlc_client_lock_witness_idle_ignored WClientLockIdleIgnored WClientLockIdleIgnored.cfg action
+         PROPERTY IdleLocks)
+tlc_test(tlc_client_lock_witness_prompt_twice WClientLockPromptTwice WClientLockPromptTwice.cfg action
+         PROPERTY PromptOnlyLocked)
+tlc_test(tlc_client_lock_witness_prompt_lost WClientLockPromptLost WClientLockPromptLost.cfg liveness)
+foreach(seed 1 2 3)
+    tlc_test(tlc_client_lock_trace_seed_${seed} ClientLockTrace ClientLockTrace.cfg pass LOCKWALK SEED ${seed} STEPS 1000)
+endforeach()
+foreach(fault stale draw idle)
+    tlc_test(tlc_client_lock_trace_faulty_${fault}_rejected ClientLockTrace ClientLockTrace.cfg invariant
+             PROPERTY TraceMatches LOCKWALK SEED 1 STEPS 1000 FAULTY ${fault})
+endforeach()
 
 # Foreground-group synchronization between the background poll thread and the frame thread (src/terminal_watch.h,
 # TerminalWatch.tla): the whole bounded state space with temporal liveness, a witness per property, code traces, and
