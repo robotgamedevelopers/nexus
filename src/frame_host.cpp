@@ -234,11 +234,34 @@ void FrameHost::finishUpload() {
     view->problem = std::move(result.error);
 }
 
+void FrameHost::showCut(const std::vector<std::uint64_t>& cut) {
+    std::size_t restored = 0;
+    for (const std::uint64_t number : cut) {
+        auto bubble = std::find_if(view->outgoing.begin(), view->outgoing.end(),
+            [&](const auto& b) { return b.action == number; });
+        if (bubble == view->outgoing.end()) continue;
+        for (std::size_t i = 0; i < model->tab_count(); ++i)
+            if (model->tab(i).id == bubble->tab) model->restore_held(i, bubble->text);
+        view->outgoing.erase(bubble);
+        ++restored;
+    }
+    const std::size_t n = cut.size();
+    view->problem = "The link to the server ended before the server acknowledged " + std::to_string(n) +
+        (n == 1 ? " action" : " actions") + " from this window; " + (n == 1 ? "it" : "they") +
+        " may not have arrived and " + (n == 1 ? "was" : "were") + " not sent again.";
+    if (restored > 0)
+        view->problem += restored == n ? (n == 1 ? " The message is back in its tab: check the conversation, then "
+            "press Enter to send it." : " The messages are back in their tabs: check each conversation, then press "
+            "Enter to send them.") : " The messages among them are back in their tabs: check each conversation, then "
+            "press Enter to send them.";
+}
+
 void FrameHost::pollLink() {
     finishUpload();
     LinkState s;
     if (link == nullptr || !link->poll(&s))
         return;
+    if (!s.cut.empty()) showCut(s.cut);
     // The AIs first, so that an AI's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
         for (const auto& [name, claim] : pendingClaims_) {

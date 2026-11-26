@@ -2,15 +2,16 @@
 # label nexus-pr; never a GitHub-hosted one): MSVC x64 at /W4, warnings as errors. Used by ci.yml and cache-warm.yml.
 #
 # Everything is kept on the machine between jobs, on D: (C: is nearly full on captain), in a directory of the runner's
-# own, D:\nexus-ci\<runner>: the build directory (build-x64), Prax's checkout at its pin, Prax's downloads and cargo's
-# target directory. Two runners never share one. The pinned Rust (1.98.1) and rustup itself live in D:\nexus-ci\rustup
+# own, D:\nexus-ci\<runner>: the build directory (build-x64; build-x64-lto with NEXUS_LTO on), Prax's checkout at
+# its pin, Prax's downloads and cargo's target directory. Two runners never share one. The pinned Rust (1.98.1)
+# and rustup itself live in D:\nexus-ci\rustup
 # and D:\nexus-ci\cargo, shared by the machine's runners: rustup-init, from rustup's own site and checked against the
 # sha256 published beside it, is fetched once when the machine has no rustup. Nothing is restored from GitHub's cache.
 #
-# The build directory is configured once (where it has no CMakeCache.txt) and then only built: MSBuild rebuilds what is
-# newer than its outputs. The checkout rewrites only what changed, and, in case it starts over, the sources a successful
-# build of everything was made from are recorded in the build directory and a file still byte for byte the same gets a
-# fixed old time before the next build (.github/source-times.sh; Git's bash). The record is removed before each build
+# The build directory is configured on every run with every NEXUS_* option (the configure step), then built: MSBuild
+# rebuilds what is newer than its outputs. The checkout rewrites only what changed, and, in case it starts over, the
+# sources a successful build of everything was made from are recorded in the build directory and a file still byte
+# for byte the same gets a fixed old time before the next build (.github/source-times.sh; Git's bash). The record is removed before each build
 # and written only after a build of every target that succeeded (cache-warm.yml, the nightly), never after ci.yml's
 # tier_pr_build. Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one
 # by itself.
@@ -18,8 +19,15 @@ name: windows-build
 description: The runner's own build directory, configure and build of nexus's native Windows part on a fleet runner
 inputs:
   target:
-    description: the one target to build (empty for all; ci.yml gives tier_pr_build)
+    description: the targets to build, separated by spaces (empty for all; ci.yml gives tier_pr_build and nexus)
     default: ""
+  lto:
+    description: >-
+      NEXUS_LTO, ON or OFF: whole-program optimisation in Release (CMakeLists.txt). ci.yml and cache-warm.yml give OFF
+      (a shipping optimisation, and most of the windows job's 2 minutes); the nightly keeps the default. Each setting
+      has its own build directory on the runner (build-x64 off, build-x64-lto on), so the nightly on these runners
+      never makes the next pull request's build start over.
+    default: "ON"
 outputs:
   build:
     value: ${{ steps.dirs.outputs.build }}
@@ -29,6 +37,8 @@ runs:
     - name: The runner's directories and the Rust toolchain
       id: dirs
       shell: pwsh
+      env:
+        LTO: ${{ inputs.lto }}
       run: |
         $ErrorActionPreference = 'Stop'
         $ProgressPreference = 'SilentlyContinue'
@@ -38,7 +48,10 @@ runs:
         $root = 'D:\nexus-ci'
         $runner = $env:RUNNER_NAME -replace '[^A-Za-z0-9_.-]', '_'
         $caches = "$root\$runner"
-        New-Item -ItemType Directory -Force -Path "$caches\build-x64", "$caches\prax-downloads", "$caches\cargo-target", "$root\rustup", "$root\cargo", "$root\tools" | Out-Null
+        if ($env:LTO -notin @('ON', 'OFF')) { throw "windows-build: lto is '$($env:LTO)', not ON or OFF" }
+        $buildName = if ($env:LTO -eq 'OFF') { 'build-x64' } else { 'build-x64-lto' }
+        "NEXUS_LTO=$($env:LTO)" >> $env:GITHUB_ENV
+        New-Item -ItemType Directory -Force -Path "$caches\$buildName", "$caches\prax-downloads", "$caches\cargo-target", "$root\rustup", "$root\cargo", "$root\tools" | Out-Null
         $rustupHome = "$root\rustup"
         $cargoHome = "$root\cargo"
         $env:RUSTUP_HOME = $rustupHome
@@ -80,13 +93,13 @@ runs:
         "RUSTUP_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
         "PRAX_PIN=$pin" >> $env:GITHUB_ENV
         "NEXUS_CACHES=$caches" >> $env:GITHUB_ENV
-        "NEXUS_BUILD=$caches\build-x64" >> $env:GITHUB_ENV
+        "NEXUS_BUILD=$caches\$buildName" >> $env:GITHUB_ENV
         "PR_DOWNLOAD_DIR=$caches\prax-downloads" >> $env:GITHUB_ENV
         "NEXUS_CARGO_TARGET_DIR=$caches\cargo-target" >> $env:GITHUB_ENV
         "JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
         "TEST_JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
-        "build=$caches\build-x64" >> $env:GITHUB_OUTPUT
-        Write-Output "$env:COMPUTERNAME ($env:RUNNER_NAME): $([Environment]::ProcessorCount) cores; build directory $caches\build-x64"
+        "build=$caches\$buildName" >> $env:GITHUB_OUTPUT
+        Write-Output "$env:COMPUTERNAME ($env:RUNNER_NAME): $([Environment]::ProcessorCount) cores; build directory $caches\$buildName (NEXUS_LTO $($env:LTO))"
     - name: Source times by content
       shell: bash
       run: |
@@ -139,11 +152,12 @@ runs:
         }
     # Configured on every run with every NEXUS_* option given, so a kept CMakeCache.txt (the runner's build directory,
     # shared by every branch that runs there) never decides what is built: another branch's options are set back here.
+    # The window and its logic, and not the link, which on Windows runs inside WSL2 (CMakeLists.txt says why).
     - name: Configure (Release, MSVC x64)
       shell: pwsh
       run: |
         cmake -S . -B $env:NEXUS_BUILD -A x64 "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE" `
-          -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DNEXUS_LINK=OFF
+          -DNEXUS_WINDOW=ON -DNEXUS_WINDOW_LOGIC=ON -DNEXUS_LINK=OFF "-DNEXUS_LTO=$env:NEXUS_LTO"
         if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
     - name: Build
       shell: pwsh
@@ -152,7 +166,7 @@ runs:
       run: |
         $start = Get-Date
         $only = @()
-        if ($env:TARGET) { $only = @("--target", $env:TARGET) }
+        if ($env:TARGET) { $only = @('--target') + @($env:TARGET -split ' ' | Where-Object { $_ }) }
         cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS @only
         if ($LASTEXITCODE -ne 0) { throw "cmake --build exited $LASTEXITCODE" }
         Write-Output "built in $([int]((Get-Date) - $start).TotalSeconds) s"

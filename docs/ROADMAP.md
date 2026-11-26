@@ -63,7 +63,7 @@
 | The upload's storage on the server: each file a blob in the store by its content hash, sent in chunks that resume after a cut, and placed in the AI's incoming/ in one atomic step; waits for the upload design (an earlier draft is in the git history of src/store) (later) | ❌ |
 | Hotkeys to choose an AI's model and effort, in place of the model name that stood under the prompt (later) | ❌ |
 | HDR and wide gamut: the window asks Prax for its HDR swap chain (half floats, extended sRGB, EDR, gamut-mapped to the display) once Prax's display pass keeps alpha for a see-through window, and once nexus draws colours past sRGB or brighter than SDR white (later) | ❌ |
-| Windows: the native overlay window reaches nexus-server inside WSL2 over a local socket, with a functional test across that boundary in CI (wsl2-functional on captain drives the native window through WSL interop); its terminal tabs are WSL2 shells in the WSL2 home directory, never cmd or PowerShell. Waits on Prax: the window needs Prax's Win32 lib/app to compile. nexus-server builds and tests inside WSL2 and on Linux since 2026-11-25, over nexus's workaround for Prax's lib/process link error there (cmake/prax_environ.h) (later) | ❌ |
+| Windows: the native window (Prax's Win32 backend) reaches nexus-server inside WSL2 through the window's link run there, nexus-link-relay, over the relay's standard input and output (mosh's transport does not run natively on Windows), with a functional test across that boundary in CI (wsl2-link on captain runs the window's port through WSL interop); its terminal tabs are WSL2 shells in the WSL2 home directory, never cmd or PowerShell | ✅ |
 | The window reconnects by itself when its server stops or is replaced, and after a crash, with no message and the state cursor grey meanwhile; it names itself (--client) and resends from its first unacknowledged action (--next) | ✅ |
 | Windows depth: hold actions until the relay's Hello is read and the phase is running (wantsWrite, relay_life.cpp:197; the model's Write requires running plus a witness), so a missing or mismatched relay cannot swallow sign-in steps and secrets | ❌ |
 | Windows depth: start wsl.exe with PROC_THREAD_ATTRIBUTE_HANDLE_LIST (relay_port_win.cpp:136) so it does not inherit the pipes of other child processes | ❌ |
@@ -71,7 +71,7 @@
 | Windows depth: close the trace binding gaps (ten of seventeen review plants escaped the trace): constrain ranWell by the relay's run time (RelayLife.tla:171); model the tells as a sequence with a no-repeat invariant; unit tests for the acked_+1 re-cut, acked going down, and ended() after stop(); widen the CI seeds | ❌ |
 | Windows depth: a watchdog for a hung relay; keep the NEXUS_WSL_RELAY test hook out of shipping builds; show a notice when history requests are dropped; show a bubble for a message sent when nextAction()==0 (frame_host.cpp:779-783) | ❌ |
 | Linux desktop window: waits on Prax's Wayland backend (asked of Patrick); until then the Linux build is the server only | ❌ |
-| complete | 12% |
+| complete | 18% |
 
 [Source data](roadmap.sexp)
 

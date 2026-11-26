@@ -545,15 +545,15 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
         keys.push_back(binding);
     }
     for (uint32_t i = 0; i < prJsonCount(d, list); ++i) {
-        const auto name = stringAt(d, prJsonElement(d, list, i));
+        const auto panelName = stringAt(d, prJsonElement(d, list, i));
         Panel panel;
-        if (name == "board" && tab == "sprint") panel = Panel::Board;
-        else if (name == "terminal" && tab == "terminal") panel = Panel::Terminal;
-        else if (name == "spacer") panel = Panel::Spacer;
-        else if (name == "transcript" && (tab == "ai" || tab == "empty")) panel = Panel::Transcript;
-        else if (name == "prompt" && tab == "ai" && promptOpen) panel = Panel::Prompt;
-        else if (name == "account" && tab == "ai") panel = Panel::Account;
-        else if (name == "limit_choice" && tab == "ai") {
+        if (panelName == "board" && tab == "sprint") panel = Panel::Board;
+        else if (panelName == "terminal" && tab == "terminal") panel = Panel::Terminal;
+        else if (panelName == "spacer") panel = Panel::Spacer;
+        else if (panelName == "transcript" && (tab == "ai" || tab == "empty")) panel = Panel::Transcript;
+        else if (panelName == "prompt" && tab == "ai" && promptOpen) panel = Panel::Prompt;
+        else if (panelName == "account" && tab == "ai") panel = Panel::Account;
+        else if (panelName == "limit_choice" && tab == "ai") {
             label = stringAt(d, prJsonMember(d, 0, {"label", 5}));
             accountLabel = stringAt(d, prJsonMember(d, 0, {"limit_account_label", 19}));
             modelLabel = stringAt(d, prJsonMember(d, 0, {"limit_model_label", 17}));
@@ -563,11 +563,11 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
             }
             panel = Panel::LimitChoice;
         }
-        else if (name == "status") panel = Panel::Status;
-        else if (name == "service_reply" && tab == "extension") panel = Panel::ServiceReply;
-        else if (name == "native" && tab == "extension") panel = Panel::Native;
-        else if (name == "text_area" && tab == "extension") panel = Panel::TextArea;
-        else if (name == "label" && tab == "extension") {
+        else if (panelName == "status") panel = Panel::Status;
+        else if (panelName == "service_reply" && tab == "extension") panel = Panel::ServiceReply;
+        else if (panelName == "native" && tab == "extension") panel = Panel::Native;
+        else if (panelName == "text_area" && tab == "extension") panel = Panel::TextArea;
+        else if (panelName == "label" && tab == "extension") {
             label = stringAt(d, prJsonMember(d, 0, {"label", 5}));
             panel = Panel::Label;
         }

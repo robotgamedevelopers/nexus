@@ -237,6 +237,8 @@ jobs:
           config: linux-release
           dir: ${{ env.NEXUS_BUILD }}
           targets: tier_pr_build
+          # Whole-program optimisation is for shipping (CMakeLists.txt NEXUS_LTO); off for a pull request.
+          lto: "OFF"
       # A configure with no options at all takes the defaults that hold here (no window; the window's logic, the link
       # and the sandbox's programs), so a plain `cmake -S . -B build` on Linux builds nexus-server; this proves it.
       - name: Configure with the defaults
@@ -319,15 +321,15 @@ jobs:
       status: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
   # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
-  # the flags): the native window's code and its unit tests, nothing else, on captain's Windows side. On Windows only
-  # the overlay window is native; nexus-server, its store, the driver protocol and supervisor, the link and every test
-  # of them build and run as the Linux build inside WSL2 (the nightly's wsl2-functional) and on Linux (the linux job),
-  # so a native Windows build leaves them out (CMakeLists.txt NEXUS_SERVER_PARTS), and the model checks' walks with
-  # them, which TLC runs on Linux and macOS. What is built here: the libraries the window links (the model and overlay,
-  # the link's states with the accounts, the settings files, the hitch detector, the board's scroller, the terminal
-  # tab's launch line), the formats' tables (nexus_wire), src/platform_win.cpp, their unit tests, and the WSL2 terminal
-  # test, which the nightly runs on captain (it needs a WSL2 distribution). Not the window itself (Prax's Win32 backend
-  # of lib/app does not compile at its pin). The runner's own build directory, on D: (.github/actions/windows-build).
+  # the flags): the native window and its unit tests, on captain's Windows side. On Windows only the overlay window is
+  # native; nexus-server, its store, the driver protocol and supervisor, the link over mosh and every test of them build
+  # and run as the Linux build inside WSL2 (the nightly's wsl2-functional and wsl2-link) and on Linux (the linux job),
+  # so a native Windows build leaves them out (CMakeLists.txt NEXUS_SERVER_PARTS, NEXUS_LINK), and the model checks'
+  # walks with them, which TLC runs on Linux and macOS. What is built here: nexus.exe over Prax's Win32 backend of
+  # lib/app, its window logic, its link to nexus-link-relay inside WSL2 (src/relay/relay_port.h), the libraries it
+  # links, and the unit tests among them that run per pull request (tier_pr_build); the two tests the nightly's
+  # wsl2-terminal and wsl2-link run across the WSL2 boundary are built by its windows-wsl2-test. The runner's own
+  # build directory, on D: (.github/actions/windows-build).
   windows:
     runs-on: [self-hosted, nexus-pr, Windows, X64]
     timeout-minutes: 2
@@ -341,9 +343,14 @@ jobs:
       - name: Build directory, configure and build
         uses: ./.github/actions/windows-build
         with:
-          target: tier_pr_build
+          # What the tier_pr tests run, and the window itself (no tier_pr test runs nexus.exe).
+          target: tier_pr_build nexus
+          # Whole-program optimisation is for shipping (CMakeLists.txt NEXUS_LTO); off for a pull request.
+          lto: "OFF"
       # The fast unit tests (tests/tiers.txt); the slower ones run in the nightly's windows-nightly.
       - name: The tier_pr tests
         run: |
           & ./.github/ctest.ps1 --test-dir "$env:NEXUS_BUILD" -C Release -L '^tier_pr$' -j $env:TEST_JOBS --output-on-failure
           if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }
+      - name: The window was built
+        run: if (-not (Test-Path "$env:NEXUS_BUILD\Release\nexus.exe")) { throw "no nexus.exe in $env:NEXUS_BUILD\Release" }

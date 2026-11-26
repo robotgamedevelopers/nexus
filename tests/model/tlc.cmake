@@ -48,6 +48,8 @@
 #               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance, limit
 #   RECONNECTWALK optional, in place of WALK: tests/sync's reconnect_walk; it is run first and writes
 #               ReconnectTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of cached, no-reset
+#   RELAYWALK   optional, in place of WALK: tests/relay's relay_walk; it is run first and writes
+#               RelayLifeTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of resend, early-end, ack-delivered
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
 #   LOCKWALK    optional, in place of WALK: tests/model's lock_walk program; it is run first and writes
@@ -263,6 +265,19 @@ elseif(DEFINED RECONNECTWALK AND NOT "${RECONNECTWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "reconnect_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED RELAYWALK AND NOT "${RELAYWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "resend" OR FAULTY STREQUAL "early-end" OR FAULTY STREQUAL "ack-delivered")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not resend, early-end or ack-delivered")
+    endif()
+    execute_process(COMMAND "${RELAYWALK}" ${walk_args} "${WORK}/RelayLifeTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "relay_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED SECWALK AND NOT "${SECWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")

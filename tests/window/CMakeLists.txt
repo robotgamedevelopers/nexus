@@ -252,4 +252,13 @@ if(NEXUS_WINDOW)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/state_screenshot.cmake)
         set_tests_properties(window_state_screenshot PROPERTIES LABELS functional TIMEOUT 60)
     endif()
+
+    # On Windows the window's link through WSL2 does not pass a server command on (docs/mock.md), so --server-command
+    # is refused there before any window opens, never accepted and dropped. Without the refusal the window starts the
+    # relay instead and the test times out.
+    if(WIN32 AND TARGET nexus)
+        add_test(NAME window_server_command_refused COMMAND nexus --server localhost --server-command fake-server)
+        set_tests_properties(window_server_command_refused PROPERTIES LABELS functional TIMEOUT 30
+            PASS_REGULAR_EXPRESSION "--server-command is not supported on Windows")
+    endif()
 endif()

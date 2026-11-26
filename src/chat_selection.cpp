@@ -51,8 +51,8 @@ void ChatSelection::select(PrLayoutTextPosition end) {
     PrLayoutNode previous = kPrLayoutNodeNone;
     for (auto it = first; it <= last; ++it) {
         const auto s = prLayoutNodeText(tree_, it->node);
-        const uint32_t a = it == first ? std::min<size_t>(start,s.size) : 0;
-        const uint32_t b = it == last ? std::min<size_t>(stop,s.size) : s.size;
+        const uint32_t a = it == first ? static_cast<uint32_t>(std::min<size_t>(start,s.size)) : 0;
+        const uint32_t b = static_cast<uint32_t>(it == last ? std::min<size_t>(stop,s.size) : s.size);
         if (b > a) {
             if (previous && previous != it->paragraph) text_ += "\n\n";
             previous = it->paragraph;
@@ -71,10 +71,10 @@ std::string ChatSelection::linkAt(PrVec2 point, PrLayoutNode leaf) const {
     for (const auto& link : links_) {
         if (link.leaf != leaf) continue;
         // Hit actual glyph lines. The empty space after a wrapped link belongs to the paragraph.
-        const auto length = prLayoutNodeText(tree_, leaf).size;
+        const auto length = static_cast<uint32_t>(prLayoutNodeText(tree_, leaf).size);
         const auto coords = PrLayoutCoordinates_Viewport;
         std::vector<PrLayoutRect> boxes(prLayoutNodeTextRangeBoxes(tree_, leaf, 0, length, coords, nullptr, 0));
-        prLayoutNodeTextRangeBoxes(tree_, leaf, 0, length, coords, boxes.data(), boxes.size());
+        prLayoutNodeTextRangeBoxes(tree_, leaf, 0, length, coords, boxes.data(), static_cast<uint32_t>(boxes.size()));
         for (const auto box : boxes) {
             const auto r = prLayoutRectToPx(box);
             if (point.x >= r.left && point.x < r.right && point.y >= r.top && point.y < r.bottom) return link.url;
@@ -118,7 +118,7 @@ bool ChatSelection::event(const PrAppEvent& e, PrLayoutNode viewport, const std:
         auto r = prLayoutRectToPx(prLayoutNodeBounds(tree_, p, PrLayoutCoordinates_Viewport));
         PrLayoutTextPosition first{}, last{};
         textNodes(tree_, p, [&](PrLayoutNode leaf) {
-            const auto length = prLayoutNodeText(tree_, leaf).size;
+            const auto length = static_cast<uint32_t>(prLayoutNodeText(tree_, leaf).size);
             if (!length) return;
             const auto bounds = prLayoutRectToPx(prLayoutNodeBounds(tree_, leaf, PrLayoutCoordinates_Viewport));
             if (!first.node) {

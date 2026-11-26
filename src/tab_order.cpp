@@ -803,11 +803,13 @@ KeptDraftsStore fileKeptDraftsStore(std::string path) {
     KeptDraftsStore store;
     store.where = path;
     store.read = [](KeptFile*, std::string* error) {
-        *error = "drafts are not kept on Windows, where the window has no server link";
+        *error = "drafts are not kept across launches on Windows yet: the kept drafts' file and its lock are POSIX only "
+            "(src/tab_order.cpp); this run keeps them in memory";
         return false;
     };
     store.update = [](const KeptChange&, std::string* error) {
-        *error = "drafts are not kept on Windows, where the window has no server link";
+        *error = "drafts are not kept across launches on Windows yet: the kept drafts' file and its lock are POSIX only "
+            "(src/tab_order.cpp); this run keeps them in memory";
         return false;
     };
     return store;

@@ -34,9 +34,9 @@ namespace {
 using namespace style;
 
 // Dedicated theme slots for independently configurable app text. Each uses the kit's UI font.
-constexpr auto kSelectedTabRole = PrKitTextRole_MonoStrong;
-constexpr auto kTabRole = PrKitTextRole_MonoNum;
-constexpr auto kAccountRole = PrKitTextRole_Caption;
+constexpr PrKitTextRole kSelectedTabRole = PrKitTextRole_MonoStrong;
+constexpr PrKitTextRole kTabRole = PrKitTextRole_MonoNum;
+constexpr PrKitTextRole kAccountRole = PrKitTextRole_Caption;
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Records for what no kit part draws: the window's frame and background, the transcript's scroller and column, the chat
@@ -562,10 +562,10 @@ PrKitTextStyle textStyle(PrKitTextRole role, PrKitTone tone, PrKitTextAlign alig
 }
 
 // Dedicated theme slots keep transcript colors independent of controls and the sign-in card.
-constexpr auto kChatTone = PrKitTone_AxisX;
-constexpr auto kPersonTone = PrKitTone_AxisW;
-constexpr auto kNoticeTone = PrKitTone_AxisY;
-constexpr auto kStatusTone = PrKitTone_AxisZ;
+constexpr PrKitTone kChatTone = PrKitTone_AxisX;
+constexpr PrKitTone kPersonTone = PrKitTone_AxisW;
+constexpr PrKitTone kNoticeTone = PrKitTone_AxisY;
+constexpr PrKitTone kStatusTone = PrKitTone_AxisZ;
 
 void paintPendingOutline(void* context, PrVec2 size, PrDrawList* list) {
     const auto& view = *static_cast<View*>(context);
@@ -724,7 +724,7 @@ struct Builder {
             afterHeading = false;
             place.align = PrKitAlign_Stretch;
             prKitPlace(kit, row, place);
-            const auto email = label(row, item.text, textStyle(item.selected ? PrKitTextRole_Strong : kAccountRole, PrKitTone_Inverse, PrKitTextAlign_Center));
+            const auto email = label(row, item.text, textStyle(static_cast<PrKitTextRole>(item.selected ? PrKitTextRole_Strong : kAccountRole), PrKitTone_Inverse, PrKitTextAlign_Center));
             view.accountRows.push_back(row);
             if (item.selected) {
                 auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, row));
@@ -1085,7 +1085,7 @@ struct Builder {
             prKitPlace(kit, tab, tabPlace);
             const auto title = current.empty() ? tab :
                 prKitBox(kit, tab, {}, {.direction = PrKitDirection_Column, .align = PrKitAlign_Start});
-            const auto text = label(title, titleText, textStyle(active ? kSelectedTabRole : kTabRole, PrKitTone_Primary));
+            const auto text = label(title, titleText, textStyle(static_cast<PrKitTextRole>(active ? kSelectedTabRole : kTabRole), PrKitTone_Primary));
             auto titleStyle = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, text));
             auto& colors = titleStyle.groups[PrLayoutGroup_Color];
             auto ink = prLayoutColorStyleRecord(tree, colors);
@@ -1128,7 +1128,7 @@ struct Builder {
             if (!tabs) tabs.reset(prKitTabsCreate());
             if (many && extensions) caption(row, group, textStyle(PrKitTextRole_BodySmall, kStatusTone));
             strip(row, tabs.get(), first, end, group, exchanges,
-                  many && end == model.tab_count() ? PrKitFlex_Fill : PrKitFlex_Fixed);
+                  static_cast<PrKitFlex>(many && end == model.tab_count() ? PrKitFlex_Fill : PrKitFlex_Fixed));
             first = end;
         }
         if (drop.id) {
@@ -1494,7 +1494,7 @@ struct Builder {
             if (tagged != style.messageInks.end()) sourceInk = tagged->second;
         }
         const bool bold = tone == kPersonTone && look.transcriptStyle.personBold;
-        const auto body = textStyle(bold ? PrKitTextRole_Strong : PrKitTextRole_Body, tone);
+        const auto body = textStyle(static_cast<PrKitTextRole>(bold ? PrKitTextRole_Strong : PrKitTextRole_Body), tone);
         const auto plainLabel = [&](PrLayoutNode node) {
             if (trail) textNodes(tree, node, [&](auto leaf) { glyphLight(leaf, 0, *trail, look.transcriptStyle.ink); });
             if (gain != 1 || sourceInk) ink(node, sourceInk.value_or(style.personInk), false, gain);
@@ -1535,7 +1535,7 @@ struct Builder {
             const auto text = prKitText(kit, row, {}, body);
             const auto plain = sourceInk.value_or(tone == kPersonTone ? style.personInk : style.ink);
             for (const auto& run : paragraph.runs) {
-                auto runStyle = textStyle(bold && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role, tone);
+                auto runStyle = textStyle(static_cast<PrKitTextRole>(bold && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role), tone);
                 // Keep Markdown in the paragraph's line flow. The kit's default monospace role is nonwrapping.
                 runStyle.wrap = PrKitWrap_Wrap;
                 const auto span = prKitText(kit, text, {}, runStyle);
@@ -2026,7 +2026,7 @@ struct Builder {
             return;
         }
         if (plan.delivery != policy::Delivery::None) {
-            const auto first = tab.transcript.size();
+            const auto sentAt = tab.transcript.size();
             const auto sent = tab.draft;
             const bool queue = plan.delivery == policy::Delivery::Queue;
             if (view.submit)
@@ -2037,7 +2037,7 @@ struct Builder {
                 model.send(active);
             if (!queue && !sent.empty() && sent.front() != '/' && tab.draft.empty() &&
                     look.transcriptStyle.personFlashPeak > 1 && !prUiUserPreferences(ui).reducedMotion)
-                view.sentFlashes.push_back({tab.id, first, tab.transcriptGeneration, sent, view.time});
+                view.sentFlashes.push_back({tab.id, sentAt, tab.transcriptGeneration, sent, view.time});
         }
         if (!plan.notices.empty()) {
             view.problem.clear();
@@ -2706,7 +2706,7 @@ struct Builder {
                             const auto& result = service.transcript.back();
                             if (result.kind == EntryKind::AI || (result.kind == EntryKind::Notice && look.transcriptStyle.showNotices))
                                 caption(element(window, Part::ReplyRow), result.text, textStyle(PrKitTextRole_Body,
-                                    result.kind == EntryKind::Notice ? kNoticeTone : kChatTone));
+                                    static_cast<PrKitTone>(result.kind == EntryKind::Notice ? kNoticeTone : kChatTone)));
                             break;
                         }
                     }
@@ -2776,7 +2776,7 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps, float opacity,
     type(kAccountRole, kBodySize, kLinePitch);
     theme.types[kAccountRole].weight = card.unselectedWeight;
     type(PrKitTextRole_Strong, kBodySize, kLinePitch);
-    theme.types[PrKitTextRole_Strong].weight = static_cast<int>(card.emailWeight);
+    theme.types[PrKitTextRole_Strong].weight = static_cast<float>(static_cast<int>(card.emailWeight));
     type(PrKitTextRole_BodySmall, kLabelSize, 1.2f * kLabelSize);    // the notice when there are no AIs
     type(PrKitTextRole_Meta, kMetaSize, 1.3f * kMetaSize);           // "queued"
     type(PrKitTextRole_Mono, kToolSize, kToolPitch, true);           // a tool line

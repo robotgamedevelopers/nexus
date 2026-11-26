@@ -57,6 +57,8 @@ jobs:
         with:
           config: linux-release
           dir: ${{ env.NEXUS_BUILD }}
+          # As ci.yml builds this directory (NEXUS_LTO off), so it stays warm for the pull requests.
+          lto: "OFF"
       - name: Record the sources the build was made from
         run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
 
@@ -133,6 +135,9 @@ jobs:
           persist-credentials: false
       - name: Build directory, configure and build
         uses: ./.github/actions/windows-build
+        with:
+          # As ci.yml builds this directory (NEXUS_LTO off), so it stays warm for the pull requests.
+          lto: "OFF"
 
   # The Tailscale shim's primed key directory on each machine (one slot per runner), built and tested with no time limit.
   tailscale:

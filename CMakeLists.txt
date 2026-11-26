@@ -1,6 +1,6 @@
-# nexus: one person and several AIs in one window. The window runs on macOS; on 64-bit Windows it builds against Prax's
-# Win32 backend where Prax allows (NEXUS_WINDOW below), and a native Windows build holds the window's code alone
-# (NEXUS_SERVER_PARTS below); on Linux the parts without a window build and test.
+# nexus: one person and several AIs in one window. The window runs on macOS, and on 64-bit Windows over Prax's Win32
+# backend (NEXUS_WINDOW below), where a native build holds the window's code alone and its link runs inside WSL2
+# (NEXUS_SERVER_PARTS, NEXUS_LINK below); on Linux the parts without a window build and test.
 cmake_minimum_required(VERSION 3.28)
 
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
@@ -77,6 +77,39 @@ FetchContent_Declare(prax
     EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(prax)
 
+# Whole-program optimisation in Release (NEXUS_LTO). Prax turns it on for its own libraries
+# (CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE in its CMakeLists.txt): MSVC's /GL and /LTCG, LLVM bitcode with clang. It is
+# a shipping optimisation: the nightly and shipped builds keep it, and the per-pull-request builds turn it off
+# (.github/actions/windows-build and nexus-build, `lto`), where the whole-program link of each window program took most
+# of the Windows job's 2 minutes (about 53 s for one, run 45856240787). Prax is never patched, so with it off nexus clears
+# the property on every Prax target after Prax is added. tests/build/lto_check.cmake (build_unit_lto) holds the record
+# written here to the option.
+option(NEXUS_LTO "Whole-program optimisation in Release, in Prax's libraries as Prax sets it" ON)
+function(nexus_prax_targets dir out)
+    get_property(targets DIRECTORY "${dir}" PROPERTY BUILDSYSTEM_TARGETS)
+    get_property(subdirs DIRECTORY "${dir}" PROPERTY SUBDIRECTORIES)
+    foreach(sub IN LISTS subdirs)
+        nexus_prax_targets("${sub}" more)
+        list(APPEND targets ${more})
+    endforeach()
+    set(${out} "${targets}" PARENT_SCOPE)
+endfunction()
+nexus_prax_targets("${prax_SOURCE_DIR}" nexus_prax_all_targets)
+set(nexus_prax_ipo_record "NEXUS_LTO=${NEXUS_LTO}\n")
+foreach(target IN LISTS nexus_prax_all_targets)
+    get_target_property(type ${target} TYPE)
+    if(NOT type MATCHES "^(STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$")
+        continue()
+    endif()
+    if(NOT NEXUS_LTO)
+        set_target_properties(${target} PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF
+            INTERPROCEDURAL_OPTIMIZATION OFF)
+    endif()
+    get_target_property(ipo ${target} INTERPROCEDURAL_OPTIMIZATION_RELEASE)
+    string(APPEND nexus_prax_ipo_record "${target} ${ipo}\n")
+endforeach()
+file(WRITE "${CMAKE_BINARY_DIR}/prax-ipo.txt" "${nexus_prax_ipo_record}")
+
 # Prax's lib/process on Linux. At this pin its POSIX backend does not link there: process_posix.cpp (lines 165-173)
 # declares `extern char** environ;` at block scope inside its own unnamed namespace, which names an `environ` nothing
 # defines. Prax is pinned and never patched, so nexus works around it without touching the file: cmake/prax_environ.h,
@@ -110,23 +143,23 @@ else()
 endif()
 
 # The window: the app and the libraries and tests that draw or set text (the view, the terminal tabs, the sprint tab).
-# On by default on macOS only: Prax's lib/app has backends for Cocoa, Win32 and the web, none for Linux, and its
-# lib/font finds the system's fonts through CoreText and DirectWrite only. On Windows, ON builds the app against Prax's
-# Win32 backend, which compiles at this pin (captain, 2026-11-25), but the window's own code still has MSVC /W4 warnings (view.cpp,
-# window_app, chat_selection.cpp, client_home.cpp, terminals.cpp), which /WX makes errors, so it is off there too. Off, everything else still builds and tests:
-# the model, the link's states, the store, the driver protocol and supervisor, nexus-server, and the window's logic.
-option(NEXUS_WINDOW "Build the window (the app, its view, terminals and sprint tab, and their tests)" ${APPLE})
+# On by default on macOS and Windows: Prax's lib/app has backends for Cocoa, Win32 and the web, none for Linux, and its
+# lib/font finds the system's fonts through CoreText and DirectWrite only. On Windows the app builds against Prax's
+# Win32 backend, and its link is nexus-link-relay inside WSL2 (src/relay/relay_wire.h). Off, everything else still
+# builds and tests: the model, the link's states, the store, the driver protocol and supervisor, nexus-server, and the
+# window's logic.
+if(APPLE OR WIN32)
+    set(nexus_window_default ON)
+else()
+    set(nexus_window_default OFF)
+endif()
+option(NEXUS_WINDOW "Build the window (the app, its view, terminals and sprint tab, and their tests)"
+    ${nexus_window_default})
 # The window's logic (src/command.h runCommand, and what uses it: the remote and sprint logic, the link, nexus-server and
 # their tests) starts processes through Prax's lib/process. On by default on macOS and Linux (and so inside WSL2), where
-# lib/process's POSIX backend runs (on Linux over the workaround above, "Prax's lib/process on Linux"). Off by default
-# on Windows, where the window's logic is not built natively yet.
-if(WIN32)
-    set(nexus_window_logic_default OFF)
-else()
-    set(nexus_window_logic_default ON)
-endif()
-option(NEXUS_WINDOW_LOGIC "Build the window's logic over Prax's lib/process, and what uses it (the link included)"
-    ${nexus_window_logic_default})
+# lib/process's POSIX backend runs (on Linux over the workaround above, "Prax's lib/process on Linux"), and on Windows,
+# where it runs over its Win32 backend and the window needs it.
+option(NEXUS_WINDOW_LOGIC "Build the window's logic over Prax's lib/process, and what uses it (the link included)" ON)
 if(NEXUS_WINDOW AND NOT NEXUS_WINDOW_LOGIC)
     message(FATAL_ERROR "nexus: the window needs its logic; configure with -DNEXUS_WINDOW_LOGIC=ON or -DNEXUS_WINDOW=OFF")
 endif()
@@ -139,7 +172,8 @@ endif()
 # without nexus-server and without the window's --server; the model checks need neither. It uses the window's logic, so
 # it is on by default where that is.
 # On Windows only the window (the UI overlay) is native: nexus-server and the mosh link run as the Linux build inside
-# WSL2, which the native window will reach over a local socket. So none of them is built natively on Windows: the link
+# WSL2: the native window starts the window's link there, nexus-link-relay, and talks to it over its standard input and
+# output (src/relay/relay_wire.h says why). So none of them is built natively on Windows: the link
 # is off there and cannot be turned on, and nexus-server's POSIX parts (the real filesystem under the store, the
 # drivers' poll loop, the fake driver and their functional tests) are left out below.
 if(WIN32)
@@ -359,6 +393,16 @@ add_library(nexus_terminal_watch STATIC src/terminal_watch.cpp)
 target_include_directories(nexus_terminal_watch PUBLIC src)
 target_compile_options(nexus_terminal_watch PRIVATE ${NEXUS_WARNINGS})
 
+# The relay (src/relay/relay_wire.h): how the native window on Windows reaches nexus-server through the link run inside
+# WSL2 (nexus-link-relay): its frames, both ends as bytes in and out, and the window's side of the relays' life
+# (relay_life.h, models/RelayLife.tla). No OS, no time, so it builds and is unit-tested
+# everywhere; the relay itself is built with the link (below), and the window's port over wsl.exe on Windows.
+add_library(nexus_relay_wire STATIC src/relay/relay_wire.cpp src/relay/relay_ends.cpp src/relay/relay_life.cpp
+    src/relay/relay_words.cpp)
+target_include_directories(nexus_relay_wire PUBLIC src)
+target_compile_options(nexus_relay_wire PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_relay_wire PUBLIC nexus_sync)
+
 # The formats across versions as schema's variable tables (schema/Nexus.schema), generated and checked in under
 # schema/gen: the library nexus_wire, and the target schema_generate that regenerates it at the pinned schema commit.
 include(cmake/schema.cmake)
@@ -433,6 +477,10 @@ if(NEXUS_LINK)
     if(NEXUS_SANDBOX_TOOLS)
         add_dependencies(nexus-server nexus_sandbox_tools)
     endif()
+    # The window's link for the native window on Windows, run inside WSL2 (src/link/relay_main.cpp, relay/relay_wire.h).
+    add_executable(nexus-link-relay src/link/relay_main.cpp)
+    target_compile_options(nexus-link-relay PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus-link-relay PRIVATE nexus_link nexus_relay_wire)
     # The helper goes beside nexus-server: the server finds it there.
     add_dependencies(nexus-server nexus-signin-open)
     # A test's alone, never shipped: nexus-server built to write each forwarded sign-in callback's query to its log, the
@@ -474,6 +522,9 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
             MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
     else()
         add_executable(nexus WIN32 src/main.cpp src/platform_win.cpp src/lock_win.cpp)
+        # The window's link on Windows: nexus-link-relay inside WSL2, over wsl.exe (src/relay/relay_port.h).
+        target_compile_definitions(nexus PRIVATE NEXUS_RELAY=1)
+        target_link_libraries(nexus PRIVATE nexus_relay_port)
         if(MSVC)
             target_link_options(nexus PRIVATE /ENTRY:mainCRTStartup)
         endif()
@@ -515,11 +566,19 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
 endif()
 
 if(WIN32 AND NOT NEXUS_WINDOW)
-    # The app is not built on Windows until the window's code is clean at /W4 (NEXUS_WINDOW above); its Windows part,
-    # src/platform_win.cpp, is still compiled (never linked) so CI holds it to the same warnings.
+    # A Windows configure with the window off (-DNEXUS_WINDOW=OFF) still compiles its Windows part,
+    # src/platform_win.cpp and src/lock_win.cpp (never linked), so it is held to the same warnings.
     add_library(nexus_platform_win_check OBJECT src/platform_win.cpp src/lock_win.cpp)
     target_compile_options(nexus_platform_win_check PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_platform_win_check PRIVATE prax::surface nexus_model)
+endif()
+
+if(WIN32)
+    # The window's port to nexus-link-relay in WSL2 (src/relay/relay_port.h): the process, its pipes and threads.
+    add_library(nexus_relay_port STATIC src/relay/relay_port_win.cpp)
+    target_include_directories(nexus_relay_port PUBLIC src)
+    target_compile_options(nexus_relay_port PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_relay_port PUBLIC nexus_relay_wire Threads::Threads)
 endif()
 
 enable_testing()
@@ -551,6 +610,11 @@ if(TARGET nexus AND NOT NEXUS_TEST_AUTHENTICATOR)
     set_tests_properties(nexus_no_test_authenticator_detects PROPERTIES LABELS unit TIMEOUT 30
         PASS_REGULAR_EXPRESSION "no_test_authenticator:FOUND")
 endif()
+# NEXUS_LTO reaches Prax's targets (tests/build/lto_check.cmake): a configure-time record, checked in a moment.
+add_test(NAME build_unit_lto COMMAND ${CMAKE_COMMAND} "-DRECORD=${CMAKE_BINARY_DIR}/prax-ipo.txt"
+    -P "${PROJECT_SOURCE_DIR}/tests/build/lto_check.cmake")
+set_tests_properties(build_unit_lto PROPERTIES LABELS unit TIMEOUT 30)
+
 if(TARGET nexus_policy)
     add_executable(policy_reload_test tests/policy/reload.cpp)
     target_link_libraries(policy_reload_test PRIVATE nexus_policy)
@@ -585,6 +649,7 @@ if(NEXUS_SERVER_PARTS)
     add_subdirectory(tests/server)
 endif()
 add_subdirectory(tests/wire)
+add_subdirectory(tests/relay)
 if(NEXUS_LINK)
     add_subdirectory(tests/link)
     # The mock (docs/mock.md): a real nexus-server with fake AIs, for driving the clients. POSIX, as the fake driver is.

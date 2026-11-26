@@ -13,7 +13,7 @@
 ## Platform support
 
 - **macOS 26 or newer on Apple silicon** supports the full desktop chat experience. The same Mac can run the client and server.
-- **Windows x64** has native window code and tested WSL2 terminal support. Connecting that window to the Nexus server for chat is still in development.
+- **Windows x64** builds the native window, which talks to `nexus-server` inside WSL2 through `nexus-link-relay` there; its terminal tabs are WSL2 shells. CI tests the link across the WSL2 boundary. Attachment upload and drafts kept across launches are not on Windows yet.
 - **Linux** (and WSL2 on Windows) runs `nexus-server` and the drivers, built and tested in CI. The desktop client waits on a Wayland backend in Prax, the UI library it is built on.
 - **Apple Watch** (watchOS 26 or newer): talk to your AIs, and they talk back, through the nexus iPhone app. The watch app runs in the simulator; the iPhone's side of its relay is still in development. [The watch](docs/watch.md)
 

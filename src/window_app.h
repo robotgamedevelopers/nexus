@@ -53,8 +53,8 @@ struct PromptStyle {
     float caretHeight = style::kCursorHeight, caretRadius = style::kCursorRadius, caretSeconds = 1.5f;
     float caretHold = 0.1f, caretFallRatio = 0.5f;
     PrVec2 segmentSize(float scale) const {
-        const float height = caretHeight * scale;
-        return {height * caretAspect, height};
+        const float h = caretHeight * scale;
+        return {h * caretAspect, h};
     }
     bool bold = false, showPlus = false;
     bool operator==(const PromptStyle&) const = default;
