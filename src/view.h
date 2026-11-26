@@ -1,7 +1,7 @@
 // The window, declared each round as a Prax layout tree over lib/ui and Studio Kit: the tab strip (kit tabs), the
 // transcript and the prompt (a kit text area). Prax lays it out, paints it, routes input to it, edits the prompt's text
-// and keeps the transcript at its newest entry. The view keeps only what Prax does not: each friend's transcript scroll
-// while another tab shows. Under a friend's transcript come the open entry as it grows, then the state cursor on its
+// and keeps the transcript at its newest entry. The view keeps only what Prax does not: each AI's transcript scroll
+// while another tab shows. Under an AI's transcript come the open entry as it grows, then the state cursor on its
 // own line (cursor.h), coloured from the server's state and breathing while a turn is open.
 
 #pragma once
@@ -96,7 +96,7 @@ struct SecretAsk {
     std::uint64_t id = 0;       // the request's id: a new one opens the dialog afresh
     std::string account;
     std::string what;           // the file asked for, such as oauth-token
-    std::string asker;          // who asks: a friend, or empty for nexus itself
+    std::string asker;          // who asks: an AI, or empty for nexus itself
     std::string why;            // the asker's one-line reason, shown as quoted text
 };
 
@@ -112,13 +112,27 @@ struct Secrets {
     virtual void cancel() = 0;                      // Escape, or the dialog closed: the request is cancelled
 };
 
+// The window's question for its server where nothing names one (server_choice.h): on iOS, at first launch and when
+// the person asks to change it. Our own seam, so that the dialog draws in a state shot without a link.
+struct ServerChoice {
+    virtual ~ServerChoice() = default;
+    virtual bool asking() = 0;                      // the dialog shows
+    virtual std::string_view current() = 0;         // the server kept now, or empty for none
+    virtual std::string_view typed() = 0;           // the field's text, valid for the round
+    virtual std::string_view problem() = 0;         // why the last Enter was not taken, or empty
+    virtual void type(std::string_view text) = 0;   // the field's text changed
+    virtual void submit() = 0;                      // Enter: checked, then kept and used, or a problem
+    virtual void change() = 0;                      // the person asks to change the server: the dialog opens
+    virtual void cancel() = 0;                      // closed: with a server kept, the dialog closes; else it stays
+};
+
 // The kit's record of one tab strip's tabs (pr/kit_choice.h PrKitTabs), freed with the view.
 struct KitTabsFree {
     void operator()(PrKitTabs* tabs) const { prKitTabsDestroy(tabs); }
 };
 using KitTabs = std::unique_ptr<PrKitTabs, KitTabsFree>;
 
-// A friend's transcript as the view lays it out (view.cpp transcript). Only the items in sight, and a screen's height
+// An AI's transcript as the view lays it out (view.cpp transcript). Only the items in sight, and a screen's height
 // either side, are declared each round; spacers stand for the rest, so the scroll covers the whole transcript and a
 // round costs the same with fifty entries or fifty thousand. An item is an entry, or a run of tool lines, which stand
 // together. Each item's height is the one it took at its last layout, or until then an estimate from its text.
@@ -138,6 +152,10 @@ struct TranscriptItems {
 
 struct View {
     std::function<void(const Chirp&)> playChirp;
+    // Plays a cue through playChirp, and none while locked (lockScreen): no sound says what an AI did.
+    void chirp(const Chirp& cue) const {
+        if (!lockScreen && playChirp) playChirp(cue);
+    }
     struct GlyphTrail {
         struct Range { size_t start, end; double birth; };
         size_t tab = SIZE_MAX, entry = SIZE_MAX;
@@ -189,15 +207,32 @@ struct View {
     std::function<std::string(const std::string& service, const std::string& text)> requestService;
     std::string extensionProblem;
     int askedTextSteps = 0;                     // the text scale the keys asked for, applied at the next frame's start
+    // The share of the policy's prompt width the prompt box and the transcript's column take, applied at the next
+    // frame's start: 1 on a desktop, style::kRegularWidthColumn on an iPad (main_ios.cpp).
+    float columnScale = 1;
+    // The AI's replies take the column's whole width rather than the policy's reply_width, applied at the next frame's
+    // start: false on a desktop and an iPad, true on a compact width (an iPhone, main_ios.cpp), where the policy's share
+    // wraps a reply at about half the screen.
+    bool fullWidthReplies = false;
+    // The dialogs typed into (the server, a secret) stand at the window's top rather than its centre: true on iOS and
+    // iPadOS (main_ios.cpp), where the on-screen keyboard covers the window's lower part and a modal is placed over
+    // the whole window.
+    bool dialogsAtTop = false;
+    // A tap outside the prompt's box ends editing, and the on-screen keyboard goes down, as in other apps: true on iOS
+    // and iPadOS (main_ios.cpp). A drag or a scroll is no tap, and a tap on a tab or in the prompt's box ends nothing
+    // (FrameHost::watchTap). The draft stays.
+    bool tapEndsEditing = false;
+    bool promptDismissed = false;               // a tap ended editing: the prompt does not take the focus back until
+                                                // a press in its box, a key, or another tab
     std::string notice;                         // shown in place of the transcript when there are no tabs
     std::function<void()> hide;                 // Escape: hides the overlay (overlay.h escape); unset when
                                                 // windowed, where Escape does nothing
-    std::function<void()> stop;                 // Command-Escape on a friend's tab: stops the friend's work (with a
+    std::function<void()> stop;                 // Command-Escape on an AI's tab: stops the AI's work (with a
                                                 // server, a stop action for the server to decide); unset, nothing
-    // With a server: the friend's text still growing in the session a friend's tab (by Tab::id) shows, the open entry
+    // With a server: the AI's text still growing in the session an AI's tab (by Tab::id) shows, the open entry
     // (sync/mirror.h Mirror::open), shown after the transcript as it grows; null or empty for none. Unset: none.
     std::function<const std::string*(std::size_t id)> growing;
-    // With a server: the state cursor of a friend's tab (by Tab::id), under its last text (cursor.h). Unset: none.
+    // With a server: the state cursor of an AI's tab (by Tab::id), under its last text (cursor.h). Unset: none.
     std::function<CursorState(std::size_t id)> cursor;
     std::function<unsigned(std::size_t)> activeAgents;
     std::string choiceKind, choiceValue;
@@ -217,7 +252,7 @@ struct View {
     std::string helpText;
     std::string problem;                        // why the last prompt was not sent, until one is: a dim line at the
                                                 // end of the transcript, never beside the prompt
-    // With a server (main.cpp --server): Enter and Command-Enter on a friend's tab call this with the tab's position
+    // With a server (main.cpp --server): Enter and Command-Enter on an AI's tab call this with the tab's position
     // and whether it queues, in place of the model's send and queue; the server's state comes back into the model.
     std::function<void(std::size_t tab, bool queue)> submit;
     std::function<void(std::size_t tabId)> clearOpen;
@@ -239,7 +274,7 @@ struct View {
     // Command-V in the prompt: reads the clipboard, whose text comes back as a Paste event through the host, which cuts
     // it to the room the prompt has left (frame_host.h); unset, the text area pastes on its own, uncut.
     std::function<void()> paste;
-    // Text cut to fit the prompt (kPromptBytes): one dim line at the end of the transcript of the friend's tab it was
+    // Text cut to fit the prompt (kPromptBytes): one dim line at the end of the transcript of the AI's tab it was
     // cut on (`cutTab`, by Tab::id), saying how much was left out (cutLine), until that draft changes. The transcript
     // goes to its end once to show it (`cutFollow`). While the cut text is on its way into the prompt (`cutComing`, a
     // Paste event for the next frame), the change it makes is not a change of the draft; once it is in, `cutDraft` is
@@ -249,10 +284,10 @@ struct View {
     std::string cutDraft;
     bool cutComing = false;
     bool cutFollow = false;
-    bool promptOpen = true;                     // false: no prompt on a friend's tab (before the server is reached)
+    bool promptOpen = true;                     // false: no prompt on an AI's tab (before the server is reached)
     std::string status;                         // one plain line where the prompt stands (the link's state); empty,
                                                 // none
-    std::function<void(const Tab&)> dismissFriend; // local close; the server still owns the friend and session
+    std::function<void(const Tab&)> dismissAI; // local close; the server still owns the AI and session
     std::function<void()> restoreTabLayout;      // after the effective group policy is installed
     std::function<void()> moved;                // after a drag moved a tab: saves the order (tab_order.h)
     std::function<void()> selected;             // after a round that changed the selected tab (by Tab::id), the
@@ -262,15 +297,17 @@ struct View {
     std::function<void()> scaled;               // after a frame's start applied a new text scale (look->textSteps),
                                                 // the first one included: saves it (tab_order.h)
     Secrets* secrets = nullptr;                 // the secret dialog's requests and field; unset, none ever shows
+    ServerChoice* serverChoice = nullptr;       // the server dialog (iOS); unset, it never shows
+    bool serverShown = false;                   // the server dialog showed last round
     std::uint64_t secretShown = 0;              // the request the dialog showed last round (0: none)
     PrLayoutNode secretField = kPrLayoutNodeNone;   // its field, as the last round built it
-    // Each friend's transcript scroll from the top in px, by Tab::id, kept while another shows; kAtEnd while it showed
+    // Each AI's transcript scroll from the top in px, by Tab::id, kept while another shows; kAtEnd while it showed
     // its newest entry, where it follows what arrives.
     static constexpr float kAtEnd = -1;
     std::vector<float> scrolls;
-    std::vector<TranscriptItems> items;         // each friend's transcript as laid out, by Tab::id
-    std::size_t shown = ~std::size_t(0);        // the friend (Tab::id) the transcript showed last round
-    std::size_t prompted = ~std::size_t(0);     // the friend (Tab::id) whose draft the prompt edited last round
+    std::vector<TranscriptItems> items;         // each AI's transcript as laid out, by Tab::id
+    std::size_t shown = ~std::size_t(0);        // the AI (Tab::id) the transcript showed last round
+    std::size_t prompted = ~std::size_t(0);     // the AI (Tab::id) whose draft the prompt edited last round
     uint32_t promptRows = 1;                    // lines of text the prompt showed at the last layout
     PrLayoutNode prompt = kPrLayoutNodeNone;    // the prompt's text area, as the last round built it
     PrLayoutNode promptBox = kPrLayoutNodeNone; // the rounded box that holds the plus and the text area
@@ -278,6 +315,16 @@ struct View {
     PrLayoutNode transcript = kPrLayoutNodeNone; // the transcript's scroller, as the last round built it
     PrLayoutNode boardBox = kPrLayoutNodeNone;  // the box that holds the sprint tab's page, as the last round built it
     HitchDetector* hitch = nullptr;             // names each terminal tab's update and show as a phase; null, none
+    // The client lock (client_lock.h): set while the window is locked. A round then builds the lock screen alone, its
+    // title and message: no tab strip, no AI tabs or their names, no transcript or prompt, no terminal, no Dashboard,
+    // no dialog. The terminals' shells and the board keep running unseen (each round services them as hidden). Return
+    // or a click on it calls `unlock` (asks the system again); Escape hides the overlay (`hide`).
+    struct LockScreen {
+        std::string title;
+        std::string message;
+    };
+    std::optional<LockScreen> lockScreen;
+    std::function<void()> unlock;
 };
 
 // The most a prompt holds, in bytes: the server's text limit (sync/hub.h Limits::text), past which the server refuses a
@@ -289,11 +336,11 @@ constexpr std::size_t kPromptBytes = 32 * 1024;
 // 1,048,576 bytes were left out: the prompt holds 32 KB."
 std::string cutLine(std::size_t given, std::size_t kept);
 
-// The bytes the prompt of the friend's tab that shows can still take: kPromptBytes less its draft, plus the bytes
+// The bytes the prompt of the AI's tab that shows can still take: kPromptBytes less its draft, plus the bytes
 // selected in it (`ui`'s selection of view.prompt), which what comes in replaces. Zero on any other tab.
 std::size_t promptRoom(const View& view, PrUi* ui);
 
-// Notes that text of `given` bytes was cut to `kept` on the friend's tab that shows (View::cut): `coming`, the kept text
+// Notes that text of `given` bytes was cut to `kept` on the AI's tab that shows (View::cut): `coming`, the kept text
 // is still on its way into the prompt.
 void promptCut(View& view, std::size_t given, std::size_t kept, bool coming);
 
@@ -310,8 +357,8 @@ bool windowWantsFrame(const View& view);
 
 // Declares the whole window for one round under `parent`, or as the root if `parent` is kPrLayoutNodeNone, and applies
 // the round's input: tab clicks and drags (reordering), Command-1 to Command-0 (by position), the text scale's keys,
-// Command-T (a terminal tab) and Command-W (closes a terminal tab), on a friend's or the sprint tab Escape (hide), and
-// on a friend's tab Command-Escape (stop), the prompt's edits, and its Enter and Command-Enter. The sprint tab stands
+// Command-T (a terminal tab) and Command-W (closes a terminal tab), on an AI's or the sprint tab Escape (hide), and
+// on an AI's tab Command-Escape (stop), the prompt's edits, and its Enter and Command-Enter. The sprint tab stands
 // first in a strip of its own, which nothing is dragged into or out of, and shows its page (or the line that says why
 // there is none) with no prompt. A terminal tab shows its terminal in place of the transcript and the prompt; terminals
 // that do not show are serviced, and one whose shell ended closes.

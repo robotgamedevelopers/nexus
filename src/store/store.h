@@ -29,7 +29,7 @@
 // then each change: u8 kind and its frame (bytes: a u32 length and the bytes), which holds for an append the entry,
 // for an enqueue str prompt, for a dequeue nothing (the queue's oldest prompt leaves it), for a driver the driver and
 // its tail, for an info the info and its tail; then str client (empty: none) and u64 its new counter. An entry: its
-// frame, holding u8 kind, u8 closed, str text. An info: str friend, str harness, str account, str model, str effort;
+// frame, holding u8 kind, u8 closed, str text. An info: str AI, str harness, str account, str model, str effort;
 // its tail: str instance. A driver: u64 next turn, u64 open turn, str session, u32 waiting prompts (str); its tail: u8
 // summary (1: the next send carries a summary of the conversation), str the directory its session was made in. The
 // snapshot: u8 format (4); u8 the oldest format a reader must know (4); u64 next session id; u32 sessions, each a frame
@@ -37,7 +37,7 @@
 // clients, each str client, u64 counter. Little-endian; str is a u32 length and the bytes (codec.h).
 //
 // The tails were added to formats 3 and 4 at the end of their frames, so a reader from before them skips them, and
-// neither format's number nor its reader byte changed. A frame without them reads as their defaults: the friend's
+// neither format's number nor its reader byte changed. A frame without them reads as their defaults: the AI's
 // default instance, no summary owed, and the directory not known. A driver record or session snapshot frame may
 // end with 0xA1 and str session account. An absent owner makes a harness ID ineligible for resume.
 //
@@ -47,10 +47,10 @@
 // reader must know, one later than its own. Format 2 records and format 3 snapshots, by session, are the same without
 // the frames and the reader byte, and hold entry kinds 0 to 2 only; they are read as they are, never rewritten.
 //
-// Older stores, keyed by friend tab: a record of format 1 names its tab by the friend's name where format 2 has the
+// Older stores, keyed by AI tab: a record of format 1 names its tab by the AI's name where format 2 has the
 // session; a snapshot of format 2 has no next id, and its tabs (in name order) are each str name, the entries, the
 // prompts and the driver; one of format 1 (before drivers) has no driver. They are read, and migrated as they are
-// read: each tab becomes a session with its friend, the harness StoreOptions::legacy_harness and the defaults, its
+// read: each tab becomes a session with its AI, the harness StoreOptions::legacy_harness and the defaults, its
 // transcript, queue and driver intact; the snapshot's tabs get ids 1, 2, ... in name order, and a tab a record names
 // first the next id. A store found in an older format is compacted at open, so it is in this format from then on (a
 // crash during that leaves the older one, read again the same way). The older formats are never written.
@@ -60,9 +60,9 @@ namespace nexus::store {
 // is still read. 3 and 4 frame each change, entry and session by its length, so that a later format's additions are
 // skipped by this build, as long as that format declares this one can read it. A placed build lists them in its
 // manifest (server/build_manifest.h), and a switch keeps the rule they make.
-constexpr std::uint8_t kRecordFormat = 3;       // 2: by session, unframed; 1: a friend tab's, by name, migrated
+constexpr std::uint8_t kRecordFormat = 3;       // 2: by session, unframed; 1: an AI tab's, by name, migrated
 constexpr std::uint8_t kRecordReader = 3;       // the oldest record format a reader must know to read ours
-constexpr std::uint8_t kSnapshotFormat = 4;     // 3: by session, unframed; 2: friend tabs; 1: before drivers
+constexpr std::uint8_t kSnapshotFormat = 4;     // 3: by session, unframed; 2: AI tabs; 1: before drivers
 constexpr std::uint8_t kSnapshotReader = 4;
 
 // An entry of a transcript. The store keeps kind as the server gives it (sync's EntryKind); an open entry (closed
@@ -92,14 +92,14 @@ struct Driver {
     bool operator==(const Driver&) const = default;
 };
 
-// What a session is (sync's SessionInfo): the friend it is with, its harness, account, model and effort.
+// What a session is (sync's SessionInfo): the AI it is with, its harness, account, model and effort.
 struct Info {
-    std::string friend_name;
+    std::string ai_name;
     std::string harness;
     std::string account;
     std::string model;
     std::string effort;
-    std::string instance{};     // the friend's instance (empty: its default)
+    std::string instance{};     // the AI's instance (empty: its default)
     bool auto_account = false;
     bool operator==(const Info&) const = default;
 };
@@ -123,7 +123,7 @@ struct Change {
 
 struct StoreOptions {
     std::uint64_t compact_bytes = 4 << 20;  // the log is compacted past this many bytes
-    std::string legacy_harness = "claude";  // the harness of a session migrated from a friend tab
+    std::string legacy_harness = "claude";  // the harness of a session migrated from an AI tab
     // Test-only, for the trace binding's negative check (tests/store/store_lock_walk.cpp --faulty-unlocked), which TLC
     // must reject: open without the lock, as nexus-server did before it had one. Never set by the server or a tool.
     bool test_unlocked = false;
@@ -141,7 +141,7 @@ struct OpenReport {
     bool fresh = false;          // nothing there: a new store
     std::uint64_t records = 0;   // records replayed after the snapshot
     std::uint64_t cut_bytes = 0; // bytes of torn tail cut from the log
-    std::uint64_t migrated = 0;  // sessions made from the friend tabs of an older format (then compacted into this one)
+    std::uint64_t migrated = 0;  // sessions made from the AI tabs of an older format (then compacted into this one)
     std::uint64_t skipped = 0;   // unknown changes and frames with trailing fields from a later format skipped on replay
 };
 

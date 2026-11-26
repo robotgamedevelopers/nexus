@@ -34,7 +34,7 @@ std::string projection(const DurableStore& store) {
         std::size_t visible = 0;
         for (const auto id : store.ids()) {
             const auto* session = store.find(id);
-            if (session->info.friendName == name)
+            if (session->info.aiName == name)
                 visible += std::count_if(session->transcript.begin(), session->transcript.end(),
                     [](const EntryRef& entry) { return entry->kind == EntryKind::Bus; });
         }
@@ -56,7 +56,7 @@ void writeTrace(std::ostream& out) {
         if (!store->open(fs, "store", &why)) throw std::runtime_error(why);
         hub = std::make_unique<Hub>(*store, Limits{}, &driver);
         accounts::Registry registry;
-        for (const auto* name : inboxes) registry.friends.push_back({name, {}, {}, {}});
+        for (const auto* name : inboxes) registry.ais.push_back({name, {}, {}, {}});
         hub->useAccounts(registry, nullptr);
     };
     open();
@@ -125,7 +125,7 @@ int main(int argc, char** argv) {
             Driver driver;
             Hub hub(store, Limits{}, &driver);
             accounts::Registry roster;
-            roster.friends.push_back({"ada", {}, {}, {}});
+            roster.ais.push_back({"ada", {}, {}, {}});
             hub.useAccounts(roster, nullptr);
             writePeerTrace(out, hub, store);
         } else {

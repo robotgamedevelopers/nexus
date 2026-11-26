@@ -37,10 +37,10 @@ int main() {
     nexus::WindowApplication window;
     const std::string ui = R"({"tabs":[)"
         R"({"kind":"sprint","label":"sprint","group":"","type":""},)"
-        R"({"kind":"friend","label":"rowan","group":"","type":""},)"
-        R"({"kind":"friend","label":"stella","group":"","type":""}],)"
+        R"({"kind":"ai","label":"rowan","group":"","type":""},)"
+        R"({"kind":"ai","label":"stella","group":"","type":""}],)"
         R"("dismissed":false,"help_visible":false,"draft":"","logout":false})";
-    window.update(host, "friend", "", true, false, 1, 3, "", {}, false, {}, ui);
+    window.update(host, "ai", "", true, false, 1, 3, "", {}, false, {}, ui);
     const std::vector<std::string> expected{"Dashboard", "Rowan", "Stella"};
     if (window.surface.tabTitles != expected)
         std::fprintf(stderr, "tab titles: [%s], expected [%s]\n", joined(window.surface.tabTitles).c_str(),

@@ -7,7 +7,7 @@ BrokenFirst(s) == Max(0, Len(s) - W - 1)
 BrokenSnap(sess, trs, qs, ops) ==
     [i \in Ids |-> IF sess[i] = NoSes THEN NoSnap
                    ELSE LET s == trs[i] IN
-                        [friend  |-> sess[i].friend,
+                        [ai  |-> sess[i].ai,
                          first   |-> BrokenFirst(s),
                          entries |-> SubSeq(s, TailFirst(s) + 1, Len(s)) \o OpenOf(ops, i),
                          queue   |-> qs[i]]]

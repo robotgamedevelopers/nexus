@@ -13,7 +13,7 @@ BrokenAdd ==
     /\ nextId' = IF Free = {} THEN nextId + 1 ELSE nextId
     /\ history' = Touch(history, Reused)
     /\ last' = DidAdd(Reused)
-    /\ UNCHANGED <<friends, transcript, draft, queue>>
+    /\ UNCHANGED <<ais, transcript, draft, queue>>
 
 BrokenSpec == Init /\ [][NextWithAll(SelectTab, SetDraft, Send, Queue, AppendEntry, MoveTab, BrokenAdd,
                                      CloseTab)]_vars

@@ -7,7 +7,7 @@
 // outside the token's own. The harness must still authenticate: the fake API must see the token as the bearer.
 //
 // It runs twice: with the whole wall, and with the hook (the backstop) left out, to show that the walls under it hold
-// alone. Twice more for a friend limited to its directory (kLimitedRoutes; docs/accounts.md, "limit"), with the hook and
+// alone. Twice more for an AI limited to its directory (kLimitedRoutes; docs/accounts.md, "limit"), with the hook and
 // without it: it must read nothing outside its directory, a planted private key above all, and still work inside it. A functional test (real processes, a real socket, the OS sandbox): `npm run test:functional`, never in the
 // unit tests. It needs the platform's Claude executable (npm ci with optional packages) and, on Linux, bubblewrap.
 // It never uses a real token, never reads ~/.nexus and never prints an environment.
@@ -74,12 +74,12 @@ interface Probe {
     input: Record<string, unknown>;
     expect?: string | readonly string[];    // what the result must say (one of): a call that must work, not a leak
     hookOnly?: boolean;                     // expect holds only with the hook (the run without it checks no leak only)
-    never?: string;                         // what the result must not say: a file a limited friend must not read
+    never?: string;                         // what the result must not say: a file a limited AI must not read
     open?: string;                          // a read docs/secrets.md lists as open: reported as read or refused, not checked
 }
 
 // Planted in every run's HOME (runWall), outside the work directory: another project's file and a private key, each
-// holding a word nothing else has. An unlimited friend reads the first; a limited one reads neither.
+// holding a word nothing else has. An unlimited AI reads the first; a limited one reads neither.
 const kOutside = 'elsewhere/notes.txt';
 const kOutsideWord = 'nexusoutside';
 const kKey = '.ssh/id_ed25519';
@@ -235,7 +235,7 @@ const kRoutes: Probe[] = [
     { route: 'own work: nexus_ask_secret alias resolves to the MCP tool', tool: kSecretToolName,
         input: { account: 'main', what: 'oauth-token', why: 'alias' },
         expect: 'asked main oauth-token: alias' },
-    // An unlimited friend (the default before friends.json had "limit") reads the rest of the home directory.
+    // An unlimited AI (the default before ais.json had "limit") reads the rest of the home directory.
     { route: 'unlimited: the shell reads a file outside the work directory', tool: 'Bash', expect: kOutsideWord,
         input: { command: `cat "$HOME/${kOutside}" 2>&1; true` } },
     { route: 'unlimited: Read reads a file outside the work directory', tool: 'Read', expect: kOutsideWord,
@@ -244,7 +244,7 @@ const kRoutes: Probe[] = [
 ];
 
 /**
- * A friend limited to its directory (docs/accounts.md, "limit"; wall.ts limitOf): it reads neither the other project's
+ * An AI limited to its directory (docs/accounts.md, "limit"; wall.ts limitOf): it reads neither the other project's
  * file nor the private key by the shell or the file tools, by a link or a search; writes nothing outside; and works in
  * its own directory: writes and edits a file, builds and runs a small program, and commits with git. Two token routes
  * show the token wall still stands beside the limit.
@@ -521,7 +521,7 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
         { mode: 0o600 });
     // For the limit's other spellings: the shell's history files, a folder named with an accent, a file in a PATH folder
     // inside HOME and a shell start-up file (both open, docs/secrets.md), and a volume-like root of its own beside HOME
-    // (kept out by the driver's --keep-out, as friends.json's "limit_keeps_out" names another data root), with a PATH folder holding a
+    // (kept out by the driver's --keep-out, as ais.json's "limit_keeps_out" names another data root), with a PATH folder holding a
     // program and a file beside that folder. Its name has an accent, composed, for the look-alike spelling's probe.
     writeFileSync(join(home, '.bash_history'), `${kOutsideWord}\n`);
     writeFileSync(join(home, '.zsh_history'), `${kOutsideWord}\n`);
@@ -591,7 +591,7 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
     };
     mkdirSync(base['TMPDIR'] ?? '', { recursive: true });
     let stderr = '';
-    // A limited friend's directory as the driver resolves it, once (run.ts prepare): the path checked, allowed and
+    // A limited AI's directory as the driver resolves it, once (run.ts prepare): the path checked, allowed and
     // given to Claude.
     const cwd = limited ? realpathSync(work) : work;
     const q = query({
@@ -668,7 +668,7 @@ function check(name: string, run: Run, hook: boolean, probes: Probe[]): void {
     assert.equal(run.hookRan, false, `${name}: a hook planted in the settings ran`);
     assert.equal(run.socketHits, 0, `${name}: a command reached a local socket outside the sandbox`);
     if (probes === kLimitedRoutes) {
-        assert.deepEqual(run.wroteOutside, [], `${name}: a limited friend wrote outside its directory`);
+        assert.deepEqual(run.wroteOutside, [], `${name}: a limited AI wrote outside its directory`);
     }
     assert.ok(run.authenticated, `${name}: Claude did not authenticate with the token`);
     assert.ok(run.tools.has(kSecretMcpToolName), `${name}: Claude did not expose ${kSecretMcpToolName}`);
@@ -683,7 +683,7 @@ function check(name: string, run: Run, hook: boolean, probes: Probe[]): void {
 // a run too slow fails and says so, rather than the job being cancelled with nothing reported. A run takes 8 to 25 s,
 // and 47 to 53 s on WSL2 under load (CI, 2026-11-15).
 const kRunMs = 60_000;
-// The third and fourth are a friend limited to its directory (kLimitedRoutes), with the whole wall and without the hook.
+// The third and fourth are an AI limited to its directory (kLimitedRoutes), with the whole wall and without the hook.
 const kAll = [['whole-wall', true, false], ['without-the-hook', false, false], ['limited', true, true], ['limited-nohook', false, true]] as const;
 const kOnly = process.env['NEXUS_WALL_RUN'];
 const kRuns = kTryFile !== undefined ? [['tried', true, false]] as const

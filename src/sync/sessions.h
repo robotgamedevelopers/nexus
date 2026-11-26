@@ -1,5 +1,5 @@
 // Down, server to client: the sessions as nexus-server holds them, the state mosh's Transport carries from nexus-server
-// to the window (src/link). The server is its only writer. Per session: its id, what it is (the friend it is with, its
+// to the window (src/link). The server is its only writer. Per session: its id, what it is (the AI it is with, its
 // harness, account, model and effort), the tail of its transcript (the newest entries, where an entry may grow until
 // it is closed) and its queue. Nothing in it names a tab, a selection or an order the window shows: which session a
 // tab shows is the window's own business (sync/mirror.h). models/Link.tla is the model; tests/sync/link_walk.cpp binds
@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "model.h"
+#include "sync/dashboards.h"
 #include "sync/formats.h"
 #include "sync/secrets.h"
 #include "sync/signin.h"
@@ -48,19 +49,19 @@ struct AccountChoice {
     bool operator==(const AccountChoice&) const = default;
 };
 
-// What a session is, apart from its transcript and queue: the friend it is with (an attribute, so that a window can
-// group sessions by friend; it names no tab), the harness its driver runs (Claude, for now), the account the driver
-// runs under, the model and effort each turn is sent with, and the friend's instance it belongs to (the machine and
+// What a session is, apart from its transcript and queue: the AI it is with (an attribute, so that a window can
+// group sessions by AI; it names no tab), the harness its driver runs (Claude, for now), the account the driver
+// runs under, the model and effort each turn is sent with, and the AI's instance it belongs to (the machine and
 // directory it runs in), so that a window can also group sessions by instance. An empty account, model or effort is
 // the harness's default.
 struct SessionInfo {
-    std::string friendName;
+    std::string aiName;
     std::string harness;
     std::string account;
     std::string model;
     std::string effort;
-    std::string instance{};     // which of its friend's instances (accounts/registry.h): a machine and a directory; empty
-                                // before the server holds the friend's instances, or when the friend has none
+    std::string instance{};     // which of its AI's instances (accounts/registry.h): a machine and a directory; empty
+                                // before the server holds the AI's instances, or when the AI has none
     bool autoAccount = false;    // account names the concrete credential in both modes
     // Published by the server while a turn is paused. Empty targets are unavailable options.
     std::uint64_t limitRequest = 0;
@@ -84,19 +85,19 @@ using EntryRef = std::shared_ptr<const SessionEntry>;
 
 inline constexpr char kAutoAccountTarget[] = "!auto";  // reserved SetAccount intent, invalid as a registry name
 
-// A friend the server holds (accounts/registry.h, its friends.json): what a window needs to show the friend's tab and
-// to start a session with it (an ensure naming it). The server is the authority on who the friends are; the window
-// shows them. A later version adds fields here and in schema/Nexus.schema's Friend.
-struct ServerFriend {
+// An AI the server holds (accounts/registry.h, its ais.json): what a window needs to show the AI's tab and
+// to start a session with it (an ensure naming it). The server is the authority on who the AIs are; the window
+// shows them. A later version adds fields here and in schema/Nexus.schema's AI.
+struct ServerAI {
     std::string name;
     std::vector<AccountChoice> accounts{};   // in link order, empty with an older server
     bool canAutoAccount = false;
-    bool operator==(const ServerFriend&) const = default;
+    bool operator==(const ServerAI&) const = default;
 };
 
-// What the friend of a session is doing, as the server holds it now (server/supervisor.h Supervisor::activity): Busy
+// What the AI of a session is doing, as the server holds it now (server/supervisor.h Supervisor::activity): Busy
 // while a turn is open or about to begin (a prompt waits, the driver starts, a stop is out); Idle when nothing runs and
-// nothing will until the person sends (every queued prompt taken); Down when the friend cannot run (its driver crashed,
+// nothing will until the person sends (every queued prompt taken); Down when the AI cannot run (its driver crashed,
 // failed to start too many times in a row, or has no login) until the person's next prompt. In memory only, never in
 // the store: a server that starts again works it out afresh. The window's state cursor shows it (sync/client.h).
 enum class Activity : std::uint8_t { Idle = 0, Busy = 1, Down = 2, Working = 3 };
@@ -149,21 +150,21 @@ public:
     // value. A window of an older format receives none.
     const std::vector<SecretRequest>& requests() const { return *requests_; }
     void setRequests(std::vector<SecretRequest> requests);
-    // The server's friends, in its friends file's order, after the requests: from format 4 on the wire (schema's
-    // SessionsDiff.friends), whole in each diff where they changed and in no other. friendsKnown() is false until the
+    // The server's AIs, in its AIs file's order, after the requests: from format 4 on the wire (schema's
+    // SessionsDiff.ais), whole in each diff where they changed and in no other. aisKnown() is false until the
     // server sets them: in a state from a server before them (or of an older format), and from a server that holds no
-    // friends file it could read; a window then shows the friends of the sessions it holds (sync/client.h friendsOf).
+    // AIs file it could read; a window then shows the AIs of the sessions it holds (sync/client.h aisOf).
     // Empty and known: the server has none.
-    const std::vector<ServerFriend>& friends() const { return *friends_; }
-    // The list itself, shared by every copy of the state and every state a diff that does not carry the friends is
-    // applied to: one pointer until setFriends or clearFriends sets another, so that a window tells a new list from the
-    // one it holds without comparing them (sync/friend_strip.h).
-    const std::shared_ptr<const std::vector<ServerFriend>>& friendsList() const { return friends_; }
-    bool friendsKnown() const { return friendsKnown_; }
-    void setFriends(std::vector<ServerFriend> friends);
-    void clearFriends();
-    // The friends of `from`, known or not, its list shared and not copied.
-    void shareFriends(const Sessions& from);
+    const std::vector<ServerAI>& ais() const { return *ais_; }
+    // The list itself, shared by every copy of the state and every state a diff that does not carry the AIs is
+    // applied to: one pointer until setAIs or clearAIs sets another, so that a window tells a new list from the
+    // one it holds without comparing them (sync/ai_strip.h).
+    const std::shared_ptr<const std::vector<ServerAI>>& aisList() const { return ais_; }
+    bool aisKnown() const { return aisKnown_; }
+    void setAIs(std::vector<ServerAI> ais);
+    void clearAIs();
+    // The AIs of `from`, known or not, its list shared and not copied.
+    void shareAIs(const Sessions& from);
     // The live sign-in flows (sync/signin.h), by id, after the secret requests: schema's SessionsDiff.signins, on a
     // link of format 5 or later only (a window of 4 would skip them and never act). The URL is in an offer only in the
     // state of the link of the window that holds it (Hub::stateFor); never in a state file.
@@ -172,9 +173,13 @@ public:
     // First action from this client still unapplied when the server built this exact state. Zero on older links.
     std::uint64_t nextAction() const { return nextAction_; }
     void setNextAction(std::uint64_t next) { nextAction_ = next; }
+    // The dashboards the server offers (sync/dashboards.h), in order: one tab each at the head of a window's strip.
+    // On a table link (format 4 on); a link of 1 to 3 carries none, and a window then reads none.
+    const std::vector<Dashboard>& dashboards() const { return dashboards_; }
+    void setDashboards(std::vector<Dashboard> list) { dashboards_ = std::move(list); }
     const SessionView* find(SessionId id) const;
-    // The friend's first session: the one with the lowest id. Null when the friend has none.
-    const SessionView* first(const std::string& friendName) const;
+    // The AI's first session: the one with the lowest id. Null when the AI has none.
+    const SessionView* first(const std::string& aiName) const;
 
     // mosh's state interface.
     // Empty when the states are equal. Otherwise, for every session: unchanged, or what it is, its first index, and
@@ -205,12 +210,13 @@ private:
     std::shared_ptr<const std::vector<SessionRef>> sessions_;
     SessionId primaryChat_ = 0;
     std::shared_ptr<const std::vector<SecretRequest>> requests_;
-    std::shared_ptr<const std::vector<ServerFriend>> friends_;
-    bool friendsKnown_ = false;
+    std::shared_ptr<const std::vector<ServerAI>> ais_;
+    bool aisKnown_ = false;
     std::shared_ptr<const std::vector<SignInOffer>> offers_;
     std::uint32_t format_ = kStateFormat;
     int unknown_ = 0;
     std::uint64_t nextAction_ = 0;
+    std::vector<Dashboard> dashboards_;
 };
 
 // A state kept in a file, for `nexus --state` (a screenshot of what a server's state draws) and tests' fixtures: the

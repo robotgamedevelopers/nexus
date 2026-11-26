@@ -36,7 +36,7 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
 
 int textZoom(Host& host, const std::string& path, int current, int delta, int low, int high);
 // Returns an empty string when the bundle disables the fallback or returns an invalid model.
-std::string modelAfterLimit(Host& host, const std::string& path, const std::string& friendName,
+std::string modelAfterLimit(Host& host, const std::string& path, const std::string& aiName,
     const std::string& account, const std::string& model);
 std::string accountCommand(Host& host, const std::string& path, const std::string& current,
     const std::vector<std::string>& linked, const std::string& command, std::string& why);

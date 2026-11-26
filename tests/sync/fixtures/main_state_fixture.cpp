@@ -30,10 +30,10 @@ EntryRef entry(EntryKind kind, std::string text, bool closed = true) {
 
 Sessions state(const std::string& open) {
     const std::vector<EntryRef> ada = {entry(EntryKind::Person, "Why did the nightly go red?"),
-        entry(EntryKind::Friend, "Looking at the log."), entry(EntryKind::Notice, "Stopped.")};
+        entry(EntryKind::AI, "Looking at the log."), entry(EntryKind::Notice, "Stopped.")};
     const std::vector<EntryRef> bo = {entry(EntryKind::Person, "hi")};
     SessionView a = tailOf(1, SessionInfo{"ada", "claude", "work", "opus", "high"}, ada, {"after that, the PR"}, Tail{},
-        entry(EntryKind::Friend, open, false));
+        entry(EntryKind::AI, open, false));
     SessionView b = tailOf(2, SessionInfo{"bo", "claude", "", "", ""}, bo, {}, Tail{});
     return Sessions({std::make_shared<const SessionView>(a), std::make_shared<const SessionView>(b)});
 }

@@ -1,7 +1,7 @@
 // Drain (server/drain.h): how a running nexus-server finishes its open turns before handing over to a placed build
 // (docs/builds.md; models/handover/Handover.tla). Pure: no OS, no sockets, no clock.
 //
-// When `drain` is asked on the control socket, the server keeps serving its windows and letting every open friend turn
+// When `drain` is asked on the control socket, the server keeps serving its windows and letting every open AI turn
 // (and any driver starting for one) run to its normal end, up to `limit_ms` (kDrainMs by default). As soon as no turn
 // is open, or once `limit_ms` passes, the server closes its control socket, ends its drivers cleanly, and exits with
 // kDrainExit (EX_TEMPFAIL, 75), which a service restarts on the current build and which `handover` waits for.

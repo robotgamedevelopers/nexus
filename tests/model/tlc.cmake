@@ -10,28 +10,28 @@
 #               property it found violated, so with liveness the cfg names the one temporal property it checks)
 #   WALK        optional: the walk program (trace_walk, or label_walk); it is run first and writes DATA.tla into WORK
 #   DATA        with WALK: the module the walk writes, WindowTraceData unless given
-#   SEED, STEPS, FRIENDS   with WALK: the walk's seed, step count and number of friends (label_walk: of remotes)
+#   SEED, STEPS, AIS   with WALK: the walk's seed, step count and number of AIs (label_walk: of remotes)
 #   FAULTY      with WALK: send walks the test-only model with a faulty send, queue the one with a faulty queue,
 #               move the one whose move_tab leaves active behind, queue-cap the one whose queue drops its oldest past
 #               four, send-trim the one whose send strips trailing spaces, send-dedup the one whose send of the
-#               text just sent appends nothing, close the one whose close_tab removes a friend, sprint-move the one
-#               whose move_tab puts the sprint tab among the friends, sprint-close the one whose close_tab removes the
+#               text just sent appends nothing, close the one whose close_tab removes an AI, sprint-move the one
+#               whose move_tab puts the sprint tab among the AIs, sprint-close the one whose close_tab removes the
 #               sprint tab, close-fallback the one whose close of the active tab ignores the selection history,
-#               remove-friend (with CHURN) the one whose remove_friend leaves the tab's id in the history;
+#               remove-ai (with CHURN) the one whose remove_ai leaves the tab's id in the history;
 #               for label_walk, before the one that takes the label to return to at a session's first observation
 #   NOSPRINT    with WALK: ON walks a model made without the sprint tab
-#   CHURN       with WALK: ON walks the friends coming and going (trace_walk --friends-churn)
+#   CHURN       with WALK: ON walks the AIs coming and going (trace_walk --ais-churn)
 #   LINKWALK    optional, in place of WALK: tests/sync's link_walk program; it is run first and writes
 #               LinkTraceData.tla into WORK, with SEED, STEPS and WINDOWS (its windows), and FAULTY one of applier,
 #               mirror, tail, close or ensure
-#   STRIPWALK   optional, in place of WALK: strip_walk; it is run first and writes FriendStripTraceData.tla into WORK,
-#               with SEED, STEPS and FRIENDS (2 or 3), and FAULTY one of forget, wait
+#   STRIPWALK   optional, in place of WALK: strip_walk; it is run first and writes AIStripTraceData.tla into WORK,
+#               with SEED, STEPS and AIS (2 or 3), and FAULTY one of forget, wait
 #   GLIDEWALK   optional, in place of WALK: glide_walk; it is run first and writes GlideTraceData.tla into WORK, with
 #               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
 #   SUPWALK     optional, in place of WALK: tests/server's supervisor_walk; it is run first and writes
 #               SupervisorTraceData.tla into WORK, with SEED and STEPS, FAULTY one of turn, resume, queue,
 #               limit, setting, account, activity, dir, remove or unknown (both with CHURN), and CHURN ON for the
-#               friend taken out of friends.json and put back (supervisor_walk --friends-churn)
+#               AI taken out of ais.json and put back (supervisor_walk --ais-churn)
 #   DRIVERWALK  optional, in place of WALK: the Claude driver's walk (drivers/claude/dist/test/walk.js), run under
 #               NODE; it is run first and writes ClaudeDriverTraceData.tla into WORK, with SEED and STEPS, and FAULTY
 #               one of settings, refusal, latch
@@ -48,8 +48,12 @@
 #               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance, limit
 #   RECONNECTWALK optional, in place of WALK: tests/sync's reconnect_walk; it is run first and writes
 #               ReconnectTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of cached, no-reset
+#   RELAYWALK   optional, in place of WALK: tests/relay's relay_walk; it is run first and writes
+#               RelayLifeTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of resend, early-end, ack-delivered
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
+#   LOCKWALK    optional, in place of WALK: tests/model's lock_walk program; it is run first and writes
+#               ClientLockTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stale, draw, idle
 #   TSWALK      optional, in place of WALK: the Tailscale shim's lifecycle module (src/tailscale/lifecycle), whose walk
 #               (./walk) runs under GO, offline, with the local toolchain (the module needs no other); it is run
 #               first and writes TailscaleTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of ready, url,
@@ -262,6 +266,19 @@ elseif(DEFINED RECONNECTWALK AND NOT "${RECONNECTWALK}" STREQUAL "")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "reconnect_walk failed (${walk_rc}): ${walk_out}")
     endif()
+elseif(DEFINED RELAYWALK AND NOT "${RELAYWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "resend" OR FAULTY STREQUAL "early-end" OR FAULTY STREQUAL "ack-delivered")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not resend, early-end or ack-delivered")
+    endif()
+    execute_process(COMMAND "${RELAYWALK}" ${walk_args} "${WORK}/RelayLifeTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "relay_walk failed (${walk_rc}): ${walk_out}")
+    endif()
 elseif(DEFINED SECWALK AND NOT "${SECWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
     if(FAULTY STREQUAL "store-late" OR FAULTY STREQUAL "echo" OR FAULTY STREQUAL "driver" OR
@@ -303,7 +320,7 @@ elseif(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
             "limit, remove or unknown")
     endif()
     if(CHURN)
-        list(APPEND walk_args "--friends-churn")
+        list(APPEND walk_args "--ais-churn")
     endif()
     execute_process(COMMAND "${SUPWALK}" ${walk_args} "${WORK}/SupervisorTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
@@ -312,13 +329,13 @@ elseif(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
         message(FATAL_ERROR "supervisor_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED STRIPWALK AND NOT "${STRIPWALK}" STREQUAL "")
-    set(walk_args "${SEED}" "${STEPS}" "${FRIENDS}")
+    set(walk_args "${SEED}" "${STEPS}" "${AIS}")
     if(FAULTY STREQUAL "forget" OR FAULTY STREQUAL "wait")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
         message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not forget or wait")
     endif()
-    execute_process(COMMAND "${STRIPWALK}" ${walk_args} "${WORK}/FriendStripTraceData.tla"
+    execute_process(COMMAND "${STRIPWALK}" ${walk_args} "${WORK}/AIStripTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
@@ -379,6 +396,19 @@ elseif(DEFINED OVERLAYWALK AND NOT "${OVERLAYWALK}" STREQUAL "")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "overlay_walk failed (${walk_rc}): ${walk_out}")
     endif()
+elseif(DEFINED LOCKWALK AND NOT "${LOCKWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "stale" OR FAULTY STREQUAL "draw" OR FAULTY STREQUAL "idle")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not stale, draw or idle")
+    endif()
+    execute_process(COMMAND "${LOCKWALK}" ${walk_args} "${WORK}/ClientLockTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "lock_walk failed (${walk_rc}): ${walk_out}")
+    endif()
 elseif(DEFINED WATCHWALK AND NOT "${WATCHWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
     if(FAULTY STREQUAL "aba" OR FAULTY STREQUAL "stale")
@@ -420,7 +450,7 @@ elseif(DEFINED PICKERWALK)
         message(FATAL_ERROR "account_picker_trace failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
-    set(walk_args "${SEED}" "${STEPS}" "${FRIENDS}")
+    set(walk_args "${SEED}" "${STEPS}" "${AIS}")
     if(FAULTY STREQUAL "send")
         list(APPEND walk_args --faulty)
     elseif(FAULTY STREQUAL "queue")
@@ -441,19 +471,19 @@ elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
         list(APPEND walk_args --faulty-sprint-close)
     elseif(FAULTY STREQUAL "close-fallback")
         list(APPEND walk_args --faulty-close-fallback)
-    elseif(FAULTY STREQUAL "remove-friend")
-        list(APPEND walk_args --faulty-remove-friend)
+    elseif(FAULTY STREQUAL "remove-ai")
+        list(APPEND walk_args --faulty-remove-ai)
     elseif(FAULTY STREQUAL "before")
         list(APPEND walk_args --faulty-before)
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
         message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not send, queue, move, queue-cap, send-trim, send-dedup, "
-            "close, sprint-move, sprint-close, close-fallback, remove-friend or before")
+            "close, sprint-move, sprint-close, close-fallback, remove-ai or before")
     endif()
     if(NOSPRINT)
         list(APPEND walk_args --no-sprint)
     endif()
     if(CHURN)
-        list(APPEND walk_args --friends-churn)
+        list(APPEND walk_args --ais-churn)
     endif()
     if(NOT DEFINED DATA OR "${DATA}" STREQUAL "")
         set(DATA WindowTraceData)

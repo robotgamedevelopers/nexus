@@ -9,7 +9,7 @@ BrokenSend(i) ==
          /\ queue' = [queue EXCEPT ![At(i)] = Append(@, draft[At(i)])]
          /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("send", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active>>
+         /\ UNCHANGED <<ais, order, active>>
     ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

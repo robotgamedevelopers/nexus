@@ -1,4 +1,4 @@
-// The state cursor of a friend's tab: its own line under the last text of the transcript, showing what the friend of
+// The state cursor of an AI's tab: its own line under the last text of the transcript, showing what the AI of
 // the session is doing, from the server's state only (AGENTS.md "The state cursor"; sync/client.h cursorOf). Its
 // colours are OKLCH, and the busy one breathes: its lightness rises and falls once every kBreathSeconds. Pure: the
 // time is an argument, so the breathe is tested without a clock; view.cpp turns the colour into the display's.
@@ -10,11 +10,11 @@
 namespace nexus {
 
 enum class CursorState : std::uint8_t {
-    None,   // no cursor: the window shows no server (no --server), or the tab is not a friend's
+    None,   // no cursor: the window shows no server (no --server), or the tab is not an AI's
     Busy,   // a turn is open, starting or stopping: pulsing light blue
     Working, // the harness is waiting for one or more tools
     Idle,   // waiting for the person: steady dark blue
-    Down,   // the friend is down (its driver crashed, keeps failing to start, or has no login): steady red
+    Down,   // the AI is down (its driver crashed, keeps failing to start, or has no login): steady red
     Lost,   // the window has lost the server: dim grey, and never blue, since what it holds is stale
 };
 

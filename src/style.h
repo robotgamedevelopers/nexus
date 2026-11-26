@@ -10,12 +10,14 @@
 #include "pr/app_input.h"
 #include "pr/color.h"
 
+#include "build_parts.h"
+
 namespace nexus::style {
 
 // Type sizes.
 constexpr float kBodySize = 28;        // transcript, bubbles, prompt, dim notices
 constexpr float kTabSize = 26;         // tab labels (the reference's title row)
-constexpr float kLabelSize = 24;       // the notice when there are no friends
+constexpr float kLabelSize = 24;       // the notice when there are no AIs
 constexpr float kMetaSize = 21;        // "queued" (not in the reference; one step below the label)
 constexpr float kTerminalSize = 21;    // a terminal tab's monospaced cells (not in the reference; a guess, at 0.75 of
                                        // the body size, where Prax's terminal app sets 13 px in a smaller window)
@@ -61,6 +63,22 @@ constexpr int kTextStepsUp = int((kTextScaleMax - 1) / kTextScaleStep + 0.5f);  
 constexpr float textScale(int steps) {
     return 1 + float(steps) * kTextScaleStep;
 }
+
+// The steps a window starts at until the person sets a scale (tab_order.h loadTextScale). 0 on a desktop. On iOS and
+// iPadOS -2 (0.8): text there is set in points as on the Mac, but a 13-inch iPad has 132 points to the inch at about
+// 45 cm against a Mac display's 109 at about 70 cm, so the same size looks about 1.25 times as large; 0.8 matches the
+// Mac's. A phone, at 153 points to the inch and closer still, is nearer -3; its own form (docs/ios.md) will say.
+#if NEXUS_PROCESSES
+constexpr int kDefaultTextSteps = 0;
+#else
+constexpr int kDefaultTextSteps = -2;
+#endif
+static_assert(kDefaultTextSteps >= -kTextStepsDown && kDefaultTextSteps <= kTextStepsUp);
+
+// On a regular-width screen without a desktop's window (an iPad), the prompt box and the transcript's column stand at
+// this share of the policy's prompt width (prompt_style.width), centred where they stood, so that their edges still
+// line up: 10% narrower, at the owner's ask. View::columnScale carries it; main_ios.cpp sets it from the size class.
+constexpr float kRegularWidthColumn = 0.9f;
 
 // Widths, as percentages of the window width.
 constexpr float kColumnPercent = 80;          // transcript (the reference's 54.1% widened at the owner's ask)

@@ -1,6 +1,6 @@
 ---------------------------- MODULE WSupCrashIdle ----------------------------
 \* Reversed witness: the state cursor's activity forgets that the last driver failed, so a driver that exits mid-turn
-\* leaves the friend showing idle, as if waiting for the person. CrashShowsDown must reject it.
+\* leaves the AI showing idle, as if waiting for the person. CrashShowsDown must reject it.
 EXTENDS MCSupervisor
 
 BrokenActivity(x) ==

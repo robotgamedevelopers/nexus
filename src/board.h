@@ -14,8 +14,10 @@
 // window shows, under a lock: the latest list, the load's state, when it next has work, and the links to open, which
 // the window's thread opens. Each new list wakes the app for a frame.
 //
-// The address comes from the sprint's record (sprint.h findSprintBoard), looked up on a thread of its own so that the
-// window never waits on it. Until there is a page to show, show() gives one line that says what is happening or what
+// The address comes from the server the window is linked to (offer: the first of the dashboards its state carries,
+// sync/dashboards.h), and otherwise from the window's own config or the sprint's record (sprint.h findSprintBoard),
+// looked up on a thread of its own so that the window never waits on it. A window with no processes (iOS) has only the
+// server's. Until there is a page to show, show() gives one line that says what is happening or what
 // failed and what to do.
 //
 // The tab always shows the board. A click on a link that would leave it (sprint.h linkLeavesBoard) is canceled, and the
@@ -65,9 +67,13 @@ public:
         PrFontSet* fonts = nullptr;             // the window's fonts; the page's set is a child with aliases
         PrApp* app = nullptr;                   // woken when the page has work, and when the address is found; may be null
         PrAppWindow* window = nullptr;          // whose clipboard the page's text controls use; may be null
-        // The board's address. Empty: `find` on a thread of its own (findSprintBoard if unset).
+        // The board's address. Empty: the server's (fromServer), else `find` on a thread of its own (findSprintBoard if
+        // unset, where the build runs processes).
         PrVec2 initialExtent{};
         std::string url;
+        // A link will hand over the address its server sends (offer): wait for the first state's, and look one up
+        // only if that is empty. False: look it up at once.
+        bool fromServer = false;
         std::string storageDirectory;
         std::function<SprintBoardAddress()> find;
         // A test's network: every request goes to `answer`, over Prax's null network, whose loop each frame runs. No
@@ -122,6 +128,11 @@ public:
     double overscroll();
     // The page's rectangle in the window, px, at the last layout.
     PrRect pane() const { return pane_; }
+
+    // The board's address as the server's latest state gives it (the first of sync::Sessions::dashboards), empty for none: the first
+    // one decides whether the window looks its own up (Desc::fromServer), and a non-empty one is the page's address
+    // when the page has none yet.
+    void offer(const std::string& url);
 
     // For tests: waits until the page's thread has taken up everything handed to it so far and said what came of it.
     void wait();
@@ -215,6 +226,8 @@ private:
     bool prewarming_ = false;
     bool onScreen_ = false;
     std::string lookupError_;               // protected by mutex_
+    bool offered_ = false;                  // the server's state has said, protected by mutex_
+    std::string offeredUrl_;                // what it said, protected by mutex_
     PrVec2 extent_{};                       // the pane's, px
     float zoom_ = 1;
     PrDomAgent* waiting_ = nullptr;         // the agent the page's thread waits on, to wake it

@@ -407,7 +407,7 @@ void testMigrationGuardsInMemory() {
         CHECK(store::Store::open(fs, "/home/.nexus/store", {}, oldSt).is_ok());
         store::Change mk;
         mk.kind = store::Change::Kind::SetInfo;
-        mk.info.friend_name = "alice";
+        mk.info.ai_name = "alice";
         mk.info.harness = "claude";
         store::Change app;
         app.kind = store::Change::Kind::Append;

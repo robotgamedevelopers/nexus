@@ -1,11 +1,11 @@
-# Tests of nexus-server's driver supervisor (src/server/supervisor.h) and the friends layer over it, with four labels:
+# Tests of nexus-server's driver supervisor (src/server/supervisor.h) and the AIs layer over it, with four labels:
 #   unit           supervisor_test: the state machine by rule, every refusal and every deadline at its edges, text
-#                  gathering and splitting, the failed-start count, shutdown from every phase; friends_unit: the
+#                  gathering and splitting, the failed-start count, shutdown from every phase; ais_unit: the
 #                  drivers file; server_unit_home: the server's home and config (the settings files' own parsing is
 #                  tests/window's config_unit); server_unit_pass: the
 #                  order of a pass's end (flush, then release and state). Logic only: no processes,
 #                  files, sockets or clock.
-#   functional     friends_functional_*: the friends layer's real processes (the fake driver, tests/driver, and shell
+#   functional     ais_functional_*: the AIs layer's real processes (the fake driver, tests/driver, and shell
 #                  scripts for drivers that start processes of their own) over real pipes, on a real store in a
 #                  directory of the test's own, with short deadlines.
 #   model          TLC: Supervisor.tla, its reversed witnesses, and the code's walks (supervisor_walk) checked against
@@ -18,6 +18,8 @@ add_executable(supervisor_walk supervisor_walk.cpp)
 target_link_libraries(supervisor_walk PRIVATE nexus_supervisor)
 target_include_directories(supervisor_walk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sync)
 target_compile_options(supervisor_walk PRIVATE ${warnings})
+# The steering walk (tests/driver) goes with it: the nightly shard supervisor-rest builds supervisor_walk only.
+add_dependencies(supervisor_walk steering_walk)
 
 add_executable(supervisor_test supervisor_test.cpp)
 target_link_libraries(supervisor_test PRIVATE nexus_supervisor)
@@ -59,7 +61,7 @@ add_test(NAME service_process_functional COMMAND service_process_functional)
 set_tests_properties(service_process_functional PROPERTIES LABELS functional TIMEOUT 30)
 add_dependencies(model_checks service_process_functional)
 
-# The friends layer's real processes: POSIX, like nexus-server (not built natively on Windows, where nexus-server runs inside WSL2: CMakeLists.txt NEXUS_LINK).
+# The AIs layer's real processes: POSIX, like nexus-server (not built natively on Windows, where nexus-server runs inside WSL2: CMakeLists.txt NEXUS_LINK).
 if(NOT WIN32)
     find_package(Python3 3.9 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
@@ -85,13 +87,13 @@ endif()
 
 add_dependencies(model_checks supervisor_walk supervisor_test secrets_test signin_test server_pass_test pass_walk)
 
-foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered friend_removed
-              hub_friend_removed queue shutdown restart continuation settings account place limit activity signin)
+foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered ai_removed
+              hub_ai_removed queue shutdown restart continuation settings account place limit activity signin steering)
     add_test(NAME supervisor_unit_${group} COMMAND supervisor_test ${group})
     set_tests_properties(supervisor_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
-add_test(NAME friends_unit_driver_table COMMAND driver_table_test)
-set_tests_properties(friends_unit_driver_table PROPERTIES LABELS unit TIMEOUT 30)
+add_test(NAME ais_unit_driver_table COMMAND driver_table_test)
+set_tests_properties(ais_unit_driver_table PROPERTIES LABELS unit TIMEOUT 30)
 
 # The secret dialog (docs/secrets.md): the desk, the prompt, their codecs, the hub over the server's store, the account's
 # file at every crash point (all on MemFs: unit), and the leak test, which searches every output for the fake value.
@@ -173,13 +175,13 @@ if(NOT WIN32)
     foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume primary_route restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
                  stop_hammered account window unconfigured bus_admission bus_default_instance sign_in no_credential usage_limit continuation bus_continuation fable_switch_account fable_switch_model limit_unsupported no_account
-                 friend_removed friend_back_limited friend_removed_starting friend_back_before_stop
-                 friend_back_limited_queue friend_back_moved friend_back_account no_registry no_registry_listed
+                 ai_removed ai_back_limited ai_removed_starting ai_back_before_stop
+                 ai_back_limited_queue ai_back_moved ai_back_account no_registry no_registry_listed
                  instance_dir instance_elsewhere instance_moved
                  instance_default instance_removed held secret_ask secret_sign_in secret_leak_witness)
-        add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
-                 ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
-        set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
+        add_test(NAME ais_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
+                 ${CMAKE_CURRENT_BINARY_DIR}/ais-${case} ${case})
+        set_tests_properties(ais_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
     endforeach()
 endif()
 
@@ -200,7 +202,7 @@ endif()
 # checked for the same inputs and bounds. The slower Place and Switch temporal shards omit the write-only effects, sends and stops logs.
 # Every guard, successor on the remaining fields, fair action and Settles observation is independent of those logs.
 # The _rest shard checks safety with full histories, including NoSendOnOldAccount and ResumesItsAccount. Other
-# instances retain full output in both halves (for example Friend checks AbsentRunsNothing, which reads stops).
+# instances retain full output in both halves (for example AI checks AbsentRunsNothing, which reads stops).
 tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 8 SHARD SPLIT Settles=SettlesOdd+SettlesEven)
 tlc_test(tlc_supervisor_switch MCSupervisor MCSupervisorSwitch.cfg pass WORKERS 4 SHARD
     SPLIT Settles=SettlesOdd+SettlesEven TEMPORALCFG SupervisorSettles.cfg)
@@ -214,19 +216,19 @@ tlc_test(tlc_supervisor_signin MCSupervisor MCSupervisorSignIn.cfg pass WORKERS 
 tlc_test(tlc_supervisor_limit MCSupervisor MCSupervisorLimit.cfg pass)
 tlc_test(tlc_supervisor_limit_two MCSupervisor MCSupervisorLimitTwo.cfg pass WORKERS 8 NIGHTLY CAP 900)
 tlc_test(tlc_supervisor_limit_wide MCSupervisor MCSupervisorLimitWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
-# The limit with the friend taken out of friends.json and put back (MCSupervisorLimitFriend.cfg: 15,450 states, 40 s on
-# two workers), nightly; per commit, the walk's limit changes meet its removals in tlc_supervisor_trace_friends_*.
-tlc_test(tlc_supervisor_limit_friend MCSupervisor MCSupervisorLimitFriend.cfg pass WORKERS 8 NIGHTLY CAP 900)
-# The friend taken out of friends.json and put back: per commit with no server restart (MCSupervisorFriend.cfg, split
-# as the instances above, its Settles halves each in a CI shard of their own), and nightly with a restart while it is out as well (MCSupervisorFriendRestart.cfg,
+# The limit with the AI taken out of ais.json and put back (MCSupervisorLimitAI.cfg: 15,450 states, 40 s on
+# two workers), nightly; per commit, the walk's limit changes meet its removals in tlc_supervisor_trace_ais_*.
+tlc_test(tlc_supervisor_limit_ai MCSupervisor MCSupervisorLimitAI.cfg pass WORKERS 8 NIGHTLY CAP 900)
+# The AI taken out of ais.json and put back: per commit with no server restart (MCSupervisorAI.cfg, split
+# as the instances above, its Settles halves each in a CI shard of their own), and nightly with a restart while it is out as well (MCSupervisorAIRestart.cfg,
 # 65,189 states, 62 s on eight workers on an M-series Mac, most of it the liveness check). The walk's restarts while
-# the friend is out are checked per commit (tlc_supervisor_trace_friends_*).
-tlc_test(tlc_supervisor_friend MCSupervisor MCSupervisorFriend.cfg pass WORKERS 8 SHARD
+# the AI is out are checked per commit (tlc_supervisor_trace_ais_*).
+tlc_test(tlc_supervisor_ai MCSupervisor MCSupervisorAI.cfg pass WORKERS 8 SHARD
     SPLIT Settles=SettlesOdd+SettlesEven)
-tlc_test(tlc_supervisor_friend_restart MCSupervisor MCSupervisorFriendRestart.cfg pass WORKERS 8 NIGHTLY CAP 900)
-# No friends list held (a start whose committed files do not read), then the first list applied: per commit, in
+tlc_test(tlc_supervisor_ai_restart MCSupervisor MCSupervisorAIRestart.cfg pass WORKERS 8 NIGHTLY CAP 900)
+# No AIs list held (a start whose committed files do not read), then the first list applied: per commit, in
 # supervisor-rest (5,571 states, 6 s on eight workers).
-tlc_test(tlc_supervisor_friend_unknown MCSupervisor MCSupervisorFriendUnknown.cfg pass WORKERS 8)
+tlc_test(tlc_supervisor_ai_unknown MCSupervisor MCSupervisorAIUnknown.cfg pass WORKERS 8)
 tlc_test(tlc_supervisor_queue MCSupervisor MCSupervisorQueue.cfg pass WORKERS 4 NIGHTLY)
 tlc_test(tlc_supervisor_wide MCSupervisor MCSupervisorWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
 tlc_test(tlc_supervisor_switch_wide MCSupervisor MCSupervisorSwitchWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
@@ -280,25 +282,25 @@ tlc_test(tlc_supervisor_witness_idle_while_waiting WSupIdleWhileWaiting WSupIdle
 tlc_test(tlc_supervisor_witness_crash_idle WSupCrashIdle WSupCrashIdle.cfg action PROPERTY BrokenCrashShowsDown)
 tlc_test(tlc_supervisor_witness_down_forgotten WSupDownForgotten WSupDownForgotten.cfg action
          PROPERTY BrokenDownLeavesByWork)
-# A friend with no driver configured shown idle.
+# An AI with no driver configured shown idle.
 tlc_test(tlc_supervisor_witness_no_driver_idle WSupNoDriverIdle WSupNoDriverIdle.cfg invariant
          PROPERTY BrokenNoDriverShowsDown)
-# The friend taken out of friends.json: a removal that leaves the turn running, and a take while it is out.
+# The AI taken out of ais.json: a removal that leaves the turn running, and a take while it is out.
 tlc_test(tlc_supervisor_witness_remove_leaves_turn WSupRemoveLeavesTurn WSupRemoveLeavesTurn.cfg invariant
          PROPERTY AbsentRunsNothing)
 tlc_test(tlc_supervisor_witness_take_while_absent WSupTakeWhileAbsent WSupTakeWhileAbsent.cfg action
          PROPERTY AbsentKeepsPrompts)
-# A start holding no friends list that reads the friend as in it.
+# A start holding no AIs list that reads the AI as in it.
 tlc_test(tlc_supervisor_witness_unknown_listed WSupUnknownListed WSupUnknownListed.cfg action PROPERTY NoSendUnknown)
 
 # Trace binding: the supervisor's random walks, each a behaviour of Supervisor.tla.
 foreach(seed 1 2 3 4 12)
     tlc_test(tlc_supervisor_trace_seed_${seed} SupervisorTrace SupervisorTrace.cfg pass SUPWALK SEED ${seed} STEPS 600)
 endforeach()
-# With the friend taken out of friends.json and put back among the other steps. Seed 13 restarts once holding no
-# friends list, then applies one with the friend in it; seed 15 also applies one without it, and restarts again after.
+# With the AI taken out of ais.json and put back among the other steps. Seed 13 restarts once holding no
+# AIs list, then applies one with the AI in it; seed 15 also applies one without it, and restarts again after.
 foreach(seed 13 14 15)
-    tlc_test(tlc_supervisor_trace_friends_seed_${seed} SupervisorTrace SupervisorTrace.cfg pass SUPWALK CHURN
+    tlc_test(tlc_supervisor_trace_ais_seed_${seed} SupervisorTrace SupervisorTrace.cfg pass SUPWALK CHURN
              SEED ${seed} STEPS 600)
 endforeach()
 
@@ -327,10 +329,10 @@ tlc_test(tlc_supervisor_trace_faulty_limit_rejected SupervisorTrace SupervisorTr
 # rejected.
 tlc_test(tlc_supervisor_trace_faulty_activity_rejected SupervisorTrace SupervisorTrace.cfg invariant
          PROPERTY TraceMatches SUPWALK SEED 1 STEPS 600 FAULTY activity)
-# A server whose supervisor is never told the friend was taken out of friends.json is rejected.
+# A server whose supervisor is never told the AI was taken out of ais.json is rejected.
 tlc_test(tlc_supervisor_trace_faulty_remove_rejected SupervisorTrace SupervisorTrace.cfg invariant
          PROPERTY TraceMatches SUPWALK CHURN SEED 13 STEPS 600 FAULTY remove)
-# A restart holding no friends list that starts the supervisor with its friend in it is rejected.
+# A restart holding no AIs list that starts the supervisor with its AI in it is rejected.
 tlc_test(tlc_supervisor_trace_faulty_unknown_rejected SupervisorTrace SupervisorTrace.cfg invariant
          PROPERTY TraceMatches SUPWALK CHURN SEED 13 STEPS 600 FAULTY unknown)
 

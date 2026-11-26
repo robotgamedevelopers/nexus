@@ -36,8 +36,8 @@ PrStringView pr(std::string_view s) {
 
 } // namespace
 
-std::vector<FriendInfo> applyTabOrder(const std::vector<FriendInfo>& loaded, const std::vector<std::string>& saved) {
-    std::vector<FriendInfo> out;
+std::vector<AIInfo> applyTabOrder(const std::vector<AIInfo>& loaded, const std::vector<std::string>& saved) {
+    std::vector<AIInfo> out;
     std::vector<bool> placed(loaded.size(), false);
     for (const std::string& name : saved) {
         for (std::size_t i = 0; i < loaded.size(); ++i) {
@@ -55,10 +55,10 @@ std::vector<FriendInfo> applyTabOrder(const std::vector<FriendInfo>& loaded, con
     return out;
 }
 
-std::vector<std::string> friendTabNames(const Model& model) {
+std::vector<std::string> aiTabNames(const Model& model) {
     std::vector<std::string> names;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
-        if (model.tab(i).kind == TabKind::Friend)  // a terminal tab is never saved
+        if (model.tab(i).kind == TabKind::AI)  // a terminal tab is never saved
             names.push_back(model.tab(i).name);
     }
     return names;
@@ -161,7 +161,18 @@ TabOrderStore fileStoreNamed(std::string_view name) {
 // "terminal", by no place, since terminals were not kept.
 constexpr std::string_view kSelectedHeader = "nexus selected tab 2";
 constexpr std::string_view kSelectedHeader1 = "nexus selected tab 1";
-constexpr std::string_view kFriendPrefix = "friend ";
+constexpr std::string_view kAIPrefix = "ai ";
+// What the saved files said before the friend names became AI: the selected tab's "friend <name>", the layout's
+// "friend:<name>" keys and "friends" group. Read as the AI's, and written the new way at the next save; the word
+// stays here only.
+constexpr std::string_view kOldAIPrefix = "friend ";
+constexpr std::string_view kOldAIKey = "friend:";
+constexpr std::string_view kOldAIGroup = "friends";
+
+// A layout key or group as this version names it.
+std::string currentKey(std::string key) {
+    return key.starts_with(kOldAIKey) ? "ai:" + key.substr(kOldAIKey.size()) : key;
+}
 constexpr std::string_view kTerminalPrefix = "terminal ";
 
 // The first line of the terminals' file: what it is, and its format's version.
@@ -221,13 +232,17 @@ bool parseLayout(std::string_view text, SavedLayout* layout) {
     const auto tabs = prJsonMember(d, 0, pr("tabs"));
     if (prJsonKind(d, tabs) != PrJsonKind_Array || !stringAt(prJsonMember(d, 0, pr("selected")), result.selected))
         return false;
+    result.selected = currentKey(std::move(result.selected));
     std::set<std::string> seen;
     for (auto i = prJsonFirst(d, tabs); i != kPrJsonMissing; i = prJsonAfter(d, tabs, i)) {
         LayoutTab row;
         if (prJsonKind(d, i) != PrJsonKind_Array || prJsonCount(d, i) != 3 ||
             !stringAt(prJsonElement(d, i, 0), row.key) || !stringAt(prJsonElement(d, i, 1), row.group) ||
-            !stringAt(prJsonElement(d, i, 2), row.detail) || !seen.insert(row.key).second)
+            !stringAt(prJsonElement(d, i, 2), row.detail))
             return false;
+        row.key = currentKey(std::move(row.key));
+        if (row.group == kOldAIGroup) row.group = "ais";
+        if (!seen.insert(row.key).second) return false;
         const std::string_view key(row.key);
         if (key.starts_with("terminal:") || key.starts_with("extension:")) {
             auto number = key.substr(key.find(':') + 1);
@@ -236,7 +251,7 @@ bool parseLayout(std::string_view text, SavedLayout* layout) {
                 (key.starts_with("extension:") && row.detail.empty()))
                 return false;
         } else if (!(key == "sprint" || key == "primary" ||
-                     (key.starts_with("friend:") && accounts::isName(key.substr(7)))) ||
+                     (key.starts_with("ai:") && accounts::isName(key.substr(3)))) ||
                    !row.detail.empty()) {
             return false;
         }
@@ -252,7 +267,7 @@ TabLayout::TabLayout(SavedLayout saved) : saved_(std::move(saved)), pending_(sav
 std::string TabLayout::keyOf(const Tab& tab) {
     if (tab.kind == TabKind::Sprint) return "sprint";
     if (tab.primaryChat()) return "primary";
-    if (tab.kind == TabKind::Friend) return "friend:" + tab.name;
+    if (tab.kind == TabKind::AI) return "ai:" + tab.name;
     auto& key = localKeys_[tab.id];
     if (key.empty()) {
         const std::string prefix = tab.kind == TabKind::Terminal ? "terminal:" : "extension:";
@@ -275,7 +290,7 @@ std::vector<std::pair<std::size_t, std::string>> TabLayout::reopenTerminals(Mode
 }
 
 void TabLayout::restore(Model& model, const std::function<bool(const std::string&, std::string*, std::string*)>& type,
-                        bool friendsKnown) {
+                        bool aisKnown) {
     if (saved_.tabs.empty()) return;
     std::map<std::string, std::size_t> ids;
     const auto activeId = model.tab_count() ? model.tab(model.active()).id : ~std::size_t{};
@@ -300,11 +315,11 @@ void TabLayout::restore(Model& model, const std::function<bool(const std::string
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
         if (model.tab(i).id == wanted && model.active() != i) model.select_tab(i);
     }
-    if (selected != ids.end() || pending_.starts_with("terminal:") || (friendsKnown && pending_.starts_with("friend:")))
+    if (selected != ids.end() || pending_.starts_with("terminal:") || (aisKnown && pending_.starts_with("ai:")))
         pending_.clear();
 }
 
-void TabLayout::capture(const Model& model, const std::vector<std::string>& directories, bool friendsKnown) {
+void TabLayout::capture(const Model& model, const std::vector<std::string>& directories, bool aisKnown) {
     SavedLayout next;
     std::set<std::string> live;
     std::size_t terminal = 0;
@@ -322,7 +337,7 @@ void TabLayout::capture(const Model& model, const std::vector<std::string>& dire
         }
         next.tabs.push_back({std::move(key), tab.group, std::move(detail)});
     }
-    // Keep offline friends and extensions whose registrations have not loaded yet at the same neighboring tab.
+    // Keep offline AIs and extensions whose registrations have not loaded yet at the same neighboring tab.
     // A local instance seen in this run and now absent was closed by the person.
     std::set<std::string> opened;
     for (const auto& [id, key] : localKeys_) opened.insert(key);
@@ -331,8 +346,8 @@ void TabLayout::capture(const Model& model, const std::vector<std::string>& dire
     for (const auto& old : saved_.tabs) {
         if (live.contains(old.key)) {
             if (!waiting.empty()) preceding[old.key].swap(waiting);
-        } else if ((old.key == "primary" && (!friendsKnown || pending_ == old.key)) ||
-                   (!friendsKnown && old.key.starts_with("friend:")) ||
+        } else if ((old.key == "primary" && (!aisKnown || pending_ == old.key)) ||
+                   (!aisKnown && old.key.starts_with("ai:")) ||
                    (!opened.contains(old.key) && old.key.starts_with("extension:"))) {
             waiting.push_back(old);
         }
@@ -383,14 +398,14 @@ std::vector<std::string> loadTabOrderNames(const TabOrderStore& store, std::stri
     return names;
 }
 
-std::vector<FriendInfo> loadTabOrder(const TabOrderStore& store, const std::vector<FriendInfo>& loaded,
+std::vector<AIInfo> loadTabOrder(const TabOrderStore& store, const std::vector<AIInfo>& loaded,
         std::string* warning) {
     return applyTabOrder(loaded, loadTabOrderNames(store, warning));
 }
 
 bool saveTabOrder(const TabOrderStore& store, const Model& model, std::string* error) {
     std::string why;
-    if (store.write(formatTabOrder(friendTabNames(model)), &why))
+    if (store.write(formatTabOrder(aiTabNames(model)), &why))
         return true;
     *error = "the tab order could not be saved to " + store.where + ": " + why;
     return false;
@@ -408,7 +423,7 @@ std::string formatSelectedTab(const Model& model) {
             place += model.tab(i).kind == TabKind::Terminal ? 1 : 0;
         text += std::string(kTerminalPrefix) + std::to_string(place);
     } else {
-        text += std::string(kFriendPrefix) + tab->name;
+        text += std::string(kAIPrefix) + tab->name;
     }
     return text + '\n';
 }
@@ -454,16 +469,17 @@ bool parseSelectedTab(std::string_view text, SavedTab* saved, std::string* error
         saved->terminal = place;
         return true;
     }
-    if (line.substr(0, kFriendPrefix.size()) == kFriendPrefix) {
-        if (line.size() == kFriendPrefix.size()) {
-            *error = "its friend line has no name";
+    for (const std::string_view prefix : {kAIPrefix, kOldAIPrefix}) {
+        if (line.substr(0, prefix.size()) != prefix) continue;
+        if (line.size() == prefix.size()) {
+            *error = "its ai line has no name";
             return false;
         }
-        saved->kind = TabKind::Friend;
-        saved->name = std::string(line.substr(kFriendPrefix.size()));
+        saved->kind = TabKind::AI;
+        saved->name = std::string(line.substr(prefix.size()));
         return true;
     }
-    *error = "its second line \"" + std::string(line) + "\" is not sprint, terminal <n> or friend <name>";
+    *error = "its second line \"" + std::string(line) + "\" is not sprint, terminal <n> or ai <name>";
     return false;
 }
 
@@ -473,7 +489,7 @@ std::size_t savedTabPosition(const Model& model, const SavedTab& saved) {
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
         const Tab& tab = model.tab(i);
         if (tab.kind == TabKind::Sprint) sprint = i;
-        if (saved.kind == TabKind::Friend && tab.kind == TabKind::Friend && tab.name == saved.name)
+        if (saved.kind == TabKind::AI && tab.kind == TabKind::AI && tab.name == saved.name)
             return i;
         if (saved.kind == TabKind::Terminal && tab.kind == TabKind::Terminal && ++terminals == saved.terminal)
             return i;
@@ -551,7 +567,7 @@ bool parseTextScale(std::string_view text, int* steps, std::string* error) {
     return true;
 }
 
-int loadTextScale(const TabOrderStore& store, int lo, int hi, std::string* warning) {
+int loadTextScale(const TabOrderStore& store, int lo, int hi, std::string* warning, int unsaved) {
     warning->clear();
     std::string text;
     std::string error;
@@ -560,11 +576,11 @@ int loadTextScale(const TabOrderStore& store, int lo, int hi, std::string* warni
         if (!error.empty())
             *warning = "the saved text scale " + store.where + " is not used: " + error +
                 "; deleting it resets the scale";
-        return 0;
+        return unsaved;
     }
     if (!parseTextScale(text, &steps, &error)) {
         *warning = "the saved text scale " + store.where + " is not used: " + error + "; deleting it resets the scale";
-        return 0;
+        return unsaved;
     }
     if (steps < lo || steps > hi) {
         const int clamped = steps < lo ? lo : hi;
@@ -755,13 +771,13 @@ bool parseKeptDrafts(std::string_view text, KeptFile* file, std::string* error) 
         const std::size_t last = line.rfind(' ');
         if (line.substr(0, kDraftPrefix.size()) != kDraftPrefix || first == std::string_view::npos ||
                 last == first) {
-            return refuse("a line is not draft <server> <friend> <bytes>");
+            return refuse("a line is not draft <server> <ai> <bytes>");
         }
         const std::string_view server = line.substr(kDraftPrefix.size(), first - kDraftPrefix.size());
         const std::string_view name = line.substr(first + 1, last - first - 1);
         const std::string_view digits = line.substr(last + 1);
         if (!keptServer(server) || !accounts::isName(name)) {
-            return refuse("a line is not draft <server> <friend> <bytes>");
+            return refuse("a line is not draft <server> <ai> <bytes>");
         }
         if (digits.empty() || digits.size() > kMaxLengthDigits ||
                 digits.find_first_not_of("0123456789") != std::string_view::npos) {
@@ -774,7 +790,7 @@ bool parseKeptDrafts(std::string_view text, KeptFile* file, std::string* error) 
         }
         if (!file->emplace(std::make_pair(std::string(server), std::string(name)),
                            std::string(text.substr(from, length))).second) {
-            return refuse("it keeps two drafts for one friend of one server");
+            return refuse("it keeps two drafts for one AI of one server");
         }
         at = from + length + 1;
     }
@@ -787,11 +803,13 @@ KeptDraftsStore fileKeptDraftsStore(std::string path) {
     KeptDraftsStore store;
     store.where = path;
     store.read = [](KeptFile*, std::string* error) {
-        *error = "drafts are not kept on Windows, where the window has no server link";
+        *error = "drafts are not kept across launches on Windows yet: the kept drafts' file and its lock are POSIX only "
+            "(src/tab_order.cpp); this run keeps them in memory";
         return false;
     };
     store.update = [](const KeptChange&, std::string* error) {
-        *error = "drafts are not kept on Windows, where the window has no server link";
+        *error = "drafts are not kept across launches on Windows yet: the kept drafts' file and its lock are POSIX only "
+            "(src/tab_order.cpp); this run keeps them in memory";
         return false;
     };
     return store;

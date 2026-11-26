@@ -125,6 +125,7 @@ constexpr const char* kLinksPage = R"HTML(<!doctype html>
 
 // The served board's header and footer in their shape (nova-sprint's index.html): the logo tile and the wordmark in the
 // brand's h1, the live clock on the right, the footer's link to the repository; and a link to another repository.
+// Its "friends" section ids and labels are nova-sprint's own, so the word stays in this page only.
 constexpr const char* kBrandPage = R"HTML(<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>nova-sprint</title>
 <style>:root { --text: #e6e8eb; } html, body { margin: 0; color: var(--text); }
@@ -200,11 +201,11 @@ struct Clock {
     static double wall(void* context) { return 1794326567000.0 + static_cast<Clock*>(context)->ms.load(); }
 };
 
-// The window with no window, the sprint tab first and one friend, and the board over the fixture.
+// The window with no window, the sprint tab first and one AI, and the board over the fixture.
 struct Harness {
     Server server;
     Clock clock;
-    Model model{std::vector<FriendInfo>{FriendInfo{"f1", "m"}}, true};
+    Model model{std::vector<AIInfo>{AIInfo{"f1", "m"}}, true};
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     PrFontSet* fonts = prFontSetCreate(nullptr);
     PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
@@ -219,7 +220,8 @@ struct Harness {
     double time = 1000;
     PrVec2 extent{1000, 780};       // the window's, px
 
-    explicit Harness(std::function<SprintBoardAddress()> find = nullptr, bool prewarm = false, std::string storageDirectory = {}) {
+    explicit Harness(std::function<SprintBoardAddress()> find = nullptr, bool prewarm = false, std::string storageDirectory = {},
+        bool fromServer = false) {
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 1};
@@ -232,9 +234,10 @@ struct Harness {
         b.storageDirectory = std::move(storageDirectory);
         b.kit = kit;
         b.fonts = fonts;
+        b.fromServer = fromServer;
         if (find)
             b.find = find;
-        else
+        else if (!fromServer)
             b.url = kUrl;
         b.answer = Server::answer;
         b.answerContext = &server;
@@ -419,7 +422,7 @@ void offScreenRunsNothingAndCatchesUp() {
     CHECK(h.server.polls > polls);
 }
 
-// A cleared sprint replaces a populated chart while the friend page remains selected.
+// A cleared sprint replaces a populated chart while the AI page remains selected.
 void preparationWaitsForTheNewChart() {
     Harness h;
     h.frames(10);
@@ -489,6 +492,30 @@ void aFoundAddressLoads() {
     h.model.select_tab(0);
     h.frame();
     CHECK(h.board->problem().empty() && has(h.text(), "first") && h.server.pages == 1);
+}
+
+// Linked to a server, the board waits for the address the server's state gives and says so, never looking one up;
+// once given, it is the page's.
+void theServersAddressLoads() {
+    std::atomic<int> lookups{0};
+    Harness h([&lookups] { ++lookups; return SprintBoardAddress{{}, "looked up"}; }, true, {}, true);
+    h.model.select_tab(0);
+    for (int i = 0; i < 20 && h.board->problem().empty(); ++i) h.frame();
+    CHECK(h.board->problem().find("waiting for nexus-server") != std::string::npos && h.server.pages == 0);
+    h.board->offer(kUrl);
+    for (int i = 0; i < 200 && !h.board->settled(); ++i) h.frame();
+    CHECK(h.board->settled() && h.server.pages == 1 && lookups == 0);
+    CHECK(h.board->problem().empty() && has(h.text(), "first"));
+}
+
+// A server that gives no address (none it knows, or older than the field): the window's own lookup, as unlinked.
+void anEmptyServerAddressLooksUp() {
+    std::atomic<int> lookups{0};
+    Harness h([&lookups] { ++lookups; return SprintBoardAddress{kUrl, {}}; }, true, {}, true);
+    h.model.select_tab(0);
+    h.board->offer({});
+    for (int i = 0; i < 200 && !h.board->settled(); ++i) h.frame();
+    CHECK(h.board->settled() && h.server.pages == 1 && lookups == 1);
 }
 
 // The Cost breakdown reaches one gap above the bottom of the first screen at a tall window and a short one, the gap the
@@ -792,6 +819,7 @@ void largeDashboardRefresh(bool reuse) {
 
 void activeAndTransferredCellsAnimate() {
     Harness h;
+    // "friends" below is nova-sprint's section id, so the word stays in this page only.
     h.server.page = R"HTML(<style>
         #overall .cell { animation: pulse 2.4s ease-in-out infinite; }
         .flash { animation: flash 1.5s ease-out; }
@@ -872,6 +900,8 @@ int main() {
     anUnreachableBoardSaysWhyAndRecovers();
     aFailedLookupIsTheLine();
     aFoundAddressLoads();
+    theServersAddressLoads();
+    anEmptyServerAddressLooksUp();
     theCostBreakdownFillsTheFirstScreen();
     keysAndTheWheelScrollSmoothly();
     linksThatLeaveTheBoardOpenInTheBrowser();

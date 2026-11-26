@@ -41,13 +41,13 @@ def prepare(home, driver, messages):
     workspace = home / "workspace"
     for directory in (state, tools, workspace):
         directory.mkdir(mode=0o700, parents=True)
-    # The historic drivers file is upgraded to the normal committed friend registry at first start.
+    # The historic drivers file is upgraded to the normal committed AI registry at first start.
     (state / "config").write_text("machine testbench\n")
     (home / "fake-driver").symlink_to(driver)
     (state / "drivers").write_text(
-        f"driver codex {home}/policy -I -m nexus_policy friend-driver {home}/profile "
-        f"{{friend}} {{harness}} {home}/fake-driver --script {home}/driver-script\n"
-        f"friend bob codex {workspace}\n"
+        f"driver codex {home}/policy -I -m nexus_policy ai-driver {home}/profile "
+        f"{{ai}} {{harness}} {home}/fake-driver --script {home}/driver-script\n"
+        f"ai bob codex {workspace}\n"
     )
     executable(home / "policy", """\
 [ "$1" = -I ] && [ "$2" = -m ] && [ "$3" = nexus_policy ]
@@ -65,7 +65,7 @@ case "$4" in
         fi
         cat "$home/roster"
         ;;
-    friend-driver)
+    ai-driver)
         [ "$6" = bob ] && [ "$7" = codex ]
         shift 7
         exec "$@"
@@ -155,7 +155,7 @@ def exercise(home, binary, driver, probe):
     long_peer = "peer-" + "p" * 85   # valid nova-config friend beyond the 64-byte Nexus tab-name limit
     diagnostic_sender = "service-hook-" + "z" * 128  # valid bus sender outside nova-config's 128-byte names
     messages = [("1730800000000-1", "peer-a", "", "first topic", short),
-                ("1730800000000-2", "not-a-friend", "1730800000000-1", "ordinary message", unknown),
+                ("1730800000000-2", "not-an-ai", "1730800000000-1", "ordinary message", unknown),
                 ("1730800000000-3", diagnostic_sender, "", "first topic", short),
                 ("1730800000000-4", long_peer, "", "second topic", large)]
     ids = [row[0] for row in messages]
@@ -169,12 +169,12 @@ def exercise(home, binary, driver, probe):
     roster_error = "Cannot read the message bus roster"
     for run in (1, 2):
         log_start = len(read(home / "server-output"))
-        # Replay every ID on restart, even ones now sent by a newly registered friend.
+        # Replay every ID on restart, even ones now sent by a newly registered AI.
         (home / "handled").write_text("")
         if run == 1:
             roster(home, "peer-a")
         else:
-            roster(home, "peer-a", long_peer, "not-a-friend")
+            roster(home, "peer-a", long_peer, "not-an-ai")
             (home / "hook-ready").unlink()
             (home / "old-profile").touch()
         with (home / "server-output").open("ab") as log:
@@ -187,7 +187,7 @@ def exercise(home, binary, driver, probe):
                     until(server, lambda: (home / "flush-gate.reached").exists(), "the first receipt's store flush")
                     try:
                         # The server is blocked between write and fsync. Give the external hook time
-                        # to record an early acknowledgment, and the friend time to log an early turn.
+                        # to record an early acknowledgment, and the AI time to log an early turn.
                         time.sleep(0.15)
                         assert not read(home / "acknowledged") and not read(home / "turns")
                     finally:
@@ -197,7 +197,7 @@ def exercise(home, binary, driver, probe):
                     check_private_envelopes(home, messages[1:3])
                     assert not (workspace / "incoming").exists(), "an unregistered sender created an attachment"
                     # Fail the registry after the prior successful query and before the next envelope.
-                    # Treating the old roster as proof would discard this new friend permanently.
+                    # Treating the old roster as proof would discard this new AI permanently.
                     (home / "registry-offline").touch()
                     (home / "allow-late").touch()
                     until(server, lambda: (home / "failed-query").exists() and roster_error in read(home / "server-output"),
@@ -207,7 +207,7 @@ def exercise(home, binary, driver, probe):
                     roster(home, "peer-a", long_peer)
                     (home / "registry-offline").unlink()
                 else:
-                    # An older policy emits only grant rows. It cannot identify every sending friend.
+                    # An older policy emits only grant rows. It cannot identify every sending AI.
                     until(server, lambda: (home / "old-query").exists() and
                           roster_error in read(home / "server-output")[log_start:],
                           "the receiver to reject the old profile response on boot")
@@ -217,7 +217,7 @@ def exercise(home, binary, driver, probe):
                 until(server, lambda: len(read(home / "acknowledged").splitlines()) >= len(ids) * run,
                       "server-owned hook receipts")
                 until(server, lambda: len(re.findall(r"^send \d+:$", read(home / "turns"), re.M)) >= 2,
-                      "both friend turns without a window")
+                      "both AI turns without a window")
                 assert read(home / "acknowledged").splitlines() == ids * run
                 check_private_envelopes(home, messages[1:3])
                 files = list((workspace / "incoming").glob("*/*"))

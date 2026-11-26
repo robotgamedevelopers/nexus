@@ -9,7 +9,7 @@ BrokenClose(i) ==
     THEN /\ order' = Removed(order, i)
          /\ history' = Forget(history, At(i))
          /\ last' = Did("close", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, active, transcript, draft, queue, nextId>>
+         /\ UNCHANGED <<ais, active, transcript, draft, queue, nextId>>
     ELSE /\ last' = Did("close", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

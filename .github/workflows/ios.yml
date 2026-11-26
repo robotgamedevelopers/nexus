@@ -7,15 +7,17 @@
 # Per pull request the iOS builds are Debug at -O0 without debug information (nexus-build's ios-device and
 # ios-simulator): no LTO (Prax turns it on for Release only) and asserts on, as ci.yml's macOS build.
 #
-# The iOS port is not on main yet (it is on port/ios, pull request #88), so main has no iOS build (no cmake/ios.cmake)
-# and this workflow runs on no push or pull request: a job that would only skip is not defined, and nothing in CI is
-# skipped. Dispatched by hand on a tree without the port, its build fails. The port brings back the push and
-# pull_request triggers with cmake/ios.cmake. Until the port is on main, cache-warm builds the iOS caches from
-# port/ios.
+# Per pull request: the device and simulator builds, and on a simulator device the tier_pr tests (docs/ci-tiers.md):
+# the fast unit tests and the iOS happy path, the window drawn from a state (tests/tiers.txt). The simulator builds
+# tier_pr_build, what those tests run (cmake/tiers.cmake), as ci.yml's builds do; the device build, which runs no test,
+# builds everything. Every other iOS test is tier_nightly and runs in nightly.yml's ios-nightly.
 
 name: ios
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -55,8 +57,10 @@ jobs:
         with:
           config: ios-${{ matrix.target }}
           dir: ${{ env.NEXUS_BUILD }}
+          targets: ${{ matrix.target == 'simulator' && 'tier_pr_build' || '' }}
       - name: Record the sources the build was made from
         run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
-      - name: Unit and iOS tests on a simulator device
+      # The fast unit tests and the iOS happy path (tests/tiers.txt), on a simulator device.
+      - name: The tier_pr tests on a simulator device
         if: matrix.target == 'simulator'
-        run: bash .github/ctest.sh --test-dir "$NEXUS_BUILD" -L 'unit|ios' -j "$TEST_JOBS" --output-on-failure
+        run: bash .github/ctest.sh --test-dir "$NEXUS_BUILD" -L '^tier_pr$' -j "$TEST_JOBS" --output-on-failure

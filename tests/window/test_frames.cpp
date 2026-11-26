@@ -259,7 +259,7 @@ struct Window {
     Hitch firstHitch;                   // and the frame as the detector measured it
     std::string firstLine;              // and its phases, as a hitch's line gives them
 
-    Window() : model(std::vector<FriendInfo>{FriendInfo{"alex", "m"}, FriendInfo{"emma", "m"}, FriendInfo{"stella", "m"}},
+    Window() : model(std::vector<AIInfo>{AIInfo{"alex", "m"}, AIInfo{"emma", "m"}, AIInfo{"stella", "m"}},
             true) {
         hitch.setRefreshRate(120);
         prFontSetSetSystem(fonts, system);
@@ -589,8 +589,8 @@ struct Window {
     }
 };
 
-// A friend's history of `count` entries, as the mirror leaves it in the model after a long conversation: the person's
-// prompts, the friend's replies (some long, wrapping over many lines), tool lines and notices.
+// An AI's history of `count` entries, as the mirror leaves it in the model after a long conversation: the person's
+// prompts, the AI's replies (some long, wrapping over many lines), tool lines and notices.
 void history(Model& model, std::size_t tab, int count, int salt = 0) {
     const std::string paragraph = "The layout of a long reply wraps across the column, and each line of it has to be set "
         "in the system's font before it can be drawn; a transcript of thousands of these is what a day of work leaves. ";
@@ -605,7 +605,7 @@ void history(Model& model, std::size_t tab, int count, int salt = 0) {
                 std::string reply;
                 for (int p = 0; p < 1 + n % 4; ++p)
                     reply += paragraph;
-                model.append(tab, Entry{EntryKind::Friend, reply});
+                model.append(tab, Entry{EntryKind::AI, reply});
                 break;
             }
             case 3:
@@ -618,23 +618,23 @@ void history(Model& model, std::size_t tab, int count, int salt = 0) {
     }
 }
 
-// A state of the server: one session per friend, the friend's activity, and each tail.
+// A state of the server: one session per AI, the AI's activity, and each tail.
 sync::Sessions stateOf(const Model& model, sync::Activity activity, const std::string& open = std::string(),
         std::uint64_t first = 0, const std::vector<std::string>& closed = {}) {
     std::vector<sync::SessionRef> sessions;
     sync::SessionId id = 1;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
-        if (model.tab(i).kind != TabKind::Friend)
+        if (model.tab(i).kind != TabKind::AI)
             continue;
         auto v = std::make_shared<sync::SessionView>();
         v->id = id++;
-        v->info.friendName = model.tab(i).name;
+        v->info.aiName = model.tab(i).name;
         v->activity = activity;
         v->first = first;
         for (const std::string& text : closed)
-            v->entries.push_back(std::make_shared<sync::SessionEntry>(sync::SessionEntry{EntryKind::Friend, text, true}));
+            v->entries.push_back(std::make_shared<sync::SessionEntry>(sync::SessionEntry{EntryKind::AI, text, true}));
         if (!open.empty())
-            v->entries.push_back(std::make_shared<sync::SessionEntry>(sync::SessionEntry{EntryKind::Friend, open, false}));
+            v->entries.push_back(std::make_shared<sync::SessionEntry>(sync::SessionEntry{EntryKind::AI, open, false}));
         sessions.push_back(std::move(v));
     }
     return sync::Sessions(std::move(sessions));
@@ -662,13 +662,13 @@ struct Case {
     double ceiling = 0;
 };
 
-// The window comes up connected on a friend's tab, and its first frames are drawn.
+// The window comes up connected on an AI's tab, and its first frames are drawn.
 void firstFrames(Window& w) {
     w.link.set(connected(stateOf(w.model, sync::Activity::Idle)));
     w.frames(30);
 }
 
-// Typing into the prompt over a friend's tab with a history of 5,000 entries, the busy cursor breathing.
+// Typing into the prompt over an AI's tab with a history of 5,000 entries, the busy cursor breathing.
 void typingOverALongHistory(Window& w) {
     history(w.model, 1, 5000);
     w.link.set(connected(stateOf(w.model, sync::Activity::Busy)));
@@ -678,7 +678,7 @@ void typingOverALongHistory(Window& w) {
 }
 
 // The server stalls (nothing heard for seconds, the state cursor goes grey), comes back, and a long transcript
-// arrives at once: thousands of entries for a friend whose tab shows.
+// arrives at once: thousands of entries for an AI whose tab shows.
 void stalledLinkThenALongTranscript(Window& w) {
     w.link.set(connected(stateOf(w.model, sync::Activity::Idle)));
     w.frames(10);
@@ -696,7 +696,7 @@ void stalledLinkThenALongTranscript(Window& w) {
 void streamingReply(Window& w) {
     history(w.model, 1, 200);
     std::string open;
-    const std::string chunk = "streamed text arrives in pieces as the friend writes it, and the window shows it as it "
+    const std::string chunk = "streamed text arrives in pieces as the AI writes it, and the window shows it as it "
         "grows; ";
     for (int i = 0; open.size() < 32 * 1024; ++i) {
         open += chunk;
@@ -732,7 +732,7 @@ void bigPaste(Window& w) {
     CHECK(!w.link.sent.empty() && w.link.sent.back().text == "xsmall paste");
 }
 
-// Switching between friends with long histories, and to the sprint tab and back.
+// Switching between AIs with long histories, and to the sprint tab and back.
 void switchingTabs(Window& w) {
     history(w.model, 1, 3000);
     history(w.model, 2, 3000, 1);
@@ -850,7 +850,7 @@ void resizing(Window& w) {
 void fallbackFonts(Window& w) {
     history(w.model, 1, 20);
     w.frames(5);
-    w.model.append(1, Entry{EntryKind::Friend, "done \xF0\x9F\x8E\x89\xF0\x9F\x9A\x80 \xE4\xBD\xA0\xE5\xA5\xBD\xE4\xB8\x96"
+    w.model.append(1, Entry{EntryKind::AI, "done \xF0\x9F\x8E\x89\xF0\x9F\x9A\x80 \xE4\xBD\xA0\xE5\xA5\xBD\xE4\xB8\x96"
         "\xE7\x95\x8C \xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7 \xE3\x81\x93\xE3\x82\x93\xE3\x81\xAB\xE3\x81\xA1\xE3\x81\xAF"});
     w.known();      // the first frame that sets the text: the kit's fonts match their fallback faces
     w.frames(20);
@@ -872,7 +872,7 @@ void scrollingUpALongHistory(Window& w) {
     w.frames(10);
 }
 
-// The secret dialog (docs/secrets.md) over a friend's tab with a long history: a request arrives in the server's state
+// The secret dialog (docs/secrets.md) over an AI's tab with a long history: a request arrives in the server's state
 // and the dialog opens; the person types a few characters, takes them back, pastes a token, and presses Enter: the
 // value goes to the link in one action and the dialog closes, and the next state, without the request, keeps it
 // closed. A second request is cancelled with Escape. Every frame within the budget. The values are made up here.
@@ -947,7 +947,7 @@ void secretDialog(Window& w) {
     w.frames(30);
 }
 
-// In-app sign-in (docs/secrets.md "Sign-in") over a friend's tab with a long history, the server on another machine
+// In-app sign-in (docs/secrets.md "Sign-in") over an AI's tab with a long history, the server on another machine
 // ("server.test"): a flow is offered and the overlay shown, so the window claims it; the state then gives this window
 // the URL, so it binds its gate (the real one, on its own thread) and opens it through the window's own path, a
 // UrlOpener (url_opener.h) as main.cpp gives it, over a stub browser that takes 300 ms to answer, as a slow Launch
@@ -1024,47 +1024,47 @@ void slowSshLink(Window& w) {
     w.host.link = &w.link;
 }
 
-// The server's list of 2,000 friends while a reply streams into a friend's tab. The window's first frames come before
-// the link does, as in the app; the list arrives with the stream's first state, its first 256 friends' tabs added
-// that frame (sync/client.h kMaxFriendTabs); then each frame's state carries the stream alone, as the link brings it:
+// The server's list of 2,000 AIs while a reply streams into an AI's tab. The window's first frames come before
+// the link does, as in the app; the list arrives with the stream's first state, its first 256 AIs' tabs added
+// that frame (sync/client.h kMaxAITabs); then each frame's state carries the stream alone, as the link brings it:
 // the server's state each frame holds a list equal to the one before, so its diff carries none
-// (Sessions::diff_from), and the window's state keeps the list it holds (Sessions::friendsList), which the window does
-// not take again (sync/friend_strip.h): no ensure is sent after the first. Every frame keeps the budget.
-void manyFriendsWhileStreaming(Window& w) {
+// (Sessions::diff_from), and the window's state keeps the list it holds (Sessions::aisList), which the window does
+// not take again (sync/ai_strip.h): no ensure is sent after the first. Every frame keeps the budget.
+void manyAIsWhileStreaming(Window& w) {
     history(w.model, 1, 200);
     w.frames(5);
-    std::vector<sync::ServerFriend> list{{"alex"}, {"emma"}, {"stella"}};
+    std::vector<sync::ServerAI> list{{"alex"}, {"emma"}, {"stella"}};
     for (int i = 0; list.size() < 2000; ++i) {
-        list.push_back(sync::ServerFriend{"friend-" + std::to_string(i)});
+        list.push_back(sync::ServerAI{"ai-" + std::to_string(i)});
     }
     sync::Sessions sent;    // the server's last state
     sync::Sessions held;    // the window's, each state's diff applied to it as the link's thread does
     std::string open;
-    const std::string chunk = "streamed text arrives in pieces as the friend writes it, and the window shows it as it "
+    const std::string chunk = "streamed text arrives in pieces as the AI writes it, and the window shows it as it "
         "grows; ";
     while (open.size() < 16 * 1024) {
         open += chunk;
         auto v = std::make_shared<sync::SessionView>();
         v->id = 1;
-        v->info.friendName = "alex";
+        v->info.aiName = "alex";
         v->activity = sync::Activity::Busy;
-        v->entries.push_back(std::make_shared<sync::SessionEntry>(sync::SessionEntry{EntryKind::Friend, open, false}));
+        v->entries.push_back(std::make_shared<sync::SessionEntry>(sync::SessionEntry{EntryKind::AI, open, false}));
         sync::Sessions next(std::vector<sync::SessionRef>{std::move(v)});
-        next.setFriends(list);
+        next.setAIs(list);
         held.apply_string(next.diff_from(sent));
         sent = std::move(next);
         w.link.set(connected(held));
         w.frame();
-        CHECK(held.friendsList() == w.link.state.sessions.friendsList());
+        CHECK(held.aisList() == w.link.state.sessions.aisList());
     }
-    // The sprint tab and the first 256 friends, alex, emma and stella among them; an ensure for each new one, once.
-    CHECK(w.model.tab_count() == 1 + sync::kMaxFriendTabs);
-    CHECK(w.link.sent.size() == sync::kMaxFriendTabs - 3);
+    // The sprint tab and the first 256 AIs, alex, emma and stella among them; an ensure for each new one, once.
+    CHECK(w.model.tab_count() == 1 + sync::kMaxAITabs);
+    CHECK(w.link.sent.size() == sync::kMaxAITabs - 3);
     w.frames(10);
 }
 
 const Case kCases[] = {
-    {"many_friends_while_streaming", manyFriendsWhileStreaming},
+    {"many_ais_while_streaming", manyAIsWhileStreaming},
     {"first_frames", firstFrames},
     {"typing_over_a_long_history", typingOverALongHistory},
     {"stalled_link_then_a_long_transcript", stalledLinkThenALongTranscript},

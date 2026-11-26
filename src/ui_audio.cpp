@@ -1,6 +1,7 @@
 #include "ui_audio.h"
 #include "window_app.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <numbers>
 
@@ -79,7 +80,7 @@ void UiAudio::render(void* context, float* samples, uint32_t frames) {
                 return;
             }
             voice.idle_.store(false);
-            voice.start_ = next & 65535;
+            voice.start_ = static_cast<double>(next & 65535);
             voice.delta_ = double((next >> 16) & 65535) - voice.start_;
             voice.synth_ = ((next >> 47) & 1) != 0;
             voice.length_ = std::max(1u, uint32_t((next >> 32) & 32767) * voice.rate_ / 1000);

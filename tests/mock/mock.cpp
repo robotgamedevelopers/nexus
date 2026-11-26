@@ -230,11 +230,11 @@ std::string driversFor(const Options& o, const std::string& fake, const std::str
     s << "# The mock's AIs (tests/mock/mock.h), each on the fake driver with a script of its own.\n";
     for (const std::string& name : o.ais) {
         s << "driver mock-" << name << " " << fake << " --script " << scripts << "/" << name << ".script\n"
-          << "friend " << name << " mock-" << name << " " << work << "/" << name << "\n";
+          << "ai " << name << " mock-" << name << " " << work << "/" << name << "\n";
     }
     if (o.signIn) {
         s << "driver claude " << fake << " --script " << scripts << "/" << kSignInName << ".script\n"
-          << "friend " << kSignInName << " claude " << work << "/" << kSignInName << "\n";
+          << "ai " << kSignInName << " claude " << work << "/" << kSignInName << "\n";
     }
     return s.str();
 }
@@ -242,17 +242,17 @@ std::string driversFor(const Options& o, const std::string& fake, const std::str
 accounts::Registry registryFor(const Options& o, const std::string& work) {
     accounts::Registry r;
     for (const std::string& name : o.ais) {
-        accounts::Friend f{name, {}, {}};
+        accounts::AI f{name, {}, {}};
         f.instances = {{"mock", kMachine, work + "/" + name}};
         f.limit = false;
-        r.friends.push_back(std::move(f));
+        r.ais.push_back(std::move(f));
     }
     if (o.signIn) {
         r.accounts.push_back(accounts::Account{kSignInAccount, "claude"});
-        accounts::Friend f{kSignInName, {kSignInAccount}, kSignInAccount};
+        accounts::AI f{kSignInName, {kSignInAccount}, kSignInAccount};
         f.instances = {{"mock", kMachine, work + "/" + kSignInName}};
         f.limit = false;
-        r.friends.push_back(std::move(f));
+        r.ais.push_back(std::move(f));
     }
     return r;
 }

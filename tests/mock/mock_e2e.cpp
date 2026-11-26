@@ -98,11 +98,11 @@ void fiveAndSignIn(const std::string& mock, const std::string& dir) {
     for (const std::string& name : five) {
         sync::Action a;
         a.kind = sync::ActionKind::Ensure;
-        a.friendName = name;
+        a.aiName = name;
         c.session->add(a);
     }
     const bool arrived = c.until([&] {
-        if (!c.session->state().friendsKnown() || !c.session->allAcknowledged())
+        if (!c.session->state().aisKnown() || !c.session->allAcknowledged())
             return false;
         for (const std::string& name : five)
             if (c.session->state().first(name) == nullptr)
@@ -118,7 +118,7 @@ void fiveAndSignIn(const std::string& mock, const std::string& dir) {
     // The AIs, in order, and only Ida with an account, which needs a sign-in.
     const sync::Sessions& state = c.session->state();
     std::vector<std::string> listed;
-    for (const sync::ServerFriend& f : state.friends()) {
+    for (const sync::ServerAI& f : state.ais()) {
         listed.push_back(f.name);
         if (f.name == mock::kSignInName) {
             CHECK(f.accounts.size() == 1 && f.accounts[0].name == mock::kSignInAccount && f.accounts[0].needsSignIn);
@@ -137,21 +137,21 @@ void fiveAndSignIn(const std::string& mock, const std::string& dir) {
             continue;
         const std::vector<mock::SeedTurn> seed = mock::seedFor(five[i], i);
         CHECK(v->activity == sync::Activity::Idle && v->queue.empty());
-        CHECK(!v->entries.empty() && v->entries.back()->kind == EntryKind::Friend &&
+        CHECK(!v->entries.empty() && v->entries.back()->kind == EntryKind::AI &&
             v->entries.back()->text == seed.back().reply);
         for (std::size_t t = seed.size() - 4; t < seed.size(); ++t)
             CHECK(count(*v, EntryKind::Person, seed[t].prompt) == 1);
         if (i % 2 == 0) {
-            CHECK(count(*v, EntryKind::Friend, "```cpp") == 1);
-            CHECK(count(*v, EntryKind::Friend, "## Release checklist") == 1);
-            CHECK(count(*v, EntryKind::Friend, "This week is about making the server boring") == 1);
+            CHECK(count(*v, EntryKind::AI, "```cpp") == 1);
+            CHECK(count(*v, EntryKind::AI, "## Release checklist") == 1);
+            CHECK(count(*v, EntryKind::AI, "This week is about making the server boring") == 1);
             CHECK(count(*v, EntryKind::Tool, "ctest --test-dir build") == 1);
-            CHECK(count(*v, EntryKind::Friend, "One test fails") == 1);
+            CHECK(count(*v, EntryKind::AI, "One test fails") == 1);
         } else {
-            CHECK(count(*v, EntryKind::Friend, "# Design: the journal's second generation") == 1);
-            CHECK(count(*v, EntryKind::Friend, "Deploying to the bench now.") == 1);
+            CHECK(count(*v, EntryKind::AI, "# Design: the journal's second generation") == 1);
+            CHECK(count(*v, EntryKind::AI, "Deploying to the bench now.") == 1);
             CHECK(count(*v, EntryKind::Notice, "a scripted error") == 1);
-            CHECK(count(*v, EntryKind::Friend, "three restarts of the server") == 1);
+            CHECK(count(*v, EntryKind::AI, "three restarts of the server") == 1);
             CHECK(count(*v, EntryKind::Notice, "cut short") == 1);
         }
         CHECK(v->total() >= 2 * seed.size());
@@ -186,8 +186,8 @@ void fiveAndSignIn(const std::string& mock, const std::string& dir) {
     if (v != nullptr) {
         CHECK(v->total() == before + 2);
         CHECK(count(*v, EntryKind::Person, "A prompt from the mock's test") == 1);
-        CHECK(count(*v, EntryKind::Friend, mock::firstReplyText()) == 1);
-        CHECK(v->entries.back()->kind == EntryKind::Friend && v->entries.back()->text == mock::firstReplyText());
+        CHECK(count(*v, EntryKind::AI, mock::firstReplyText()) == 1);
+        CHECK(v->entries.back()->kind == EntryKind::AI && v->entries.back()->text == mock::firstReplyText());
     }
     c.close();
 }
@@ -207,8 +207,8 @@ void none(const std::string& mock, const std::string& dir) {
         ++failures;
         return;
     }
-    CHECK(c.until([&] { return c.session->state().friendsKnown(); }, kStallSeconds, &why));
-    CHECK(c.session->state().friends().empty() && c.session->state().sessions().empty());
+    CHECK(c.until([&] { return c.session->state().aisKnown(); }, kStallSeconds, &why));
+    CHECK(c.session->state().ais().empty() && c.session->state().sessions().empty());
     c.close();
 }
 
@@ -228,13 +228,13 @@ void thirty(const std::string& mock, const std::string& dir) {
         ++failures;
         return;
     }
-    CHECK(c.until([&] { return c.session->state().friendsKnown() && c.session->state().sessions().size() >= 16; },
+    CHECK(c.until([&] { return c.session->state().aisKnown() && c.session->state().sessions().size() >= 16; },
         kStallSeconds, &why));
     std::vector<std::string> thirtyNames;
     std::string ignored;
     CHECK(mock::aisFor(30, &thirtyNames, &ignored));
     std::vector<std::string> listed;
-    for (const sync::ServerFriend& f : c.session->state().friends())
+    for (const sync::ServerAI& f : c.session->state().ais())
         listed.push_back(f.name);
     CHECK(listed == thirtyNames);
     CHECK(c.session->state().sessions().size() == 16);

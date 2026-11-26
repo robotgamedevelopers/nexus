@@ -37,7 +37,7 @@ add_test(NAME link_e2e_restart COMMAND link_e2e ${server} ${e2e_dir}-restart res
 add_test(NAME link_e2e_older_server COMMAND link_e2e ${server} ${e2e_dir}-older older_server)
 add_test(NAME link_e2e_flush COMMAND link_e2e ${server} ${e2e_dir}-flush flush $<TARGET_FILE:nexus_fake_driver>)
 add_test(NAME link_e2e_secret COMMAND link_e2e ${server} ${e2e_dir}-secret secret $<TARGET_FILE:nexus_fake_driver>)
-add_test(NAME link_e2e_friends COMMAND link_e2e ${server} ${e2e_dir}-friends friends $<TARGET_FILE:nexus_fake_driver>)
+add_test(NAME link_e2e_ais COMMAND link_e2e ${server} ${e2e_dir}-ais ais $<TARGET_FILE:nexus_fake_driver>)
 # In-app sign-in through the real server with the FAKE claude (tests/server/fake_claude.cpp), and its reversed witness:
 # nexus-server-leaky, which writes the forwarded query to server.log, which the run's search must find.
 add_test(NAME link_e2e_signin COMMAND link_e2e ${server} ${e2e_dir}-signin signin $<TARGET_FILE:nexus_fake_claude>)
@@ -49,9 +49,9 @@ add_test(NAME link_e2e_signin_leaky COMMAND link_e2e $<TARGET_FILE:nexus-server-
 # server stopped until the next starts, and resending unacknowledged actions), then after SIGKILL (found by silence).
 add_test(NAME link_e2e_takeover COMMAND link_e2e ${server} ${e2e_dir}-takeover takeover)
 set(e2e_tests link_e2e_loopback link_e2e_outage link_e2e_soak link_e2e_restart link_e2e_older_server link_e2e_flush
-    link_e2e_secret link_e2e_friends link_e2e_signin link_e2e_signin_leaky link_e2e_verified_claude link_e2e_takeover)
+    link_e2e_secret link_e2e_ais link_e2e_signin link_e2e_signin_leaky link_e2e_verified_claude link_e2e_takeover)
 set(e2e_dirs ${e2e_dir}-loopback ${e2e_dir}-outage ${e2e_dir}-soak ${e2e_dir}-restart ${e2e_dir}-older
-    ${e2e_dir}-flush ${e2e_dir}-secret ${e2e_dir}-friends ${e2e_dir}-signin ${e2e_dir}-leaky ${e2e_dir}-verified-claude ${e2e_dir}-takeover)
+    ${e2e_dir}-flush ${e2e_dir}-secret ${e2e_dir}-ais ${e2e_dir}-signin ${e2e_dir}-leaky ${e2e_dir}-verified-claude ${e2e_dir}-takeover)
 find_package(Python3 3.11 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME link_e2e_private_signin COMMAND link_e2e ${server} ${e2e_dir}-private-signin private-signin

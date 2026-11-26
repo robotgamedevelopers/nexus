@@ -10,6 +10,9 @@
 // swap). The code generated from this file is in schema/gen, checked in; CI regenerates it at the pin and fails on any
 // difference.
 
+// Each `| was = "..."` names the first wire name of a field, table or value renamed since (the friend names became
+// ai): its id stays the hash of that first name, so every older reader and store reads it unchanged, and the word
+// stays in this file only there.
 package nexuswire
 
 // Sent first on a link, each way, before any state (src/link/bootstrap.h): the protocol this end speaks (its state
@@ -27,13 +30,13 @@ table Hello
 enum EntryKind
 {
     Person,
-    Friend,
+    AI | was = "Friend",
     Notice,
     Tool,
     Bus
 }
 
-// What a session's friend is doing. Absent (a writer that never sent it) reads Idle, which claims least; an unknown
+// What a session's AI is doing. Absent (a writer that never sent it) reads Idle, which claims least; an unknown
 // value (a later server's) reads None, which the window shows as busy.
 enum Activity
 {
@@ -43,12 +46,12 @@ enum Activity
     Working
 }
 
-// What a session is (sync::SessionInfo, store::Info): its friend, harness, account, model and effort, and which of
-// its friend's instances it belongs to. Empty account, model or effort: the harness's default; empty instance: the
-// friend's default.
+// What a session is (sync::SessionInfo, store::Info): its AI, harness, account, model and effort, and which of
+// its AI's instances it belongs to. Empty account, model or effort: the harness's default; empty instance: the
+// AI's default.
 table SessionInfo
 {
-    friend_name *string
+    ai_name *string | was = "friend_name"
     harness     *string
     account     *string
     model       *string
@@ -95,7 +98,7 @@ table SessionChange
 }
 
 // An open secret request as every window that can take one receives it (sync/secrets.h): its id, its account, the file
-// asked for, the asker's session (0: nexus itself) and friend, and the asker's one-line reason. Never a value.
+// asked for, the asker's session (0: nexus itself) and AI, and the asker's one-line reason. Never a value.
 table SecretRequest
 {
     id         uint64
@@ -115,9 +118,9 @@ table AccountChoice
     email *string
 }
 
-// A friend the server holds (its friends.json, docs/accounts.md): what a window needs to show the friend's tab and to
-// start a session with it, which it does with an ensure naming the friend.
-table Friend
+// An AI the server holds (its ais.json, docs/accounts.md): what a window needs to show the AI's tab and to
+// start a session with it, which it does with an ensure naming the AI.
+table AI | was = "Friend"
 {
     name *string
     accounts []AccountChoice
@@ -139,23 +142,32 @@ table SignInOffer
     url      *bytes
 }
 
+// A dashboard the server offers (sync/dashboards.h): the tab's name and the page's http:// or https:// address.
+table Dashboard
+{
+    name *string
+    url  *string
+}
+
 // A sessions diff (Sessions::diff_from): every session in the state, in id order. A session the state diffed from
 // holds and this one lacks is not named, which removes it. Then every open secret request, oldest first, whole in
-// every diff (a few short lines). Then the server's friends, only in a diff where they changed from the state diffed
-// from: friends_sent says this diff carries them, and then friends_known whether the server holds a list (false: a
-// server holding no friends file it could read, and the window shows the friends of the sessions it holds) and
-// friends the list, whole, in its friends.json's order. Absent friends_sent (no change, or a server from before the
-// list) reads false: the reader keeps the friends it held. Then, from format 5 and only on a link of 5 or later, the
-// live sign-in flows in id order, whole in every diff.
+// every diff (a few short lines). Then the server's AIs, only in a diff where they changed from the state diffed
+// from: ais_sent says this diff carries them, and then ais_known whether the server holds a list (false: a
+// server holding no AIs file it could read, and the window shows the AIs of the sessions it holds) and
+// AIs the list, whole, in its ais.json's order. Absent ais_sent (no change, or a server from before the
+// list) reads false: the reader keeps the AIs it held. Then, from format 5 and only on a link of 5 or later, the
+// live sign-in flows in id order, whole in every diff. Then the dashboards the server offers (its config's
+// `dashboard` lines, sync/dashboards.h), in order, whole in every diff; a window shows the first today.
 table SessionsDiff
 {
     sessions      []SessionChange
     requests      []SecretRequest
-    friends_known bool
-    friends       []Friend
-    friends_sent  bool
+    ais_known bool | was = "friends_known"
+    ais       []AI | was = "friends"
+    ais_sent  bool | was = "friends_sent"
     signins       []SignInOffer
     next_action   uint64
+    dashboards    []Dashboard
 }
 
 // ---- The actions, window to server (src/sync/actions.h) ----
@@ -172,7 +184,7 @@ enum ActionKind
     SetEffort,
     AddAccount,
     RemoveAccount,
-    AddFriend,
+    AddAI | was = "AddFriend",
     LinkAccount,
     UnlinkAccount,
     SetDefault,
@@ -185,7 +197,7 @@ enum ActionKind
     ResolveLimit
 }
 
-// One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's friend,
+// One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's AI,
 // its text, an account action's account, and a secret answer's or cancel's request and an answer's value (bytes as
 // the person pasted them, never text). The sign-in's (format 5 on, sync/signin.h): `request` is the flow's id, `text`
 // the window's claim token, and a callback's query rides in `secret`, as bytes. Its number is the diff's `start` plus
@@ -194,7 +206,7 @@ table Action
 {
     kind        ActionKind
     session     uint64
-    friend_name *string
+    ai_name *string | was = "friend_name"
     text        *string
     account     *string
     request     uint64

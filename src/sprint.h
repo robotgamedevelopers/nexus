@@ -13,6 +13,7 @@
 
 #include "pr/app.h"
 
+#include "build_parts.h"
 #include "command.h"
 
 namespace nexus {
@@ -23,6 +24,9 @@ struct SprintBoardAddress {
     std::string error;
 };
 
+// The lookup of the board's address in the sprint's record, which runs nova-config: not where the build runs no processes
+// (iOS: build_parts.h), whose board takes its address from nexus-server alone.
+#if NEXUS_PROCESSES
 // How long findSprintBoard waits for nova-config. It runs off the window's thread.
 constexpr int kSprintRunTimeoutSeconds = 5;
 
@@ -39,8 +43,9 @@ SprintBoardAddress parseSprintRun(std::string_view json);
 SprintBoardAddress findSprintBoard(const char* override, const Command& command, const CommandRunner& run);
 
 // findSprintBoard with the client config's sprint-url, sprintRunCommand(its nova-config, SHELL) and runCommand. Blocks for up to
-// kSprintRunTimeoutSeconds: call it off the window's thread.
+// kSprintRunTimeoutSeconds: call it off the window's thread. Not where the build runs no processes (iOS: build_parts.h).
 SprintBoardAddress findSprintBoard();
+#endif
 
 // Where an event goes while the sprint tab shows.
 enum class BoardRoute {

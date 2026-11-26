@@ -23,7 +23,7 @@ using namespace shared;
 wire::EntryKind kindOut(EntryKind k) {
     switch (k) {
         case EntryKind::Person: return wire::EntryKind::Person;
-        case EntryKind::Friend: return wire::EntryKind::Friend;
+        case EntryKind::AI: return wire::EntryKind::AI;
         case EntryKind::Notice: return wire::EntryKind::Notice;
         case EntryKind::Tool: return wire::EntryKind::Tool;
         case EntryKind::Bus: return wire::EntryKind::Bus;
@@ -36,7 +36,7 @@ wire::EntryKind kindOut(EntryKind k) {
 EntryKind kindIn(wire::EntryKind k) {
     switch (k) {
         case wire::EntryKind::Person: return EntryKind::Person;
-        case wire::EntryKind::Friend: return EntryKind::Friend;
+        case wire::EntryKind::AI: return EntryKind::AI;
         case wire::EntryKind::Notice: return EntryKind::Notice;
         case wire::EntryKind::Tool: return EntryKind::Tool;
         case wire::EntryKind::Bus: return EntryKind::Bus;
@@ -55,7 +55,7 @@ wire::Activity activityOut(Activity a) {
 }
 
 // Absent reads its declared default, Idle (schema/Nexus.schema); a value this build does not know (None) reads busy:
-// the server said the friend is neither idle nor down.
+// the server said the AI is neither idle nor down.
 Activity activityIn(wire::Activity a) {
     switch (a) {
         case wire::Activity::Idle: return Activity::Idle;
@@ -113,7 +113,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
             continue;
         }
         x->changed = true;
-        putText(b.main, x->info.friend_name, s.info.friendName, scratch);
+        putText(b.main, x->info.ai_name, s.info.aiName, scratch);
         putText(b.main, x->info.harness, s.info.harness, scratch);
         putText(b.main, x->info.account, s.info.account, scratch);
         putText(b.main, x->info.model, s.info.model, scratch);
@@ -170,21 +170,26 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         putText(b.main, r->asker_name, q.askerName, scratch);
         putText(b.main, r->why, q.why, scratch);
     }
-    if (change.friendsSent) {
-        d->friends_sent = true;
-        d->friends_known = change.friendsKnown;
-        for (const ServerFriend& f : change.friends) {
-            wire::Friend* w = added(wire::SessionsDiffFriendsAdd(b.main, d->friends));
+    if (change.aisSent) {
+        d->ais_sent = true;
+        d->ais_known = change.aisKnown;
+        for (const ServerAI& f : change.ais) {
+            wire::AI* w = added(wire::SessionsDiffAisAdd(b.main, d->ais));
             putText(b.main, w->name, f.name, scratch);
             w->can_auto_account = f.canAutoAccount;
             for (const AccountChoice& account : f.accounts) {
-                auto* choice = added(wire::FriendAccountsAdd(b.main, w->accounts));
+                auto* choice = added(wire::AIAccountsAdd(b.main, w->accounts));
                 putText(b.main, choice->name, account.name, scratch);
                 putText(b.main, choice->label, account.label, scratch);
                 choice->needs_sign_in = account.needsSignIn;
                 putText(b.main, choice->email, account.email, scratch);
             }
         }
+    }
+    for (const Dashboard& x : change.dashboards) {
+        wire::Dashboard* w = added(wire::SessionsDiffDashboardsAdd(b.main, d->dashboards));
+        putText(b.main, w->name, x.name, scratch);
+        putText(b.main, w->url, x.url, scratch);
     }
     if (signIns) {
         d->next_action = change.nextAction;
@@ -203,11 +208,11 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         "sessions diff");
 }
 
-bool rosterFits(std::vector<ServerFriend> friends) {
+bool rosterFits(std::vector<ServerAI> ais) {
     SessionsChange state;
-    state.friendsSent = true;
-    state.friendsKnown = true;
-    state.friends = std::move(friends);
+    state.aisSent = true;
+    state.aisKnown = true;
+    state.ais = std::move(ais);
     const std::string bytes = writeTables(state, kStateFormat);
     if (bytes.size() > kRosterWireBytes) {
         return false;
@@ -234,13 +239,15 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
     *unknown = report.unknown;
     SessionsChange out;
     out.nextAction = d->next_action;
+    out.dashboards.reserve(static_cast<std::size_t>(d->dashboards.size()));
+    for (const wire::Dashboard& x : d->dashboards) out.dashboards.push_back({textOf(x.name), textOf(x.url)});
     out.sessions.reserve(static_cast<std::size_t>(d->sessions.size()));
     for (const wire::SessionChange& x : d->sessions) {
         SessionChange s;
         s.id = x.id;
         s.changed = x.changed;
         if (s.changed) {
-            s.info.friendName = textOf(x.info.friend_name);
+            s.info.aiName = textOf(x.info.ai_name);
             s.info.harness = textOf(x.info.harness);
             s.info.account = textOf(x.info.account);
             s.info.model = textOf(x.info.model);
@@ -291,21 +298,21 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
         q.why = textOf(r.why);
         out.requests.push_back(std::move(q));
     }
-    // Only a diff that says it carries the friends sets them: without friends_sent the reader keeps what it held, and any
-    // friends such a diff names are ignored.
-    out.friendsSent = d->friends_sent;
-    if (out.friendsSent) {
-        out.friendsKnown = d->friends_known;
-        out.friends.reserve(static_cast<std::size_t>(d->friends.size()));
-        for (const wire::Friend& f : d->friends) {
-            ServerFriend friendState{textOf(f.name)};
-            friendState.canAutoAccount = f.can_auto_account;
-            friendState.accounts.reserve(static_cast<std::size_t>(f.accounts.size()));
+    // Only a diff that says it carries the AIs sets them: without ais_sent the reader keeps what it held, and any
+    // AIs such a diff names are ignored.
+    out.aisSent = d->ais_sent;
+    if (out.aisSent) {
+        out.aisKnown = d->ais_known;
+        out.ais.reserve(static_cast<std::size_t>(d->ais.size()));
+        for (const wire::AI& f : d->ais) {
+            ServerAI aiState{textOf(f.name)};
+            aiState.canAutoAccount = f.can_auto_account;
+            aiState.accounts.reserve(static_cast<std::size_t>(f.accounts.size()));
             for (const wire::AccountChoice& choice : f.accounts) {
-                friendState.accounts.push_back(
+                aiState.accounts.push_back(
                     {textOf(choice.name), textOf(choice.label), choice.needs_sign_in, textOf(choice.email)});
             }
-            out.friends.push_back(std::move(friendState));
+            out.ais.push_back(std::move(aiState));
         }
     }
     for (const wire::SignInOffer& x : d->signins) {

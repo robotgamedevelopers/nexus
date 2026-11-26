@@ -50,6 +50,13 @@ void parsing() {
     // No text: nothing set.
     c = parseConfig("", "/c", keys);
     CHECK(c.values.empty() && c.errors.empty() && c.warnings.empty());
+    // A list key: on as many lines as given, each kept in order with its line number; never "set again".
+    c = parseConfig("item a\nnova-config /n\nitem b c\n\nitem a\n", "/c", keys, {"item"});
+    CHECK(c.errors.empty() && c.warnings.empty() && c.values.size() == 1);
+    CHECK((c.lists.at("item") == std::vector<std::pair<std::size_t, std::string>>{{1, "a"}, {3, "b c"}, {5, "a"}}));
+    c = parseConfig("item\ncolour blue\n", "/c", keys, {"item"});
+    CHECK(c.errors.size() == 1 && has(c.errors[0], "/c line 1:") && c.lists.empty());
+    CHECK(c.warnings.size() == 1 && has(c.warnings[0], "`item` (on as many lines as you like)"));
 }
 
 } // namespace
