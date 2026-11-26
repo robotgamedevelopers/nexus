@@ -52,7 +52,7 @@ jobs:
       - name: Build the model checks
         run: cmake --build build --parallel "$JOBS" --target model_checks
       - name: The largest instances
-        run: ctest --test-dir build -L '^model_nightly$' -j "$TEST_JOBS" --output-on-failure
+        run: bash .github/ctest.sh --test-dir build -L '^model_nightly$' -j "$TEST_JOBS" --output-on-failure
 
   model:
     # Keep the compiled trace walks and the CPU-intensive specs on prebuilt runners.
@@ -371,7 +371,7 @@ jobs:
           select=()
           if [ -n "$RUN" ]; then select+=(-R "$RUN"); fi
           if [ -n "$SKIP" ]; then select+=(-E "$SKIP"); fi
-          ctest --test-dir build -L '^model$' "${select[@]}" -j "$TEST_JOBS" --output-on-failure --no-tests=error
+          bash .github/ctest.sh --test-dir build -L '^model$' "${select[@]}" -j "$TEST_JOBS" --output-on-failure
 
   # The tab label's trace checks (TabLabelTrace.tla), whose walk needs the window's logic: on macOS, as the model job
   # ran them before it moved to Linux.
@@ -439,7 +439,7 @@ jobs:
       - name: Check tab-label and account-picker traces
         run: |
           for family in label_trace window_account_picker_trace; do
-            ctest --test-dir build -L '^model$' -R "^tlc_${family}" -j "$TEST_JOBS" --output-on-failure --no-tests=error || exit 1
+            bash .github/ctest.sh --test-dir build -L '^model$' -R "^tlc_${family}" -j "$TEST_JOBS" --output-on-failure || exit 1
           done
 
   # Windows' functional tests, inside WSL2: on Windows the overlay stays native and everything else (nexus-server, the
@@ -498,7 +498,7 @@ jobs:
       - name: Build
         run: cmake --build build --parallel "$JOBS"
       - name: Functional tests
-        run: ctest --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure --no-tests=error
+        run: bash .github/ctest.sh --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure
       - name: ccache hits in this job
         if: always()
         shell: bash
@@ -515,7 +515,7 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_WINDOW=OFF
           cmake --build build --parallel "$(sh .github/job-cores.sh)" --target server_lock
-          ctest --test-dir build -R '^server_lock_functional$' --output-on-failure --no-tests=error
+          bash .github/ctest.sh --test-dir build -R '^server_lock_functional$' --output-on-failure
 
   # The Claude driver's token wall inside captain's WSL2 (ci.yml's claude-driver-wall-linux runs it on hosted Ubuntu
   # per commit; WSL2 needs the fleet, so it runs here).
@@ -703,7 +703,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          frames=(ctest --test-dir build -R '^window_frame_budget$' --output-on-failure --no-tests=error)
+          frames=(bash .github/ctest.sh --test-dir build -R '^window_frame_budget$' --output-on-failure)
           if command -v nova-reserve >/dev/null; then
             held="$RUNNER_TEMP/frame-budget-held"
             rm -f "$held"
@@ -718,18 +718,27 @@ jobs:
           fi
           "${frames[@]}"
 
-  # The Tailscale shim on Windows and on macOS with its x86_64 slice under Rosetta (tailscale.yml), with no time limit:
-  # restoring Windows's primed cache alone takes most of a per-commit job's 2 minutes on the hosted image, and the
-  # x86_64 build and run do not fit beside the arm64 one, so ci.yml runs macOS arm64 and Linux and this runs the rest.
-  # It saves the primed caches again when the pins changed.
-  tailscale-windows-and-rosetta:
+  # The Tailscale shim on Windows (tailscale-windows.yml), with no time limit: restoring its primed cache alone took 83 s
+  # on the hosted Windows image (docs/tailscale.md), which does not fit a per-commit job's 2 minutes, so no per-commit
+  # workflow calls it and it runs here. It saves the primed cache again when the pins changed.
+  tailscale-windows:
+    uses: ./.github/workflows/tailscale-windows.yml
+    permissions:
+      contents: read
+    with:
+      prime: true
+      save: true
+
+  # The shim on macOS with its x86_64 slice under Rosetta, and on Linux (tailscale.yml), with no time limit: the x86_64
+  # build and run do not fit beside the arm64 one in a per-commit job, so ci.yml runs macOS arm64 and Linux and this
+  # runs both slices. It saves the primed caches again when the pins changed.
+  tailscale-rosetta:
     uses: ./.github/workflows/tailscale.yml
     permissions:
       contents: read
     with:
       prime: true
       save: true
-      linux: false
 
   # From ci.yml, so that a pull request asks for few hosted macOS runners (about five run at once for the
   # organisation): the macOS sanitizers, the Claude driver and its token wall on the fleet Mac, with no time limit. Their
@@ -1031,7 +1040,7 @@ jobs:
       - name: Build the conformance test
         run: cmake --build build --parallel "$JOBS" --target driver_conformance_test
       - name: Conformance of the Claude driver
-        run: ctest --test-dir build -L claude_driver -j "$TEST_JOBS" --output-on-failure --no-tests=error
+        run: bash .github/ctest.sh --test-dir build -L claude_driver -j "$TEST_JOBS" --output-on-failure
 
   # The Claude driver's token wall (drivers/claude/src/wall.ts, docs/secrets.md "The token wall"), end to end: the real
   # Claude executable the pinned SDK ships (so npm ci with the optional per-platform package here), on a fake token,
