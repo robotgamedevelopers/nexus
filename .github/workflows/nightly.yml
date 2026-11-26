@@ -15,10 +15,12 @@ concurrency:
 
 jobs:
   # The largest instances, on the fleet Mac. On the hosted macos-26 image (3 cores, Prax built cold each night) it ran
-  # past its 30 minutes on 2026-11-25 (run 45683088547) and was cut off. A nightly has no time limit; GitHub's default
-  # for a job (6 hours) is the only one.
+  # past its 30 minutes on 2026-11-25 (run 45683088547) and was cut off. A nightly has no time limit: the model jobs
+  # configure with NEXUS_TLC_UNCAPPED (CMakeLists.txt), so no check has a cap, and each job's 360 minutes is a safety
+  # net for a hung runner, not a budget.
   model-large:
     runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -46,7 +48,7 @@ jobs:
           echo "TEST_JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
       # Without the link's transport (mosh and protobuf), which no check program uses.
       - name: Configure (Release)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_TLC_UNCAPPED=ON
       - name: Build the model checks
         run: cmake --build build --parallel "$JOBS" --target model_checks
       - name: The largest instances
@@ -55,7 +57,7 @@ jobs:
   model:
     # Keep the compiled trace walks and the CPU-intensive specs on prebuilt runners.
     runs-on: ${{ (matrix.build || matrix.prebuilt) && fromJSON('["self-hosted","nexus-nightly","Linux","X64","tlc"]') || 'ubuntu-24.04' }}
-    timeout-minutes: 15
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -106,9 +108,8 @@ jobs:
           - shard: accounts-rest
             run: '^tlc_accounts_'
             build: accounts_walk
-          # The journal (models/store/Journal.tla): its spec alone, capped at 60 s (49 s on four workers of an idle
-          # 16-thread bench, 2026-11-26), which beside the shard's walks and witnesses on a shared host ran past the cap
-          # (nightly 45689827990); then the witnesses and the code's walks with their faults.
+          # The journal (models/store/Journal.tla): its spec alone (49 s on four workers of an idle 16-thread bench,
+          # 2026-11-26), beside the witnesses and the code's walks with their faults, so the two run at once.
           - shard: journal-spec
             run: '^tlc_journal_spec$'
           - shard: journal
@@ -346,7 +347,7 @@ jobs:
             launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
           fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF \
-            -DCMAKE_LINKER_TYPE=LLD "${launcher[@]}"
+            -DCMAKE_LINKER_TYPE=LLD -DNEXUS_TLC_UNCAPPED=ON "${launcher[@]}"
       # Only the walks this shard's trace checks run (`build`); a shard of specs and witnesses alone builds nothing.
       - name: Build the shard's walks
         if: matrix.build
@@ -376,7 +377,7 @@ jobs:
   # ran them before it moved to Linux.
   model-window:
     runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
-    timeout-minutes: 15
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -432,7 +433,7 @@ jobs:
             launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
                       -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache)
           fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF "${launcher[@]}"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_TLC_UNCAPPED=ON "${launcher[@]}"
       - name: Build the label and account-picker trace programs
         run: cmake --build build --parallel "$JOBS" --target label_walk account_picker_trace
       - name: Check tab-label and account-picker traces
