@@ -106,9 +106,15 @@ jobs:
           - shard: accounts-rest
             run: '^tlc_accounts_'
             build: accounts_walk
+          # The journal (models/store/Journal.tla): its spec alone, capped at 60 s (49 s on four workers of an idle
+          # 16-thread bench, 2026-11-26), which beside the shard's walks and witnesses on a shared host ran past the cap
+          # (nightly 45689827990); then the witnesses and the code's walks with their faults.
+          - shard: journal-spec
+            run: '^tlc_journal_spec$'
           - shard: journal
             run: '^tlc_journal'
             build: journal_walk
+            skip: '^tlc_journal_spec$'
           # The store's lock and the start-up order (models/store/StoreLock.tla): its instances, witnesses and the
           # code's walks.
           - shard: store-lock
