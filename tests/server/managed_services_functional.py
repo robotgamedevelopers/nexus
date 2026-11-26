@@ -114,6 +114,8 @@ def test_server(binary, box):
     def configure(rows):
         temp = manifest.with_suffix(".tmp")
         temp.write_text(json.dumps({"version": 1, "services": rows}))
+        # The server refuses a manifest others can write to; Ubuntu's umask (0002) makes a new file group-writable.
+        temp.chmod(0o600)
         temp.replace(manifest)
 
     def pids(name, event):

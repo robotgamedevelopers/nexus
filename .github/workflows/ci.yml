@@ -167,10 +167,12 @@ jobs:
         run: npm run check
 
   # Linux: everything but the window, which Prax cannot run here yet (no lib/app backend for Linux, no system fonts in
-  # lib/font; CMakeLists.txt NEXUS_WINDOW), and the window's logic, which starts processes through Prax's lib/process,
-  # whose POSIX backend does not link on Linux at nexus's pin (NEXUS_WINDOW_LOGIC). The link (nexus-server) uses the
-  # window's logic, so it is off too (NEXUS_LINK=OFF). With clang and lld, warnings as errors as on macOS.
-  # One build, shared: build-linux builds and uploads the build tree; the unit and functional tests download it.
+  # lib/font; CMakeLists.txt NEXUS_WINDOW): the window's logic over Prax's lib/process (on a workaround for its link
+  # error at this pin, CMakeLists.txt "Prax's lib/process on Linux"), the link and nexus-server over mosh and Ubuntu's
+  # protobuf, and their tests. The sandbox's bubblewrap and socat are left to the nightly's claude-driver-wall-linux,
+  # which builds and runs them (NEXUS_SANDBOX_TOOLS=OFF here, .github/actions/nexus-build linux-release), so these
+  # jobs' 2 minutes go to nexus's own code. With clang and lld, warnings as errors as on macOS.
+  # One build, shared: build-linux builds and uploads the build tree; tests-linux downloads it.
   build-linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 2
@@ -186,7 +188,7 @@ jobs:
         uses: ./.github/actions/hosted-caches
         with:
           name: linux-release
-          apt: ""
+          apt: libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev
       - name: Configure and build
         uses: ./.github/actions/nexus-build
         with:
@@ -195,17 +197,18 @@ jobs:
         uses: ./.github/actions/build-share
         with:
           name: build-linux
-      # A configure with no options at all takes the defaults that hold here (no window, no window logic, no link), so
-      # a plain `cmake -S . -B build` on Linux works rather than failing late; this proves it.
+      # A configure with no options at all takes the defaults that hold here (no window; the window's logic, the link
+      # and the sandbox's programs), so a plain `cmake -S . -B build` on Linux builds nexus-server; this proves it.
       - name: Configure with the defaults
         shell: bash
         run: |
           set -euo pipefail
           cmake -S . -B build-plain
-          for option in NEXUS_WINDOW NEXUS_WINDOW_LOGIC NEXUS_LINK; do
+          for expect in NEXUS_WINDOW=OFF NEXUS_WINDOW_LOGIC=ON NEXUS_LINK=ON NEXUS_SANDBOX_TOOLS=ON; do
+            option=${expect%%=*}
             value=$(sed -n "s/^$option:BOOL=//p" build-plain/CMakeCache.txt)
-            if [ "$value" != "OFF" ]; then
-              echo "::error::a plain configure on Linux left $option at '$value', not OFF: its default in CMakeLists.txt is wrong"
+            if [ "$value" != "${expect#*=}" ]; then
+              echo "::error::a plain configure on Linux left $option at '$value', not ${expect#*=}: its default in CMakeLists.txt is wrong"
               exit 1
             fi
           done
@@ -223,6 +226,39 @@ jobs:
         uses: ./.github/actions/build-fetch
         with:
           name: build-linux
+      # What the link's programs load at run time (Ubuntu's protobuf and protobuf-lite, which mosh links) and the ssh
+      # server the link's happy paths reach, installed only where the image lacks them.
+      - name: The link's run-time packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          need=()
+          for package in libprotobuf32t64 libprotobuf-lite32t64 openssh-server; do
+            dpkg -s "$package" >/dev/null 2>&1 || need+=("$package")
+          done
+          if [ ${#need[@]} -gt 0 ]; then
+            echo "installing ${need[*]}"
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends "${need[@]}"
+          fi
+      # The link's happy paths reach this machine over `ssh localhost` without a password prompt
+      # (tests/link/CMakeLists.txt): a key made here, for this job only, authorized for the runner's own login.
+      - name: Passwordless ssh to this machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          if [ ! -f ~/.ssh/id_ed25519 ]; then ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519; fi
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          chmod go-w ~
+          if ! nc -z -w 2 127.0.0.1 22; then
+            sudo systemctl start ssh
+          fi
+          ssh-keyscan -T 5 localhost 127.0.0.1 >> ~/.ssh/known_hosts
+          ssh -o BatchMode=yes localhost true
+          echo "ssh localhost works for $(id -un)"
       # The ctest wrapper every CI ctest call goes through fails a skipped or disabled test and a selection of none:
       # its planted cases (tests/ci/ctest-skips) say so.
       - name: The ctest wrapper refuses a skipped test and an empty selection
@@ -231,7 +267,8 @@ jobs:
       # planted cases (tests/ci/tiers) say so.
       - name: The tiers, as planted
         run: bash .github/tiers-selftest.sh
-      # The fast unit tests and each feature's happy path that builds here (tests/tiers.txt).
+      # The fast unit tests and each feature's happy path that builds here (tests/tiers.txt): on Linux now the link's
+      # too (link_e2e_loopback, link_e2e_signin), over ssh to this machine.
       - name: The tier_pr tests
         run: bash .github/ctest.sh --test-dir build -L '^tier_pr$' -j "$TEST_JOBS" --output-on-failure
 

@@ -218,6 +218,13 @@ crypto come with macOS). Without it, configure with `-DNEXUS_LINK=OFF` for the w
 Homebrew protobuf is built for the macOS it was installed on, and so then are nexus and `nexus-server` (the build says
 so).
 
+On Linux, and inside WSL2 on Windows, the same commands build `nexus-server`, the drivers and their tests, but not the
+window: Prax has no Linux app backend yet (the desktop client waits on its Wayland backend). It builds with clang and
+lld, which the configure picks where they are installed, and needs `apt install clang lld cmake ninja-build
+libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev` (and Rust and Cargo, as above). On Linux the window's logic
+runs over a workaround for a link error in Prax's lib/process at the pinned commit (`cmake/prax_environ.h`), which goes
+away when Prax fixes it.
+
 Tests: `ctest --test-dir build -L unit`, `-L functional`, and `-L model` (needs Java and `TLA2TOOLS_JAR`; see
 [models/README.md](../models/README.md)). The link's functional tests run `nexus-server` over `ssh localhost`, which has
 to work without a password prompt; configure with `-DNEXUS_E2E_TAILNET=<this machine's tailnet address>` to run the
