@@ -5,7 +5,8 @@
 # the organisation), so a pull request's macOS jobs are the build with its unit tests, the functional tests in four
 # parts and the Tailscale shim; the macOS sanitizers, the macOS Claude driver and its token wall run in the nightly on
 # the fleet Mac, and their Linux forms run here.
-# The Tailscale shim is built and tested separately on macOS, Linux and Windows (.github/workflows/tailscale.yml).
+# The Tailscale shim is built and tested separately on macOS and Linux (.github/workflows/tailscale.yml); Windows in
+# the nightly (tailscale-windows.yml).
 #
 # Each per-commit job finishes in 2 minutes: timeout-minutes says so here. Longer work belongs in the nightly.
 #
@@ -93,15 +94,15 @@ jobs:
           config: mac-release
       - name: Unit tests
         if: matrix.check == 'build-and-unit'
-        run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
+        run: bash .github/ctest.sh --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
       # The headless window (system fonts), real child processes and a real file, and the link end to end (nexus-server
       # over ssh to this machine, mosh's transport over real UDP): not unit tests.
       # The frame budget and the server lock under contention run in the nightly.
       - name: Functional tests (every fourth one, from the shard's)
         if: matrix.check == 'functional'
         run: >-
-          ctest --test-dir build -L functional -E '^(window_frame_budget|server_lock_functional)$' -I '${{ matrix.shard }},,4'
-          -j "$TEST_JOBS" --output-on-failure --no-tests=error
+          bash .github/ctest.sh --test-dir build -L functional -E '^(window_frame_budget|server_lock_functional)$' -I '${{ matrix.shard }},,4'
+          -j "$TEST_JOBS" --output-on-failure
 
   # On hosted Ubuntu per commit; the same job on macOS runs in the nightly (on the fleet Mac), as do the macOS token
   # wall and the macOS sanitizers, so that a pull request asks for few macOS runners (2026-11-25: about five run at
@@ -176,7 +177,7 @@ jobs:
       - name: Build the conformance test
         run: cmake --build build --parallel "$JOBS" --target driver_conformance_test
       - name: Conformance of the Claude driver
-        run: ctest --test-dir build -L claude_driver -j "$TEST_JOBS" --output-on-failure --no-tests=error
+        run: bash .github/ctest.sh --test-dir build -L claude_driver -j "$TEST_JOBS" --output-on-failure
 
   # The same wall on Linux, where Claude's sandbox is bubblewrap and socat, both built by nexus from pinned sources
   # (cmake/sandbox.cmake) and found by the driver (drivers/claude/src/tools.ts), with nothing installed for them: on an
@@ -319,11 +320,15 @@ jobs:
               exit 1
             fi
           done
+      # The ctest wrapper every CI ctest call goes through fails a skipped or disabled test and a selection of none:
+      # its planted cases (tests/ci/ctest-skips) say so.
+      - name: The ctest wrapper refuses a skipped test and an empty selection
+        run: bash .github/ctest-selftest.sh
       - name: Unit tests
-        run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
+        run: bash .github/ctest.sh --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
       # Real child processes and real files: not unit tests.
       - name: Functional tests
-        run: ctest --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure
+        run: bash .github/ctest.sh --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure
 
   # The code generated from schema/Nexus.schema (and the tests' later version) is checked in; this regenerates it with
   # schema's compiler at the pinned commit (cmake/schema.cmake) and fails on any difference, so the checked-in code is
@@ -627,8 +632,8 @@ jobs:
           echo "$launched of $listed walks passed (half $HALF; the other job runs the rest)"
 
   # The Tailscale shim built and tested alone on macOS and Linux (.github/workflows/tailscale.yml, which says how its
-  # caches are kept so that only a pin change is cold; Windows runs in the nightly). On a pull request it builds the
-  # head, not the merge commit, and each OS's verdict is the commit status tailscale-<os> on that head, which a
+  # caches are kept so that only a pin change is cold; Windows runs in the nightly, tailscale-windows.yml). On a pull
+  # request it builds the head, not the merge commit, and each OS's verdict is the commit status tailscale-<os> on that head, which a
   # lander waits for; statuses: write sets it. A pull request from a fork has a read-only token, so its jobs build and
   # test but set no status (a lander of a fork's pull request reads the jobs).
   tailscale:
@@ -639,9 +644,7 @@ jobs:
     with:
       prime: false
       sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      # Windows runs in the nightly: restoring its primed cache alone took 83 s here (docs/tailscale.md). So does macOS's
-      # x86_64 slice under Rosetta: built and run beside arm64 it took the job past 2 minutes.
-      windows: false
+      # macOS's x86_64 slice under Rosetta runs in the nightly: built and run beside arm64 it took the job past 2 minutes.
       rosetta: false
       status: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
@@ -670,5 +673,5 @@ jobs:
         uses: ./.github/actions/windows-build
       - name: Unit tests
         run: |
-          ctest --test-dir "$env:NEXUS_BUILD" -C Release -L unit -j $env:TEST_JOBS --output-on-failure
+          & ./.github/ctest.ps1 --test-dir "$env:NEXUS_BUILD" -C Release -L unit -j $env:TEST_JOBS --output-on-failure
           if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }

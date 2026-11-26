@@ -7,16 +7,15 @@
 # Per pull request the iOS builds are Debug at -O0 without debug information (nexus-build's ios-device and
 # ios-simulator): no LTO (Prax turns it on for Release only) and asserts on, as ci.yml's macOS build.
 #
-# The iOS port is not on main yet (it is on port/ios, pull request #88). The tree job looks for cmake/ios.cmake and
-# says when this tree has no iOS build, and the iOS jobs then do not run; a pull request of the port, once rebased
-# onto main, has it and runs them. Until the port is on main, cache-warm builds the iOS caches from port/ios.
+# The iOS port is not on main yet (it is on port/ios, pull request #88), so main has no iOS build (no cmake/ios.cmake)
+# and this workflow runs on no push or pull request: a job that would only skip is not defined, and nothing in CI is
+# skipped. Dispatched by hand on a tree without the port, its build fails. The port brings back the push and
+# pull_request triggers with cmake/ios.cmake. Until the port is on main, cache-warm builds the iOS caches from
+# port/ios.
 
 name: ios
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -27,31 +26,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  tree:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    outputs:
-      ios: ${{ steps.look.outputs.ios }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - name: Does this tree build iOS?
-        id: look
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f cmake/ios.cmake ]; then
-            echo "ios=true" >> "$GITHUB_OUTPUT"
-            echo "cmake/ios.cmake is here: the iOS jobs run"
-          else
-            echo "ios=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::this tree has no iOS build (no cmake/ios.cmake): the iOS jobs do not apply to it"
-          fi
-
   ios:
-    needs: tree
-    if: needs.tree.outputs.ios == 'true'
     runs-on: macos-26
     name: ios-${{ matrix.target }}
     timeout-minutes: 2
@@ -82,4 +57,4 @@ jobs:
           config: ios-${{ matrix.target }}
       - name: Unit and iOS tests on a simulator device
         if: matrix.target == 'simulator'
-        run: ctest --test-dir build -L 'unit|ios' -j "$TEST_JOBS" --output-on-failure --no-tests=error
+        run: bash .github/ctest.sh --test-dir build -L 'unit|ios' -j "$TEST_JOBS" --output-on-failure

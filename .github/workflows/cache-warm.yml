@@ -276,3 +276,11 @@ jobs:
     with:
       prime: true
       save: true
+  tailscale-windows:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'push'
+    uses: ./.github/workflows/tailscale-windows.yml
+    permissions:
+      contents: read
+    with:
+      prime: true
+      save: true
