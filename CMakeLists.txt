@@ -77,6 +77,39 @@ FetchContent_Declare(prax
     EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(prax)
 
+# Whole-program optimisation in Release (NEXUS_LTO). Prax turns it on for its own libraries
+# (CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE in its CMakeLists.txt): MSVC's /GL and /LTCG, LLVM bitcode with clang. It is
+# a shipping optimisation: the nightly and shipped builds keep it, and the per-pull-request builds turn it off
+# (.github/actions/windows-build and nexus-build, `lto`), where the whole-program link of each window program took most
+# of the Windows job's 2 minutes (about 53 s for one, run 45856240787). Prax is never patched, so with it off nexus clears
+# the property on every Prax target after Prax is added. tests/build/lto_check.cmake (build_unit_lto) holds the record
+# written here to the option.
+option(NEXUS_LTO "Whole-program optimisation in Release, in Prax's libraries as Prax sets it" ON)
+function(nexus_prax_targets dir out)
+    get_property(targets DIRECTORY "${dir}" PROPERTY BUILDSYSTEM_TARGETS)
+    get_property(subdirs DIRECTORY "${dir}" PROPERTY SUBDIRECTORIES)
+    foreach(sub IN LISTS subdirs)
+        nexus_prax_targets("${sub}" more)
+        list(APPEND targets ${more})
+    endforeach()
+    set(${out} "${targets}" PARENT_SCOPE)
+endfunction()
+nexus_prax_targets("${prax_SOURCE_DIR}" nexus_prax_all_targets)
+set(nexus_prax_ipo_record "NEXUS_LTO=${NEXUS_LTO}\n")
+foreach(target IN LISTS nexus_prax_all_targets)
+    get_target_property(type ${target} TYPE)
+    if(NOT type MATCHES "^(STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$")
+        continue()
+    endif()
+    if(NOT NEXUS_LTO)
+        set_target_properties(${target} PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF
+            INTERPROCEDURAL_OPTIMIZATION OFF)
+    endif()
+    get_target_property(ipo ${target} INTERPROCEDURAL_OPTIMIZATION_RELEASE)
+    string(APPEND nexus_prax_ipo_record "${target} ${ipo}\n")
+endforeach()
+file(WRITE "${CMAKE_BINARY_DIR}/prax-ipo.txt" "${nexus_prax_ipo_record}")
+
 # Prax's lib/process on Linux. At this pin its POSIX backend does not link there: process_posix.cpp (lines 165-173)
 # declares `extern char** environ;` at block scope inside its own unnamed namespace, which names an `environ` nothing
 # defines. Prax is pinned and never patched, so nexus works around it without touching the file: cmake/prax_environ.h,
@@ -577,6 +610,11 @@ if(TARGET nexus AND NOT NEXUS_TEST_AUTHENTICATOR)
     set_tests_properties(nexus_no_test_authenticator_detects PROPERTIES LABELS unit TIMEOUT 30
         PASS_REGULAR_EXPRESSION "no_test_authenticator:FOUND")
 endif()
+# NEXUS_LTO reaches Prax's targets (tests/build/lto_check.cmake): a configure-time record, checked in a moment.
+add_test(NAME build_unit_lto COMMAND ${CMAKE_COMMAND} "-DRECORD=${CMAKE_BINARY_DIR}/prax-ipo.txt"
+    -P "${PROJECT_SOURCE_DIR}/tests/build/lto_check.cmake")
+set_tests_properties(build_unit_lto PROPERTIES LABELS unit TIMEOUT 30)
+
 if(TARGET nexus_policy)
     add_executable(policy_reload_test tests/policy/reload.cpp)
     target_link_libraries(policy_reload_test PRIVATE nexus_policy)

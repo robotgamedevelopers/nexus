@@ -26,6 +26,12 @@ inputs:
   targets:
     description: the targets to build (empty for all)
     default: ""
+  lto:
+    description: >-
+      NEXUS_LTO for the Release configurations (mac-release, linux-release), ON or OFF: whole-program optimisation
+      (CMakeLists.txt). ci.yml and cache-warm.yml give OFF for the pull requests' build directories; the nightly keeps
+      the default.
+    default: "ON"
 runs:
   using: composite
   steps:
@@ -74,6 +80,7 @@ runs:
       shell: bash
       env:
         CONFIG: ${{ inputs.config }}
+        LTO: ${{ inputs.lto }}
         DIR: ${{ inputs.dir || 'build' }}
       run: |
         set -euo pipefail
@@ -84,11 +91,12 @@ runs:
               "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined")
         off=(-DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF)
         linux_server=(-DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=ON -DNEXUS_LINK=ON -DNEXUS_SANDBOX_TOOLS=OFF)
+        case "$LTO" in ON|OFF) ;; *) echo "::error::nexus-build: lto is '$LTO', not ON or OFF"; exit 1 ;; esac
         case "$CONFIG" in
           mac-release)
             cmake -S . -B "$DIR" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Release "${launch[@]}" \
               -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-cache_path_lto,$NEXUS_CACHES/lto" \
-              -DNEXUS_E2E_TAILNET= ;;
+              -DNEXUS_E2E_TAILNET= "-DNEXUS_LTO=$LTO" ;;
           mac-debug)
             cmake -S . -B "$DIR" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Debug "${launch[@]}" \
               -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache -DNEXUS_E2E_TAILNET= \
@@ -105,7 +113,7 @@ runs:
               -DCMAKE_C_FLAGS_DEBUG=-O0 -DCMAKE_CXX_FLAGS_DEBUG=-O0 -DCMAKE_OBJC_FLAGS_DEBUG=-O0 -DCMAKE_OBJCXX_FLAGS_DEBUG=-O0 ;;
           linux-release)
             CC=clang CXX=clang++ cmake -S . -B "$DIR" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Release "${linux_server[@]}" "${launch[@]}" \
-              -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto" ;;
+              -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto" "-DNEXUS_LTO=$LTO" ;;
           linux-asan)
             CC=clang CXX=clang++ cmake -S . -B "$DIR" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Debug "${off[@]}" "${launch[@]}" \
               -DCMAKE_LINKER_TYPE=LLD "${asan[@]}" ;;

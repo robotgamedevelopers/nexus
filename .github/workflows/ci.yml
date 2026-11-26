@@ -237,6 +237,8 @@ jobs:
           config: linux-release
           dir: ${{ env.NEXUS_BUILD }}
           targets: tier_pr_build
+          # Whole-program optimisation is for shipping (CMakeLists.txt NEXUS_LTO); off for a pull request.
+          lto: "OFF"
       # A configure with no options at all takes the defaults that hold here (no window; the window's logic, the link
       # and the sandbox's programs), so a plain `cmake -S . -B build` on Linux builds nexus-server; this proves it.
       - name: Configure with the defaults
@@ -343,6 +345,8 @@ jobs:
         with:
           # What the tier_pr tests run, and the window itself (no tier_pr test runs nexus.exe).
           target: tier_pr_build nexus
+          # Whole-program optimisation is for shipping (CMakeLists.txt NEXUS_LTO); off for a pull request.
+          lto: "OFF"
       # The fast unit tests (tests/tiers.txt); the slower ones run in the nightly's windows-nightly.
       - name: The tier_pr tests
         run: |
