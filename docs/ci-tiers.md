@@ -36,13 +36,15 @@ Per pull request (`ci.yml`), with `-L '^tier_pr$'`:
 - `tailscale.yml`: the shim's unit tests.
 - `server-policy`: the Python tests.
 - `claude-driver`: the Claude driver's own unit tests.
+- `watch`: the Apple Watch core's unit tests (the still-frames test among them) from the watch's own build (`cmake -S watch`, where every test is a fast unit test, so it selects `-L unit`), and the watchOS app compiled for the simulator and a watch (docs/watch.md). nexus's own build leaves the watch out of its default targets; the nightly builds its walks and speech tools by name.
 
 Nightly (`nightly.yml`), with `-L '^tier_nightly$'`:
 
 - `macos-debug`, `linux-nightly` and `windows-nightly`: the same configurations. They leave out the model checks, the Claude driver's conformance and the tests that time the real clock, which have their own jobs:
   - the `model*` jobs;
   - `claude-driver-macos` and `claude-driver-linux`;
-  - `frame-budget`, `macos-release` and `server-lock`.
+  - `frame-budget`, `macos-release` and `server-lock`;
+  - `watch-speech`: the watch's speech test, on hosted macOS.
 - The nightly also runs configurations a pull request does not build: the Release build with LTO, the sanitizers, WSL2, the token walls, and the Tailscale shim's functional tests and Windows build.
 - `python-native`: the Python tests that need a real Mac (`.github/python-native-tests.txt`), on the fleet Mac. `.github/python-tests.py` holds them to the same rule as ctest: a skip fails the run.
 

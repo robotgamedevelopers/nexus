@@ -2,9 +2,32 @@
 ; The layers of nexus, bottom up. Each is secured before the next starts.
 (:schema 1
  :root "goal"
- :page (:roadmaps ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi" "apple-watch" "client-lock"))
+ :page (:roadmaps ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi" "watch" "apple-watch" "client-lock"))
  :nodes
- ((:id "goal" :type :work-set :children ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi" "apple-watch" "client-lock"))
+ ((:id "goal" :type :work-set :children ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi" "watch" "apple-watch" "client-lock"))
+  (:id "watch" :type :roadmap :title "Apple Watch: talk to your AIs, and they talk back (docs/watch.md)"
+   :rows (
+     ("watch-turn" "1. The voice turn: hold to talk, the AI named first (\"Hey Rowan, ...\") or with no name the first AI in the server's list, the reply spoken; every refusal said and shown; locked (not on the wrist since the passcode), it neither listens nor reads a reply")
+     ("watch-relay" "2. The relay to the phone: the watch's prompts reach the server once, through restarts of either end, and a phone app not unlocked since it slept refuses the watch, saying so")
+     ("watch-app" "3. The watchOS app: SwiftUI over the C++ core, built for the simulator and a watch in CI, driven end to end in the simulator to an AI on a test server and back")
+     ("watch-phone" "4. The iPhone's side of the relay: WatchConnectivity to the nexus iPhone app, its link to nexus-server and its recognizer (waits on the link on iOS)")
+     ("watch-device" "5. On a real watch: signed with the team, installed, and the owner's check and the microphone tried on the wrist"))
+   :columns (("done" "done"))
+   :cells (
+     ("watch-turn" "done" "t-watch-turn")
+     ("watch-relay" "done" "t-watch-relay")
+     ("watch-app" "done" "t-watch-app")
+     ("watch-phone" "done" "t-watch-phone")
+     ("watch-device" "done" "t-watch-device")
+     ))
+  (:id "t-watch-turn" :type :task :title "The watch's voice turn, modelled and bound to the code" :state :done
+   :evidence ("watch/models/VoiceTurn.tla: ctest -L model tlc_watchapp_model_voice tlc_watchapp_witness_WVt*" "watch/tests/voice_walk.cpp, watch/models/VoiceTurnTrace.tla: ctest -L model tlc_watchapp_trace_voice_*" "watch/tests/core_test.cpp: ctest -L unit watch_unit_turn watch_unit_match watch_unit_capi" "watch/tests/speech.cmake: ctest -L functional watch_speech watch_speech_planted"))
+  (:id "t-watch-relay" :type :task :title "The relay between watch and phone, modelled and bound to the code" :state :done
+   :evidence ("watch/models/Relay.tla: ctest -L model tlc_watchapp_model_relay tlc_watchapp_witness_WRl*" "watch/tests/relay_walk.cpp, watch/models/RelayTrace.tla: ctest -L model tlc_watchapp_trace_relay_*" "watch/tests/core_test.cpp: ctest -L unit watch_unit_frames watch_unit_watchlink watch_unit_phone"))
+  (:id "t-watch-app" :type :task :title "The watchOS app, built in CI and driven in the simulator" :state :done
+   :evidence (".github/workflows/ci.yml: job watch" "docs/watch.md: the simulator's end to end"))
+  (:id "t-watch-phone" :type :task :title "The iPhone's side of the relay" :state :todo)
+  (:id "t-watch-device" :type :task :title "The watch app on a real watch" :state :todo)
   (:id "takeover" :type :roadmap :title "Takeover: a new build replaces the running server, rebuilt bottom up"
    :rows (
      ("takeover-store-lock" "1. Store lock: at most one process ever has the store open for writing, enforced by the operating system (an exclusive flock on the store's directory itself, taken before the store is read, held for the life of the process, released by the OS however it ends; the store reached only through that directory's descriptor after); the server starts in the order probe, lock and replay, socket, drivers restored, waiting a bounded time for a writer that holds the lock without answering; only a start refused by a live server exits 0; readers take the lock shared, change nothing and give up past a limit; the lock checked where it lives, and network filesystems refused")
