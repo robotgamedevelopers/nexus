@@ -126,8 +126,11 @@ set_tests_properties(ios_ssh_functional PROPERTIES LABELS "functional;ios" TIMEO
 # same speech must not be routed to ada (it fails on a refusal too, never passing by the recognizer not running). Label
 # `speech`, not `ios`: speech recognition needs the app allowed once by a tap on that simulator, which a CI runner
 # cannot give, so these run where a person has: ctest -L speech. NEXUS_IOS_SIM_DEVICE picks the simulator; "booted" by
-# default. Serial: each relaunches the one app on the one simulator.
-if(NEXUS_IOS_SIMULATOR)
+# default. Serial: each relaunches the one app on the one simulator. Registered only with NEXUS_IOS_SPEECH_TESTS=ON, on a
+# simulator where a person has allowed it: no CI runner can, so CI never registers them (no tier holds a test that cannot
+# run there).
+option(NEXUS_IOS_SPEECH_TESTS "Register the iOS voice tests, for a simulator where speech recognition is allowed" OFF)
+if(NEXUS_IOS_SIMULATOR AND NEXUS_IOS_SPEECH_TESTS)
     set(NEXUS_IOS_SIM_DEVICE booted CACHE STRING "The simulator the iOS voice tests run on: a UDID or booted")
     set(voice_audio ${PROJECT_SOURCE_DIR}/tests/ios/audio)
     function(nexus_ios_voice_test name audio names expected)

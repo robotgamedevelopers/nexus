@@ -42,7 +42,7 @@ On an iPhone the app opens on a menu of your tabs with a microphone at the botto
 ask, and the reply comes back on the menu, spoken. Speech is recognized on the phone and sent as an ordinary prompt.
 An AI's own page has the way back, the transcript and the prompt, whose microphone is plain dictation. The form comes
 from the client policy by device idiom; an iPad keeps the desktop's strip. See [voice.md](voice.md) for the form, the
-voice turn, its tests (`ctest -L speech` on a simulator) and how a watch reuses it.
+voice turn, its tests (`-DNEXUS_IOS_SPEECH_TESTS=ON`, then `ctest -L speech` on a simulator) and how a watch reuses it.
 
 ## Reaching the server
 

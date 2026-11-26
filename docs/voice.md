@@ -105,8 +105,9 @@ Tests:
 - `menu_rows_unit` (`-L unit`): `menu_rows` read, run as shortcuts, and each malformed form refused with its reason.
 - `ios_voice_named`, `ios_voice_current` and `ios_voice_planted` (`-L speech`, simulator builds): recorded speech in
   `tests/ios/audio` goes through the real on-device recognizer and the matcher in the app (`nexus --recognize AUDIO
-  --ais NAMES`). They are not labelled `ios` because a CI runner cannot allow speech recognition. On a simulator, allow
-  it once (launch the app, tap Talk, Allow), then run `ctest -L speech`.
+  --ais NAMES`). A CI runner cannot allow speech recognition, so they are registered only in a simulator build
+  configured with `-DNEXUS_IOS_SPEECH_TESTS=ON`. On that simulator, allow it once (launch the app, tap Talk, Allow),
+  then run `ctest -L speech`.
 
 To try voice in the simulator without a microphone, launch the app with `--voice-file AUDIO`. Talk then recognizes
 that file instead of the microphone.

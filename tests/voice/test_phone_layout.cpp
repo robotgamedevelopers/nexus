@@ -134,10 +134,9 @@ void theMicrophoneTakesItsPress(PrFontSet* fonts) {
     (void)presses;
 }
 
-// The keyboard over many frames, as UIKit shows it: up while the last frame reported text being edited
-// (PrAppOutput.hasTextInput), and down for a frame now and then whatever the window does (its input view changing over,
-// a frame whose caret is not yet placed). With the prompt tapped once, the prompt keeps the focus and the keyboard comes
-// up once: neither changes again on its own, frame after frame (the flicker it once had). The window's box above the
+// An AI's page on the phone over 120 frames with no input after one tap in the prompt: the prompt keeps the focus and
+// the text input (PrAppOutput.hasTextInput, which raises the keyboard) starts once; neither changes again on its own,
+// frame after frame (the flicker it once had). The window's box above the
 // keyboard is tests/window/test_keyboard_frames.cpp's, on the frame code main_ios.cpp runs.
 void theKeyboardHoldsStill(PrFontSet* fonts) {
     Page page("Johnny");
