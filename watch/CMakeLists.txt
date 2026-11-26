@@ -19,9 +19,20 @@ if(NOT DEFINED PROJECT_NAME)
     enable_testing()
 endif()
 
+# Inside nexus's own build (not watchOS) the watch adds nothing to the default build: its unit tests run per pull
+# request in ci.yml's watch job, from the standalone build above, and the nightly builds what it needs by name (the
+# walks, the relay host, the speech test's matcher). So a pull request's macOS and Linux builds stay inside their 2
+# minutes.
+set(NEXUS_WATCH_STANDALONE OFF)
+set(NEXUS_WATCH_NOT_ALL EXCLUDE_FROM_ALL)
+if(PROJECT_NAME STREQUAL "nexus_watch" OR CMAKE_SYSTEM_NAME STREQUAL "watchOS")
+    set(NEXUS_WATCH_STANDALONE ON)
+    set(NEXUS_WATCH_NOT_ALL)
+endif()
+
 # The name matcher is the iPhone's (src/voice/name_match.h), shared, so the two route the same words alike.
 set(NEXUS_WATCH_SRC "${CMAKE_CURRENT_LIST_DIR}/../src")
-add_library(nexus_watch_core STATIC core/ai_match.cpp core/voice_turn.cpp core/relay.cpp core/screen.cpp core/nexus_watch.cpp
+add_library(nexus_watch_core STATIC ${NEXUS_WATCH_NOT_ALL} core/ai_match.cpp core/voice_turn.cpp core/relay.cpp core/screen.cpp core/nexus_watch.cpp
     ${NEXUS_WATCH_SRC}/voice/name_match.cpp)
 target_include_directories(nexus_watch_core PUBLIC core PRIVATE ${NEXUS_WATCH_SRC})
 target_compile_features(nexus_watch_core PUBLIC cxx_std_20)

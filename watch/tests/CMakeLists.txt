@@ -1,16 +1,19 @@
 # The watch core's tests (docs/watch.md), with two labels:
-#   unit    watch_core_test, one test per group: logic only, no clock, sockets or files
+#   unit    watch_core_test, one test per group: logic only, no clock, sockets or files. Standalone only (cmake -S
+#           watch: ci.yml's watch job, per pull request), so nexus's own build does not compile it.
 #   model   TLC on watch/models: VoiceTurn.tla and Relay.tla on small instances, every reversed witness rejected, and
 #           the code's walks (voice_walk, relay_walk) checked against them over several seeds, with each walk's planted
 #           fault rejected. Needs java and TLA2TOOLS_JAR (the pinned tla2tools.jar, .github/tla2tools.sha256).
 
-add_executable(watch_core_test core_test.cpp)
-target_link_libraries(watch_core_test PRIVATE nexus_watch_core)
-target_compile_options(watch_core_test PRIVATE ${NEXUS_WARNINGS})
-foreach(group match turn frames watchlink phone capi screen)
-    add_test(NAME watch_unit_${group} COMMAND watch_core_test ${group})
-    set_tests_properties(watch_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
-endforeach()
+if(NEXUS_WATCH_STANDALONE)
+    add_executable(watch_core_test core_test.cpp)
+    target_link_libraries(watch_core_test PRIVATE nexus_watch_core)
+    target_compile_options(watch_core_test PRIVATE ${NEXUS_WARNINGS})
+    foreach(group match turn frames watchlink phone capi screen)
+        add_test(NAME watch_unit_${group} COMMAND watch_core_test ${group})
+        set_tests_properties(watch_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
+    endforeach()
+endif()
 
 # The walks TLC checks the code's traces with, over a copy of the core built with its planted faults
 # (NEXUS_WATCH_FAULTS: voice_turn.h); no other build has them.
@@ -25,7 +28,7 @@ target_compile_options(watch_voice_walk PRIVATE ${NEXUS_WARNINGS})
 add_executable(watch_relay_walk EXCLUDE_FROM_ALL relay_walk.cpp)
 target_link_libraries(watch_relay_walk PRIVATE nexus_watch_core_faulty)
 target_compile_options(watch_relay_walk PRIVATE ${NEXUS_WARNINGS})
-add_custom_target(watch_model_checks DEPENDS watch_core_test watch_voice_walk watch_relay_walk)
+add_custom_target(watch_model_checks DEPENDS watch_voice_walk watch_relay_walk)
 
 find_program(NEXUS_WATCH_JAVA java)
 set(NEXUS_WATCH_TLC_JAR "$ENV{TLA2TOOLS_JAR}" CACHE FILEPATH "The pinned tla2tools.jar")

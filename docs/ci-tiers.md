@@ -36,7 +36,7 @@ Per pull request (`ci.yml`), with `-L '^tier_pr$'`:
 - `tailscale.yml`: the shim's unit tests.
 - `server-policy`: the Python tests.
 - `claude-driver`: the Claude driver's own unit tests.
-- `watch`: the Apple Watch core's unit tests (the still-frames test among them), and the watchOS app compiled for the simulator and a watch (docs/watch.md).
+- `watch`: the Apple Watch core's unit tests (the still-frames test among them) from the watch's own build (`cmake -S watch`, where every test is a fast unit test, so it selects `-L unit`), and the watchOS app compiled for the simulator and a watch (docs/watch.md). nexus's own build leaves the watch out of its default targets; the nightly builds its walks and speech tools by name.
 
 Nightly (`nightly.yml`), with `-L '^tier_nightly$'`:
 

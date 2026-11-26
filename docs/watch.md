@@ -101,7 +101,8 @@ is signed with `-DNEXUS_WATCH_TEAM=<identity>`, or ad hoc without one, which no 
 
 - **Per change** (`ci.yml`, job `watch`): the core's unit tests, and the app built warning-free for the simulator and
   for a watch. The still-frames test is among the unit tests (`watch_unit_screen`): a fresh launch's frames are all
-  its first until the phone reaches the server.
+  its first until the phone reaches the server. They run only there, in the watch's own build (`cmake -S watch`):
+  nexus's own build leaves the watch out of its default targets.
 - **The models**, in a nightly shard of their own (`nightly.yml`, shard `watch-app`):
   - TLC on `VoiceTurn.tla` and `Relay.tla`.
   - Every reversed witness under `watch/models/witnesses`.
