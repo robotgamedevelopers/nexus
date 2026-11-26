@@ -26,7 +26,8 @@ manifest=${2:?usage: source-times.sh own TIMES [NOW] | apply MANIFEST | record M
 old=200101010000
 current=$(mktemp)
 plan=$(mktemp)
-trap 'rm -f "$current" "$plan"' EXIT
+changed=$(mktemp)
+trap 'rm -f "$current" "$plan" "$changed"' EXIT
 git ls-files -s | LC_ALL=C sort > "$current"
 # git quotes a path with unusual bytes; such a path would be touched under the wrong name.
 if grep -q "$(printf '\t')\"" "$current"; then
@@ -43,11 +44,12 @@ case "$mode" in
     fi
     if [ -f "$manifest" ]; then
       # Each line of TIMES: git ls-files -s's line (mode blob stage, a tab, the path), a tab, the time set.
-      awk -F'\t' -v now="$now" '
+      awk -F'\t' -v now="$now" -v changed="$changed" '
         NR == FNR { t[$1 FS $2] = $3; next }
-        { k = $1 FS $2; print k FS ((k in t) ? t[k] : now) }' "$manifest" "$current" > "$plan"
+        { k = $1 FS $2; if (k in t) print k FS t[k]; else { print k FS now; print $2 > changed } }' "$manifest" "$current" > "$plan"
     else
       awk -F'\t' -v now="$now" '{ print $1 FS $2 FS now }' "$current" > "$plan"
+      cut -f2- "$current" > "$changed"
       echo "no record of this build directory's source times at $manifest: every source gets $now, and the directory builds whole"
     fi
     # One touch per distinct time.
@@ -58,9 +60,9 @@ case "$mode" in
         stamp=${line%%$'\t'*}
         printf '%s' "${line#*$'\t'}" | tr '\t' '\0' | xargs -0 touch -h -t "$stamp"
       done
-    changed=$(awk -F'\t' -v now="$now" '$3 == now' "$plan" | wc -l | tr -d ' ')
-    echo "$(( $(wc -l < "$plan") - changed )) of $(wc -l < "$plan" | tr -d ' ') tracked files as this build directory last saw them; $changed changed or new since, at $now:"
-    awk -F'\t' -v now="$now" '$3 == now { print $2 }' "$plan" | sed -n 1,50p
+    n=$(wc -l < "$changed" | tr -d ' ')
+    echo "$(( $(wc -l < "$plan") - n )) of $(wc -l < "$plan" | tr -d ' ') tracked files as this build directory last saw them; $n changed or new since, at $now:"
+    sed -n 1,50p "$changed"
     mkdir -p "$(dirname "$manifest")"
     cp "$plan" "$manifest.new"
     mv "$manifest.new" "$manifest"
