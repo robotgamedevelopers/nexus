@@ -225,6 +225,8 @@ struct SignInHooks {
     std::function<void(const std::string& account)> stop;
     std::function<void(std::uint64_t id, const std::string& account, const SignInTarget& target,
                        const SecretValue& query)> replay;
+    // Hand a pasted code to flow `id`'s waiting process (SignInDesk::code took it): once, never logged.
+    std::function<void(std::uint64_t id, const std::string& account, const SecretValue& code)> code;
     // Whether any linked window reads sign-ins (its link of format kSignInFormat or later). Unset: taken as yes. When
     // windows that take a paste are linked but none of them reads sign-ins (each from a build before them), an
     // account is asked for by a paste instead (Hub::signInWindowsChanged).
@@ -438,6 +440,8 @@ public:
     bool requestSignIn(const std::string& account, std::string* said);
     // The account's process handed over its URL; printed its token; ended with no token (`why`, one line).
     void signInUrl(const std::string& account, std::uint64_t id, const SecretValue& url);
+    // Flow `id`'s process waits for the vendor's code (models/SignInPaste.tla Ask).
+    void signInCodeWanted(const std::string& account, std::uint64_t id);
     void signInPrinted(const std::string& account, const SecretValue& token);
     void signInEnrolled(const std::string& account, const std::string& provider, std::uint64_t id);
     void signInExited(const std::string& account, std::uint64_t id, const std::string& why);
@@ -458,6 +462,17 @@ public:
     // The dashboards every window's state carries (Sessions::dashboards), in order.
     void setDashboards(std::vector<Dashboard> list) { dashboards_ = std::move(list); }
     const std::vector<Dashboard>& dashboards() const { return dashboards_; }
+    // A window's action as the server applies it, from a link whose claim token is `link` (src/server/server.cpp): a
+    // claim by a valid token other than the link's names the link by it (`renamed`; the old token's flows are let go
+    // of first); an opened, a callback or a pasted code is named by the link's own token, whatever token it carries, so
+    // that only the link that claimed a flow speaks for it (sync/signin.h kSignInHeldBy; models/SignInPaste.tla
+    // CodeOnlyFromHolder). Every other action is as it came.
+    struct LinkAction {
+        Action action;
+        std::string token;      // the link's token after it
+        bool renamed = false;
+    };
+    static LinkAction fromLink(const Action& a, const std::string& link);
     const SignInDesk& signIns() const { return signIns_; }
     // The walk's faulty runs alone: SignInDesk's seams.
     void injectSignInClaimFault() { signIns_.injectClaimFault(); }
@@ -471,6 +486,12 @@ private:
     bool pasteInstead() const;
     void askPasteLogin(const std::string& account);
     void noteAccount(const std::string& account, const std::string& text);  // a notice in each session on it
+    // A sign-in refusal as a notice in `session`, the one the window acted in, only when that session is on `account`,
+    // the account the sign-in is for: the id comes from the window and is checked, never trusted. Otherwise a log line
+    // and no notice.
+    void signInRefusal(SessionId session, const std::string& account, const std::string& text);
+    // The account and provider of live flow `id`; empty when none.
+    std::pair<std::string, std::string> signInFlowAccount(std::uint64_t id) const;
     void signInEffects(const SignInEffects& effects);
     bool signInAction(const Action& action, std::string* why, const std::string& client);
     void secretEffects(const SecretEffects& effects);

@@ -85,6 +85,13 @@ jobs:
           require: "false"
           brew: ${{ matrix.brew }}
           apt: ${{ matrix.apt }}
+      # cargo runs only when a policy source is newer than its outputs, so a cache could keep crates built by a Rust the
+      # jobs no longer use (the image's, before Rust was pinned), and then every pull request that touches the policy
+      # rebuilt all of them (about 100 s on 4 cores, PR #89 on 2026-11-25). Removing the outputs makes cargo run here,
+      # with the pinned Rust and the jobs' own environment, so the cached target directory matches what they build.
+      - name: The policy crate built by the pinned Rust
+        shell: bash
+        run: rm -f build/policy-rust/release/libnexus_policy_runtime.a build/nexus-policy
       - name: Configure and build
         uses: ./.github/actions/nexus-build
         with:

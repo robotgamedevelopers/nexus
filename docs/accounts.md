@@ -152,6 +152,16 @@ stays in the composer through sign-in. If the browser page closes or reports an 
 again in the window that opened it to reopen the active sign-in page. After the attempt expires, selecting the
 account starts a fresh attempt. Press **Enter** again after sign-in to send your draft.
 
+An Antigravity account signs in from any window, on any machine. When Google's page shows a code to paste into
+your application, the tab that started the sign-in asks for it in a masked field: paste it and press **Enter**. It is
+sent once, to that sign-in alone, and the field is cleared. **Esc** puts the field away; selecting the account again
+in that window brings it back. A code with no sign-in waiting, a second code, or one pasted in another window is
+refused with a plain line in the session. Something that is not a code (two words, a sentence) is never sent: the
+window says so and keeps the field open. If the server refuses a code, the field opens again so you can paste the
+right one. A Nexus window from before this cannot take a code: the server says so in the session, and an updated
+window signs in. A server from before this can sign Antigravity in only from a window on its own machine; a window
+elsewhere says the server is too old.
+
 When an AI has at least two linked subscription accounts, **auto** is the first menu choice and the
 stock server profile uses it for fresh sessions. It starts on the first signed-in linked subscription. When
 none are signed in, the first subscription supplies the sign-in card. The account shown alongside **auto** is
@@ -533,7 +543,8 @@ Adding a required Claude email to a legacy login requires a browser sign-in to e
 | `claude` with `email` | `verified-claude.json` with the verified address and private OAuth grant | the grant declares its access expiry | Claude CLI uses the private refresh grant | checks the email before use and requests renewal when the access token is near expiry | [Verified Claude sign-in](secrets.md#verified-claude-sign-in) |
 | `claude` without `email` | `oauth-token`: the token `claude setup-token` prints, for the account's Claude subscription | one year from when it was made | nothing: it has no refresh token; a person runs `claude setup-token` again | built: counts the year from the file's time, tells the account's sessions 30, 7 and 1 days ahead, and on the day asks for a new one in the window, saying why | code.claude.com/docs/en/authentication ("Generate a long-lived token": one year, no refresh); code.claude.com/docs/en/errors ("OAuth token has expired", "OAuth token revoked") |
 | `codex` | ChatGPT browser grant in the account’s private Codex home | managed by the Codex CLI | Codex | Nexus enrolls the named account with device authorization and verifies its subscription on every turn | [Codex adapter](../drivers/rpc/README.md) |
-| `antigravity`, `grok`, `muse` | browser grant in the named account’s private harness home | managed by the vendor CLI | the corresponding CLI | Nexus opens a private enrollment page, verifies the account’s receipt on restart and checks subscription access before sending a prompt | [Harness drivers](../drivers/rpc/README.md) |
+| `antigravity` | Google browser grant in the named account’s private harness home | managed by the vendor CLI | Antigravity's `agy` | From any window on any machine: Nexus opens Google's page, takes the code Google shows in that tab's masked field and hands it once to the waiting `agy`; verifies the account’s receipt on restart and checks subscription access before sending a prompt | [Harness drivers](../drivers/rpc/README.md), [Sign-in](secrets.md#browser-sign-in-for-codex-antigravity-grok-and-muse) |
+| `grok`, `muse` | browser grant in the named account’s private harness home | managed by the vendor CLI | the corresponding CLI | Nexus opens a private enrollment page from a window on the server's machine, verifies the account’s receipt on restart and checks subscription access before sending a prompt | [Harness drivers](../drivers/rpc/README.md) |
 | gemini (Google sign-in) | `oauth_creds.json`: access and refresh tokens | access tokens about an hour | google-auth-library refreshes them from the refresh token, unattended | roadmap (`login-life-gemini`): no gemini driver yet | geminicli.com/docs/get-started/authentication; google-gemini/gemini-cli `packages/core/src/code_assist/oauth2.ts` |
 | an API key (Anthropic Console, OpenAI, Gemini, xAI) | the key | until it is revoked; an xAI key may carry an optional expiry chosen when it is made | nothing needed | roadmap (`login-life-api-keys`): no provider of nexus stores a key yet | each provider's key docs (docs.x.ai for the optional expiry) |
 
