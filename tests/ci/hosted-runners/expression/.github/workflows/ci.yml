@@ -1,0 +1,11 @@
+# Planted: a per-commit job whose runs-on is an expression (it could name a hosted runner); refused.
+name: ci
+on:
+  pull_request:
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-26]
+    steps: [{run: "true"}]

@@ -6,7 +6,28 @@ cmake_minimum_required(VERSION 3.28)
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
 set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0 CACHE STRING "Oldest macOS the build runs on")
 
-project(nexus VERSION 0.2.2 LANGUAGES C CXX)
+# Prax compiles with clang and links with lld on Linux, not gcc (below), so on Linux a configure that names no compiler
+# takes clang where clang and lld are installed, rather than the system's cc and c++, which are gcc's on most
+# distributions.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX})
+    find_program(NEXUS_CLANGXX NAMES clang++)
+    find_program(NEXUS_CLANG NAMES clang)
+    find_program(NEXUS_LLD NAMES ld.lld)
+    if(NEXUS_CLANGXX AND NEXUS_CLANG AND NEXUS_LLD AND NOT CMAKE_C_COMPILER AND NOT DEFINED ENV{CC})
+        set(CMAKE_C_COMPILER "${NEXUS_CLANG}")
+        set(CMAKE_CXX_COMPILER "${NEXUS_CLANGXX}")
+    endif()
+endif()
+
+project(nexus VERSION 0.2.3 LANGUAGES C CXX)
+# Apple Watch builds the watch app alone, without Prax or the desktop's parts (cmake/watchos.cmake, docs/watch.md).
+if(CMAKE_SYSTEM_NAME STREQUAL "watchOS")
+    include(cmake/watchos.cmake)
+    return()
+endif()
+# What each test runs, recorded from here on, so the pull request tier builds its own targets alone (tier_pr_build,
+# cmake/tiers.cmake). Before the first add_test.
+include(cmake/test_targets.cmake)
 # The app's platform layer (src/platform_mac.mm) is Objective-C++.
 if(APPLE)
     enable_language(OBJCXX)
@@ -19,6 +40,29 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_LINK_LIBRARIES_STRATEGY REORDER_FREELY)
+
+# Prax builds with clang (and MSVC on Windows), not gcc: its headers use clang's builtins (pr/type_traits.h,
+# __is_trivially_destructible), so gcc fails in Prax's first file. A gcc configure still builds the targets without
+# Prax (the sandbox's programs, nexus_sandbox_tools, as CI's claude-driver-wall-linux does on GitHub's runners), so
+# this says so once rather than refusing.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    message(WARNING "nexus: Prax, which nexus builds on, compiles with clang, not gcc: with gcc only the targets "
+        "without Prax build (nexus_sandbox_tools). Configure with CC=clang CXX=clang++ (on Ubuntu: apt install clang "
+        "lld) for nexus.")
+endif()
+
+# Clang on Linux links with lld unless the configure names a linker: Prax builds Release with LTO
+# (CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE in its CMakeLists.txt), so its static libraries hold LLVM bitcode, which
+# GNU ld cannot read ("file format not recognized").
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_LINKER_TYPE)
+    find_program(NEXUS_LLD NAMES ld.lld)
+    if(NEXUS_LLD)
+        set(CMAKE_LINKER_TYPE LLD)
+    else()
+        message(WARNING "nexus: clang on Linux links Prax's LTO libraries with lld, which was not found: only the "
+            "targets without Prax link (nexus_sandbox_tools). Install it (on Ubuntu: apt install lld) for nexus.")
+    endif()
+endif()
 
 # Prax options: leave out what this window does not use. The sprint tab's page runs its scripts in QuickJS (PR_JS).
 set(PR_JS ON CACHE BOOL "" FORCE)
@@ -36,6 +80,25 @@ FetchContent_MakeAvailable(prax)
 # iOS and iPadOS build the client alone (cmake/ios.cmake), and set the options' defaults below for it.
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     include(cmake/ios.cmake)
+endif()
+
+# Prax's lib/process on Linux. At this pin its POSIX backend does not link there: process_posix.cpp (lines 165-173)
+# declares `extern char** environ;` at block scope inside its own unnamed namespace, which names an `environ` nothing
+# defines. Prax is pinned and never patched, so nexus works around it without touching the file: cmake/prax_environ.h,
+# force-included into that one source, points the declaration at the C library's `environ` (the header says how).
+# This goes away when Prax fixes the file and the pin moves past the fix: the check below refuses to configure once the
+# line is gone, so the workaround is dropped then rather than left over a fixed file. macOS reads _NSGetEnviron().
+if(UNIX AND NOT APPLE AND TARGET pr_process)
+    set(nexus_prax_process_posix "${prax_SOURCE_DIR}/lib/process/backends/posix/src/process_posix.cpp")
+    file(READ "${nexus_prax_process_posix}" nexus_prax_process_posix_text)
+    string(FIND "${nexus_prax_process_posix_text}" "    extern char** environ;" nexus_prax_environ_bug)
+    if(nexus_prax_environ_bug EQUAL -1)
+        message(FATAL_ERROR "nexus: Prax's process_posix.cpp no longer declares `extern char** environ;` in its "
+            "unnamed namespace, so the bug cmake/prax_environ.h works around is fixed at this pin: remove that header "
+            "and this block from CMakeLists.txt")
+    endif()
+    set_source_files_properties("${nexus_prax_process_posix}" TARGET_DIRECTORY pr_process
+        PROPERTIES COMPILE_OPTIONS "-include;${PROJECT_SOURCE_DIR}/cmake/prax_environ.h")
 endif()
 
 # A static library of ours compiles without waiting for the static libraries it links, which only its users' links
@@ -58,10 +121,16 @@ endif()
 # the model, the link's states, the store, the driver protocol and supervisor, nexus-server, and the window's logic.
 option(NEXUS_WINDOW "Build the window (the app, its view, terminals and sprint tab, and their tests)" ${APPLE})
 # The window's logic (src/command.h runCommand, and what uses it: the remote and sprint logic, the link, nexus-server and
-# their tests) starts processes through Prax's lib/process. On by default on macOS only: at this Prax pin, lib/process's
-# POSIX backend does not link on Linux (process_posix.cpp declares `environ` inside its own namespace, so the symbol is
-# never defined), so off macOS those parts are left out until Prax fixes it.
-option(NEXUS_WINDOW_LOGIC "Build the window's logic over Prax's lib/process, and what uses it (the link included)" ${APPLE})
+# their tests) starts processes through Prax's lib/process. On by default on macOS and Linux (and so inside WSL2), where
+# lib/process's POSIX backend runs (on Linux over the workaround above, "Prax's lib/process on Linux"). Off by default
+# on Windows, where the window's logic is not built natively yet.
+if(WIN32)
+    set(nexus_window_logic_default OFF)
+else()
+    set(nexus_window_logic_default ON)
+endif()
+option(NEXUS_WINDOW_LOGIC "Build the window's logic over Prax's lib/process, and what uses it (the link included)"
+    ${nexus_window_logic_default})
 if(NEXUS_WINDOW AND NOT NEXUS_WINDOW_LOGIC)
     message(FATAL_ERROR "nexus: the window needs its logic; configure with -DNEXUS_WINDOW_LOGIC=ON or -DNEXUS_WINDOW=OFF")
 endif()
@@ -107,8 +176,7 @@ else()
 endif()
 if(NEXUS_LINK AND NOT NEXUS_WINDOW_LOGIC)
     message(FATAL_ERROR "nexus: the link (nexus-server and the window's --server) uses the window's logic, which is off "
-        "(NEXUS_WINDOW_LOGIC: Prax's lib/process does not link on this platform at this pin). Configure with "
-        "-DNEXUS_LINK=OFF, or -DNEXUS_WINDOW_LOGIC=ON where Prax's lib/process links.")
+        "(NEXUS_WINDOW_LOGIC). Configure with -DNEXUS_LINK=OFF, or with -DNEXUS_WINDOW_LOGIC=ON.")
 endif()
 if(NEXUS_LINK)
     include(cmake/mosh.cmake)
@@ -484,9 +552,17 @@ endif()
 add_subdirectory(tests/wire)
 if(NEXUS_LINK)
     add_subdirectory(tests/link)
+    # The mock (docs/mock.md): a real nexus-server with fake AIs, for driving the clients. POSIX, as the fake driver is.
+    if(NOT WIN32)
+        add_subdirectory(tests/mock)
+    endif()
 endif()
 if(NEXUS_TAILSCALE)
     add_subdirectory(tests/tailscale)
+endif()
+# The watch's core, its tests and models, and on macOS with the link the phone's relay host (watch/CMakeLists.txt).
+if(NOT WIN32)
+    add_subdirectory(watch)
 endif()
 # Each test's tier (tier_pr or tier_nightly, cmake/tiers.cmake and tests/tiers.txt), given once every test above is
 # registered.

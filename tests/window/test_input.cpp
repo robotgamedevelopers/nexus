@@ -2221,6 +2221,28 @@ Harness withSprint(std::size_t ais = 2) {
     return Harness(aisNamed(ais), false, true);
 }
 
+// An AI's tab chosen from the sprint tab, which has no prompt, before the frame, as a selection the server or a
+// restored window makes: the frame's first round builds the prompt with no value in the last layout. The frame runs
+// another round, so that its first frame shows the value in the bold weight, and Prax's debug build does not stop on
+// a value of another frame (Builder::prompt).
+void aPromptShownFirstIsBoldInItsFirstFrame() {
+    Harness h = withSprint(2);
+    h.view.windowApp.surface.prompt.bold = true;
+    h.model.select_tab(0);
+    h.frame();
+    h.frame();
+    CHECK(h.active().kind == TabKind::Dashboard);
+    h.model.select_tab(1);
+    h.frame();
+    CHECK(h.active().kind != TabKind::Dashboard && h.view.prompt != kPrLayoutNodeNone);
+    const auto value = prLayoutNodeFirstChild(h.tree, h.view.prompt);
+    CHECK(value != kPrLayoutNodeNone);
+    if (value == kPrLayoutNodeNone) return;
+    const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, value));
+    const auto font = prLayoutFontStyleRecord(h.tree, record.groups[PrLayoutGroup_Font]).font;
+    CHECK(font && prTextFontStyle(font).weight == 700);
+}
+
 // Real key events, the production frame host and the actual Prax menu. Only the transport is fake.
 void accountPickerIsAnExplicitChoice() {
     Harness h(aisNamed(2), true, true);
@@ -3592,6 +3614,7 @@ int main(int argc, char** argv) {
     promptIsARoundedBoxHoldingThePlus();
     promptSegmentTracksInsertionAndUsesHeadroom();
     newGlyphsFadeWithoutRelightingOldText();
+    aPromptShownFirstIsBoldInItsFirstFrame();
     noModelUnderThePrompt();
     switchNoticeBubble();
     namedBusBubbles();

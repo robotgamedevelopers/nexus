@@ -2,9 +2,32 @@
 ; The layers of nexus, bottom up. Each is secured before the next starts.
 (:schema 1
  :root "goal"
- :page (:roadmaps ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi"))
+ :page (:roadmaps ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi" "watch" "apple-watch" "client-lock"))
  :nodes
- ((:id "goal" :type :work-set :children ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi"))
+ ((:id "goal" :type :work-set :children ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi" "watch" "apple-watch" "client-lock"))
+  (:id "watch" :type :roadmap :title "Apple Watch: talk to your AIs, and they talk back (docs/watch.md)"
+   :rows (
+     ("watch-turn" "1. The voice turn: hold to talk, the AI named first (\"Hey Rowan, ...\") or with no name the first AI in the server's list, the reply spoken; every refusal said and shown; locked (not on the wrist since the passcode), it neither listens nor reads a reply")
+     ("watch-relay" "2. The relay to the phone: the watch's prompts reach the server once, through restarts of either end, and a phone app not unlocked since it slept refuses the watch, saying so")
+     ("watch-app" "3. The watchOS app: SwiftUI over the C++ core, built for the simulator and a watch in CI, driven end to end in the simulator to an AI on a test server and back")
+     ("watch-phone" "4. The iPhone's side of the relay: WatchConnectivity to the nexus iPhone app, its link to nexus-server and its recognizer (waits on the link on iOS)")
+     ("watch-device" "5. On a real watch: signed with the team, installed, and the owner's check and the microphone tried on the wrist"))
+   :columns (("done" "done"))
+   :cells (
+     ("watch-turn" "done" "t-watch-turn")
+     ("watch-relay" "done" "t-watch-relay")
+     ("watch-app" "done" "t-watch-app")
+     ("watch-phone" "done" "t-watch-phone")
+     ("watch-device" "done" "t-watch-device")
+     ))
+  (:id "t-watch-turn" :type :task :title "The watch's voice turn, modelled and bound to the code" :state :done
+   :evidence ("watch/models/VoiceTurn.tla: ctest -L model tlc_watchapp_model_voice tlc_watchapp_witness_WVt*" "watch/tests/voice_walk.cpp, watch/models/VoiceTurnTrace.tla: ctest -L model tlc_watchapp_trace_voice_*" "watch/tests/core_test.cpp: ctest -L unit watch_unit_turn watch_unit_match watch_unit_capi" "watch/tests/speech.cmake: ctest -L functional watch_speech watch_speech_planted"))
+  (:id "t-watch-relay" :type :task :title "The relay between watch and phone, modelled and bound to the code" :state :done
+   :evidence ("watch/models/Relay.tla: ctest -L model tlc_watchapp_model_relay tlc_watchapp_witness_WRl*" "watch/tests/relay_walk.cpp, watch/models/RelayTrace.tla: ctest -L model tlc_watchapp_trace_relay_*" "watch/tests/core_test.cpp: ctest -L unit watch_unit_frames watch_unit_watchlink watch_unit_phone"))
+  (:id "t-watch-app" :type :task :title "The watchOS app, built in CI and driven in the simulator" :state :done
+   :evidence (".github/workflows/ci.yml: job watch" "docs/watch.md: the simulator's end to end"))
+  (:id "t-watch-phone" :type :task :title "The iPhone's side of the relay" :state :todo)
+  (:id "t-watch-device" :type :task :title "The watch app on a real watch" :state :todo)
   (:id "takeover" :type :roadmap :title "Takeover: a new build replaces the running server, rebuilt bottom up"
    :rows (
      ("takeover-store-lock" "1. Store lock: at most one process ever has the store open for writing, enforced by the operating system (an exclusive flock on the store's directory itself, taken before the store is read, held for the life of the process, released by the OS however it ends; the store reached only through that directory's descriptor after); the server starts in the order probe, lock and replay, socket, drivers restored, waiting a bounded time for a writer that holds the lock without answering; only a start refused by a live server exits 0; readers take the lock shared, change nothing and give up past a limit; the lock checked where it lives, and network filesystems refused")
@@ -49,6 +72,9 @@
      ("writer-thread" "Writer thread: the store's write and flush run off the server loop's thread, and the loop keeps sending state to the windows while a flush runs, holding back only the acknowledgement until it is durable. mosh cannot hold that back: unmodified, it sends as ack_num the newest remote state it has received, on any tick, so the acknowledgement is bound to received state, and modifying mosh is out (AGENTS.md). So the acknowledgement moves up into nexus: the server's state carries each window's durable applied counter (the number the store has flushed), and the window trims its held actions by that counter, not by mosh's ack, and sends them again after a reconnect as it does now; the state shown is the durable state, or marks what is not yet durable. Changes the Link model (the window's held list, ExactlyOnce across a crash), the Applier, the window's trimming, and their trace binding")
      ("loop-trace" "Server loop bound to a model: a spec of one pass of nexus-server's loop (the batch applied with the drivers held, its one flush, the drivers released, the state set, the links' ticks at the next pass, and a crash anywhere in it), and the real loop's trace (hold, flush, release, tick, with the fs seam's crashes) checked against it in CI, with reversed witnesses for a release, a state or a tick before the flush")
      ("ios-client" "iOS client (one universal app for iPhone and iPad), a second client of the server: builds, draws and links in the simulator and on an iPad (docs/ios.md); next the phone's own form, voice, and a watch")
+     ("iphone-scroll-model" "iPhone depth: a TLA+ layout model and trace check for the momentum list scroll (finger_scroll), as the rules for index arithmetic ask")
+     ("ios-lock-trace" "iOS lock depth: a trace check binding the iOS lock glue to ClientLock.tla, so the lock the phone shows is the lock the model proves")
+     ("login-switch-trace" "Login switch bound to its model: the hub's sign-in-then-switch (SignInClaim naming a session and another account, switchTo, switchSignedIn, dropSwitches, the learned email) driven by a random walk of sign-ins that succeed, fail, are declined or are refused as another account's identity, and logouts, its trace checked by TLC as a behaviour of models/LoginSwitch.tla in CI beside its witnesses")
      ("install-through-ai" "Install through AI, no installer: a person in their own AI, on their own subscription, points it at this repo; the AI builds nexus from source by README, installs nexus-server as a login item, and sets nexus up with one AI, its own harness and account. No sprint, no fleet. README is the installer and is proven by a cold run on a clean Mac. After the AIs layer." :later t)
      ("real-isolation" "Real isolation, for people who need it: everything on the fleet (AIs, fleet workers on API billing, and CI workers) runs inside a sandboxed VM or container, so nothing it runs can reach the machine's own files, logins or services. The token wall today is best effort (docs/secrets.md). Candidates to try, none chosen, by host, in docs/secrets.md \"Real isolation: candidates\": on Mac hosts Tart (a separate program only: source-available, never taken in), Apple's containerization and container tool, Lima, lume, vfkit, Podman's VM mode; on Linux and WSL2 libkrun through BoxLite or microsandbox, Firecracker with Fireactions for CI runners, Cloud Hypervisor, gVisor, Kata Containers, Podman, Incus; on any host Kubernetes (agent-sandbox, a runner controller) or VMs on GCP or AWS; bubblewrap and nsjail as the process-level baseline. Day-to-day AIs on a Mac stay on the process sandbox (GPU and Xcode natively)." :later t)
      )
@@ -66,6 +92,9 @@
      ("writer-thread" "done" "t-writer-thread")
      ("loop-trace" "done" "t-loop-trace")
      ("ios-client" "done" "t-ios-client")
+     ("iphone-scroll-model" "done" "t-iphone-scroll-model")
+     ("ios-lock-trace" "done" "t-ios-lock-trace")
+     ("login-switch-trace" "done" "t-login-switch-trace")
      ("install-through-ai" "done" "t-install-through-ai")
      ("real-isolation" "done" "t-real-isolation")
      ))
@@ -79,8 +108,14 @@
      ("upload-store" "The upload's storage on the server: each file a blob in the store by its content hash, sent in chunks that resume after a cut, and placed in the AI's incoming/ in one atomic step; waits for the upload design (an earlier draft is in the git history of src/store)" :later t)
      ("model-effort-keys" "Hotkeys to choose an AI's model and effort, in place of the model name that stood under the prompt" :later t)
      ("hdr" "HDR and wide gamut: the window asks Prax for its HDR swap chain (half floats, extended sRGB, EDR, gamut-mapped to the display) once Prax's display pass keeps alpha for a see-through window, and once nexus draws colours past sRGB or brighter than SDR white" :later t)
-     ("windows-wsl2" "Windows: the native overlay window reaches nexus-server inside WSL2 over a local socket, with a functional test across that boundary in CI (wsl2-functional on captain drives the native window through WSL interop); its terminal tabs are WSL2 shells in the WSL2 home directory, never cmd or PowerShell. Waits on Prax: the window needs Prax's Win32 lib/app to compile, and nexus-server in WSL2 needs Prax's lib/process to link on Linux" :later t)
+     ("windows-wsl2" "Windows: the native overlay window reaches nexus-server inside WSL2 over a local socket, with a functional test across that boundary in CI (wsl2-functional on captain drives the native window through WSL interop); its terminal tabs are WSL2 shells in the WSL2 home directory, never cmd or PowerShell. Waits on Prax: the window needs Prax's Win32 lib/app to compile. nexus-server builds and tests inside WSL2 and on Linux since 2026-11-25, over nexus's workaround for Prax's lib/process link error there (cmake/prax_environ.h)" :later t)
      ("window-reattach-takeover" "The window reconnects by itself when its server stops or is replaced, and after a crash, with no message and the state cursor grey meanwhile; it names itself (--client) and resends from its first unacknowledged action (--next)")
+     ("win-hold-until-hello" "Windows depth: hold actions until the relay's Hello is read and the phase is running (wantsWrite, relay_life.cpp:197; the model's Write requires running plus a witness), so a missing or mismatched relay cannot swallow sign-in steps and secrets")
+     ("win-handle-list" "Windows depth: start wsl.exe with PROC_THREAD_ATTRIBUTE_HANDLE_LIST (relay_port_win.cpp:136) so it does not inherit the pipes of other child processes")
+     ("win-one-relay" "Windows depth: one relay at a time holds for wsl.exe, not for the Linux relay; fix the comments and OneRelay to say so, and bind the port's real check in the trace, which relay_walk.cpp:204 re-implements")
+     ("win-trace-binding" "Windows depth: close the trace binding gaps (ten of seventeen review plants escaped the trace): constrain ranWell by the relay's run time (RelayLife.tla:171); model the tells as a sequence with a no-repeat invariant; unit tests for the acked_+1 re-cut, acked going down, and ended() after stop(); widen the CI seeds")
+     ("win-watchdog-hooks" "Windows depth: a watchdog for a hung relay; keep the NEXUS_WSL_RELAY test hook out of shipping builds; show a notice when history requests are dropped; show a bubble for a message sent when nextAction()==0 (frame_host.cpp:779-783)")
+     ("linux-window" "Linux desktop window: waits on Prax's Wayland backend (asked of Patrick); until then the Linux build is the server only")
      )
    :columns (("done" "done"))
    :cells (
@@ -94,6 +129,12 @@
      ("hdr" "done" "t-hdr")
      ("windows-wsl2" "done" "t-windows-wsl2")
      ("window-reattach-takeover" "done" "t-window-reattach-takeover")
+     ("win-hold-until-hello" "done" "t-win-hold-until-hello")
+     ("win-handle-list" "done" "t-win-handle-list")
+     ("win-one-relay" "done" "t-win-one-relay")
+     ("win-trace-binding" "done" "t-win-trace-binding")
+     ("win-watchdog-hooks" "done" "t-win-watchdog-hooks")
+     ("linux-window" "done" "t-linux-window")
      ))
   (:id "configuration" :type :roadmap :title "Configuration through your AI"
    :rows (
@@ -168,6 +209,42 @@
      ("ts-own-control" "done" "t-ts-own-control")
      ))
   ; Lessons from pi (earendil-works/pi, MIT; read at 1.6.0 on 2026-11-23). Native per-harness drivers stay primary; pi is a source of mechanisms and possibly one more driver, never the base.
+  (:id "apple-watch" :type :roadmap :title "Apple Watch"
+   :rows (
+     ("watch-phone-relay" "iPhone-side WatchConnectivity relay: the watch's only route to the server, with the phone lock enforced there")
+     ("watch-live-lock" "Live, not latched, wrist and lock state: nothing is spoken while locked, including cues and notices (NexusWatchApp.swift:16-20, Client.swift:94-120)")
+     ("watch-listening-timeout" "A core timeout on Listening, so a voice turn that hears nothing ends (voice_turn.cpp:263)")
+     ("watch-two-prompts" "Two prompts to the same AI lose the first reply: keep both (relay.cpp:483, 414-419)")
+     ("watch-persist" "Persist across restarts: the relay's events_ and awaits_ over a phone restart (relay.h:225,232); epoch_ and ack_ over a watch restart (relay.cpp:282-292); unapplied_ so lost prompts are told (nexus_watch.cpp:46)")
+     ("watch-mac-host" "Mac relay host: a per-launch token and a Content-Type check on every request (watch/host/main.swift:134-171)")
+     ("watch-other-id" "A frame from another watch id must not reset state, nor be accepted while locked (relay.cpp:335-348)")
+     ("watch-model-extend" "Extend Relay.tla and relay_walk to the lock, events and replies, audio, a watch switch and an unknown AI; three review plants escaped (relay.cpp:452, 360, 272)")
+     ("watch-audio" "Speak recorder failures aloud, and validate the audio format; the model tests are too slow under load")
+     ("watch-mac-xcode" "A fleet Mac with Xcode (mini-m5) for the nightly speech test")
+     ("watch-real-device" "Run on a real paired watch")
+     )
+   :columns (("done" "done"))
+   :cells (
+     ("watch-phone-relay" "done" "t-watch-phone-relay")
+     ("watch-live-lock" "done" "t-watch-live-lock")
+     ("watch-listening-timeout" "done" "t-watch-listening-timeout")
+     ("watch-two-prompts" "done" "t-watch-two-prompts")
+     ("watch-persist" "done" "t-watch-persist")
+     ("watch-mac-host" "done" "t-watch-mac-host")
+     ("watch-other-id" "done" "t-watch-other-id")
+     ("watch-model-extend" "done" "t-watch-model-extend")
+     ("watch-audio" "done" "t-watch-audio")
+     ("watch-mac-xcode" "done" "t-watch-mac-xcode")
+     ("watch-real-device" "done" "t-watch-real-device")
+     ))
+  (:id "client-lock" :type :roadmap :title "Client lock"
+   :rows (
+     ("lock-trace-real-view" "Bind the lock trace check to the view's real lock screen and input gate: the walk drives WindowLock and FrameHost::event, not ClientLock alone.")
+     )
+   :columns (("done" "done"))
+   :cells (
+     ("lock-trace-real-view" "done" "t-lock-trace-real-view")
+     ))
   (:id "lessons-from-pi" :type :roadmap :title "Lessons from pi, bottom up"
    :rows (
      ("pi-protocol" "1. Driver protocol additions: steer (taken in after the current turn's tool calls, before the next model call) and follow-up (taken in only when the run would otherwise end) as their own kinds beside send; an explicit settled event, since the end of one model run is not done while retries, compaction or queued messages can follow; the full queue sent on each change; each driver says in hello which native features its harness has, so a harness's own features keep working and the server offers only what the driver can do. TLA+ model and fake driver first")
@@ -301,5 +378,27 @@
   (:id "t-one-app" :type :task :title "One app: nexus-server starts at boot and runs every tool and AI as its child; permissions granted once" :state :todo)
   (:id "t-ios-client" :type :task :title "iOS client: one universal iPhone and iPad app, a second client of the server (docs/ios.md): the window over Prax's UIKit backend, the link with an in-app ssh, signed for a device by tools/ios-device-run" :state :doing
    :note "Built and tested in CI (.github/workflows/ios.yml): tests/ios (window_ios_state_shot_*, window_ios_status_no_tabs, ios_ssh_unit, ios_ssh_gate, ios_ssh_functional). Next: the iPhone's form (a menu of tabs), voice in and out, and a watch client over the same link.")
+
   (:id "t-install-through-ai" :type :task :title "Install through AI: README as the installer, one AI (the installing AI), proven by a cold run on a clean Mac" :state :todo)
-  (:id "t-real-isolation" :type :task :title "Real isolation: AIs, API-billed fleet workers and CI workers in a sandboxed microVM, VM or container (local hypervisor, or GCP or AWS)" :state :todo)))
+  (:id "t-real-isolation" :type :task :title "Real isolation: AIs, API-billed fleet workers and CI workers in a sandboxed microVM, VM or container (local hypervisor, or GCP or AWS)" :state :todo)
+  (:id "t-win-hold-until-hello" :type :task :title "Windows depth: hold actions until the relay's Hello is read and the phase is running (wantsWrite, relay_life.cpp:197; the model's Write requires running plus a witness), so a missing or mismatched relay cannot swallow sign-in steps and secrets" :state :todo)
+  (:id "t-win-handle-list" :type :task :title "Windows depth: start wsl.exe with PROC_THREAD_ATTRIBUTE_HANDLE_LIST (relay_port_win.cpp:136) so it does not inherit the pipes of other child processes" :state :todo)
+  (:id "t-win-one-relay" :type :task :title "Windows depth: one relay at a time holds for wsl.exe, not for the Linux relay; fix the comments and OneRelay to say so, and bind the port's real check in the trace, which relay_walk.cpp:204 re-implements" :state :todo)
+  (:id "t-win-trace-binding" :type :task :title "Windows depth: close the trace binding gaps (ten of seventeen review plants escaped the trace): constrain ranWell by the relay's run time (RelayLife.tla:171); model the tells as a sequence with a no-repeat invariant; unit tests for the acked_+1 re-cut, acked going down, and ended() after stop(); widen the CI seeds" :state :todo)
+  (:id "t-win-watchdog-hooks" :type :task :title "Windows depth: a watchdog for a hung relay; keep the NEXUS_WSL_RELAY test hook out of shipping builds; show a notice when history requests are dropped; show a bubble for a message sent when nextAction()==0 (frame_host.cpp:779-783)" :state :todo)
+  (:id "t-linux-window" :type :task :title "Linux desktop window: waits on Prax's Wayland backend (asked of Patrick); until then the Linux build is the server only" :state :todo)
+  (:id "t-iphone-scroll-model" :type :task :title "iPhone depth: a TLA+ layout model and trace check for the momentum list scroll (finger_scroll), as the rules for index arithmetic ask" :state :todo)
+  (:id "t-ios-lock-trace" :type :task :title "iOS lock depth: a trace check binding the iOS lock glue to ClientLock.tla, so the lock the phone shows is the lock the model proves" :state :todo)
+  (:id "t-watch-phone-relay" :type :task :title "iPhone-side WatchConnectivity relay: the watch's only route to the server, with the phone lock enforced there" :state :todo)
+  (:id "t-watch-live-lock" :type :task :title "Live, not latched, wrist and lock state: nothing is spoken while locked, including cues and notices (NexusWatchApp.swift:16-20, Client.swift:94-120)" :state :todo)
+  (:id "t-watch-listening-timeout" :type :task :title "A core timeout on Listening, so a voice turn that hears nothing ends (voice_turn.cpp:263)" :state :todo)
+  (:id "t-watch-two-prompts" :type :task :title "Two prompts to the same AI lose the first reply: keep both (relay.cpp:483, 414-419)" :state :todo)
+  (:id "t-watch-persist" :type :task :title "Persist across restarts: the relay's events_ and awaits_ over a phone restart (relay.h:225,232); epoch_ and ack_ over a watch restart (relay.cpp:282-292); unapplied_ so lost prompts are told (nexus_watch.cpp:46)" :state :todo)
+  (:id "t-watch-mac-host" :type :task :title "Mac relay host: a per-launch token and a Content-Type check on every request (watch/host/main.swift:134-171)" :state :todo)
+  (:id "t-watch-other-id" :type :task :title "A frame from another watch id must not reset state, nor be accepted while locked (relay.cpp:335-348)" :state :todo)
+  (:id "t-watch-model-extend" :type :task :title "Extend Relay.tla and relay_walk to the lock, events and replies, audio, a watch switch and an unknown AI; three review plants escaped (relay.cpp:452, 360, 272)" :state :todo)
+  (:id "t-watch-audio" :type :task :title "Speak recorder failures aloud, and validate the audio format; the model tests are too slow under load" :state :todo)
+  (:id "t-watch-mac-xcode" :type :task :title "A fleet Mac with Xcode (mini-m5) for the nightly speech test" :state :todo)
+  (:id "t-watch-real-device" :type :task :title "Run on a real paired watch" :state :todo)
+  (:id "t-lock-trace-real-view" :type :task :title "Bind the lock trace check to the view's real lock screen and input gate: the walk drives WindowLock and FrameHost::event, not ClientLock alone." :state :todo)
+  (:id "t-login-switch-trace" :type :task :title "Login switch bound to its model: the hub's sign-in-then-switch (SignInClaim naming a session and another account, switchTo, switchSignedIn, dropSwitches, the learned email) driven by a random walk of sign-ins that succeed, fail, are declined or are refused as another account's identity, and logouts, its trace checked by TLC as a behaviour of models/LoginSwitch.tla in CI beside its witnesses" :state :todo)))

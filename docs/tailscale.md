@@ -131,8 +131,8 @@ outside its workspace: `NEXUS_GO_MODCACHE` (modules and the toolchain), `NEXUS_G
 on Windows, `NEXUS_TAILSCALE_DOWNLOADS` (llvm-mingw) or `NEXUS_LLVM_MINGW` (an unpacked one). Each defaults to a
 directory under the build tree.
 
-CI has one job per OS (`.github/workflows/tailscale.yml`; Windows in `tailscale-windows.yml`), on GitHub-hosted runners: `tailscale-macos` (arm64) and
-`tailscale-linux` (with the licence check), called by `ci.yml` for every pull request and push to main, beside the
+CI has one job per OS (`.github/workflows/tailscale.yml`; Windows in `tailscale-windows.yml`): `tailscale-macos` (arm64, on the fleet Mac) and
+`tailscale-linux` (with the licence check, on fleet Linux), both on nexus's own fleet runners (label `nexus-pr`), called by `ci.yml` for every pull request and push to main, beside the
 others and in parallel with them; and, called by the nightly, `tailscale-windows`, since restoring its primed cache
 (about 1.3 GB of Go's build cache) alone took 83 s on the hosted Windows image, and `tailscale-macos` with its x86_64
 slice built beside arm64 and run under Rosetta, which took the per-commit job past 2 minutes. Each configures `src/tailscale` alone,
@@ -147,11 +147,12 @@ the jobs show.
 
 The Go toolchain, the modules, Go's build cache and llvm-mingw live in a directory keyed by the pins
 (`src/tailscale/pins.cmake`, `go.mod`, `go.sum`), so only a pin change is cold; each is checked against its pin when used.
-The jobs run on GitHub-hosted runners, which start empty, so that directory is a GitHub Actions cache: `cache-warm.yml`,
-run on main daily and by hand after a pin change, builds and tests main with no time limit and saves the primed
-directory; every per-commit job restores it. A per-commit job that finds no primed cache for its pins builds nothing,
-sets its status to failure and fails, saying to run cache-warm (a cold build does not fit the 2 minutes; the times
-below).
+The macOS and Linux jobs run on fleet machines, which keep that directory: `cache-warm.yml` (on every push to main, daily,
+and by hand after a pin change) builds and tests with no time limit on each machine and leaves it primed; every
+per-commit job then uses it in place. A per-commit job whose machine is not primed for its pins builds nothing, sets
+its status to failure and fails, saying to run cache-warm (a cold build does not fit the 2 minutes; the times below).
+The Windows job (`tailscale-windows.yml`, nightly) still runs on a GitHub-hosted runner and restores a GitHub Actions
+cache.
 
 #### Build times
 

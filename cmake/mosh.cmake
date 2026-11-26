@@ -25,11 +25,18 @@ FetchContent_MakeAvailable(mosh)
 find_package(ZLIB REQUIRED)
 # iOS builds protobuf's lite runtime and takes a pinned protoc (cmake/ios_link.cmake): nothing to find on the machine.
 if(NOT NEXUS_IOS)
+# protobuf's own CMake package where it is installed (Homebrew's); else CMake's FindProtobuf, for distributions that
+# ship protobuf without that package (Ubuntu's libprotobuf-dev), which gives the same protobuf::libprotobuf-lite target
+# and protobuf_generate.
 find_package(protobuf CONFIG QUIET)
 if(NOT protobuf_FOUND)
-    message(FATAL_ERROR "nexus: protobuf's CMake package was not found, and mosh's transport needs it (with protoc). "
-        "Install it (on macOS: brew install protobuf), or point CMAKE_PREFIX_PATH at it; or configure with "
-        "-DNEXUS_LINK=OFF to build without nexus-server and the client's --server.")
+    find_package(Protobuf MODULE QUIET)
+endif()
+if(NOT protobuf_FOUND AND NOT Protobuf_FOUND)
+    message(FATAL_ERROR "nexus: protobuf was not found, and mosh's transport needs it (with protoc). "
+        "Install it (on macOS: brew install protobuf; on Ubuntu: apt install libprotobuf-dev protobuf-compiler), or "
+        "point CMAKE_PREFIX_PATH at it; or configure with -DNEXUS_LINK=OFF to build without nexus-server and the "
+        "client's --server.")
 endif()
 
 # A protobuf library built for a newer macOS than CMAKE_OSX_DEPLOYMENT_TARGET (Homebrew builds for the macOS it runs

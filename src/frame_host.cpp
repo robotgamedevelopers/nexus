@@ -743,10 +743,10 @@ std::optional<AccountPicker> FrameHost::previewAccounts(int direction) const {
 const sync::ServerAI* FrameHost::rosterOf(sync::SessionId id) const {
     const auto* session = accountState_.find(id);
     if (!session) return nullptr;
-    const auto& friends = accountState_.ais();
-    const auto it = std::find_if(friends.begin(), friends.end(),
+    const auto& ais = accountState_.ais();
+    const auto it = std::find_if(ais.begin(), ais.end(),
                                  [&](const auto& f) { return f.name == session->info.aiName; });
-    return it == friends.end() || it->accounts.empty() ? nullptr : &*it;
+    return it == ais.end() || it->accounts.empty() ? nullptr : &*it;
 }
 
 // A switch of a session to another of its AI's accounts, the server's login switch (src/sync/hub.cpp): a sign-in claim

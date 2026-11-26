@@ -8,7 +8,7 @@ For a first install, point your current AI harness at the repository and ask it 
 
 The client and server can run on the same Apple silicon Mac with macOS 26 or newer. An always-on server can keep working while the laptop sleeps. Start with the harness you already use. You can add AIs or other harnesses later. [Accounts and AIs](accounts.md)
 
-Windows has native window code and WSL2 terminal support. The connected Windows client, Wayland and Android clients are still development work. The iPhone and iPad app is in progress ([ios.md](ios.md)). The proposed heads-down timer and away report are also on the [roadmap](ROADMAP.md).
+Windows has native window code and WSL2 terminal support. The connected Windows client, Wayland and Android clients are still development work. The iPhone and iPad app is in progress ([ios.md](ios.md)). The [Apple Watch app](watch.md) talks to your AIs by voice through the iPhone. The proposed heads-down timer and away report are also on the [roadmap](ROADMAP.md).
 
 ## The window today
 
@@ -218,6 +218,13 @@ The window and `nexus-server` need protobuf for mosh's transport (on macOS, `bre
 crypto come with macOS). Without it, configure with `-DNEXUS_LINK=OFF` for the window alone, without `--server`. A
 Homebrew protobuf is built for the macOS it was installed on, and so then are nexus and `nexus-server` (the build says
 so).
+
+On Linux, and inside WSL2 on Windows, the same commands build `nexus-server`, the drivers and their tests, but not the
+window: Prax has no Linux app backend yet (the desktop client waits on its Wayland backend). It builds with clang and
+lld, which the configure picks where they are installed, and needs `apt install clang lld cmake ninja-build
+libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev` (and Rust and Cargo, as above). On Linux the window's logic
+runs over a workaround for a link error in Prax's lib/process at the pinned commit (`cmake/prax_environ.h`), which goes
+away when Prax fixes it.
 
 Tests: `ctest --test-dir build -L unit`, `-L functional`, and `-L model` (needs Java and `TLA2TOOLS_JAR`; see
 [models/README.md](../models/README.md)). The link's functional tests run `nexus-server` over `ssh localhost`, which has

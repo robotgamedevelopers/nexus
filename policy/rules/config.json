@@ -137,6 +137,9 @@
       "to_hz": 510
     }
   },
+  "tab_labels": {
+    "sprint": "Dashboard"
+  },
   "tab_style": {
     "fill": "#1b1b1b",
     "ink": "#999999",
@@ -165,6 +168,9 @@
     "ink": "#ffffff",
     "list_gap_em": 0.4,
     "list_item_gap_lines": 0.4,
+    "message_inks": {
+      "Glenn asks for the bus verification again after replacing your idle driver. Start your scoped bus wrapper using Monitor with the absolute wrapper path in your startup instructions, hook --as rowan --harness claude. Pass the full stream to Monitor. Confirm HOOK OK or exact error, and leave the successful listener running. No pushes, writes to your repo, or inbox contents in your reply.": "#86c5ff"
+    },
     "notice_ink": "#ff4455",
     "panel_fill": "#1b1b1b",
     "pending_outline_width": 3,

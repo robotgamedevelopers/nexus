@@ -81,14 +81,14 @@ jobs:
             run: '^tlc_supervisor_signin_temporal_1$'
           - shard: supervisor-signin-2
             run: '^tlc_supervisor_signin_temporal_2$'
-          - shard: supervisor-friend-1
-            run: '^tlc_supervisor_friend_temporal_1$'
-          - shard: supervisor-friend-2
-            run: '^tlc_supervisor_friend_temporal_2$'
+          - shard: supervisor-ai-1
+            run: '^tlc_supervisor_ai_temporal_1$'
+          - shard: supervisor-ai-2
+            run: '^tlc_supervisor_ai_temporal_2$'
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
             build: supervisor_walk
-            skip: '^tlc_supervisor_(switch_|place_|signin_|friend_)?temporal_[0-9]+$'
+            skip: '^tlc_supervisor_(switch_|place_|signin_|ai_)?temporal_[0-9]+$'
           - shard: link-ensure
             prebuilt: true
             run: '^tlc_link_ensure$'
@@ -186,6 +186,12 @@ jobs:
           - shard: glide-overlay
             run: '^tlc_(glide|overlay|watch)_'
             build: overlay_walk glide_walk watch_walk
+          # The Apple Watch client (watch/models, docs/watch.md): the voice turn, the relay to the phone and the
+          # account switch, their witnesses, and the code's walks against them with each planted fault rejected (short
+          # tests).
+          - shard: watch-app
+            run: '^tlc_watchapp_'
+            build: watch_voice_walk watch_relay_walk
           # The Tailscale shim's node lifecycle (models/Tailscale.tla): the three liveness instances (47,169 to 74,329
           # states) each in a shard of their own on eight workers, then the witnesses, recorded orders and Go walks.
           - shard: tailscale-spec
@@ -197,12 +203,12 @@ jobs:
           - shard: tailscale-rest
             run: '^tlc_tailscale_'
             skip: '^tlc_tailscale_spec(_keys|_certs)?$'
-          # The window's friends from the server's list (MCWindowFriends, 39,465 states on four workers), alone: in the
+          # The window's AIs from the server's list (MCWindowAIs, 39,465 states on four workers), alone: in the
           # window shard it ran past its 60 s.
-          - shard: window-friends
-            run: '^tlc_spec_friends$'
-          # The friend strip's shared-file instance (MCFriendStripShared, 150,016 states) in its own shard on eight
-          # workers, then its single-window spec and its code's walks against FriendStripTrace.tla, and their faults.
+          - shard: window-ais
+            run: '^tlc_spec_ais$'
+          # The AI strip's shared-file instance (MCAIStripShared, 150,016 states) in its own shard on eight
+          # workers, then its single-window spec and its code's walks against AIStripTrace.tla, and their faults.
           - shard: strip-shared
             run: '^tlc_spec_strip_shared$'
           - shard: strip-rest
@@ -247,7 +253,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk service_process_functional
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass|bus_delivery)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_ais$|signin|reconnect|loop_pass|bus_delivery)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang
@@ -442,11 +448,41 @@ jobs:
             bash .github/ctest.sh --test-dir build -L '^model$' -R "^tlc_${family}" -j "$TEST_JOBS" --output-on-failure || exit 1
           done
 
+  # The watch's speech test (watch/tests/speech.cmake): recordings spoken by `say`, through the recognizer the phone
+  # uses (SpeechTranscriber, on device, as nexus-watch-relay --transcribe) and the shared name matcher, and silence
+  # refused with its reason; with its planted twin, which must fail. nexus-watch-relay links the link, so this is the
+  # full configure (ci.yml's macOS Debug, from its cache: hosted-caches and nexus-build, which bring Ninja, protobuf and
+  # the pinned Rust) on a runner with Xcode. Never the studio (Glenn's screen); the fleet's only other Mac, mini-m5, has
+  # no Xcode and no runner label apart from the studio's, so this runs on GitHub's hosted macOS (macos-26) until a
+  # fleet Mac off the studio carries Xcode.
+  watch-speech:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: mac-debug
+          require: "false"
+          brew: ninja protobuf
+          brew-keep: protobuf abseil
+      - name: Build the relay and the matcher
+        uses: ./.github/actions/nexus-build
+        with:
+          config: mac-debug
+          targets: nexus_watch_relay_host watch_match
+      - name: Speech
+        run: bash .github/ctest.sh --test-dir build -R '^watch_speech(_planted)?$' --output-on-failure
+
   # Windows' functional tests, inside WSL2: on Windows the overlay stays native and everything else (nexus-server, the
   # link, the drivers and their tests) runs as the Linux build inside WSL2 (AGENTS.md, platform targets). So these run
   # on captain's WSL2 runners (label wsl2: Linux runners inside captain's WSL2 distro, from the fleet's record), with
-  # the same configure as ci.yml's build-linux, and so with what Prax lets Linux build at its pin (no window logic, so
-  # no link and no nexus-server yet: ci.yml's build-linux says why). The first step refuses to run anywhere but WSL2.
+  # the defaults' configure, as on Linux: the window's logic, the link and nexus-server (and the sandbox's bubblewrap
+  # and socat), all but the window. The first step refuses to run anywhere but WSL2.
   # Caches as ci.yml's build-linux's, under ~/.cache/nexus-ci inside the distro.
   wsl2-functional:
     runs-on: [self-hosted, nexus-nightly, Linux, X64, wsl2]
@@ -493,10 +529,21 @@ jobs:
           else
             echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
           fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF "${launcher[@]}" \
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "${launcher[@]}" \
             -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto"
+          for option in NEXUS_WINDOW_LOGIC NEXUS_LINK NEXUS_SANDBOX_TOOLS; do
+            [ "$(sed -n "s/^$option:BOOL=//p" build/CMakeCache.txt)" = ON ] || { echo "::error::$option is not ON inside WSL2"; exit 1; }
+          done
       - name: Build
         run: cmake --build build --parallel "$JOBS"
+      - name: nexus-server is built
+        run: test -x build/nexus-server
+      # The link's functional tests reach this machine over `ssh localhost` (tests/link/CMakeLists.txt); the runner's
+      # login has no ssh login of its own here, so the job starts an sshd of its own on 127.0.0.1 and the tests reach
+      # it through NEXUS_E2E_SSH (.github/ssh-localhost.sh). The protobuf libraries mosh links come with the distro
+      # (libprotobuf-dev, protobuf-compiler: present on captain's WSL2, checked 2026-11-26).
+      - name: ssh localhost, through this job's own sshd
+        run: bash .github/ssh-localhost.sh "$RUNNER_TEMP/ssh-localhost"
       - name: Functional tests
         run: bash .github/ctest.sh --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure
       - name: ccache hits in this job
@@ -623,10 +670,10 @@ jobs:
           flock "$HOME/.cache/nexus-ci/claude-wall.lock" npm run test:functional
           [ "$ssh_out" = ran ]
 
-  # The WSL2 terminal test (wsl2-terminal below), built with MSVC on a GitHub-hosted Windows runner as ci.yml's windows
-  # job builds it (.github/actions/windows-build, from cache-warm's cache when there is one; no limit here).
+  # The WSL2 terminal test (wsl2-terminal below), built with MSVC on a fleet Windows runner (captain's Windows side) as
+  # ci.yml's windows job builds it (.github/actions/windows-build, the runner's own build directory; no limit here).
   windows-wsl2-test:
-    runs-on: windows-2025
+    runs-on: [self-hosted, nexus-pr, Windows, X64]
     timeout-minutes: 60
     defaults:
       run:
@@ -635,10 +682,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Caches, configure and build
+      - name: Build directory, configure and build
         uses: ./.github/actions/windows-build
-        with:
-          require: "false"
       - name: Keep the WSL2 terminal test for wsl2-terminal
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -649,7 +694,7 @@ jobs:
 
   # A Windows terminal tab's shell for real (tests/window/test_wsl2_terminal.cpp, ctest wsl2_terminal): the probe through
   # wsl.exe, then the launch line on a Windows pseudoconsole through Prax's lib/process, as a terminal tab starts it; the
-  # shell's prompt, TERM, home directory, Escape and exit. windows-wsl2-test builds it with MSVC on a GitHub-hosted runner; it runs here, on captain's
+  # shell's prompt, TERM, home directory, Escape and exit. windows-wsl2-test builds it with MSVC on a fleet Windows runner; it runs here, on captain's
   # WSL2 runners, through WSL interop, which starts it on Windows as the user whose WSL2 distribution that is. It cannot
   # run in the windows job: those runners run as NETWORK SERVICE, which has no WSL2 distribution.
   wsl2-terminal:
@@ -889,18 +934,18 @@ jobs:
           for fault in --faulty-aba --faulty-stale; do
             walk build/tests/model/watch_walk 1 1000 "$fault"
           done
-          for friends in 0 1 2 3; do
+          for ais in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
-              walk build/tests/model/trace_walk "$seed" 1000 "$friends"
+              walk build/tests/model/trace_walk "$seed" 1000 "$ais"
             done
-            walk build/tests/model/trace_walk 1 1000 "$friends" --no-sprint
+            walk build/tests/model/trace_walk 1 1000 "$ais" --no-sprint
           done
           for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             walk build/tests/model/trace_walk 1 1000 3 "$fault"
           done
-          walk build/tests/model/trace_walk 10 1000 3 --friends-churn
-          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn
-          walk build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend
+          walk build/tests/model/trace_walk 10 1000 3 --ais-churn
+          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --ais-churn
+          walk build/tests/model/trace_walk 1 300 3 --ais-churn --faulty-remove-ai
           for seed in 1 2 3; do
             walk build/tests/model/strip_walk "$seed" 400 2
           done
@@ -947,10 +992,10 @@ jobs:
             walk build/tests/server/supervisor_walk 1 1000 "$fault"
           done
           for seed in 13 14 15; do
-            walk build/tests/server/supervisor_walk "$seed" 600 --friends-churn
+            walk build/tests/server/supervisor_walk "$seed" 600 --ais-churn
           done
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-remove
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-unknown
           for seed in 1 2 3 4 5 6 7 8; do
             walk build/tests/server/pass_walk "$seed" 250
           done
@@ -1052,7 +1097,7 @@ jobs:
   # Claude executable the pinned SDK ships (so npm ci with the optional per-platform package here), on a fake token,
   # against a fake Messages API on 127.0.0.1, in the OS sandbox, trying every way an AI could read its login. Spends
   # nothing and reaches no outside service. The test's runs in three jobs (NEXUS_WALL_RUN): the whole
-  # wall, the wall without its hook, and together a friend limited to its directory with the hook and without it (two
+  # wall, the wall without its hook, and together an AI limited to its directory with the hook and without it (two
   # short runs in one job: the setup is the cost).
   claude-driver-wall-macos:
     strategy:
@@ -1122,10 +1167,11 @@ jobs:
       - name: Unit tests
         run: bash .github/ctest.sh --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
       # The link's functional tests reach this machine over `ssh localhost` as the runner's login, which this Mac allows.
+      # The watch's speech test runs in watch-speech, on hosted macOS, never here.
       - name: Functional tests
         run: >-
           bash .github/ctest.sh --test-dir build -L functional
-          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional)$'
+          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional|watch_speech|watch_speech_planted)$'
           -j "$TEST_JOBS" --output-on-failure
       # The paced injected hitch measures Release's frame budgets (tests/window/CMakeLists.txt, unchanged), so it runs
       # here in the Release build rather than in ci.yml's Debug build; alone, so no other test shares the clock. A run
@@ -1141,7 +1187,8 @@ jobs:
   # macos-release, server-lock).
   #
   # macOS Debug, as a pull request builds it (asserts on), on the fleet Mac. The link's tests reach this machine over
-  # `ssh localhost` as the runner's login, which this Mac allows.
+  # `ssh localhost` as the runner's login, which this Mac allows. The watch's speech test runs in watch-speech,
+  # on hosted macOS, never here.
   macos-debug:
     runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
     steps:
@@ -1162,7 +1209,7 @@ jobs:
       - name: The tier_nightly tests
         run: >-
           bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
-          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional)$'
+          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional|watch_speech|watch_speech_planted)$'
           -j "$TEST_JOBS" --output-on-failure
 
   # Linux, as ci.yml's build-linux builds it, on hosted Ubuntu.
@@ -1180,20 +1227,41 @@ jobs:
         uses: ./.github/actions/hosted-caches
         with:
           name: linux-release
-          apt: ""
+          require: "false"
+          apt: libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev openssh-server
       - name: Configure and build
         uses: ./.github/actions/nexus-build
         with:
           config: linux-release
+      # The link's functional tests reach this machine over `ssh localhost` without a password prompt
+      # (tests/link/CMakeLists.txt): a key made here, for this job only, authorized for the runner's own login.
+      - name: Passwordless ssh to this machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          if [ ! -f ~/.ssh/id_ed25519 ]; then ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519; fi
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          chmod go-w ~
+          if ! nc -z -w 2 127.0.0.1 22; then
+            sudo systemctl start ssh
+          fi
+          ssh-keyscan -T 5 localhost 127.0.0.1 >> ~/.ssh/known_hosts
+          ssh -o BatchMode=yes localhost true
+          echo "ssh localhost works for $(id -un)"
+      # The server lock under contention runs in server-lock (macOS) and inside WSL2 (wsl2-functional), as macos-debug
+      # leaves it out too.
       - name: The tier_nightly tests
         run: >-
           bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
-          -j "$TEST_JOBS" --output-on-failure
+          -E '^server_lock_functional$' -j "$TEST_JOBS" --output-on-failure
 
-  # Windows, as ci.yml's windows job builds it, on hosted Windows: the unit tests too slow for a pull request. The WSL2
+  # Windows, as ci.yml's windows job builds it, on a fleet Windows runner: the unit tests too slow for a pull request. The WSL2
   # terminal test needs a WSL2 distribution, which hosted Windows lacks: wsl2-terminal runs it on captain.
   windows-nightly:
-    runs-on: windows-2025
+    runs-on: [self-hosted, nexus-pr, Windows, X64]
     defaults:
       run:
         shell: pwsh
@@ -1375,6 +1443,7 @@ jobs:
         uses: ./.github/actions/hosted-caches
         with:
           name: linux-asan
+          require: "false"
           apt: ""
       - name: Configure and build the programs the parts run
         uses: ./.github/actions/nexus-build
@@ -1513,19 +1582,19 @@ jobs:
           for fault in --faulty-aba --faulty-stale; do
             walk build/tests/model/watch_walk 1 1000 "$fault"
           done
-          for friends in 0 1 2 3; do
+          for ais in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
-              walk build/tests/model/trace_walk "$seed" 1000 "$friends"
+              walk build/tests/model/trace_walk "$seed" 1000 "$ais"
             done
-            walk build/tests/model/trace_walk 1 1000 "$friends" --no-sprint
+            walk build/tests/model/trace_walk 1 1000 "$ais" --no-sprint
           done
           for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             walk build/tests/model/trace_walk 1 1000 3 "$fault"
           done
-          # the friends coming and going, and the friend strip's walks and faults
-          walk build/tests/model/trace_walk 10 1000 3 --friends-churn
-          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn
-          walk build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend
+          # the AIs coming and going, and the AI strip's walks and faults
+          walk build/tests/model/trace_walk 10 1000 3 --ais-churn
+          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --ais-churn
+          walk build/tests/model/trace_walk 1 300 3 --ais-churn --faulty-remove-ai
           for seed in 1 2 3; do
             walk build/tests/model/strip_walk "$seed" 400 2
           done
@@ -1583,12 +1652,12 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             walk build/tests/server/supervisor_walk 1 1000 "$fault"
           done
-          # the friend taken out of friends.json and put back, and a start holding no friends list, and their faults
+          # the AI taken out of ais.json and put back, and a start holding no AIs list, and their faults
           for seed in 13 14 15; do
-            walk build/tests/server/supervisor_walk "$seed" 600 --friends-churn
+            walk build/tests/server/supervisor_walk "$seed" 600 --ais-churn
           done
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-remove
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-unknown
           # placement's walks on real files (each in walk-files beside its trace) and their faults, at the seeds the
           # trace checks use (tests/server/CMakeLists.txt)
           for seed in 1 2 3; do

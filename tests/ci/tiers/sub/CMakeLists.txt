@@ -1,5 +1,5 @@
 add_test(NAME functional_one COMMAND ${CMAKE_COMMAND} -E true)
-set_tests_properties(functional_one PROPERTIES LABELS functional)
+set_tests_properties(functional_one PROPERTIES LABELS functional NEXUS_NEEDS nightly_tool)
 add_test(NAME happy_path COMMAND ${CMAKE_COMMAND} -E true)
-set_tests_properties(happy_path PROPERTIES LABELS functional)
+set_tests_properties(happy_path PROPERTIES LABELS functional NEXUS_NEEDS pr_tool)
 add_test(NAME no_label COMMAND ${CMAKE_COMMAND} -E true)

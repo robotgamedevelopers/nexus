@@ -1,0 +1,8 @@
+# Planted: a per-commit job with a list that does not start with self-hosted; refused.
+name: ci
+on:
+  pull_request:
+jobs:
+  build:
+    runs-on: [macos-latest]
+    steps: [{run: "true"}]
