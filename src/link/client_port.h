@@ -19,7 +19,8 @@ namespace nexus::link {
 
 class ClientPort final : public LinkPort {
 public:
-    explicit ClientPort(ClientLink::Options options) : bootstrap_(options.bootstrap), wake_(options.wake), link_(std::make_unique<ClientLink>(std::move(options))) {}
+    explicit ClientPort(ClientLink::Options options) : bootstrap_(options.bootstrap), wake_(options.wake),
+        run_(linkRunner(options.run)), link_(std::make_unique<ClientLink>(std::move(options))) {}
 
     bool poll(LinkState* out) override {
         const bool changed = link_->poll(&latest_);
@@ -73,7 +74,7 @@ public:
         if (job.epoch != epoch) job = {};
         if (std::chrono::steady_clock::now() < job.retry) return;
         job.epoch = epoch;
-        std::packaged_task fetch([b = bootstrap_, stop = stopping_, id, epoch, before, start = job.prefix.size()]() mutable {
+        std::packaged_task fetch([b = bootstrap_, run = run_, stop = stopping_, id, epoch, before, start = job.prefix.size()]() mutable {
             std::vector<sync::EntryRef> entries;
             auto verb = std::find(b.command.begin(), b.command.end(), "new");
             if (verb == b.command.end()) return entries;
@@ -83,7 +84,7 @@ public:
             while (!stop->load() && start + entries.size() < before) {
                 const auto offset = start + entries.size();
                 b.command.back() = std::to_string(offset);
-                const auto result = runCommand(bootstrapCommand(b), b.timeoutSeconds);
+                const auto result = run(bootstrapCommand(b), b.timeoutSeconds);
                 if (result.end != CommandResult::End::Exited || result.code || result.out.empty()) break;
                 sync::Sessions decoded;
                 try { decoded.apply_string(result.out); }
@@ -118,6 +119,7 @@ private:
     std::shared_ptr<std::atomic<bool>> stopping_ = std::make_shared<std::atomic<bool>>(false);
     Bootstrap bootstrap_;
     std::function<void()> wake_;
+    CommandRunner run_;   // the link's (ClientLink::Options run)
     std::map<sync::SessionId, HistoryJob> pages_;
     ClientLink::Snapshot latest_;
     std::unique_ptr<ClientLink> link_;

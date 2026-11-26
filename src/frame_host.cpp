@@ -7,8 +7,15 @@
 #include <utility>
 #include <vector>
 
+#include "pr/hash.h"
+#include "pr/ui_records.h"
+
+#include "platform.h"
 #include "board.h"
+#if NEXUS_PROCESSES
+#include "command.h"
 #include "terminals.h"
+#endif
 
 static_assert(nexus::kPromptBytes == nexus::sync::Limits{}.text, "the prompt holds what the server takes");
 
@@ -51,6 +58,7 @@ void FrameHost::keepSelection() {
 void FrameHost::keepTerminals() {
     if (!keep || terminals == nullptr || terminalStore == nullptr)
         return;
+#if NEXUS_PROCESSES
     PraxTerminals* t = terminals;
     std::vector<std::string> directories = terminalDirectories(*model,
         [t](std::size_t id) { return t->workingDirectory(id); });
@@ -75,6 +83,7 @@ void FrameHost::keepTerminals() {
         }
     }
     keepSelection();
+#endif
 }
 
 void FrameHost::personSelected() {
@@ -377,6 +386,10 @@ void FrameHost::pollLink() {
     if (link == nullptr || !link->poll(&s))
         return;
     if (!s.cut.empty()) showCut(s.cut);
+    // The first dashboard's address, as the server says it (empty: none), for the sprint tab's page, until the strip
+    // holds a tab for each dashboard.
+    if (board != nullptr && s.phase == sync::LinkPhase::Connected)
+        board->offer(s.sessions.dashboards().empty() ? std::string() : s.sessions.dashboards().front().url);
     // The AIs first, so that an AI's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
         for (const auto& [name, claim] : pendingClaims_) {
@@ -434,8 +447,9 @@ void FrameHost::pollLink() {
                 const auto* offer = offerFor(it->first);
                 if (offer && !it->second) it->second = offer->id;
                 const auto* choice = activeChoice();
-                if ((offer && offer->id != it->second) ||
-                    (!offer && (it->second || !choice || choice->name != it->first || !choice->needsSignIn)))
+                const bool login = pendingLogin_ && pendingLogin_->second == it->first;
+                if ((offer && offer->id != it->second) || (!offer && it->second) ||
+                    (!offer && !login && (!choice || choice->name != it->first || !choice->needsSignIn)))
                     it = pendingClaims_.erase(it);
                 else
                     ++it;
@@ -467,6 +481,7 @@ void FrameHost::pollLink() {
             signInSelection_.reset();
         }
     }
+    settleLogin();
     refreshPicker();
     heardMsAgo = s.heardMsAgo;
     view->status = sync::linkStatus(s.phase, host, s.heardMsAgo, s.problem);
@@ -568,8 +583,17 @@ void FrameHost::selectSignInAccount() {
         signIn.activeAccount.reset();
         return;
     }
+    signIn.activeAccount = signInTarget().value_or(std::string{});
+}
+
+// The account whose sign-in page this window opens for the AI that shows: one /login signs in, else the account the
+// AI's session is on.
+std::optional<std::string> FrameHost::signInTarget() const {
+    if (pendingLogin_ && model->tab_count() && mirror.session(model->tab(model->active()).id) == pendingLogin_->first)
+        return pendingLogin_->second;
     const auto* choice = activeChoice();
-    signIn.activeAccount = choice ? choice->name : std::string{};
+    if (!choice) return std::nullopt;
+    return choice->name;
 }
 
 bool FrameHost::activateSignIn() {
@@ -709,6 +733,158 @@ std::optional<AccountPicker> FrameHost::previewAccounts(int direction) const {
     return AccountPicker::open(tab, *session, *roster, direction, view->windowApp.centeredAccounts);
 }
 
+const sync::ServerAI* FrameHost::rosterOf(sync::SessionId id) const {
+    const auto* session = accountState_.find(id);
+    if (!session) return nullptr;
+    const auto& ais = accountState_.ais();
+    const auto it = std::find_if(ais.begin(), ais.end(),
+                                 [&](const auto& f) { return f.name == session->info.aiName; });
+    return it == ais.end() || it->accounts.empty() ? nullptr : &*it;
+}
+
+// A switch of a session to another of its AI's accounts, the server's login switch (src/sync/hub.cpp): a sign-in claim
+// naming the session and the account, with this window's claim token and no request. An account already signed in is
+// switched to at once, with no sign-in; one that needs signing in signs in while the session stays where it is, and the
+// server moves the session once it has. Never SetAccount first: a sign-in that then failed would leave the session on an
+// account with no login.
+std::uint64_t FrameHost::claimAccount(sync::SessionId session, const std::string& account) {
+    if (!link) return 0;
+    sync::Action action;
+    action.kind = sync::ActionKind::SignInClaim;
+    action.account = account;
+    action.session = session;
+    action.request = 0;
+    action.text = signIn.opener.token();
+    return link->send(std::move(action));
+}
+
+// /login of an account for the AI that shows: the account signs in while the AI stays on its own account (claimAccount),
+// and the server switches the AI to it once it has (settleLogin watches). A sign-in that is cancelled or fails leaves
+// everything as it was.
+void FrameHost::startLogin(const std::string& account) {
+    if (!link || phase != sync::LinkPhase::Connected || !model->tab_count()) {
+        view->problem = "Reconnect to the Nexus server to sign in.";
+        return;
+    }
+    const auto session = mirror.session(model->tab(model->active()).id);
+    const auto* current = accountState_.find(session);
+    const auto* roster = activeAccountRoster();
+    if (!current || !roster) return;
+    const auto it = std::find_if(roster->accounts.begin(), roster->accounts.end(),
+                                 [&](const auto& a) { return a.name == account; });
+    if (it == roster->accounts.end() || !pickable(*it)) return;
+    if (!it->needsSignIn) {         // signed in since the dialog opened: the claim switches at once
+        if (current->info.account != account && !accountSelections_.contains(session)) {
+            const auto number = claimAccount(session, account);
+            if (accountState_.nextAction()) accountSelections_[session] = number;
+        }
+        return;
+    }
+    if (sync::usesLocalSignInPage(current->info.harness) && !signIn.loopback) {
+        view->problem = "Open Nexus on the server machine to sign in to " + accountShownAs(*it) + ".";
+        return;
+    }
+    pendingLogin_ = std::make_pair(session, account);
+    signIn.activeAccount = account;
+    view->problem = "Signing in to " + accountShownAs(*it) + "\xE2\x80\xA6 " +
+        std::string(model->tab(model->active()).displayName()) + " stays on its account until then.";
+    const auto* offer = offerFor(account);
+    if (offer && offer->opener == signIn.opener.token()) return;    // this window holds the flow: its page opens
+    if (pendingClaims_.contains(account)) return;
+    pendingClaims_.emplace(account, 0);
+    claimAccount(session, account);
+}
+
+// A /login under way, against the server's latest state: the server moved the session to the account, it is done; its
+// flow gone with the account still not signed in (cancelled, failed, expired), or the link lost, it ends and nothing
+// changes. The window sends nothing more: the server moves the session itself, once no turn is open.
+void FrameHost::settleLogin() {
+    if (!pendingLogin_) return;
+    const auto [id, account] = *pendingLogin_;
+    const auto* roster = rosterOf(id);
+    const auto* session = accountState_.find(id);
+    const sync::AccountChoice* choice = nullptr;
+    if (roster) {
+        const auto it = std::find_if(roster->accounts.begin(), roster->accounts.end(),
+                                     [&](const auto& a) { return a.name == account; });
+        if (it != roster->accounts.end()) choice = &*it;
+    }
+    if (phase != sync::LinkPhase::Connected || !session || !choice) {
+        pendingLogin_.reset();
+        return;
+    }
+    if (session->info.account == account) {
+        pendingLogin_.reset();
+        view->problem.clear();
+        return;
+    }
+    if (choice->needsSignIn && !offerFor(account) && !pendingClaims_.contains(account)) {
+        pendingLogin_.reset();
+        view->problem = "The sign-in to " + accountShownAs(*choice) + " did not finish. The AI stays on its account.";
+    }
+}
+
+void FrameHost::wireAccountMenu() {
+    view->accountMenuRows = [this]() -> std::optional<std::vector<AccountMenuRow>> {
+        if (phase != sync::LinkPhase::Connected || !model->tab_count()) return std::nullopt;
+        const auto* roster = activeAccountRoster();
+        const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id));
+        if (!roster || !session || accountSelections_.contains(session->id)) return std::nullopt;
+        return accountMenuRows(*roster, session->info.account);
+    };
+    view->accountLoginRows = [this]() -> std::vector<AccountMenuRow> {
+        const auto* roster = phase == sync::LinkPhase::Connected ? activeAccountRoster() : nullptr;
+        return roster ? accountLoginRows(*roster) : std::vector<AccountMenuRow>{};
+    };
+    view->switchAccount = [this](const std::string& account) {
+        if (phase != sync::LinkPhase::Connected || !model->tab_count()) return;
+        const auto* roster = activeAccountRoster();
+        const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id));
+        if (!roster || !session || session->info.account == account || accountSelections_.contains(session->id)) return;
+        const auto it = std::find_if(roster->accounts.begin(), roster->accounts.end(),
+                                     [&](const auto& a) { return a.name == account; });
+        if (it == roster->accounts.end() || !pickable(*it) || it->needsSignIn) return;
+        view->accountPicker.reset();
+        const auto number = claimAccount(session->id, account);
+        if (accountState_.nextAction()) accountSelections_[session->id] = number;
+    };
+    view->loginAccount = [this](const std::string& account) { startLogin(account); };
+    view->logoutTarget = [this](std::string& account, std::string& shown, std::string& next) {
+        if (!link || phase != sync::LinkPhase::Connected) {
+            view->problem = "Reconnect to the Nexus server before signing out.";
+            return false;
+        }
+        const auto* choice = activeChoice();
+        if (!choice) {
+            view->problem = "The server has not confirmed a selected account for this conversation.";
+            return false;
+        }
+        account = choice->name;
+        shown = accountShownAs(*choice);
+        const auto* roster = activeAccountRoster();
+        logoutNext_ = roster ? accountAfterLogout(*roster, choice->name) : std::string{};
+        next.clear();
+        if (roster) {
+            for (const auto& a : roster->accounts)
+                if (a.name == logoutNext_) next = accountShownAs(a);
+        }
+        return true;
+    };
+    view->logout = [this] {
+        if (!model->tab_count() || !view->signOut) return false;
+        const auto session = mirror.session(model->tab(model->active()).id);
+        const auto next = logoutNext_;
+        if (!view->signOut()) return false;
+        // The server applies the actions in order: the sign-out leaves the session on its account, asking for its
+        // sign-in; the claim of the next signed-in account then switches it there at once.
+        if (!next.empty()) {
+            const auto number = claimAccount(session, next);
+            if (accountState_.nextAction()) accountSelections_[session] = number;
+        }
+        return true;
+    };
+}
+
 LimitOffer FrameHost::currentLimit() const {
     if (!model->tab_count()) return {};
     const auto& tab = model->tab(model->active());
@@ -769,6 +945,7 @@ void FrameHost::wire() {
         }
     };
     view->previewAccounts = [this](int direction) { return previewAccounts(direction); };
+    wireAccountMenu();
     view->pickerCommand = [this](const std::string& command) { pickerCommand(command); };
     view->chooseAccount = [this](const std::string& account) { chooseAccount(account); };
     view->dismissAI = [this](const Tab& tab) {
@@ -937,6 +1114,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
                 } else link->send(std::move(action));
                 return;
             }
+#if NEXUS_PROCESSES
             const auto aiName = model->tab(i).name;
             const auto instance = current ? current->info.instance : "";
             view->outgoing.push_back({tabId, 0, action.text});
@@ -969,6 +1147,12 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
                 if (wake) wake();
             });
             return;
+#else
+            // Unreachable: this build stages no file (stageFile), so no prompt names one.
+            (void)current;
+            link->send(std::move(action));
+            return;
+#endif
         }
         if (!why.empty())
             view->problem = why;
@@ -1002,6 +1186,9 @@ void FrameHost::showState(const sync::Sessions& state, bool lost) {
 
 void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAppDisplay& display) {
     ++pasteFrame_;
+    // Another tab chosen: its prompt takes the focus, as a switch does (View::promptDismissed).
+    if (view->promptDismissed && (model->tab_count() == 0 || model->tab(model->active()).id != tapTab_))
+        view->promptDismissed = false;
     if (!upload_.valid()) std::erase_if(stagedFiles_, [&](const StagedFile& file) {
         if (pasteFrame_ - file.frame < 3) return false;
         for (size_t i = 0; i < model->tab_count(); ++i) {
@@ -1012,6 +1199,7 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
         return true;
     });
     view->hitch = hitch;
+#if NEXUS_PROCESSES
     if (terminals != nullptr) {
         // Each terminal's foreground process, for its tab's label, read where its working directory is read.
         HitchScope scope(hitch, Phase::Terminals);
@@ -1020,6 +1208,7 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
             terminals->deliver(ui);
         }
     }
+#endif
     {
         HitchScope scope(hitch, Phase::Keep);
         keepTerminals();
@@ -1029,9 +1218,9 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
         HitchScope scope(hitch, Phase::SyncApply);
         pollLink();
         if (signIn.activeAccount) {
-            const auto* choice = activeChoice();
-            if (!choice) signIn.activeAccount->clear();
-            else if (*signIn.activeAccount != choice->name) *signIn.activeAccount = choice->name;
+            const auto target = signInTarget();
+            if (!target) signIn.activeAccount->clear();
+            else if (*signIn.activeAccount != *target) *signIn.activeAccount = *target;
         }
         if (view->lockScreen && !signIn.locked) signIn.lock();
         else if (!view->lockScreen) signIn.unlock();
@@ -1057,6 +1246,13 @@ bool FrameHost::stageFile(std::string name, std::string bytes) {
     if (view->lockScreen) return false;
     if (!ui || view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt ||
         (view->secrets && view->secrets->showing()) || !model->tab_count()) return false;
+#if !NEXUS_PROCESSES
+    // An attachment goes to the server through a child process (ssh running nexus-receive, the upload worker above),
+    // which this build cannot start (build_parts.h). The in-app ssh (link/inapp_ssh.h) runs only the link's commands.
+    (void)bytes;
+    view->problem = "Attaching " + name + " is not available on iOS yet; nothing was sent.";
+    return false;
+#endif
     if (name.empty() || name == "." || name == ".." || name.size() > 255 ||
         name.find_first_of("/\\") != std::string::npos || std::any_of(name.begin(), name.end(),
             [](unsigned char c) { return c < 32 || c == 127; })) {
@@ -1145,16 +1341,80 @@ bool resetsIdle(const PrAppEvent& e) {
     }
 }
 
+namespace {
+
+// How far a press may move and still be a tap, logical px: further, it is a drag or a scroll.
+constexpr float kTapSlop = 10;
+
+bool inside(PrLayoutTree* tree, PrLayoutNode node, PrVec2 p) {
+    if (node == kPrLayoutNodeNone || !prLayoutNodeIsValid(tree, node)) return false;
+    const PrRect r = prLayoutRectToPx(prLayoutNodeBounds(tree, node, PrLayoutCoordinates_Viewport));
+    return p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom;
+}
+
+} // namespace
+
+void FrameHost::watchTap(const PrAppEvent& e) {
+    if (!view->tapEndsEditing || ui == nullptr) return;
+    PrLayoutTree* tree = prUiTree(ui);
+    switch (e.kind) {
+    case PrAppEventKind_PointerDown:
+        tapping_ = e.pointer.button == 0;
+        tapDown_ = e.pointer.position;
+        // A press in the prompt's box takes editing back up.
+        if (inside(tree, view->promptBox, tapDown_)) view->promptDismissed = false;
+        break;
+    case PrAppEventKind_PointerMove:
+        if (tapping_) {
+            const float dx = e.pointer.position.x - tapDown_.x, dy = e.pointer.position.y - tapDown_.y;
+            if (dx * dx + dy * dy > kTapSlop * kTapSlop) tapping_ = false;
+        }
+        break;
+    case PrAppEventKind_PointerCancel:
+    case PrAppEventKind_Scroll:
+    case PrAppEventKind_Gesture:
+        tapping_ = false;
+        break;
+    case PrAppEventKind_PointerUp: {
+        if (!tapping_) break;
+        tapping_ = false;
+        if (inside(tree, view->promptBox, tapDown_)) break;
+        for (const PrLayoutNode tab : view->tabNodes) {
+            if (inside(tree, tab, tapDown_)) return;     // a tab switches, as it does
+        }
+        if (view->prompt != kPrLayoutNodeNone && prUiFocus(ui) == view->prompt) prUiSetFocus(ui, kPrLayoutNodeNone);
+        view->promptDismissed = true;
+        tapTab_ = model->tab_count() != 0 ? model->tab(model->active()).id : ~std::size_t(0);
+        break;
+    }
+    case PrAppEventKind_KeyDown:
+    case PrAppEventKind_Text:
+    case PrAppEventKind_Paste:
+        // A key typed (a hardware keyboard's) goes to the prompt again.
+        if (view->promptDismissed) {
+            view->promptDismissed = false;
+            if (view->prompt != kPrLayoutNodeNone && prLayoutNodeIsValid(tree, view->prompt))
+                prUiSetFocus(ui, view->prompt);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 bool FrameHost::event(const PrAppEvent& e) {
     HitchScope scope(hitch, Phase::Input);
     // While locked (View::lockScreen) no input reaches anything but the lock screen: no key reaches a terminal's shell,
     // the Dashboard's page or the prompt, and nothing is pasted or dropped. What is not input (a resize, a timer) passes.
     if (view->lockScreen && isInputEvent(e)) return !lockScreenTakes(e);
+    watchTap(e);
     // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
     // reaches the sprint tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {
         return false;
     }
+    // The account menu under the active AI's tab takes its press, and every pointer event of that gesture.
+    if (routeAccountMenu(*view, ui, e)) return true;
     if (!view->accountPicker && view->choiceKind.empty() &&
             (!view->windowApp.surface.items || view->windowApp.surface.items->empty())) {
         const bool output = view->selection.event(e, view->transcript, view->copy, view->openLink);
@@ -1169,6 +1429,7 @@ bool FrameHost::event(const PrAppEvent& e) {
     if (board != nullptr && board->event(e)) {
         return true;
     }
+#if NEXUS_PROCESSES
     // Typed into a terminal tab before its screen can take it: held for its shell, in order.
     if (terminals != nullptr && model->tab_count() != 0) {
         const Tab& tab = model->tab(model->active());
@@ -1176,6 +1437,7 @@ bool FrameHost::event(const PrAppEvent& e) {
             return true;
         }
     }
+#endif
     if (ui == nullptr || (e.kind != PrAppEventKind_Text && e.kind != PrAppEventKind_Paste) ||
             view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt) {
         return false;
@@ -1204,6 +1466,31 @@ bool FrameHost::event(const PrAppEvent& e) {
 
 void FrameHost::build(PrKit* kit, PrLayoutNode root) {
     buildWindow(*view, kit, root);
+}
+
+namespace {
+
+// The box the window is built in above the on-screen keyboard (FrameHost::buildAbove).
+struct AboveKeyboard {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
+    float width;
+    float height;
+
+    void make(const View&, PrLayoutBoxStyle& box) const {
+        box.boxSizing = PrLayoutBoxSizing_BorderBox;
+        box.display = PrLayoutDisplay_Flex;
+        box.width = prLayoutLengthPx(width);
+        box.height = prLayoutLengthPx(height);
+    }
+};
+
+} // namespace
+
+void FrameHost::buildAbove(PrKit* kit, PrLayoutNode root, PrVec2 box) {
+    view->extent = box;
+    const PrLayoutNode above = prUiElement(ui, root, prHashString(PrStringView{"above-keyboard", 14}, 0),
+        pr::uiStyle(ui, *view, AboveKeyboard{view->extent.x, view->extent.y}), 0);
+    build(kit, above);
 }
 
 } // namespace nexus

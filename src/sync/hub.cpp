@@ -1444,6 +1444,7 @@ Sessions Hub::historyPage(SessionId id, std::uint64_t epoch, std::uint64_t first
 Sessions Hub::stateFor(const std::string& opener, const std::string& client) const {
     Sessions s = state_;
     if (!client.empty()) s.setNextAction(store_.applied(client) + 1);
+    s.setDashboards(dashboards_);
     if (opener.empty() || signIns_.offers().empty()) {
         return s;
     }

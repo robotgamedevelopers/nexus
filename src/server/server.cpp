@@ -504,6 +504,8 @@ bool Server::restoreAll(std::string* why) {
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get(),
         [this] { return dirNow("policy.bundle.json"); });
     drivers_->attach(*hub_);
+    // The dashboards every window shows a tab for, from this server's config (home.h).
+    hub_->setDashboards(settings_.dashboards);
     bus_ = std::make_unique<BusInbox>(paths_.home, paths_.self, machine, host, dirFd_);
     bus_->listeners.setLauncher(settings_.busLauncher);
     // The secret dialog (docs/secrets.md): a value goes to its account's file, durable before the asker hears

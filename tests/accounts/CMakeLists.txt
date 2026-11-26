@@ -131,7 +131,7 @@ tlc_test(tlc_accounts_trace_faulty_limit_rejected AccountsTrace AccountsTrace.cf
 
 # The config repository (src/server/config_repo.h): real git in a directory of the test's own, with HOME there too and
 # a bare repository beside it as the remote, by path; no network. POSIX, like nexus-server.
-if(NOT WIN32)
+if(NEXUS_SERVER_PARTS)
     add_executable(config_repo_test config_repo_test.cpp)
     target_link_libraries(config_repo_test PRIVATE nexus_config_repo)
     target_compile_options(config_repo_test PRIVATE ${warnings})

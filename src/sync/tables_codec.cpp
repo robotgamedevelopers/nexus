@@ -186,6 +186,11 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
             }
         }
     }
+    for (const Dashboard& x : change.dashboards) {
+        wire::Dashboard* w = added(wire::SessionsDiffDashboardsAdd(b.main, d->dashboards));
+        putText(b.main, w->name, x.name, scratch);
+        putText(b.main, w->url, x.url, scratch);
+    }
     if (signIns) {
         d->next_action = change.nextAction;
         for (const SignInOffer& o : change.offers) {
@@ -235,6 +240,8 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
     *unknown = report.unknown;
     SessionsChange out;
     out.nextAction = d->next_action;
+    out.dashboards.reserve(static_cast<std::size_t>(d->dashboards.size()));
+    for (const wire::Dashboard& x : d->dashboards) out.dashboards.push_back({textOf(x.name), textOf(x.url)});
     out.sessions.reserve(static_cast<std::size_t>(d->sessions.size()));
     for (const wire::SessionChange& x : d->sessions) {
         SessionChange s;

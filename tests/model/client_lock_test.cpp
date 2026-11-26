@@ -164,7 +164,8 @@ void messagesSayWhyAndWhatToDo() {
     CHECK(lockMessage(LockState::Prompting, LockReason::Launch, method, "") ==
           "Confirm it is you with Touch ID or your password.");
     CHECK(lockMessage(LockState::Locked, LockReason::Sleep, method, "").find("went to sleep") != std::string::npos);
-    const auto failed = lockMessage(LockState::Locked, LockReason::Failed, method, "Application retry limit exceeded.");
+    const auto failed = lockMessage(LockState::Locked, LockReason::Failed, method, "Application retry limit exceeded.",
+                                     LockInput::KeyOrClick);
     CHECK(failed.find("did not confirm you") != std::string::npos);
     CHECK(failed.find("retry limit") != std::string::npos);
     CHECK(failed.find("Press Return or click here") != std::string::npos);

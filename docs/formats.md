@@ -118,6 +118,14 @@ later field goes after them.
   is sent, adds a tab for each new one and removes none, as a window did before the list. Formats 1 to 3 carry none,
   byte for byte as before (`sync_unit` `ais_cross_the_wire`, `ais_not_in_older_formats`,
   `ais_sent_only_when_changed`).
+- Absent dashboards (a server from before them, or a link of format 3 or older): **none**.
+  `SessionsDiff.dashboards` (`[]Dashboard`, each a `name` and a `url`, both `*string`) is the list of dashboards
+  the server offers, from its config's `dashboard <url> <name>` lines in their order (`~/.nexus/server/config`,
+  `server/home.h`; none by default), whole in every diff (`sync/dashboards.h` holds the bounds: at most 16, a name of 1
+  to 64 bytes, an `http://` or `https://` address of at most 2048 bytes, no name twice). A window today shows the
+  first at its dashboard tab (`board.h`); a tab for each is the next step (docs/ios.md); with none, the window finds
+  its board as before. An older window skips the field. Formats 1 to 3 carry none (`sync_unit`
+  `sessions_dashboards_appended`).
 
 Text in format 4 is schema's text: well-formed UTF-8 with no NUL, or the whole diff would not load. The server writes
 what it holds with each malformed byte, and each NUL, shown as U+FFFD (the replacement character), so an AI's
