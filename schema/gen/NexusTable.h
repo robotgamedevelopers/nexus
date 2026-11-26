@@ -650,7 +650,7 @@ inline int64_t TableLebBytes( uint64_t v )
 // nothing rides.
 struct TableIds
 {
-    static const int32_t kCapacity = 133;
+    static const int32_t kCapacity = 135;
     static const int32_t kBuckets = 512;
 
     uint64_t ids[kCapacity];
@@ -1948,14 +1948,14 @@ inline const uint8_t kTableAnnounce[kTableAnnounceBytes] = {
     0x01,
     0x01,
     0x09,
-    0xaf,
-    0xd8,
-    0x33,
-    0x0b,
-    0xeb,
-    0x8e,
-    0xd3,
-    0xd8,
+    0xee,
+    0xb9,
+    0x22,
+    0x78,
+    0x6c,
+    0x4d,
+    0xb7,
+    0xbd,
     0x02,
     0x0e,
     0x02,
@@ -6172,7 +6172,7 @@ inline bool TableRetainRecordHere( const TableRetain & retain, const uint8_t * r
 // derived from. An id inside a retained record takes its trailer entry from
 // the GENERATED table when it is here and from the CALLER's list otherwise, so
 // no retained id ever enters the generated table and no id is written twice.
-static const int32_t kTableRetainKnownIds = 133;
+static const int32_t kTableRetainKnownIds = 135;
 // INLINE, not static: TableRetainNameable below is an inline function
 // and odr-uses this array, so it must name ONE entity across every unit
 // that includes this header rather than a per-unit copy - the same rule
@@ -6238,6 +6238,7 @@ inline const uint64_t kTableRetainKnown[kTableRetainKnownIds] = {
     0x791c93b0c38fe999ull,
     0x7aa5e74b9dd7baa5ull,
     0x7ce4fd9430e80ceaull,
+    0x7fee95b66225e1fbull,
     0x7feea05062b28e5eull,
     0x82a6b14733b2685aull,
     0x8333fca36e80cc6dull,
@@ -6309,6 +6310,7 @@ inline const uint64_t kTableRetainKnown[kTableRetainKnownIds] = {
     0xfa04f4ef1995407eull,
     0xfb0aacbc4db97225ull,
     0xfdeaad7f71d2f0ceull,
+    0xff5b1282501e1438ull,
     0xff7b88c2ff4bff78ull,
     0xffffffffffffffffull,
 };
@@ -8307,7 +8309,7 @@ namespace nexuswire {
 // PROTOCOL ID is the type wire's and nothing else, and the BUILD VERSION is
 // what everything cooked or blocked is keyed by. A table edit moves this and
 // never the protocol id; a type edit moves both.
-static const uint64_t BuildVersion = 0xd8d38eeb0b33d8afull;
+static const uint64_t BuildVersion = 0xbdb74d6c7822b9eeull;
 
 } // namespace nexuswire
 
@@ -8723,6 +8725,14 @@ struct SignInOffer
     bool code_wanted = false;
 };
 
+// table Dashboard — TABLE-wire storage: relocatable, bounded, defaults in the
+// member initializers (docs/SPEC-TABLES.md)
+struct Dashboard
+{
+    TableRef name; // *string — a byte buffer at its used size, null until assigned
+    TableRef url; // *string — a byte buffer at its used size, null until assigned
+};
+
 // table SessionsDiff — TABLE-wire storage: relocatable, bounded, defaults in the
 // member initializers (docs/SPEC-TABLES.md)
 struct SessionsDiff
@@ -8734,6 +8744,7 @@ struct SessionsDiff
     bool ais_sent = false;
     TableList<SignInOffer> signins; // SignInOffer: the element array, empty until an Add
     uint64_t next_action = 0;
+    TableList<Dashboard> dashboards; // Dashboard: the element array, empty until an Add
 };
 
 // table Action — TABLE-wire storage: relocatable, bounded, defaults in the
@@ -8900,10 +8911,10 @@ inline bool TableEnumRef( TableIds & ids, EntryKind value, uint64_t & ref )
             ref = ids.ref_at( 31, 0x40d76f1f51639ec0ull );
             return true;
         case EntryKind::AI:
-            ref = ids.ref_at( 76, 0x9f57a2661b8a7e2dull );
+            ref = ids.ref_at( 77, 0x9f57a2661b8a7e2dull );
             return true;
         case EntryKind::Notice:
-            ref = ids.ref_at( 72, 0x9117fb5195e75151ull );
+            ref = ids.ref_at( 73, 0x9117fb5195e75151ull );
             return true;
         case EntryKind::Tool:
             ref = ids.ref_at( 38, 0x5a71f1fb3a12c6a7ull );
@@ -8925,10 +8936,10 @@ inline bool TableEnumRef( TableRetainIds & ids, EntryKind value, uint64_t & ref 
             ref = ids.ref_at( 31, 0x40d76f1f51639ec0ull );
             return true;
         case EntryKind::AI:
-            ref = ids.ref_at( 76, 0x9f57a2661b8a7e2dull );
+            ref = ids.ref_at( 77, 0x9f57a2661b8a7e2dull );
             return true;
         case EntryKind::Notice:
-            ref = ids.ref_at( 72, 0x9117fb5195e75151ull );
+            ref = ids.ref_at( 73, 0x9117fb5195e75151ull );
             return true;
         case EntryKind::Tool:
             ref = ids.ref_at( 38, 0x5a71f1fb3a12c6a7ull );
@@ -9036,7 +9047,7 @@ inline bool TableEnumRef( TableIds & ids, Activity value, uint64_t & ref )
             ref = 0;
             return true;
         case Activity::Idle:
-            ref = ids.ref_at( 104, 0xc92905d14a9421f3ull );
+            ref = ids.ref_at( 105, 0xc92905d14a9421f3ull );
             return true;
         case Activity::Busy:
             ref = ids.ref_at( 20, 0x2a02d2a7e41d6700ull );
@@ -9058,7 +9069,7 @@ inline bool TableEnumRef( TableRetainIds & ids, Activity value, uint64_t & ref )
             ref = 0;
             return true;
         case Activity::Idle:
-            ref = ids.ref_at( 104, 0xc92905d14a9421f3ull );
+            ref = ids.ref_at( 105, 0xc92905d14a9421f3ull );
             return true;
         case Activity::Busy:
             ref = ids.ref_at( 20, 0x2a02d2a7e41d6700ull );
@@ -9163,10 +9174,10 @@ inline bool TableEnumRef( TableIds & ids, ActionKind value, uint64_t & ref )
             ref = ids.ref_at( 37, 0x57adf424d57c8a0full );
             return true;
         case ActionKind::Queue:
-            ref = ids.ref_at( 102, 0xc7637275f670c938ull );
+            ref = ids.ref_at( 103, 0xc7637275f670c938ull );
             return true;
         case ActionKind::Stop:
-            ref = ids.ref_at( 112, 0xd9ad53251f2330a5ull );
+            ref = ids.ref_at( 113, 0xd9ad53251f2330a5ull );
             return true;
         case ActionKind::Create:
             ref = ids.ref_at( 24, 0x382a2aa3984474ddull );
@@ -9184,34 +9195,34 @@ inline bool TableEnumRef( TableIds & ids, ActionKind value, uint64_t & ref )
             ref = ids.ref_at( 58, 0x7aa5e74b9dd7baa5ull );
             return true;
         case ActionKind::AddAccount:
-            ref = ids.ref_at( 119, 0xe8b69819a6b671dbull );
+            ref = ids.ref_at( 120, 0xe8b69819a6b671dbull );
             return true;
         case ActionKind::RemoveAccount:
             ref = ids.ref_at( 35, 0x49d09394f5773664ull );
             return true;
         case ActionKind::AddAI:
-            ref = ids.ref_at( 125, 0xf7368f51997e9bccull );
+            ref = ids.ref_at( 126, 0xf7368f51997e9bccull );
             return true;
         case ActionKind::LinkAccount:
-            ref = ids.ref_at( 131, 0xff7b88c2ff4bff78ull );
+            ref = ids.ref_at( 133, 0xff7b88c2ff4bff78ull );
             return true;
         case ActionKind::UnlinkAccount:
-            ref = ids.ref_at( 113, 0xdea837e630d4d73dull );
+            ref = ids.ref_at( 114, 0xdea837e630d4d73dull );
             return true;
         case ActionKind::SetDefault:
-            ref = ids.ref_at( 110, 0xd9292b9837d05494ull );
+            ref = ids.ref_at( 111, 0xd9292b9837d05494ull );
             return true;
         case ActionKind::SecretAnswer:
-            ref = ids.ref_at( 94, 0xb4e56199e0ae32c3ull );
+            ref = ids.ref_at( 95, 0xb4e56199e0ae32c3ull );
             return true;
         case ActionKind::SecretCancel:
-            ref = ids.ref_at( 77, 0x9f781e34e9b7c12full );
+            ref = ids.ref_at( 78, 0x9f781e34e9b7c12full );
             return true;
         case ActionKind::SignInClaim:
             ref = ids.ref_at( 54, 0x7439c20e4947e3b5ull );
             return true;
         case ActionKind::SignInOpened:
-            ref = ids.ref_at( 83, 0xa65506e3bb15f846ull );
+            ref = ids.ref_at( 84, 0xa65506e3bb15f846ull );
             return true;
         case ActionKind::SignInCallback:
             ref = ids.ref_at( 39, 0x5c16b9e2e6fb5e04ull );
@@ -9239,10 +9250,10 @@ inline bool TableEnumRef( TableRetainIds & ids, ActionKind value, uint64_t & ref
             ref = ids.ref_at( 37, 0x57adf424d57c8a0full );
             return true;
         case ActionKind::Queue:
-            ref = ids.ref_at( 102, 0xc7637275f670c938ull );
+            ref = ids.ref_at( 103, 0xc7637275f670c938ull );
             return true;
         case ActionKind::Stop:
-            ref = ids.ref_at( 112, 0xd9ad53251f2330a5ull );
+            ref = ids.ref_at( 113, 0xd9ad53251f2330a5ull );
             return true;
         case ActionKind::Create:
             ref = ids.ref_at( 24, 0x382a2aa3984474ddull );
@@ -9260,34 +9271,34 @@ inline bool TableEnumRef( TableRetainIds & ids, ActionKind value, uint64_t & ref
             ref = ids.ref_at( 58, 0x7aa5e74b9dd7baa5ull );
             return true;
         case ActionKind::AddAccount:
-            ref = ids.ref_at( 119, 0xe8b69819a6b671dbull );
+            ref = ids.ref_at( 120, 0xe8b69819a6b671dbull );
             return true;
         case ActionKind::RemoveAccount:
             ref = ids.ref_at( 35, 0x49d09394f5773664ull );
             return true;
         case ActionKind::AddAI:
-            ref = ids.ref_at( 125, 0xf7368f51997e9bccull );
+            ref = ids.ref_at( 126, 0xf7368f51997e9bccull );
             return true;
         case ActionKind::LinkAccount:
-            ref = ids.ref_at( 131, 0xff7b88c2ff4bff78ull );
+            ref = ids.ref_at( 133, 0xff7b88c2ff4bff78ull );
             return true;
         case ActionKind::UnlinkAccount:
-            ref = ids.ref_at( 113, 0xdea837e630d4d73dull );
+            ref = ids.ref_at( 114, 0xdea837e630d4d73dull );
             return true;
         case ActionKind::SetDefault:
-            ref = ids.ref_at( 110, 0xd9292b9837d05494ull );
+            ref = ids.ref_at( 111, 0xd9292b9837d05494ull );
             return true;
         case ActionKind::SecretAnswer:
-            ref = ids.ref_at( 94, 0xb4e56199e0ae32c3ull );
+            ref = ids.ref_at( 95, 0xb4e56199e0ae32c3ull );
             return true;
         case ActionKind::SecretCancel:
-            ref = ids.ref_at( 77, 0x9f781e34e9b7c12full );
+            ref = ids.ref_at( 78, 0x9f781e34e9b7c12full );
             return true;
         case ActionKind::SignInClaim:
             ref = ids.ref_at( 54, 0x7439c20e4947e3b5ull );
             return true;
         case ActionKind::SignInOpened:
-            ref = ids.ref_at( 83, 0xa65506e3bb15f846ull );
+            ref = ids.ref_at( 84, 0xa65506e3bb15f846ull );
             return true;
         case ActionKind::SignInCallback:
             ref = ids.ref_at( 39, 0x5c16b9e2e6fb5e04ull );
@@ -9551,6 +9562,7 @@ inline void SecretRequestReset( SecretRequest & value );
 inline void AccountChoiceReset( AccountChoice & value );
 inline void AIReset( AI & value );
 inline void SignInOfferReset( SignInOffer & value );
+inline void DashboardReset( Dashboard & value );
 inline void SessionsDiffReset( SessionsDiff & value );
 inline void ActionReset( Action & value );
 inline void ActionsDiffReset( ActionsDiff & value );
@@ -9665,6 +9677,12 @@ inline void SignInOfferReset( SignInOffer & value )
     value.code_wanted = false;
 }
 
+inline void DashboardReset( Dashboard & value )
+{
+    value.name.value = 0; // *string — null
+    value.url.value = 0; // *string — null
+}
+
 inline void SessionsDiffReset( SessionsDiff & value )
 {
     value.sessions.elements.value = 0; // SessionChange: empty
@@ -9682,6 +9700,9 @@ inline void SessionsDiffReset( SessionsDiff & value )
     value.signins.count = 0;
     value.signins.padding = 0;
     value.next_action = 0;
+    value.dashboards.elements.value = 0; // Dashboard: empty
+    value.dashboards.count = 0;
+    value.dashboards.padding = 0;
 }
 
 inline void ActionReset( Action & value )
@@ -9791,6 +9812,7 @@ inline void TableReset( SecretRequest & value ) { SecretRequestReset( value ); }
 inline void TableReset( AccountChoice & value ) { AccountChoiceReset( value ); }
 inline void TableReset( AI & value ) { AIReset( value ); }
 inline void TableReset( SignInOffer & value ) { SignInOfferReset( value ); }
+inline void TableReset( Dashboard & value ) { DashboardReset( value ); }
 inline void TableReset( SessionsDiff & value ) { SessionsDiffReset( value ); }
 inline void TableReset( Action & value ) { ActionReset( value ); }
 inline void TableReset( ActionsDiff & value ) { ActionsDiffReset( value ); }
@@ -9912,6 +9934,13 @@ inline bool SignInOfferSaveBodyFields( const Ctx & ctx, const TableNumbering & n
 template <typename Ctx>
 inline bool SignInOfferSaveBody( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableIds & ids, const SignInOffer & value );
 inline bool SignInOfferLoadBody( TableReader & r, const TableNodeMap & nodes, SignInOffer & value );
+template <typename Ctx>
+inline int64_t DashboardMeasureBody( const Ctx & ctx, const TableNumbering & numbering, TableIds & ids, const Dashboard & value );
+template <typename Ctx>
+inline bool DashboardSaveBodyFields( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableIds & ids, const Dashboard & value );
+template <typename Ctx>
+inline bool DashboardSaveBody( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableIds & ids, const Dashboard & value );
+inline bool DashboardLoadBody( TableReader & r, const TableNodeMap & nodes, Dashboard & value );
 template <typename Ctx>
 inline int64_t SessionsDiffMeasureBody( const Ctx & ctx, const TableNumbering & numbering, TableIds & ids, const SessionsDiff & value );
 template <typename Ctx>
@@ -10053,6 +10082,12 @@ inline int64_t SignInOfferPackMeasure( const Ctx & ctx, TablePackMap & seen, con
 template <typename Ctx>
 inline bool SignInOfferPack( const Ctx & ctx, TablePackMap & seen, const SignInOffer & src, SignInOffer & dst, uint8_t * base, int64_t capacity, int64_t & used );
 template <typename Ctx>
+inline bool DashboardNumber( const Ctx & ctx, TableNumbering & numbering, const Dashboard & value );
+template <typename Ctx>
+inline int64_t DashboardPackMeasure( const Ctx & ctx, TablePackMap & seen, const Dashboard & value );
+template <typename Ctx>
+inline bool DashboardPack( const Ctx & ctx, TablePackMap & seen, const Dashboard & src, Dashboard & dst, uint8_t * base, int64_t capacity, int64_t & used );
+template <typename Ctx>
 inline bool SessionsDiffNumber( const Ctx & ctx, TableNumbering & numbering, const SessionsDiff & value );
 template <typename Ctx>
 inline int64_t SessionsDiffPackMeasure( const Ctx & ctx, TablePackMap & seen, const SessionsDiff & value );
@@ -10161,6 +10196,10 @@ template <typename Ctx>
 inline int64_t TableNodeMeasure( const Ctx & ctx, const TableNumbering & numbering, TableIds & ids, const SignInOffer & value ) { return SignInOfferMeasureBody( ctx, numbering, ids, value ); }
 template <typename Ctx>
 inline bool TableNodeSave( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableIds & ids, const SignInOffer & value ) { return SignInOfferSaveBody( ctx, numbering, w, ids, value ); }
+template <typename Ctx>
+inline int64_t TableNodeMeasure( const Ctx & ctx, const TableNumbering & numbering, TableIds & ids, const Dashboard & value ) { return DashboardMeasureBody( ctx, numbering, ids, value ); }
+template <typename Ctx>
+inline bool TableNodeSave( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableIds & ids, const Dashboard & value ) { return DashboardSaveBody( ctx, numbering, w, ids, value ); }
 template <typename Ctx>
 inline int64_t TableNodeMeasure( const Ctx & ctx, const TableNumbering & numbering, TableIds & ids, const SessionsDiff & value ) { return SessionsDiffMeasureBody( ctx, numbering, ids, value ); }
 template <typename Ctx>
@@ -10283,6 +10322,13 @@ template <typename Ctx>
 inline bool SignInOfferSaveBodyRetain( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableRetainIds & ids, const SignInOffer & value, TableRetain * retain, const TableRetainPath & path );
 inline bool SignInOfferLoadBodyRetain( TableReader & r, const TableNodeMap & nodes, SignInOffer & value, TableRetain * retain, const TableRetainPath & path );
 template <typename Ctx>
+inline int64_t DashboardMeasureBodyRetain( const Ctx & ctx, const TableNumbering & numbering, TableRetainIds & ids, const Dashboard & value, TableRetain * retain, const TableRetainPath & path );
+template <typename Ctx>
+inline bool DashboardSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableRetainIds & ids, const Dashboard & value, TableRetain * retain, const TableRetainPath & path );
+template <typename Ctx>
+inline bool DashboardSaveBodyRetain( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableRetainIds & ids, const Dashboard & value, TableRetain * retain, const TableRetainPath & path );
+inline bool DashboardLoadBodyRetain( TableReader & r, const TableNodeMap & nodes, Dashboard & value, TableRetain * retain, const TableRetainPath & path );
+template <typename Ctx>
 inline int64_t SessionsDiffMeasureBodyRetain( const Ctx & ctx, const TableNumbering & numbering, TableRetainIds & ids, const SessionsDiff & value, TableRetain * retain, const TableRetainPath & path );
 template <typename Ctx>
 inline bool SessionsDiffSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableRetainIds & ids, const SessionsDiff & value, TableRetain * retain, const TableRetainPath & path );
@@ -10366,7 +10412,7 @@ inline int64_t HelloMeasureBody( const Ctx & ctx, const TableNumbering & numberi
     (void) ctx;
     (void) numbering;
     int64_t bytes = 1; // the ZERO REFERENCE that ends the body
-    if ( value.proto != 0 ) { bytes += TableLebBytes( ids.ref_at( 126, 0xf94687246d893231ull ) ) + 1 + 4; } // proto
+    if ( value.proto != 0 ) { bytes += TableLebBytes( ids.ref_at( 127, 0xf94687246d893231ull ) ) + 1 + 4; } // proto
     if ( value.min_peer != 0 ) { bytes += TableLebBytes( ids.ref_at( 45, 0x6276593b48242efcull ) ) + 1 + 4; } // min_peer
     return bytes;
 }
@@ -10378,7 +10424,7 @@ inline bool HelloSaveBodyFields( const Ctx & ctx, const TableNumbering & numberi
     (void) numbering;
     if ( value.proto != 0 )
     {
-        w.header( ids.ref_at( 126, 0xf94687246d893231ull ), 8 ); // proto
+        w.header( ids.ref_at( 127, 0xf94687246d893231ull ), 8 ); // proto
         w.put32( uint32_t( value.proto ) );
     }
     if ( value.min_peer != 0 )
@@ -10582,7 +10628,7 @@ inline int64_t SessionInfoMeasureBody( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 78, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
+            bytes += TableLebBytes( ids.ref_at( 79, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
         }
     }
     {
@@ -10595,7 +10641,7 @@ inline int64_t SessionInfoMeasureBody( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_model = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_model, index_model ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 75, 0x9de543933e6e703aull ) ) + 1 + TableLebBytes( index_model );
+            bytes += TableLebBytes( ids.ref_at( 76, 0x9de543933e6e703aull ) ) + 1 + TableLebBytes( index_model );
         }
     }
     {
@@ -10624,8 +10670,8 @@ inline int64_t SessionInfoMeasureBody( const Ctx & ctx, const TableNumbering & n
             bytes += TableLebBytes( ids.ref_at( 32, 0x414a134c24ef8152ull ) ) + 1 + TableLebBytes( index_instance );
         }
     }
-    if ( value.auto_account != false ) { bytes += TableLebBytes( ids.ref_at( 96, 0xbf329c2c6c784fdeull ) ) + 1 + 1; } // auto_account
-    if ( value.limit_request != 0 ) { bytes += TableLebBytes( ids.ref_at( 121, 0xec5a07037be2a186ull ) ) + 1 + 8; } // limit_request
+    if ( value.auto_account != false ) { bytes += TableLebBytes( ids.ref_at( 97, 0xbf329c2c6c784fdeull ) ) + 1 + 1; } // auto_account
+    if ( value.limit_request != 0 ) { bytes += TableLebBytes( ids.ref_at( 122, 0xec5a07037be2a186ull ) ) + 1 + 8; } // limit_request
     {
         const TableBlob * blob_limit_account = TableBlobAt( ctx, value.limit_account ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
@@ -10636,7 +10682,7 @@ inline int64_t SessionInfoMeasureBody( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_limit_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_limit_account, index_limit_account ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 86, 0xaac947ef35b48e90ull ) ) + 1 + TableLebBytes( index_limit_account );
+            bytes += TableLebBytes( ids.ref_at( 87, 0xaac947ef35b48e90ull ) ) + 1 + TableLebBytes( index_limit_account );
         }
     }
     {
@@ -10649,10 +10695,10 @@ inline int64_t SessionInfoMeasureBody( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_limit_model = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_limit_model, index_limit_model ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 116, 0xe1e90ce0b9ed7706ull ) ) + 1 + TableLebBytes( index_limit_model );
+            bytes += TableLebBytes( ids.ref_at( 117, 0xe1e90ce0b9ed7706ull ) ) + 1 + TableLebBytes( index_limit_model );
         }
     }
-    if ( value.context_epoch != 0 ) { bytes += TableLebBytes( ids.ref_at( 84, 0xa811c78198b72d52ull ) ) + 1 + 8; } // context_epoch
+    if ( value.context_epoch != 0 ) { bytes += TableLebBytes( ids.ref_at( 85, 0xa811c78198b72d52ull ) ) + 1 + 8; } // context_epoch
     {
         const TableBlob * blob_catalog = TableBlobAt( ctx, value.catalog ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
@@ -10663,7 +10709,7 @@ inline int64_t SessionInfoMeasureBody( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_catalog = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_catalog, index_catalog ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 127, 0xf9928605e9a2ddd8ull ) ) + 1 + TableLebBytes( index_catalog );
+            bytes += TableLebBytes( ids.ref_at( 128, 0xf9928605e9a2ddd8ull ) ) + 1 + TableLebBytes( index_catalog );
         }
     }
     return bytes;
@@ -10700,7 +10746,7 @@ inline bool SessionInfoSaveBodyFields( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return false; }
-            w.header( ids.ref_at( 78, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 79, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
             w.putleb( index_account );
         }
     }
@@ -10710,7 +10756,7 @@ inline bool SessionInfoSaveBodyFields( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_model = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_model, index_model ) ) { return false; }
-            w.header( ids.ref_at( 75, 0x9de543933e6e703aull ), 17 ); // model — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 76, 0x9de543933e6e703aull ), 17 ); // model — a NODE INDEX into the flat node table
             w.putleb( index_model );
         }
     }
@@ -10736,12 +10782,12 @@ inline bool SessionInfoSaveBodyFields( const Ctx & ctx, const TableNumbering & n
     }
     if ( value.auto_account != false )
     {
-        w.header( ids.ref_at( 96, 0xbf329c2c6c784fdeull ), 1 ); // auto_account
+        w.header( ids.ref_at( 97, 0xbf329c2c6c784fdeull ), 1 ); // auto_account
         w.put8( value.auto_account ? 1 : 0 );
     }
     if ( value.limit_request != 0 )
     {
-        w.header( ids.ref_at( 121, 0xec5a07037be2a186ull ), 9 ); // limit_request
+        w.header( ids.ref_at( 122, 0xec5a07037be2a186ull ), 9 ); // limit_request
         w.put64( uint64_t( value.limit_request ) );
     }
     {
@@ -10750,7 +10796,7 @@ inline bool SessionInfoSaveBodyFields( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_limit_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_limit_account, index_limit_account ) ) { return false; }
-            w.header( ids.ref_at( 86, 0xaac947ef35b48e90ull ), 17 ); // limit_account — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 87, 0xaac947ef35b48e90ull ), 17 ); // limit_account — a NODE INDEX into the flat node table
             w.putleb( index_limit_account );
         }
     }
@@ -10760,13 +10806,13 @@ inline bool SessionInfoSaveBodyFields( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_limit_model = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_limit_model, index_limit_model ) ) { return false; }
-            w.header( ids.ref_at( 116, 0xe1e90ce0b9ed7706ull ), 17 ); // limit_model — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 117, 0xe1e90ce0b9ed7706ull ), 17 ); // limit_model — a NODE INDEX into the flat node table
             w.putleb( index_limit_model );
         }
     }
     if ( value.context_epoch != 0 )
     {
-        w.header( ids.ref_at( 84, 0xa811c78198b72d52ull ), 9 ); // context_epoch
+        w.header( ids.ref_at( 85, 0xa811c78198b72d52ull ), 9 ); // context_epoch
         w.put64( uint64_t( value.context_epoch ) );
     }
     {
@@ -10775,7 +10821,7 @@ inline bool SessionInfoSaveBodyFields( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_catalog = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_catalog, index_catalog ) ) { return false; }
-            w.header( ids.ref_at( 127, 0xf9928605e9a2ddd8ull ), 17 ); // catalog — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 128, 0xf9928605e9a2ddd8ull ), 17 ); // catalog — a NODE INDEX into the flat node table
             w.putleb( index_catalog );
         }
     }
@@ -11230,12 +11276,12 @@ inline int64_t EntryChangeMeasureBody( const Ctx & ctx, const TableNumbering & n
     if ( value.kind != EntryKind::None )
     {
         if ( !TableEnumNamed( value.kind ) ) { return -1; } // no variant names this value
-        const uint64_t ref_kind = ids.ref_at( 123, 0xef9c96d721673243ull );
+        const uint64_t ref_kind = ids.ref_at( 124, 0xef9c96d721673243ull );
         uint64_t variant_kind = 0;
         if ( !TableEnumRef( ids, value.kind, variant_kind ) ) { return -1; }
         bytes += TableLebBytes( ref_kind ) + 1 + TableLebBytes( variant_kind ); // kind: the variant's reference
     }
-    if ( value.closed != false ) { bytes += TableLebBytes( ids.ref_at( 63, 0x85530f5090e836c5ull ) ) + 1 + 1; } // closed
+    if ( value.closed != false ) { bytes += TableLebBytes( ids.ref_at( 64, 0x85530f5090e836c5ull ) ) + 1 + 1; } // closed
     if ( value.offset != 0 ) { bytes += TableLebBytes( ids.ref_at( 2, 0x0268b0f8129435caull ) ) + 1 + 8; } // offset
     {
         const TableBlob * blob_tail = TableBlobAt( ctx, value.tail ); // *string
@@ -11247,10 +11293,10 @@ inline int64_t EntryChangeMeasureBody( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_tail = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_tail, index_tail ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 111, 0xd94c56ef0798d723ull ) ) + 1 + TableLebBytes( index_tail );
+            bytes += TableLebBytes( ids.ref_at( 112, 0xd94c56ef0798d723ull ) ) + 1 + TableLebBytes( index_tail );
         }
     }
-    if ( value.account_email_end != 0 ) { bytes += TableLebBytes( ids.ref_at( 93, 0xb2ac393f2277c4d1ull ) ) + 1 + 4; } // account_email_end
+    if ( value.account_email_end != 0 ) { bytes += TableLebBytes( ids.ref_at( 94, 0xb2ac393f2277c4d1ull ) ) + 1 + 4; } // account_email_end
     return bytes;
 }
 
@@ -11262,14 +11308,14 @@ inline bool EntryChangeSaveBodyFields( const Ctx & ctx, const TableNumbering & n
     if ( value.kind != EntryKind::None )
     {
         if ( !TableEnumNamed( value.kind ) ) { return false; }
-        const uint64_t ref_kind = ids.ref_at( 123, 0xef9c96d721673243ull );
+        const uint64_t ref_kind = ids.ref_at( 124, 0xef9c96d721673243ull );
         uint64_t variant_kind = 0;
         if ( !TableEnumRef( ids, value.kind, variant_kind ) ) { return false; }
         w.header( ref_kind, 30 ); w.putleb( variant_kind ); // kind
     }
     if ( value.closed != false )
     {
-        w.header( ids.ref_at( 63, 0x85530f5090e836c5ull ), 1 ); // closed
+        w.header( ids.ref_at( 64, 0x85530f5090e836c5ull ), 1 ); // closed
         w.put8( value.closed ? 1 : 0 );
     }
     if ( value.offset != 0 )
@@ -11283,13 +11329,13 @@ inline bool EntryChangeSaveBodyFields( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_tail = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_tail, index_tail ) ) { return false; }
-            w.header( ids.ref_at( 111, 0xd94c56ef0798d723ull ), 17 ); // tail — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 112, 0xd94c56ef0798d723ull ), 17 ); // tail — a NODE INDEX into the flat node table
             w.putleb( index_tail );
         }
     }
     if ( value.account_email_end != 0 )
     {
-        w.header( ids.ref_at( 93, 0xb2ac393f2277c4d1ull ), 8 ); // account_email_end
+        w.header( ids.ref_at( 94, 0xb2ac393f2277c4d1ull ), 8 ); // account_email_end
         w.put32( uint32_t( value.account_email_end ) );
     }
     return !w.overflow;
@@ -11823,10 +11869,10 @@ inline int64_t SessionChangeMeasureBody( const Ctx & ctx, const TableNumbering &
     (void) numbering;
     int64_t bytes = 1; // the ZERO REFERENCE that ends the body
     if ( value.id != 0 ) { bytes += TableLebBytes( ids.ref_at( 6, 0x08b72e07b55c3ac0ull ) ) + 1 + 8; } // id
-    if ( value.changed != false ) { bytes += TableLebBytes( ids.ref_at( 115, 0xdf38879af614707bull ) ) + 1 + 1; } // changed
+    if ( value.changed != false ) { bytes += TableLebBytes( ids.ref_at( 116, 0xdf38879af614707bull ) ) + 1 + 1; } // changed
     {
         const int32_t mark_info = ids.count;
-        const uint64_t ref_info = ids.ref_at( 124, 0xf5d6a8c57ab94f05ull );
+        const uint64_t ref_info = ids.ref_at( 125, 0xf5d6a8c57ab94f05ull );
         const int64_t body_info = SessionInfoMeasureBody( ctx, numbering, ids, value.info );
         if ( body_info < 0 ) { return -1; }
         if ( body_info > 1 ) { bytes += TableLebBytes( ref_info ) + 1 + TableLebBytes( (uint64_t) ( body_info ) ) + ( body_info ); } // info
@@ -11835,20 +11881,20 @@ inline int64_t SessionChangeMeasureBody( const Ctx & ctx, const TableNumbering &
     if ( value.activity != Activity::Idle )
     {
         if ( !TableEnumNamed( value.activity ) ) { return -1; } // no variant names this value
-        const uint64_t ref_activity = ids.ref_at( 82, 0xa62952ad3187308cull );
+        const uint64_t ref_activity = ids.ref_at( 83, 0xa62952ad3187308cull );
         uint64_t variant_activity = 0;
         if ( !TableEnumRef( ids, value.activity, variant_activity ) ) { return -1; }
         bytes += TableLebBytes( ref_activity ) + 1 + TableLebBytes( variant_activity ); // activity: the variant's reference
     }
-    if ( value.first != 0 ) { bytes += TableLebBytes( ids.ref_at( 66, 0x89d7ed7f996f1d41ull ) ) + 1 + 8; } // first
-    if ( value.keep_from != 0 ) { bytes += TableLebBytes( ids.ref_at( 74, 0x9c234ff528703a45ull ) ) + 1 + 8; } // keep_from
+    if ( value.first != 0 ) { bytes += TableLebBytes( ids.ref_at( 67, 0x89d7ed7f996f1d41ull ) ) + 1 + 8; } // first
+    if ( value.keep_from != 0 ) { bytes += TableLebBytes( ids.ref_at( 75, 0x9c234ff528703a45ull ) ) + 1 + 8; } // keep_from
     {
         // entries: a kind 14 array of kind 13 elements, INDEX order (§2.9)
         TableListCursor<EntryChange> cursor_entries = TableListElements( ctx, value.entries );
         if ( !cursor_entries.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_entries.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_entries = ids.ref_at( 101, 0xc5b2a72c0845a253ull );
+            const uint64_t ref_entries = ids.ref_at( 102, 0xc5b2a72c0845a253ull );
             int64_t body_entries = 0;
             body_entries += 1 + TableLebBytes( (uint64_t) ( cursor_entries.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_entries = 0; elem_i_entries < cursor_entries.count; elem_i_entries++ )
@@ -11867,7 +11913,7 @@ inline int64_t SessionChangeMeasureBody( const Ctx & ctx, const TableNumbering &
         if ( !cursor_queue.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_queue.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_queue = ids.ref_at( 92, 0xb11e8b146c5a21d8ull );
+            const uint64_t ref_queue = ids.ref_at( 93, 0xb11e8b146c5a21d8ull );
             int64_t body_queue = 0;
             body_queue += 1 + TableLebBytes( (uint64_t) ( cursor_queue.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_queue = 0; elem_i_queue < cursor_queue.count; elem_i_queue++ )
@@ -11880,7 +11926,7 @@ inline int64_t SessionChangeMeasureBody( const Ctx & ctx, const TableNumbering &
             bytes += TableLebBytes( ref_queue ) + 1 + TableLebBytes( (uint64_t) ( body_queue ) ) + ( body_queue );
         }
     }
-    if ( value.active_agents != 0 ) { bytes += TableLebBytes( ids.ref_at( 97, 0xbfeb08aad574e406ull ) ) + 1 + 4; } // active_agents
+    if ( value.active_agents != 0 ) { bytes += TableLebBytes( ids.ref_at( 98, 0xbfeb08aad574e406ull ) ) + 1 + 4; } // active_agents
     if ( value.bus_senders_known != false ) { bytes += TableLebBytes( ids.ref_at( 27, 0x3cd29b5c25941ab8ull ) ) + 1 + 1; } // bus_senders_known
     {
         // bus_senders: a kind 14 array of kind 12 elements, INDEX order (§2.9)
@@ -11888,7 +11934,7 @@ inline int64_t SessionChangeMeasureBody( const Ctx & ctx, const TableNumbering &
         if ( !cursor_bus_senders.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_bus_senders.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_bus_senders = ids.ref_at( 105, 0xcb68e7f0012df3ccull );
+            const uint64_t ref_bus_senders = ids.ref_at( 106, 0xcb68e7f0012df3ccull );
             int64_t body_bus_senders = 0;
             body_bus_senders += 1 + TableLebBytes( (uint64_t) ( cursor_bus_senders.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_bus_senders = 0; elem_i_bus_senders < cursor_bus_senders.count; elem_i_bus_senders++ )
@@ -11912,7 +11958,7 @@ inline int64_t SessionChangeMeasureBody( const Ctx & ctx, const TableNumbering &
         {
             uint64_t index_primary_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) pointee_primary_account, index_primary_account ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 71, 0x8fd6d804ece1e65dull ) ) + 1 + TableLebBytes( index_primary_account );
+            bytes += TableLebBytes( ids.ref_at( 72, 0x8fd6d804ece1e65dull ) ) + 1 + TableLebBytes( index_primary_account );
         }
     }
     return bytes;
@@ -11930,12 +11976,12 @@ inline bool SessionChangeSaveBodyFields( const Ctx & ctx, const TableNumbering &
     }
     if ( value.changed != false )
     {
-        w.header( ids.ref_at( 115, 0xdf38879af614707bull ), 1 ); // changed
+        w.header( ids.ref_at( 116, 0xdf38879af614707bull ), 1 ); // changed
         w.put8( value.changed ? 1 : 0 );
     }
     {
         const int32_t mark_info = ids.count;
-        const uint64_t ref_info = ids.ref_at( 124, 0xf5d6a8c57ab94f05ull );
+        const uint64_t ref_info = ids.ref_at( 125, 0xf5d6a8c57ab94f05ull );
         const int64_t body_info = SessionInfoMeasureBody( ctx, numbering, ids, value.info );
         if ( body_info < 0 ) return false; // storage invariant, refused as measure refuses it
         if ( body_info > 1 ) // all-default nested elides
@@ -11949,19 +11995,19 @@ inline bool SessionChangeSaveBodyFields( const Ctx & ctx, const TableNumbering &
     if ( value.activity != Activity::Idle )
     {
         if ( !TableEnumNamed( value.activity ) ) { return false; }
-        const uint64_t ref_activity = ids.ref_at( 82, 0xa62952ad3187308cull );
+        const uint64_t ref_activity = ids.ref_at( 83, 0xa62952ad3187308cull );
         uint64_t variant_activity = 0;
         if ( !TableEnumRef( ids, value.activity, variant_activity ) ) { return false; }
         w.header( ref_activity, 30 ); w.putleb( variant_activity ); // activity
     }
     if ( value.first != 0 )
     {
-        w.header( ids.ref_at( 66, 0x89d7ed7f996f1d41ull ), 9 ); // first
+        w.header( ids.ref_at( 67, 0x89d7ed7f996f1d41ull ), 9 ); // first
         w.put64( uint64_t( value.first ) );
     }
     if ( value.keep_from != 0 )
     {
-        w.header( ids.ref_at( 74, 0x9c234ff528703a45ull ), 9 ); // keep_from
+        w.header( ids.ref_at( 75, 0x9c234ff528703a45ull ), 9 ); // keep_from
         w.put64( uint64_t( value.keep_from ) );
     }
     {
@@ -11969,7 +12015,7 @@ inline bool SessionChangeSaveBodyFields( const Ctx & ctx, const TableNumbering &
         if ( !cursor_entries.ok ) { return false; }
         if ( cursor_entries.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_entries = ids.ref_at( 101, 0xc5b2a72c0845a253ull );
+            const uint64_t ref_entries = ids.ref_at( 102, 0xc5b2a72c0845a253ull );
             int64_t body_entries = 0;
             // entries: the sizing loop's per-element lengths, kept for the write loop
             // below — the element's own length prefix is the number the parent's
@@ -12008,7 +12054,7 @@ inline bool SessionChangeSaveBodyFields( const Ctx & ctx, const TableNumbering &
         if ( !cursor_queue.ok ) { return false; }
         if ( cursor_queue.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_queue = ids.ref_at( 92, 0xb11e8b146c5a21d8ull );
+            const uint64_t ref_queue = ids.ref_at( 93, 0xb11e8b146c5a21d8ull );
             int64_t body_queue = 0;
             body_queue += 1 + TableLebBytes( (uint64_t) ( cursor_queue.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_queue = 0; elem_i_queue < cursor_queue.count; elem_i_queue++ )
@@ -12036,7 +12082,7 @@ inline bool SessionChangeSaveBodyFields( const Ctx & ctx, const TableNumbering &
     }
     if ( value.active_agents != 0 )
     {
-        w.header( ids.ref_at( 97, 0xbfeb08aad574e406ull ), 8 ); // active_agents
+        w.header( ids.ref_at( 98, 0xbfeb08aad574e406ull ), 8 ); // active_agents
         w.put32( uint32_t( value.active_agents ) );
     }
     if ( value.bus_senders_known != false )
@@ -12049,7 +12095,7 @@ inline bool SessionChangeSaveBodyFields( const Ctx & ctx, const TableNumbering &
         if ( !cursor_bus_senders.ok ) { return false; }
         if ( cursor_bus_senders.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_bus_senders = ids.ref_at( 105, 0xcb68e7f0012df3ccull );
+            const uint64_t ref_bus_senders = ids.ref_at( 106, 0xcb68e7f0012df3ccull );
             int64_t body_bus_senders = 0;
             body_bus_senders += 1 + TableLebBytes( (uint64_t) ( cursor_bus_senders.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_bus_senders = 0; elem_i_bus_senders < cursor_bus_senders.count; elem_i_bus_senders++ )
@@ -12081,7 +12127,7 @@ inline bool SessionChangeSaveBodyFields( const Ctx & ctx, const TableNumbering &
         {
             uint64_t index_primary_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) pointee_primary_account, index_primary_account ) ) { return false; }
-            w.header( ids.ref_at( 71, 0x8fd6d804ece1e65dull ), 17 ); // primary_account — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 72, 0x8fd6d804ece1e65dull ), 17 ); // primary_account — a NODE INDEX into the flat node table
             w.putleb( index_primary_account );
         }
     }
@@ -12857,7 +12903,7 @@ inline int64_t SecretRequestMeasureBody( const Ctx & ctx, const TableNumbering &
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 78, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
+            bytes += TableLebBytes( ids.ref_at( 79, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
         }
     }
     {
@@ -12870,10 +12916,10 @@ inline int64_t SecretRequestMeasureBody( const Ctx & ctx, const TableNumbering &
         {
             uint64_t index_what = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_what, index_what ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 73, 0x9be8c5f64f26c30full ) ) + 1 + TableLebBytes( index_what );
+            bytes += TableLebBytes( ids.ref_at( 74, 0x9be8c5f64f26c30full ) ) + 1 + TableLebBytes( index_what );
         }
     }
-    if ( value.asker != 0 ) { bytes += TableLebBytes( ids.ref_at( 129, 0xfb0aacbc4db97225ull ) ) + 1 + 8; } // asker
+    if ( value.asker != 0 ) { bytes += TableLebBytes( ids.ref_at( 130, 0xfb0aacbc4db97225ull ) ) + 1 + 8; } // asker
     {
         const TableBlob * blob_asker_name = TableBlobAt( ctx, value.asker_name ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
@@ -12884,7 +12930,7 @@ inline int64_t SecretRequestMeasureBody( const Ctx & ctx, const TableNumbering &
         {
             uint64_t index_asker_name = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_asker_name, index_asker_name ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 62, 0x8333fca36e80cc6dull ) ) + 1 + TableLebBytes( index_asker_name );
+            bytes += TableLebBytes( ids.ref_at( 63, 0x8333fca36e80cc6dull ) ) + 1 + TableLebBytes( index_asker_name );
         }
     }
     {
@@ -12919,7 +12965,7 @@ inline bool SecretRequestSaveBodyFields( const Ctx & ctx, const TableNumbering &
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return false; }
-            w.header( ids.ref_at( 78, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 79, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
             w.putleb( index_account );
         }
     }
@@ -12929,13 +12975,13 @@ inline bool SecretRequestSaveBodyFields( const Ctx & ctx, const TableNumbering &
         {
             uint64_t index_what = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_what, index_what ) ) { return false; }
-            w.header( ids.ref_at( 73, 0x9be8c5f64f26c30full ), 17 ); // what — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 74, 0x9be8c5f64f26c30full ), 17 ); // what — a NODE INDEX into the flat node table
             w.putleb( index_what );
         }
     }
     if ( value.asker != 0 )
     {
-        w.header( ids.ref_at( 129, 0xfb0aacbc4db97225ull ), 9 ); // asker
+        w.header( ids.ref_at( 130, 0xfb0aacbc4db97225ull ), 9 ); // asker
         w.put64( uint64_t( value.asker ) );
     }
     {
@@ -12944,7 +12990,7 @@ inline bool SecretRequestSaveBodyFields( const Ctx & ctx, const TableNumbering &
         {
             uint64_t index_asker_name = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_asker_name, index_asker_name ) ) { return false; }
-            w.header( ids.ref_at( 62, 0x8333fca36e80cc6dull ), 17 ); // asker_name — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 63, 0x8333fca36e80cc6dull ), 17 ); // asker_name — a NODE INDEX into the flat node table
             w.putleb( index_asker_name );
         }
     }
@@ -13244,7 +13290,7 @@ inline int64_t AccountChoiceMeasureBody( const Ctx & ctx, const TableNumbering &
         {
             uint64_t index_name = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_name, index_name ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 100, 0xc4bcadba8e631b86ull ) ) + 1 + TableLebBytes( index_name );
+            bytes += TableLebBytes( ids.ref_at( 101, 0xc4bcadba8e631b86ull ) ) + 1 + TableLebBytes( index_name );
         }
     }
     {
@@ -13288,7 +13334,7 @@ inline bool AccountChoiceSaveBodyFields( const Ctx & ctx, const TableNumbering &
         {
             uint64_t index_name = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_name, index_name ) ) { return false; }
-            w.header( ids.ref_at( 100, 0xc4bcadba8e631b86ull ), 17 ); // name — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 101, 0xc4bcadba8e631b86ull ), 17 ); // name — a NODE INDEX into the flat node table
             w.putleb( index_name );
         }
     }
@@ -13523,7 +13569,7 @@ inline int64_t AIMeasureBody( const Ctx & ctx, const TableNumbering & numbering,
         {
             uint64_t index_name = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_name, index_name ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 100, 0xc4bcadba8e631b86ull ) ) + 1 + TableLebBytes( index_name );
+            bytes += TableLebBytes( ids.ref_at( 101, 0xc4bcadba8e631b86ull ) ) + 1 + TableLebBytes( index_name );
         }
     }
     {
@@ -13544,7 +13590,7 @@ inline int64_t AIMeasureBody( const Ctx & ctx, const TableNumbering & numbering,
             bytes += TableLebBytes( ref_accounts ) + 1 + TableLebBytes( (uint64_t) ( body_accounts ) ) + ( body_accounts );
         }
     }
-    if ( value.can_auto_account != false ) { bytes += TableLebBytes( ids.ref_at( 95, 0xbb15df0a66f3b845ull ) ) + 1 + 1; } // can_auto_account
+    if ( value.can_auto_account != false ) { bytes += TableLebBytes( ids.ref_at( 96, 0xbb15df0a66f3b845ull ) ) + 1 + 1; } // can_auto_account
     return bytes;
 }
 
@@ -13559,7 +13605,7 @@ inline bool AISaveBodyFields( const Ctx & ctx, const TableNumbering & numbering,
         {
             uint64_t index_name = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_name, index_name ) ) { return false; }
-            w.header( ids.ref_at( 100, 0xc4bcadba8e631b86ull ), 17 ); // name — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 101, 0xc4bcadba8e631b86ull ), 17 ); // name — a NODE INDEX into the flat node table
             w.putleb( index_name );
         }
     }
@@ -13599,7 +13645,7 @@ inline bool AISaveBodyFields( const Ctx & ctx, const TableNumbering & numbering,
     }
     if ( value.can_auto_account != false )
     {
-        w.header( ids.ref_at( 95, 0xbb15df0a66f3b845ull ), 1 ); // can_auto_account
+        w.header( ids.ref_at( 96, 0xbb15df0a66f3b845ull ), 1 ); // can_auto_account
         w.put8( value.can_auto_account ? 1 : 0 );
     }
     return !w.overflow;
@@ -13866,7 +13912,7 @@ inline int64_t SignInOfferMeasureBody( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 78, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
+            bytes += TableLebBytes( ids.ref_at( 79, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
         }
     }
     {
@@ -13879,7 +13925,7 @@ inline int64_t SignInOfferMeasureBody( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_provider = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_provider, index_provider ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 107, 0xd02b4c8c65fb54dcull ) ) + 1 + TableLebBytes( index_provider );
+            bytes += TableLebBytes( ids.ref_at( 108, 0xd02b4c8c65fb54dcull ) ) + 1 + TableLebBytes( index_provider );
         }
     }
     {
@@ -13892,7 +13938,7 @@ inline int64_t SignInOfferMeasureBody( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_opener = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_opener, index_opener ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 67, 0x8a28804a0a9ba5e2ull ) ) + 1 + TableLebBytes( index_opener );
+            bytes += TableLebBytes( ids.ref_at( 68, 0x8a28804a0a9ba5e2ull ) ) + 1 + TableLebBytes( index_opener );
         }
     }
     {
@@ -13941,7 +13987,7 @@ inline bool SignInOfferSaveBodyFields( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return false; }
-            w.header( ids.ref_at( 78, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 79, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
             w.putleb( index_account );
         }
     }
@@ -13951,7 +13997,7 @@ inline bool SignInOfferSaveBodyFields( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_provider = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_provider, index_provider ) ) { return false; }
-            w.header( ids.ref_at( 107, 0xd02b4c8c65fb54dcull ), 17 ); // provider — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 108, 0xd02b4c8c65fb54dcull ), 17 ); // provider — a NODE INDEX into the flat node table
             w.putleb( index_provider );
         }
     }
@@ -13961,7 +14007,7 @@ inline bool SignInOfferSaveBodyFields( const Ctx & ctx, const TableNumbering & n
         {
             uint64_t index_opener = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_opener, index_opener ) ) { return false; }
-            w.header( ids.ref_at( 67, 0x8a28804a0a9ba5e2ull ), 17 ); // opener — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 68, 0x8a28804a0a9ba5e2ull ), 17 ); // opener — a NODE INDEX into the flat node table
             w.putleb( index_opener );
         }
     }
@@ -14278,6 +14324,200 @@ inline bool SignInOfferLoadBody( TableReader & r, const TableNodeMap & nodes, Si
 }
 
 template <typename Ctx>
+inline int64_t DashboardMeasureBody( const Ctx & ctx, const TableNumbering & numbering, TableIds & ids, const Dashboard & value )
+{
+    (void) ctx;
+    (void) numbering;
+    int64_t bytes = 1; // the ZERO REFERENCE that ends the body
+    {
+        const TableBlob * blob_name = TableBlobAt( ctx, value.name ); // *string
+        // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
+        // §3.1): the header and the index here, the bytes themselves as a
+        // record in the node table. Null is elided and a non-null blob always
+        // rides, even at length zero — null and empty are two values.
+        if ( blob_name != NULL )
+        {
+            uint64_t index_name = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_name, index_name ) ) { return -1; }
+            bytes += TableLebBytes( ids.ref_at( 101, 0xc4bcadba8e631b86ull ) ) + 1 + TableLebBytes( index_name );
+        }
+    }
+    {
+        const TableBlob * blob_url = TableBlobAt( ctx, value.url ); // *string
+        // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
+        // §3.1): the header and the index here, the bytes themselves as a
+        // record in the node table. Null is elided and a non-null blob always
+        // rides, even at length zero — null and empty are two values.
+        if ( blob_url != NULL )
+        {
+            uint64_t index_url = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_url, index_url ) ) { return -1; }
+            bytes += TableLebBytes( ids.ref_at( 36, 0x4c4e8b193dc8be7eull ) ) + 1 + TableLebBytes( index_url );
+        }
+    }
+    return bytes;
+}
+
+template <typename Ctx>
+inline bool DashboardSaveBodyFields( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableIds & ids, const Dashboard & value )
+{
+    (void) ctx;
+    (void) numbering;
+    {
+        const TableBlob * blob_name = TableBlobAt( ctx, value.name ); // *string
+        if ( blob_name != NULL )
+        {
+            uint64_t index_name = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_name, index_name ) ) { return false; }
+            w.header( ids.ref_at( 101, 0xc4bcadba8e631b86ull ), 17 ); // name — a NODE INDEX into the flat node table
+            w.putleb( index_name );
+        }
+    }
+    {
+        const TableBlob * blob_url = TableBlobAt( ctx, value.url ); // *string
+        if ( blob_url != NULL )
+        {
+            uint64_t index_url = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_url, index_url ) ) { return false; }
+            w.header( ids.ref_at( 36, 0x4c4e8b193dc8be7eull ), 17 ); // url — a NODE INDEX into the flat node table
+            w.putleb( index_url );
+        }
+    }
+    return !w.overflow;
+}
+
+template <typename Ctx>
+inline bool DashboardSaveBody( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableIds & ids, const Dashboard & value )
+{
+    if ( !DashboardSaveBodyFields( ctx, numbering, w, ids, value ) ) { return false; }
+    w.put8( 0 ); // the ZERO REFERENCE that ends the body
+    return !w.overflow;
+}
+
+inline bool DashboardLoadBody( TableReader & r, const TableNodeMap & nodes, Dashboard & value )
+{
+    (void) nodes;
+    if ( nodes.refused ) { return false; }
+    DashboardReset( value ); // prefill declared defaults in place, then overlay
+    for ( ;; )
+    {
+        uint64_t field_ref = 0;
+        if ( !r.getleb( field_ref ) )
+        {
+            r.report->damaged = true;
+            return false;
+        }
+        if ( field_ref == 0 )
+        {
+            return true;
+        }
+        if ( r.ids == NULL || field_ref > (uint64_t) r.ids->count )
+        {
+            r.report->damaged = true;
+            return false;
+        } // a reference ABOVE the entry count
+        const uint64_t field_id = r.ids->at( field_ref );
+        if ( !r.has( 1 ) )
+        {
+            r.report->damaged = true;
+            return false;
+        }
+        uint8_t kind = r.get8();
+        if ( ( field_id == kTableNodeTableFieldId && r.nested ) || field_id == kTableBuildVersionFieldId || field_id == kTableMessageVocabularyFieldId )
+        {
+            // A RESERVED ID IN ANY BODY BUT THE ONE WHOSE TRANSPORT IT IS,
+            // IS MALFORMED (docs/SPEC-TABLES.md §3.1, §3.3). The node
+            // table's is the ROOT body's alone, on the numbering's own
+            // rule — a second numbering cannot exist — and the BUILD
+            // VERSION's rides in the announcement and nowhere else. That
+            // is damage, and damage discards the whole load (§4).
+            r.report->damaged = true;
+            return false;
+        }
+        switch ( field_id )
+        {
+            case 0xc4bcadba8e631b86ull: // name
+            {
+                if ( kind != 17 )
+                {
+                    // AT A POSITION THE READER DOES NAME, a field under
+                    // kind 31 or kind 32 takes this same rule and no other (§3)
+                    r.report->refused = true;
+                    r.report->refuse_reason = kind_mismatch;
+                    if ( !r.skip( kind ) )
+                    {
+                        r.report->damaged = true;
+                        return false;
+                    }
+                    break;
+                }
+                // A POINTER FIELD'S PAYLOAD IS A NUMBER (docs/SPEC-TABLES.md §3.1): it is
+                // bounds-checked and resolved through the numbering, never FOLLOWED, so
+                // there is no traversal here and therefore no traversal bound.
+                {
+                    uint64_t node_index = 0;
+                    if ( !r.getleb( node_index ) )
+                    {
+                        r.report->damaged = true;
+                        return false;
+                    }
+                    TableNodeResolve( nodes, value.name, node_index, kTableStringTypeId, r.report ); // *string
+                }
+                break;
+            }
+            case 0x4c4e8b193dc8be7eull: // url
+            {
+                if ( kind != 17 )
+                {
+                    // AT A POSITION THE READER DOES NAME, a field under
+                    // kind 31 or kind 32 takes this same rule and no other (§3)
+                    r.report->refused = true;
+                    r.report->refuse_reason = kind_mismatch;
+                    if ( !r.skip( kind ) )
+                    {
+                        r.report->damaged = true;
+                        return false;
+                    }
+                    break;
+                }
+                // A POINTER FIELD'S PAYLOAD IS A NUMBER (docs/SPEC-TABLES.md §3.1): it is
+                // bounds-checked and resolved through the numbering, never FOLLOWED, so
+                // there is no traversal here and therefore no traversal bound.
+                {
+                    uint64_t node_index = 0;
+                    if ( !r.getleb( node_index ) )
+                    {
+                        r.report->damaged = true;
+                        return false;
+                    }
+                    TableNodeResolve( nodes, value.url, node_index, kTableStringTypeId, r.report ); // *string
+                }
+                break;
+            }
+            case 0xffffffffffffffffull:
+            {
+                if ( !r.skip( kind ) )
+                {
+                    r.report->damaged = true;
+                    return false;
+                }
+                break;
+            }
+            default:
+            {
+                r.report->unknown++;
+                if ( !r.skip( kind ) )
+                {
+                    r.report->damaged = true;
+                    return false;
+                }
+                break;
+            }
+        }
+    }
+}
+
+template <typename Ctx>
 inline int64_t SessionsDiffMeasureBody( const Ctx & ctx, const TableNumbering & numbering, TableIds & ids, const SessionsDiff & value )
 {
     (void) ctx;
@@ -14289,7 +14529,7 @@ inline int64_t SessionsDiffMeasureBody( const Ctx & ctx, const TableNumbering & 
         if ( !cursor_sessions.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_sessions.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_sessions = ids.ref_at( 89, 0xacebadbd2040ebacull );
+            const uint64_t ref_sessions = ids.ref_at( 90, 0xacebadbd2040ebacull );
             int64_t body_sessions = 0;
             body_sessions += 1 + TableLebBytes( (uint64_t) ( cursor_sessions.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_sessions = 0; elem_i_sessions < cursor_sessions.count; elem_i_sessions++ )
@@ -14319,14 +14559,14 @@ inline int64_t SessionsDiffMeasureBody( const Ctx & ctx, const TableNumbering & 
             bytes += TableLebBytes( ref_requests ) + 1 + TableLebBytes( (uint64_t) ( body_requests ) ) + ( body_requests );
         }
     }
-    if ( value.ais_known != false ) { bytes += TableLebBytes( ids.ref_at( 88, 0xab40b3dce112851eull ) ) + 1 + 1; } // ais_known
+    if ( value.ais_known != false ) { bytes += TableLebBytes( ids.ref_at( 89, 0xab40b3dce112851eull ) ) + 1 + 1; } // ais_known
     {
         // ais: a kind 14 array of kind 13 elements, INDEX order (§2.9)
         TableListCursor<AI> cursor_ais = TableListElements( ctx, value.ais );
         if ( !cursor_ais.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_ais.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_ais = ids.ref_at( 61, 0x82a6b14733b2685aull );
+            const uint64_t ref_ais = ids.ref_at( 62, 0x82a6b14733b2685aull );
             int64_t body_ais = 0;
             body_ais += 1 + TableLebBytes( (uint64_t) ( cursor_ais.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_ais = 0; elem_i_ais < cursor_ais.count; elem_i_ais++ )
@@ -14357,7 +14597,25 @@ inline int64_t SessionsDiffMeasureBody( const Ctx & ctx, const TableNumbering & 
             bytes += TableLebBytes( ref_signins ) + 1 + TableLebBytes( (uint64_t) ( body_signins ) ) + ( body_signins );
         }
     }
-    if ( value.next_action != 0 ) { bytes += TableLebBytes( ids.ref_at( 109, 0xd6bdffc29f42fe4full ) ) + 1 + 8; } // next_action
+    if ( value.next_action != 0 ) { bytes += TableLebBytes( ids.ref_at( 110, 0xd6bdffc29f42fe4full ) ) + 1 + 8; } // next_action
+    {
+        // dashboards: a kind 14 array of kind 13 elements, INDEX order (§2.9)
+        TableListCursor<Dashboard> cursor_dashboards = TableListElements( ctx, value.dashboards );
+        if ( !cursor_dashboards.ok ) { return -1; } // the slot and the head disagree
+        if ( cursor_dashboards.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
+        {
+            const uint64_t ref_dashboards = ids.ref_at( 132, 0xff5b1282501e1438ull );
+            int64_t body_dashboards = 0;
+            body_dashboards += 1 + TableLebBytes( (uint64_t) ( cursor_dashboards.count ) ); // the element kind byte and the count
+            for ( int32_t elem_i_dashboards = 0; elem_i_dashboards < cursor_dashboards.count; elem_i_dashboards++ )
+            {
+                const int64_t elem_bytes_dashboards = DashboardMeasureBody( ctx, numbering, ids, cursor_dashboards[elem_i_dashboards] );
+                if ( elem_bytes_dashboards < 0 ) { return -1; }
+                body_dashboards += TableLebBytes( (uint64_t) ( elem_bytes_dashboards ) ) + ( elem_bytes_dashboards );
+            }
+            bytes += TableLebBytes( ref_dashboards ) + 1 + TableLebBytes( (uint64_t) ( body_dashboards ) ) + ( body_dashboards );
+        }
+    }
     return bytes;
 }
 
@@ -14371,7 +14629,7 @@ inline bool SessionsDiffSaveBodyFields( const Ctx & ctx, const TableNumbering & 
         if ( !cursor_sessions.ok ) { return false; }
         if ( cursor_sessions.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_sessions = ids.ref_at( 89, 0xacebadbd2040ebacull );
+            const uint64_t ref_sessions = ids.ref_at( 90, 0xacebadbd2040ebacull );
             int64_t body_sessions = 0;
             // sessions: the sizing loop's per-element lengths, kept for the write loop
             // below — the element's own length prefix is the number the parent's
@@ -14436,7 +14694,7 @@ inline bool SessionsDiffSaveBodyFields( const Ctx & ctx, const TableNumbering & 
     }
     if ( value.ais_known != false )
     {
-        w.header( ids.ref_at( 88, 0xab40b3dce112851eull ), 1 ); // ais_known
+        w.header( ids.ref_at( 89, 0xab40b3dce112851eull ), 1 ); // ais_known
         w.put8( value.ais_known ? 1 : 0 );
     }
     {
@@ -14444,7 +14702,7 @@ inline bool SessionsDiffSaveBodyFields( const Ctx & ctx, const TableNumbering & 
         if ( !cursor_ais.ok ) { return false; }
         if ( cursor_ais.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_ais = ids.ref_at( 61, 0x82a6b14733b2685aull );
+            const uint64_t ref_ais = ids.ref_at( 62, 0x82a6b14733b2685aull );
             int64_t body_ais = 0;
             // ais: the sizing loop's per-element lengths, kept for the write loop
             // below — the element's own length prefix is the number the parent's
@@ -14514,8 +14772,42 @@ inline bool SessionsDiffSaveBodyFields( const Ctx & ctx, const TableNumbering & 
     }
     if ( value.next_action != 0 )
     {
-        w.header( ids.ref_at( 109, 0xd6bdffc29f42fe4full ), 9 ); // next_action
+        w.header( ids.ref_at( 110, 0xd6bdffc29f42fe4full ), 9 ); // next_action
         w.put64( uint64_t( value.next_action ) );
+    }
+    {
+        TableListCursor<Dashboard> cursor_dashboards = TableListElements( ctx, value.dashboards ); // dashboards
+        if ( !cursor_dashboards.ok ) { return false; }
+        if ( cursor_dashboards.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
+        {
+            const uint64_t ref_dashboards = ids.ref_at( 132, 0xff5b1282501e1438ull );
+            int64_t body_dashboards = 0;
+            // dashboards: the sizing loop's per-element lengths, kept for the write loop
+            // below — the element's own length prefix is the number the parent's
+            // body length was built from, so measuring it twice can only agree.
+            int64_t elem_cache_dashboards[64];
+            body_dashboards += 1 + TableLebBytes( (uint64_t) ( cursor_dashboards.count ) ); // the element kind byte and the count
+            for ( int32_t elem_i_dashboards = 0; elem_i_dashboards < cursor_dashboards.count; elem_i_dashboards++ )
+            {
+                const int64_t elem_bytes_dashboards = DashboardMeasureBody( ctx, numbering, ids, cursor_dashboards[elem_i_dashboards] );
+                if ( elem_bytes_dashboards < 0 ) { return false; }
+                if ( elem_i_dashboards < 64 ) { elem_cache_dashboards[elem_i_dashboards] = elem_bytes_dashboards; }
+                body_dashboards += TableLebBytes( (uint64_t) ( elem_bytes_dashboards ) ) + ( elem_bytes_dashboards );
+            }
+            w.header( ref_dashboards, 14 );
+            w.putleb( (uint64_t) body_dashboards ); // dashboards
+            w.put8( 13 );
+            w.putleb( (uint64_t) ( cursor_dashboards.count ) );
+            for ( int32_t elem_i_dashboards = 0; elem_i_dashboards < cursor_dashboards.count; elem_i_dashboards++ )
+            {
+                {
+                    const int64_t elem_len_dashboards = elem_i_dashboards < 64 ? elem_cache_dashboards[elem_i_dashboards] : DashboardMeasureBody( ctx, numbering, ids, cursor_dashboards[elem_i_dashboards] );
+                    if ( elem_len_dashboards < 0 ) return false;
+                    w.putleb( (uint64_t) elem_len_dashboards );
+                    if ( !DashboardSaveBody( ctx, numbering, w, ids, cursor_dashboards[elem_i_dashboards] ) ) return false;
+                }
+            }
+        }
     }
     return !w.overflow;
 }
@@ -15123,6 +15415,121 @@ inline bool SessionsDiffLoadBody( TableReader & r, const TableNodeMap & nodes, S
                 value.next_action = decoded_v;
                 break;
             }
+            case 0xff5b1282501e1438ull: // dashboards
+            {
+                if ( kind != 14 )
+                {
+                    // AT A POSITION THE READER DOES NAME, a field under
+                    // kind 31 or kind 32 takes this same rule and no other (§3)
+                    r.report->refused = true;
+                    r.report->refuse_reason = kind_mismatch;
+                    if ( !r.skip( kind ) )
+                    {
+                        r.report->damaged = true;
+                        return false;
+                    }
+                    break;
+                }
+                uint64_t body_len = 0;
+                if ( !r.getleb( body_len ) || !r.room( body_len ) )
+                {
+                    r.report->damaged = true;
+                    return false;
+                }
+                int64_t body_end = r.offset + (int64_t) body_len;
+                // A BODY TOO SHORT FOR ITS OWN HEADER is INERT (§4): the field keeps
+                // the value it has, no counter is raised, and the walk continues past L.
+                if ( body_len >= 2 )
+                {
+                    uint8_t elem_kind = r.get8();
+                    uint64_t count = 0;
+                    const bool counted_ok = r.getleb( count );
+                    if ( !counted_ok ) { r.report->damaged = true; }
+                    // AN ELEMENT KIND THAT DISAGREES with the reader's declaration is §3's
+                    // element-kind rule: the field reads EMPTY and one kind_mismatch counts
+                    else if ( elem_kind != 13 )
+                    {
+                        r.report->refused = true;
+                        r.report->refuse_reason = kind_mismatch;
+                        r.offset = body_end;
+                        break;
+                    }
+                    else
+                    {
+                        // THE COUNT IS THE DATA'S (§2.9): there is no bound, so out_of_range
+                        // cannot fire on it. A count above the int32 storage cap is the
+                        // fill's refusal, and it moves no counter, the widening included.
+                        TableListFill<Dashboard> fill = TableListFillBegin( nodes, value.dashboards, count );
+                        if ( fill.refused )
+                        {
+                            nodes.refused = true;
+                            return false;
+                        }
+                        if ( !fill.ok )
+                        {
+                            r.report->damaged = true;
+                            r.offset = body_end;
+                            break;
+                        }
+                        // elements are BOUNDED by the field body: a count the length cannot
+                        // cover is damage, flags malformed, and the load is discarded
+                        // whole (§4)
+                        TableReader sub( r.buffer + r.offset, body_end - r.offset, r.report, r.ids );
+                        bool elements_consumed = true;
+                        for ( uint64_t i = 0; i < count; i++ )
+                        {
+                            Dashboard * slot = TableListFillNext( fill );
+                            if ( slot == NULL )
+                            {
+                                if ( fill.worker != NULL )
+                                {
+                                    nodes.refused = true;
+                                    return false;
+                                }
+                                r.report->damaged = true;
+                                elements_consumed = false;
+                                break;
+                            } // the arena could not carve
+                            bool landed = false;
+                            do
+                            {
+                                uint64_t elem_len_dashboards = 0;
+                                if ( !sub.getleb( elem_len_dashboards ) || !sub.room( elem_len_dashboards ) )
+                                {
+                                    r.report->damaged = true;
+                                    break;
+                                }
+                                {
+                                    TableReader elem_dashboards( sub.buffer + sub.offset, (int64_t) elem_len_dashboards, r.report, r.ids );
+                                    DashboardLoadBody( elem_dashboards, nodes, ( *slot ) );
+                                    if ( nodes.refused ) { return false; }
+                                    if ( elem_dashboards.offset != elem_dashboards.size )
+                                    {
+                                        r.report->damaged = true;
+                                        DashboardReset( ( *slot ) );
+                                    }
+                                }
+                                sub.offset += (int64_t) elem_len_dashboards;
+                                landed = true;
+                            } while ( 0 );
+                            if ( !landed )
+                            {
+                                TableListFillDrop( fill );
+                                elements_consumed = false;
+                                break;
+                            } // the element's own framing gave out before it decoded
+                        }
+                        TableListFillEnd( fill );
+                        // EVERY BYTE OF THE L IS AN ELEMENT'S (§2.9, §4): bytes left
+                        // inside the array frame after the count's elements are damage.
+                        // A narrower element kind that does not fill the frame the writer
+                        // sized is this case, and damage discards the load.
+                        if ( elements_consumed && sub.offset != sub.size ) { r.report->damaged = true; }
+                    }
+                }
+                r.offset = body_end; // the cursor closes the L (§4)
+                break;
+            }
             case 0xffffffffffffffffull:
             {
                 if ( !r.skip( kind ) )
@@ -15155,7 +15562,7 @@ inline int64_t ActionMeasureBody( const Ctx & ctx, const TableNumbering & number
     if ( value.kind != ActionKind::None )
     {
         if ( !TableEnumNamed( value.kind ) ) { return -1; } // no variant names this value
-        const uint64_t ref_kind = ids.ref_at( 123, 0xef9c96d721673243ull );
+        const uint64_t ref_kind = ids.ref_at( 124, 0xef9c96d721673243ull );
         uint64_t variant_kind = 0;
         if ( !TableEnumRef( ids, value.kind, variant_kind ) ) { return -1; }
         bytes += TableLebBytes( ref_kind ) + 1 + TableLebBytes( variant_kind ); // kind: the variant's reference
@@ -15184,7 +15591,7 @@ inline int64_t ActionMeasureBody( const Ctx & ctx, const TableNumbering & number
         {
             uint64_t index_text = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_text, index_text ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 128, 0xfa04f4ef1995407eull ) ) + 1 + TableLebBytes( index_text );
+            bytes += TableLebBytes( ids.ref_at( 129, 0xfa04f4ef1995407eull ) ) + 1 + TableLebBytes( index_text );
         }
     }
     {
@@ -15197,7 +15604,7 @@ inline int64_t ActionMeasureBody( const Ctx & ctx, const TableNumbering & number
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 78, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
+            bytes += TableLebBytes( ids.ref_at( 79, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
         }
     }
     if ( value.request != 0 ) { bytes += TableLebBytes( ids.ref_at( 51, 0x6f4743b8bc5b4eb2ull ) ) + 1 + 8; } // request
@@ -15211,10 +15618,10 @@ inline int64_t ActionMeasureBody( const Ctx & ctx, const TableNumbering & number
         {
             uint64_t index_secret = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_secret, index_secret ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 87, 0xab23f0eec020c951ull ) ) + 1 + TableLebBytes( index_secret );
+            bytes += TableLebBytes( ids.ref_at( 88, 0xab23f0eec020c951ull ) ) + 1 + TableLebBytes( index_secret );
         }
     }
-    if ( value.pastes_code != false ) { bytes += TableLebBytes( ids.ref_at( 117, 0xe24950f987c59117ull ) ) + 1 + 1; } // pastes_code
+    if ( value.pastes_code != false ) { bytes += TableLebBytes( ids.ref_at( 118, 0xe24950f987c59117ull ) ) + 1 + 1; } // pastes_code
     return bytes;
 }
 
@@ -15226,7 +15633,7 @@ inline bool ActionSaveBodyFields( const Ctx & ctx, const TableNumbering & number
     if ( value.kind != ActionKind::None )
     {
         if ( !TableEnumNamed( value.kind ) ) { return false; }
-        const uint64_t ref_kind = ids.ref_at( 123, 0xef9c96d721673243ull );
+        const uint64_t ref_kind = ids.ref_at( 124, 0xef9c96d721673243ull );
         uint64_t variant_kind = 0;
         if ( !TableEnumRef( ids, value.kind, variant_kind ) ) { return false; }
         w.header( ref_kind, 30 ); w.putleb( variant_kind ); // kind
@@ -15252,7 +15659,7 @@ inline bool ActionSaveBodyFields( const Ctx & ctx, const TableNumbering & number
         {
             uint64_t index_text = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_text, index_text ) ) { return false; }
-            w.header( ids.ref_at( 128, 0xfa04f4ef1995407eull ), 17 ); // text — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 129, 0xfa04f4ef1995407eull ), 17 ); // text — a NODE INDEX into the flat node table
             w.putleb( index_text );
         }
     }
@@ -15262,7 +15669,7 @@ inline bool ActionSaveBodyFields( const Ctx & ctx, const TableNumbering & number
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return false; }
-            w.header( ids.ref_at( 78, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 79, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
             w.putleb( index_account );
         }
     }
@@ -15277,13 +15684,13 @@ inline bool ActionSaveBodyFields( const Ctx & ctx, const TableNumbering & number
         {
             uint64_t index_secret = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_secret, index_secret ) ) { return false; }
-            w.header( ids.ref_at( 87, 0xab23f0eec020c951ull ), 17 ); // secret — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 88, 0xab23f0eec020c951ull ), 17 ); // secret — a NODE INDEX into the flat node table
             w.putleb( index_secret );
         }
     }
     if ( value.pastes_code != false )
     {
-        w.header( ids.ref_at( 117, 0xe24950f987c59117ull ), 1 ); // pastes_code
+        w.header( ids.ref_at( 118, 0xe24950f987c59117ull ), 1 ); // pastes_code
         w.put8( value.pastes_code ? 1 : 0 );
     }
     return !w.overflow;
@@ -15617,14 +16024,14 @@ inline int64_t ActionsDiffMeasureBody( const Ctx & ctx, const TableNumbering & n
     (void) ctx;
     (void) numbering;
     int64_t bytes = 1; // the ZERO REFERENCE that ends the body
-    if ( value.start != 0 ) { bytes += TableLebBytes( ids.ref_at( 122, 0xee5d97ad45ad251full ) ) + 1 + 8; } // start
+    if ( value.start != 0 ) { bytes += TableLebBytes( ids.ref_at( 123, 0xee5d97ad45ad251full ) ) + 1 + 8; } // start
     {
         // actions: a kind 14 array of kind 13 elements, INDEX order (§2.9)
         TableListCursor<Action> cursor_actions = TableListElements( ctx, value.actions );
         if ( !cursor_actions.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_actions.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_actions = ids.ref_at( 85, 0xaab8aab6b2814644ull );
+            const uint64_t ref_actions = ids.ref_at( 86, 0xaab8aab6b2814644ull );
             int64_t body_actions = 0;
             body_actions += 1 + TableLebBytes( (uint64_t) ( cursor_actions.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_actions = 0; elem_i_actions < cursor_actions.count; elem_i_actions++ )
@@ -15646,7 +16053,7 @@ inline bool ActionsDiffSaveBodyFields( const Ctx & ctx, const TableNumbering & n
     (void) numbering;
     if ( value.start != 0 )
     {
-        w.header( ids.ref_at( 122, 0xee5d97ad45ad251full ), 9 ); // start
+        w.header( ids.ref_at( 123, 0xee5d97ad45ad251full ), 9 ); // start
         w.put64( uint64_t( value.start ) );
     }
     {
@@ -15654,7 +16061,7 @@ inline bool ActionsDiffSaveBodyFields( const Ctx & ctx, const TableNumbering & n
         if ( !cursor_actions.ok ) { return false; }
         if ( cursor_actions.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_actions = ids.ref_at( 85, 0xaab8aab6b2814644ull );
+            const uint64_t ref_actions = ids.ref_at( 86, 0xaab8aab6b2814644ull );
             int64_t body_actions = 0;
             // actions: the sizing loop's per-element lengths, kept for the write loop
             // below — the element's own length prefix is the number the parent's
@@ -15922,12 +16329,12 @@ inline int64_t StoreEntryMeasureBody( const Ctx & ctx, const TableNumbering & nu
     if ( value.kind != EntryKind::None )
     {
         if ( !TableEnumNamed( value.kind ) ) { return -1; } // no variant names this value
-        const uint64_t ref_kind = ids.ref_at( 123, 0xef9c96d721673243ull );
+        const uint64_t ref_kind = ids.ref_at( 124, 0xef9c96d721673243ull );
         uint64_t variant_kind = 0;
         if ( !TableEnumRef( ids, value.kind, variant_kind ) ) { return -1; }
         bytes += TableLebBytes( ref_kind ) + 1 + TableLebBytes( variant_kind ); // kind: the variant's reference
     }
-    if ( value.closed != false ) { bytes += TableLebBytes( ids.ref_at( 63, 0x85530f5090e836c5ull ) ) + 1 + 1; } // closed
+    if ( value.closed != false ) { bytes += TableLebBytes( ids.ref_at( 64, 0x85530f5090e836c5ull ) ) + 1 + 1; } // closed
     {
         const TableBlob * blob_text = TableBlobAt( ctx, value.text ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
@@ -15938,10 +16345,10 @@ inline int64_t StoreEntryMeasureBody( const Ctx & ctx, const TableNumbering & nu
         {
             uint64_t index_text = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_text, index_text ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 128, 0xfa04f4ef1995407eull ) ) + 1 + TableLebBytes( index_text );
+            bytes += TableLebBytes( ids.ref_at( 129, 0xfa04f4ef1995407eull ) ) + 1 + TableLebBytes( index_text );
         }
     }
-    if ( value.account_email_end != 0 ) { bytes += TableLebBytes( ids.ref_at( 93, 0xb2ac393f2277c4d1ull ) ) + 1 + 4; } // account_email_end
+    if ( value.account_email_end != 0 ) { bytes += TableLebBytes( ids.ref_at( 94, 0xb2ac393f2277c4d1ull ) ) + 1 + 4; } // account_email_end
     return bytes;
 }
 
@@ -15953,14 +16360,14 @@ inline bool StoreEntrySaveBodyFields( const Ctx & ctx, const TableNumbering & nu
     if ( value.kind != EntryKind::None )
     {
         if ( !TableEnumNamed( value.kind ) ) { return false; }
-        const uint64_t ref_kind = ids.ref_at( 123, 0xef9c96d721673243ull );
+        const uint64_t ref_kind = ids.ref_at( 124, 0xef9c96d721673243ull );
         uint64_t variant_kind = 0;
         if ( !TableEnumRef( ids, value.kind, variant_kind ) ) { return false; }
         w.header( ref_kind, 30 ); w.putleb( variant_kind ); // kind
     }
     if ( value.closed != false )
     {
-        w.header( ids.ref_at( 63, 0x85530f5090e836c5ull ), 1 ); // closed
+        w.header( ids.ref_at( 64, 0x85530f5090e836c5ull ), 1 ); // closed
         w.put8( value.closed ? 1 : 0 );
     }
     {
@@ -15969,13 +16376,13 @@ inline bool StoreEntrySaveBodyFields( const Ctx & ctx, const TableNumbering & nu
         {
             uint64_t index_text = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_text, index_text ) ) { return false; }
-            w.header( ids.ref_at( 128, 0xfa04f4ef1995407eull ), 17 ); // text — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 129, 0xfa04f4ef1995407eull ), 17 ); // text — a NODE INDEX into the flat node table
             w.putleb( index_text );
         }
     }
     if ( value.account_email_end != 0 )
     {
-        w.header( ids.ref_at( 93, 0xb2ac393f2277c4d1ull ), 8 ); // account_email_end
+        w.header( ids.ref_at( 94, 0xb2ac393f2277c4d1ull ), 8 ); // account_email_end
         w.put32( uint32_t( value.account_email_end ) );
     }
     return !w.overflow;
@@ -16326,8 +16733,8 @@ inline int64_t DriverMeasureBody( const Ctx & ctx, const TableNumbering & number
     (void) ctx;
     (void) numbering;
     int64_t bytes = 1; // the ZERO REFERENCE that ends the body
-    if ( value.next_turn != 0 ) { bytes += TableLebBytes( ids.ref_at( 65, 0x86077082e7dbf9aaull ) ) + 1 + 8; } // next_turn
-    if ( value.open_turn != 0 ) { bytes += TableLebBytes( ids.ref_at( 91, 0xb0c9e7244d27f5b1ull ) ) + 1 + 8; } // open_turn
+    if ( value.next_turn != 0 ) { bytes += TableLebBytes( ids.ref_at( 66, 0x86077082e7dbf9aaull ) ) + 1 + 8; } // next_turn
+    if ( value.open_turn != 0 ) { bytes += TableLebBytes( ids.ref_at( 92, 0xb0c9e7244d27f5b1ull ) ) + 1 + 8; } // open_turn
     {
         const TableBlob * blob_session = TableBlobAt( ctx, value.session ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
@@ -16347,7 +16754,7 @@ inline int64_t DriverMeasureBody( const Ctx & ctx, const TableNumbering & number
         if ( !cursor_waiting.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_waiting.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_waiting = ids.ref_at( 120, 0xeac9afef1a00b5e8ull );
+            const uint64_t ref_waiting = ids.ref_at( 121, 0xeac9afef1a00b5e8ull );
             int64_t body_waiting = 0;
             body_waiting += 1 + TableLebBytes( (uint64_t) ( cursor_waiting.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_waiting = 0; elem_i_waiting < cursor_waiting.count; elem_i_waiting++ )
@@ -16360,7 +16767,7 @@ inline int64_t DriverMeasureBody( const Ctx & ctx, const TableNumbering & number
             bytes += TableLebBytes( ref_waiting ) + 1 + TableLebBytes( (uint64_t) ( body_waiting ) ) + ( body_waiting );
         }
     }
-    if ( value.summary != false ) { bytes += TableLebBytes( ids.ref_at( 79, 0xa3c2813bcd780513ull ) ) + 1 + 1; } // summary
+    if ( value.summary != false ) { bytes += TableLebBytes( ids.ref_at( 80, 0xa3c2813bcd780513ull ) ) + 1 + 1; } // summary
     {
         const TableBlob * blob_session_dir = TableBlobAt( ctx, value.session_dir ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
@@ -16384,12 +16791,12 @@ inline bool DriverSaveBodyFields( const Ctx & ctx, const TableNumbering & number
     (void) numbering;
     if ( value.next_turn != 0 )
     {
-        w.header( ids.ref_at( 65, 0x86077082e7dbf9aaull ), 9 ); // next_turn
+        w.header( ids.ref_at( 66, 0x86077082e7dbf9aaull ), 9 ); // next_turn
         w.put64( uint64_t( value.next_turn ) );
     }
     if ( value.open_turn != 0 )
     {
-        w.header( ids.ref_at( 91, 0xb0c9e7244d27f5b1ull ), 9 ); // open_turn
+        w.header( ids.ref_at( 92, 0xb0c9e7244d27f5b1ull ), 9 ); // open_turn
         w.put64( uint64_t( value.open_turn ) );
     }
     {
@@ -16407,7 +16814,7 @@ inline bool DriverSaveBodyFields( const Ctx & ctx, const TableNumbering & number
         if ( !cursor_waiting.ok ) { return false; }
         if ( cursor_waiting.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_waiting = ids.ref_at( 120, 0xeac9afef1a00b5e8ull );
+            const uint64_t ref_waiting = ids.ref_at( 121, 0xeac9afef1a00b5e8ull );
             int64_t body_waiting = 0;
             body_waiting += 1 + TableLebBytes( (uint64_t) ( cursor_waiting.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_waiting = 0; elem_i_waiting < cursor_waiting.count; elem_i_waiting++ )
@@ -16435,7 +16842,7 @@ inline bool DriverSaveBodyFields( const Ctx & ctx, const TableNumbering & number
     }
     if ( value.summary != false )
     {
-        w.header( ids.ref_at( 79, 0xa3c2813bcd780513ull ), 1 ); // summary
+        w.header( ids.ref_at( 80, 0xa3c2813bcd780513ull ), 1 ); // summary
         w.put8( value.summary ? 1 : 0 );
     }
     {
@@ -16818,7 +17225,7 @@ inline int64_t RecordMeasureBody( const Ctx & ctx, const TableNumbering & number
         if ( !cursor_changes.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_changes.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_changes = ids.ref_at( 114, 0xdf387c9af6145dcaull );
+            const uint64_t ref_changes = ids.ref_at( 115, 0xdf387c9af6145dcaull );
             int64_t body_changes = 0;
             body_changes += 1 + TableLebBytes( (uint64_t) ( cursor_changes.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_changes = 0; elem_i_changes < cursor_changes.count; elem_i_changes++ )
@@ -16857,7 +17264,7 @@ inline int64_t RecordMeasureBody( const Ctx & ctx, const TableNumbering & number
                         case ChangeType::SetDriver:
                         {
                             int64_t arm_payload_changesu = 0;
-                            const uint64_t arm_ref_changesu = ids.ref_at( 108, 0xd0aef91bc49cc38aull );
+                            const uint64_t arm_ref_changesu = ids.ref_at( 109, 0xd0aef91bc49cc38aull );
                             {
                                 const int64_t arm_body_changesu = DriverMeasureBody( ctx, numbering, ids, cursor_changes[elem_i_changes].set_driver );
                                 if ( arm_body_changesu < 0 ) { return -1; }
@@ -16869,7 +17276,7 @@ inline int64_t RecordMeasureBody( const Ctx & ctx, const TableNumbering & number
                         case ChangeType::Dequeue:
                         {
                             int64_t arm_payload_changesu = 0;
-                            const uint64_t arm_ref_changesu = ids.ref_at( 64, 0x85aac62a460aa5e5ull );
+                            const uint64_t arm_ref_changesu = ids.ref_at( 65, 0x85aac62a460aa5e5ull );
                             // a payload-free arm: the arm reference, kind 32 and a zero L are the whole of it (§2.6, §3)
                             body_changes += TableLebBytes( arm_ref_changesu ) + 1 + TableLebBytes( (uint64_t) ( arm_payload_changesu ) ) + ( arm_payload_changesu );
                             break;
@@ -16903,10 +17310,10 @@ inline int64_t RecordMeasureBody( const Ctx & ctx, const TableNumbering & number
         {
             uint64_t index_client = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_client, index_client ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 99, 0xc47ea73e7986f3deull ) ) + 1 + TableLebBytes( index_client );
+            bytes += TableLebBytes( ids.ref_at( 100, 0xc47ea73e7986f3deull ) ) + 1 + TableLebBytes( index_client );
         }
     }
-    if ( value.applied != 0 ) { bytes += TableLebBytes( ids.ref_at( 69, 0x8bf75481a1d237caull ) ) + 1 + 8; } // applied
+    if ( value.applied != 0 ) { bytes += TableLebBytes( ids.ref_at( 70, 0x8bf75481a1d237caull ) ) + 1 + 8; } // applied
     return bytes;
 }
 
@@ -16925,7 +17332,7 @@ inline bool RecordSaveBodyFields( const Ctx & ctx, const TableNumbering & number
         if ( !cursor_changes.ok ) { return false; }
         if ( cursor_changes.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_changes = ids.ref_at( 114, 0xdf387c9af6145dcaull );
+            const uint64_t ref_changes = ids.ref_at( 115, 0xdf387c9af6145dcaull );
             int64_t body_changes = 0;
             body_changes += 1 + TableLebBytes( (uint64_t) ( cursor_changes.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_changes = 0; elem_i_changes < cursor_changes.count; elem_i_changes++ )
@@ -16964,7 +17371,7 @@ inline bool RecordSaveBodyFields( const Ctx & ctx, const TableNumbering & number
                         case ChangeType::SetDriver:
                         {
                             int64_t arm_payload_changesu = 0;
-                            const uint64_t arm_ref_changesu = ids.ref_at( 108, 0xd0aef91bc49cc38aull );
+                            const uint64_t arm_ref_changesu = ids.ref_at( 109, 0xd0aef91bc49cc38aull );
                             {
                                 const int64_t arm_body_changesu = DriverMeasureBody( ctx, numbering, ids, cursor_changes[elem_i_changes].set_driver );
                                 if ( arm_body_changesu < 0 ) { return -1; }
@@ -16976,7 +17383,7 @@ inline bool RecordSaveBodyFields( const Ctx & ctx, const TableNumbering & number
                         case ChangeType::Dequeue:
                         {
                             int64_t arm_payload_changesu = 0;
-                            const uint64_t arm_ref_changesu = ids.ref_at( 64, 0x85aac62a460aa5e5ull );
+                            const uint64_t arm_ref_changesu = ids.ref_at( 65, 0x85aac62a460aa5e5ull );
                             // a payload-free arm: the arm reference, kind 32 and a zero L are the whole of it (§2.6, §3)
                             body_changes += TableLebBytes( arm_ref_changesu ) + 1 + TableLebBytes( (uint64_t) ( arm_payload_changesu ) ) + ( arm_payload_changesu );
                             break;
@@ -17044,7 +17451,7 @@ inline bool RecordSaveBodyFields( const Ctx & ctx, const TableNumbering & number
                         }
                         case ChangeType::SetDriver:
                         {
-                            const uint64_t arm_ref_changesu = ids.ref_at( 108, 0xd0aef91bc49cc38aull );
+                            const uint64_t arm_ref_changesu = ids.ref_at( 109, 0xd0aef91bc49cc38aull );
                             int64_t arm_payload_changesu = 0;
                             {
                                 const int64_t arm_body_changesu = DriverMeasureBody( ctx, numbering, ids, cursor_changes[elem_i_changes].set_driver );
@@ -17058,7 +17465,7 @@ inline bool RecordSaveBodyFields( const Ctx & ctx, const TableNumbering & number
                         }
                         case ChangeType::Dequeue:
                         {
-                            const uint64_t arm_ref_changesu = ids.ref_at( 64, 0x85aac62a460aa5e5ull );
+                            const uint64_t arm_ref_changesu = ids.ref_at( 65, 0x85aac62a460aa5e5ull );
                             int64_t arm_payload_changesu = 0;
                             // a payload-free arm: the arm reference, kind 32 and a zero L are the whole of it (§2.6, §3)
                             w.header( arm_ref_changesu, 32 );
@@ -17092,13 +17499,13 @@ inline bool RecordSaveBodyFields( const Ctx & ctx, const TableNumbering & number
         {
             uint64_t index_client = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_client, index_client ) ) { return false; }
-            w.header( ids.ref_at( 99, 0xc47ea73e7986f3deull ), 17 ); // client — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 100, 0xc47ea73e7986f3deull ), 17 ); // client — a NODE INDEX into the flat node table
             w.putleb( index_client );
         }
     }
     if ( value.applied != 0 )
     {
-        w.header( ids.ref_at( 69, 0x8bf75481a1d237caull ), 9 ); // applied
+        w.header( ids.ref_at( 70, 0x8bf75481a1d237caull ), 9 ); // applied
         w.put64( uint64_t( value.applied ) );
     }
     return !w.overflow;
@@ -17648,7 +18055,7 @@ inline int64_t StoreSessionMeasureBody( const Ctx & ctx, const TableNumbering & 
     if ( value.id != 0 ) { bytes += TableLebBytes( ids.ref_at( 6, 0x08b72e07b55c3ac0ull ) ) + 1 + 8; } // id
     {
         const int32_t mark_info = ids.count;
-        const uint64_t ref_info = ids.ref_at( 124, 0xf5d6a8c57ab94f05ull );
+        const uint64_t ref_info = ids.ref_at( 125, 0xf5d6a8c57ab94f05ull );
         const int64_t body_info = SessionInfoMeasureBody( ctx, numbering, ids, value.info );
         if ( body_info < 0 ) { return -1; }
         if ( body_info > 1 ) { bytes += TableLebBytes( ref_info ) + 1 + TableLebBytes( (uint64_t) ( body_info ) ) + ( body_info ); } // info
@@ -17660,7 +18067,7 @@ inline int64_t StoreSessionMeasureBody( const Ctx & ctx, const TableNumbering & 
         if ( !cursor_transcript.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_transcript.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_transcript = ids.ref_at( 118, 0xe4285b4aabc7d56bull );
+            const uint64_t ref_transcript = ids.ref_at( 119, 0xe4285b4aabc7d56bull );
             int64_t body_transcript = 0;
             body_transcript += 1 + TableLebBytes( (uint64_t) ( cursor_transcript.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_transcript = 0; elem_i_transcript < cursor_transcript.count; elem_i_transcript++ )
@@ -17678,7 +18085,7 @@ inline int64_t StoreSessionMeasureBody( const Ctx & ctx, const TableNumbering & 
         if ( !cursor_queue.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_queue.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_queue = ids.ref_at( 92, 0xb11e8b146c5a21d8ull );
+            const uint64_t ref_queue = ids.ref_at( 93, 0xb11e8b146c5a21d8ull );
             int64_t body_queue = 0;
             body_queue += 1 + TableLebBytes( (uint64_t) ( cursor_queue.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_queue = 0; elem_i_queue < cursor_queue.count; elem_i_queue++ )
@@ -17693,7 +18100,7 @@ inline int64_t StoreSessionMeasureBody( const Ctx & ctx, const TableNumbering & 
     }
     {
         const int32_t mark_driver = ids.count;
-        const uint64_t ref_driver = ids.ref_at( 103, 0xc85b78e3dea334ffull );
+        const uint64_t ref_driver = ids.ref_at( 104, 0xc85b78e3dea334ffull );
         const int64_t body_driver = DriverMeasureBody( ctx, numbering, ids, value.driver );
         if ( body_driver < 0 ) { return -1; }
         if ( body_driver > 1 ) { bytes += TableLebBytes( ref_driver ) + 1 + TableLebBytes( (uint64_t) ( body_driver ) ) + ( body_driver ); } // driver
@@ -17714,7 +18121,7 @@ inline bool StoreSessionSaveBodyFields( const Ctx & ctx, const TableNumbering & 
     }
     {
         const int32_t mark_info = ids.count;
-        const uint64_t ref_info = ids.ref_at( 124, 0xf5d6a8c57ab94f05ull );
+        const uint64_t ref_info = ids.ref_at( 125, 0xf5d6a8c57ab94f05ull );
         const int64_t body_info = SessionInfoMeasureBody( ctx, numbering, ids, value.info );
         if ( body_info < 0 ) return false; // storage invariant, refused as measure refuses it
         if ( body_info > 1 ) // all-default nested elides
@@ -17730,7 +18137,7 @@ inline bool StoreSessionSaveBodyFields( const Ctx & ctx, const TableNumbering & 
         if ( !cursor_transcript.ok ) { return false; }
         if ( cursor_transcript.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_transcript = ids.ref_at( 118, 0xe4285b4aabc7d56bull );
+            const uint64_t ref_transcript = ids.ref_at( 119, 0xe4285b4aabc7d56bull );
             int64_t body_transcript = 0;
             // transcript: the sizing loop's per-element lengths, kept for the write loop
             // below — the element's own length prefix is the number the parent's
@@ -17764,7 +18171,7 @@ inline bool StoreSessionSaveBodyFields( const Ctx & ctx, const TableNumbering & 
         if ( !cursor_queue.ok ) { return false; }
         if ( cursor_queue.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_queue = ids.ref_at( 92, 0xb11e8b146c5a21d8ull );
+            const uint64_t ref_queue = ids.ref_at( 93, 0xb11e8b146c5a21d8ull );
             int64_t body_queue = 0;
             body_queue += 1 + TableLebBytes( (uint64_t) ( cursor_queue.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_queue = 0; elem_i_queue < cursor_queue.count; elem_i_queue++ )
@@ -17792,7 +18199,7 @@ inline bool StoreSessionSaveBodyFields( const Ctx & ctx, const TableNumbering & 
     }
     {
         const int32_t mark_driver = ids.count;
-        const uint64_t ref_driver = ids.ref_at( 103, 0xc85b78e3dea334ffull );
+        const uint64_t ref_driver = ids.ref_at( 104, 0xc85b78e3dea334ffull );
         const int64_t body_driver = DriverMeasureBody( ctx, numbering, ids, value.driver );
         if ( body_driver < 0 ) return false; // storage invariant, refused as measure refuses it
         if ( body_driver > 1 ) // all-default nested elides
@@ -18235,10 +18642,10 @@ inline int64_t ClientCounterMeasureBody( const Ctx & ctx, const TableNumbering &
         {
             uint64_t index_client = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_client, index_client ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 99, 0xc47ea73e7986f3deull ) ) + 1 + TableLebBytes( index_client );
+            bytes += TableLebBytes( ids.ref_at( 100, 0xc47ea73e7986f3deull ) ) + 1 + TableLebBytes( index_client );
         }
     }
-    if ( value.applied != 0 ) { bytes += TableLebBytes( ids.ref_at( 69, 0x8bf75481a1d237caull ) ) + 1 + 8; } // applied
+    if ( value.applied != 0 ) { bytes += TableLebBytes( ids.ref_at( 70, 0x8bf75481a1d237caull ) ) + 1 + 8; } // applied
     return bytes;
 }
 
@@ -18253,13 +18660,13 @@ inline bool ClientCounterSaveBodyFields( const Ctx & ctx, const TableNumbering &
         {
             uint64_t index_client = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_client, index_client ) ) { return false; }
-            w.header( ids.ref_at( 99, 0xc47ea73e7986f3deull ), 17 ); // client — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 100, 0xc47ea73e7986f3deull ), 17 ); // client — a NODE INDEX into the flat node table
             w.putleb( index_client );
         }
     }
     if ( value.applied != 0 )
     {
-        w.header( ids.ref_at( 69, 0x8bf75481a1d237caull ), 9 ); // applied
+        w.header( ids.ref_at( 70, 0x8bf75481a1d237caull ), 9 ); // applied
         w.put64( uint64_t( value.applied ) );
     }
     return !w.overflow;
@@ -18419,7 +18826,7 @@ inline int64_t SnapshotMeasureBody( const Ctx & ctx, const TableNumbering & numb
         if ( !cursor_sessions.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_sessions.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_sessions = ids.ref_at( 89, 0xacebadbd2040ebacull );
+            const uint64_t ref_sessions = ids.ref_at( 90, 0xacebadbd2040ebacull );
             int64_t body_sessions = 0;
             body_sessions += 1 + TableLebBytes( (uint64_t) ( cursor_sessions.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_sessions = 0; elem_i_sessions < cursor_sessions.count; elem_i_sessions++ )
@@ -18467,7 +18874,7 @@ inline bool SnapshotSaveBodyFields( const Ctx & ctx, const TableNumbering & numb
         if ( !cursor_sessions.ok ) { return false; }
         if ( cursor_sessions.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_sessions = ids.ref_at( 89, 0xacebadbd2040ebacull );
+            const uint64_t ref_sessions = ids.ref_at( 90, 0xacebadbd2040ebacull );
             int64_t body_sessions = 0;
             // sessions: the sizing loop's per-element lengths, kept for the write loop
             // below — the element's own length prefix is the number the parent's
@@ -19536,6 +19943,53 @@ inline bool SignInOfferExtentPack( const Ctx & ctx, const SignInOffer & src, Sig
     return true;
 }
 
+// DashboardWireExtent: the extent Dashboard's lists and maps command, from the FRAMING alone.
+// It reads no field value, so a caller can refuse a number it did not
+// expect before one byte is allocated (docs/SPEC-TABLES.md §6.5).
+inline bool DashboardWireExtent( const uint8_t * body, int64_t length, int64_t & at, const TableIdTable * ids, TableRefuseReason & reason )
+{
+    (void) body;
+    (void) length;
+    (void) at;
+    (void) ids;
+    (void) reason; // no list or map below this record
+    return true;
+}
+
+// DashboardExtentAt: the node extent Dashboard's lists and maps take, PRE-ORDER.
+// The default native mode advances exactly as DashboardExtentPack (§2.8, §2.9).
+template <typename Ctx, bool schema_cook_extent = false>
+inline bool DashboardExtentAt( const Ctx & ctx, const Dashboard & value, int64_t & at )
+{
+    (void) ctx;
+    (void) value;
+    (void) at; // no list or map below this record
+    return true;
+}
+
+template <typename Ctx, bool schema_cook_extent = false>
+inline int64_t DashboardExtent( const Ctx & ctx, const Dashboard & value )
+{
+    (void) ctx;
+    (void) value; // no list or map below this record
+    return 0;
+}
+
+// DashboardExtentPack: carve Dashboard's arrays out of the node's extent and copy the
+// entries in ASCENDING key order and the elements in INDEX order, PRE-ORDER,
+// advancing the same running offset DashboardExtentAt advances (§2.8, §2.9).
+template <typename Ctx>
+inline bool DashboardExtentPack( const Ctx & ctx, const Dashboard & src, Dashboard & dst, uint8_t * extent, int64_t & at, int64_t capacity )
+{
+    (void) ctx;
+    (void) src;
+    (void) dst;
+    (void) extent;
+    (void) at;
+    (void) capacity; // no list or map below this record
+    return true;
+}
+
 // SessionsDiffWireExtent: the extent SessionsDiff's lists and maps command, from the FRAMING alone.
 // It reads no field value, so a caller can refuse a number it did not
 // expect before one byte is allocated (docs/SPEC-TABLES.md §6.5).
@@ -19586,6 +20040,15 @@ inline bool SessionsDiffWireExtent( const uint8_t * body, int64_t length, int64_
             const uint8_t * list_body = r.buffer + r.offset;
             r.offset += (int64_t) list_len;
             if ( !TableListWireExtent( list_body, (int64_t) list_len, at, (int64_t) sizeof( SignInOffer ), (int64_t) alignof( SignInOffer ), 13, 2, NULL, ids, reason ) ) { return false; }
+            continue;
+        }
+        if ( field_id == 0xff5b1282501e1438ull && field_kind == 14 ) // dashboards: an unbounded array
+        {
+            uint64_t list_len = 0;
+            if ( !r.getleb( list_len ) || !r.room( list_len ) ) { return true; }
+            const uint8_t * list_body = r.buffer + r.offset;
+            r.offset += (int64_t) list_len;
+            if ( !TableListWireExtent( list_body, (int64_t) list_len, at, (int64_t) sizeof( Dashboard ), (int64_t) alignof( Dashboard ), 13, 2, NULL, ids, reason ) ) { return false; }
             continue;
         }
         if ( !r.skip( field_kind ) ) { return true; }
@@ -19659,6 +20122,20 @@ inline bool SessionsDiffExtentAt( const Ctx & ctx, const SessionsDiff & value, i
         {
             at = ( at + (int64_t) alignof( SignInOffer ) - 1 ) & ~( (int64_t) alignof( SignInOffer ) - 1 );
             at += (int64_t) cursor.count * (int64_t) sizeof( SignInOffer ); // native pack layout
+        }
+    }
+    {
+        TableListCursor<Dashboard> cursor = TableListElements( ctx, value.dashboards );
+        if ( !cursor.ok ) { return false; }
+        if constexpr ( schema_cook_extent )
+        {
+            at = ( at + 7 ) & ~(int64_t) 7;
+            at += (int64_t) cursor.count * 16; // canonical cook layout
+        }
+        else
+        {
+            at = ( at + (int64_t) alignof( Dashboard ) - 1 ) & ~( (int64_t) alignof( Dashboard ) - 1 );
+            at += (int64_t) cursor.count * (int64_t) sizeof( Dashboard ); // native pack layout
         }
     }
     return true;
@@ -19750,6 +20227,22 @@ inline bool SessionsDiffExtentPack( const Ctx & ctx, const SessionsDiff & src, S
         for ( int32_t i = 0; i < cursor.count; i++ ) // INDEX order, live elements only
         {
             memcpy( (void *) ( placed + i ), (const void *) &cursor[i], sizeof( SignInOffer ) ); // trivially copyable, by construction
+        }
+    }
+    {
+        TableListCursor<Dashboard> cursor = TableListElements( ctx, src.dashboards );
+        if ( !cursor.ok ) { return false; }
+        at = ( at + (int64_t) alignof( Dashboard ) - 1 ) & ~( (int64_t) alignof( Dashboard ) - 1 );
+        const int64_t bytes = (int64_t) cursor.count * (int64_t) sizeof( Dashboard );
+        if ( at + bytes > capacity ) { return false; }
+        Dashboard * placed = (Dashboard *) ( extent + at );
+        at += bytes;
+        dst.dashboards.count = cursor.count;
+        dst.dashboards.padding = 0;
+        dst.dashboards.elements.value = cursor.count > 0 ? (int64_t) ( (uint8_t *) placed - (const uint8_t *) &dst.dashboards.elements ) : 0;
+        for ( int32_t i = 0; i < cursor.count; i++ ) // INDEX order, live elements only
+        {
+            memcpy( (void *) ( placed + i ), (const void *) &cursor[i], sizeof( Dashboard ) ); // trivially copyable, by construction
         }
     }
     return true;
@@ -20876,6 +21369,34 @@ inline bool SessionsDiffSigninsErase( TableArena & arena, TableList<SignInOffer>
 // EACH on the builder: INDEX order, live elements only, yielding the
 // element Add handed back.
 inline TableListEach<SignInOffer> SessionsDiffSigninsEach( const TableArena & arena, const TableList<SignInOffer> & list )
+{
+    return TableListEachOf( arena, list );
+}
+
+// ---- SessionsDiff.dashboards: the builder's three (§2.9) ----
+
+// ADD: the element is appended at its declared defaults and handed back to
+// fill. Nothing ever moves (§6.4), so the pointer stays valid while other
+// elements arrive.
+// NULL means NOT ADDED: an arena that cannot carve another segment, or a
+// count at the int32 cap. A caller that needs the reason checks size().
+inline Dashboard * SessionsDiffDashboardsAdd( TableWorker & worker, TableList<Dashboard> & list )
+{
+    return TableListPlace( worker, list );
+}
+
+// ERASE, by the element's own pointer: marks it DEAD, one bit in the
+// segment's slot and not in the element storage. False when the pointer is
+// not this list's. Storage is held until the builder resets. INDICES ARE
+// NOT STABLE ACROSS AN ERASE: what was index 3 is index 2 in the next Save.
+inline bool SessionsDiffDashboardsErase( TableArena & arena, TableList<Dashboard> & list, const Dashboard * element )
+{
+    return TableListErase( arena, list, element );
+}
+
+// EACH on the builder: INDEX order, live elements only, yielding the
+// element Add handed back.
+inline TableListEach<Dashboard> SessionsDiffDashboardsEach( const TableArena & arena, const TableList<Dashboard> & list )
 {
     return TableListEachOf( arena, list );
 }
@@ -23616,6 +24137,192 @@ inline bool SignInOfferPackEdges( const Ctx & ctx, TablePackMap & seen, const Si
     return true;
 }
 
+// DashboardNumber: number everything Dashboard POINTS AT, in first-visit order —
+// the fields in declaration order, a by-value edge descended in place.
+// A reference to an entry whose descent is still OPEN is a data cycle,
+// named here rather than recursed away (docs/SPEC-TABLES.md §3.1).
+template <typename Ctx>
+inline bool DashboardNumber( const Ctx & ctx, TableNumbering & numbering, const Dashboard & value )
+{
+    {
+        const TableBlob * blob = TableBlobAt( ctx, value.name ); // name: a byte buffer
+        if ( blob != NULL )
+        {
+            bool taken = false;
+            int64_t slot = 0;
+            const TablePackEntry * entry = TablePackMapReach( numbering.seen, (const void *) blob,
+                (int64_t) ( numbering.count + 2 ), taken, slot ); // its index, if this is its first visit
+            if ( entry == NULL ) { return false; } // the map could not grow
+            if ( taken )
+            {
+                TableNodeEntry node;
+                node.node = (const void *) blob;
+                node.type_id = kTableStringTypeId;
+                node.measure = &TableBlobMeasureThunk<Ctx>;
+                node.save = &TableBlobSaveThunk<Ctx>;
+                if ( !TableNumberingAppend( numbering, node ) ) { return false; } // a blob reaches nothing: no descent
+                TablePackMapClose( numbering.seen, (const void *) blob, slot );
+            }
+            else { numbering.shared = true; } // a SECOND slot names the one blob (docs/SPEC-TABLES.md §2.5, §16.7)
+        }
+    }
+    {
+        const TableBlob * blob = TableBlobAt( ctx, value.url ); // url: a byte buffer
+        if ( blob != NULL )
+        {
+            bool taken = false;
+            int64_t slot = 0;
+            const TablePackEntry * entry = TablePackMapReach( numbering.seen, (const void *) blob,
+                (int64_t) ( numbering.count + 2 ), taken, slot ); // its index, if this is its first visit
+            if ( entry == NULL ) { return false; } // the map could not grow
+            if ( taken )
+            {
+                TableNodeEntry node;
+                node.node = (const void *) blob;
+                node.type_id = kTableStringTypeId;
+                node.measure = &TableBlobMeasureThunk<Ctx>;
+                node.save = &TableBlobSaveThunk<Ctx>;
+                if ( !TableNumberingAppend( numbering, node ) ) { return false; } // a blob reaches nothing: no descent
+                TablePackMapClose( numbering.seen, (const void *) blob, slot );
+            }
+            else { numbering.shared = true; } // a SECOND slot names the one blob (docs/SPEC-TABLES.md §2.5, §16.7)
+        }
+    }
+    return true;
+}
+
+// DashboardCycleSlots: the cycle check's edges below one Dashboard, guards ignored.
+template <typename Ctx>
+inline bool DashboardCycleSlots( const Ctx & ctx, TableCycle & cycle, const Dashboard & value )
+{
+    (void) ctx;
+    (void) cycle;
+    (void) value;
+    // name: a byte buffer reaches nothing
+    // url: a byte buffer reaches nothing
+    return true;
+}
+
+// DashboardPackMeasure: the packed region bytes of everything Dashboard POINTS AT.
+// ONE VISIT PER NODE: `seen` carries the first-visit numbering (§3.1), so a
+// node two references name is measured ONCE and packed once, and a
+// reference to a node whose descent is still open is a data cycle, refused.
+template <typename Ctx>
+inline int64_t DashboardPackMeasure( const Ctx & ctx, TablePackMap & seen, const Dashboard & value )
+{
+    int64_t bytes = 0;
+    {
+        const TableBlob * blob = TableBlobAt( ctx, value.name ); // name: a byte buffer, packed at its used size
+        if ( blob != NULL )
+        {
+            bool taken = false;
+            int64_t slot = 0;
+            const TablePackEntry * entry = TablePackMapReach( seen, (const void *) blob, 0, taken, slot );
+            if ( entry == NULL ) { return -1; } // the map could not grow
+            if ( taken )
+            {
+                TablePackMapClose( seen, (const void *) blob, slot );
+                bytes += TableBlobStorage( (int64_t) blob->length, true );
+            }
+        }
+    }
+    {
+        const TableBlob * blob = TableBlobAt( ctx, value.url ); // url: a byte buffer, packed at its used size
+        if ( blob != NULL )
+        {
+            bool taken = false;
+            int64_t slot = 0;
+            const TablePackEntry * entry = TablePackMapReach( seen, (const void *) blob, 0, taken, slot );
+            if ( entry == NULL ) { return -1; } // the map could not grow
+            if ( taken )
+            {
+                TablePackMapClose( seen, (const void *) blob, slot );
+                bytes += TableBlobStorage( (int64_t) blob->length, true );
+            }
+        }
+    }
+    return bytes;
+}
+
+// DashboardPack: copy src into dst (already placed), then lay every pointee out
+// depth-first behind it, in FIELD ORDER, by bump allocation.
+//
+// ONE NODE, ONE BODY (§6.2): `seen` holds every node already placed and
+// where it landed, so a node's FIRST reference lays it out and every later
+// reference points BACK at that one body. A region delta therefore has no
+// required sign (§6.3), and sharing and a back-reference are one fact. A
+// reference to a node whose descent is still OPEN is a cycle, and this
+// refuses it rather than packing one.
+template <typename Ctx>
+inline bool DashboardPackEdges( const Ctx & ctx, TablePackMap & seen, const Dashboard & src, Dashboard & dst, uint8_t * base, int64_t capacity, int64_t & used );
+
+template <typename Ctx>
+inline bool DashboardPack( const Ctx & ctx, TablePackMap & seen, const Dashboard & src, Dashboard & dst, uint8_t * base, int64_t capacity, int64_t & used )
+{
+    memcpy( (void *) &dst, (const void *) &src, sizeof( Dashboard ) ); // trivially copyable, by construction
+    int64_t at = 0;
+    uint8_t * extent = (uint8_t *) &dst + TableAlignUp64( (int64_t) sizeof( Dashboard ) );
+    const int64_t room = capacity - ( (int64_t) ( extent - base ) );
+    if ( !DashboardExtentPack( ctx, src, dst, extent, at, room ) ) { return false; }
+    return DashboardPackEdges( ctx, seen, src, dst, base, capacity, used );
+}
+
+template <typename Ctx>
+inline bool DashboardPackEdges( const Ctx & ctx, TablePackMap & seen, const Dashboard & src, Dashboard & dst, uint8_t * base, int64_t capacity, int64_t & used )
+{
+    {
+        dst.name.value = 0; // name: a byte buffer
+        const TableBlob * blob = TableBlobAt( ctx, src.name );
+        if ( blob != NULL )
+        {
+            int64_t at = TableAlignUp64( used ); // where it WOULD land, if this is its first visit
+            bool taken = false;
+            int64_t slot = 0;
+            const TablePackEntry * entry = TablePackMapReach( seen, (const void *) blob, at, taken, slot );
+            if ( entry == NULL ) { return false; } // the map could not grow
+            if ( !taken )
+            {
+                dst.name.value = (int64_t) ( ( base + entry->offset ) - (const uint8_t *) &dst.name ); // the one body it already has
+            }
+            else
+            {
+                int64_t storage = TableBlobStorage( (int64_t) blob->length, true );
+                if ( at + storage > capacity ) { return false; }
+                memcpy( base + at, (const void *) blob, (size_t) ( kTableBlobHeader + (int64_t) blob->length ) );
+                used = at + storage;
+                dst.name.value = (int64_t) ( ( base + at ) - (const uint8_t *) &dst.name );
+                TablePackMapClose( seen, (const void *) blob, slot );
+            }
+        }
+    }
+    {
+        dst.url.value = 0; // url: a byte buffer
+        const TableBlob * blob = TableBlobAt( ctx, src.url );
+        if ( blob != NULL )
+        {
+            int64_t at = TableAlignUp64( used ); // where it WOULD land, if this is its first visit
+            bool taken = false;
+            int64_t slot = 0;
+            const TablePackEntry * entry = TablePackMapReach( seen, (const void *) blob, at, taken, slot );
+            if ( entry == NULL ) { return false; } // the map could not grow
+            if ( !taken )
+            {
+                dst.url.value = (int64_t) ( ( base + entry->offset ) - (const uint8_t *) &dst.url ); // the one body it already has
+            }
+            else
+            {
+                int64_t storage = TableBlobStorage( (int64_t) blob->length, true );
+                if ( at + storage > capacity ) { return false; }
+                memcpy( base + at, (const void *) blob, (size_t) ( kTableBlobHeader + (int64_t) blob->length ) );
+                used = at + storage;
+                dst.url.value = (int64_t) ( ( base + at ) - (const uint8_t *) &dst.url );
+                TablePackMapClose( seen, (const void *) blob, slot );
+            }
+        }
+    }
+    return true;
+}
+
 // SessionsDiffNumber: number everything SessionsDiff POINTS AT, in first-visit order —
 // the fields in declaration order, a by-value edge descended in place.
 // A reference to an entry whose descent is still OPEN is a data cycle,
@@ -23653,6 +24360,14 @@ inline bool SessionsDiffNumber( const Ctx & ctx, TableNumbering & numbering, con
         for ( int32_t i = 0; i < cursor_signins.count; i++ )
         {
             if ( !SignInOfferNumber( ctx, numbering, cursor_signins[i] ) ) { return false; }
+        }
+    }
+    { // dashboards: a by-value edge, elements in INDEX order (§2.9, §3.1)
+        TableListCursor<Dashboard> cursor_dashboards = TableListElements( ctx, value.dashboards );
+        if ( !cursor_dashboards.ok ) { return false; }
+        for ( int32_t i = 0; i < cursor_dashboards.count; i++ )
+        {
+            if ( !DashboardNumber( ctx, numbering, cursor_dashboards[i] ) ) { return false; }
         }
     }
     return true;
@@ -23695,6 +24410,14 @@ inline bool SessionsDiffCycleSlots( const Ctx & ctx, TableCycle & cycle, const S
         for ( int32_t i = 0; i < cursor_signins.count; i++ )
         {
             if ( !SignInOfferCycleSlots( ctx, cycle, cursor_signins[i] ) ) { return false; }
+        }
+    }
+    { // dashboards: a by-value edge, elements in INDEX order (§2.9, §3.1)
+        TableListCursor<Dashboard> cursor_dashboards = TableListElements( ctx, value.dashboards );
+        if ( !cursor_dashboards.ok ) { return false; }
+        for ( int32_t i = 0; i < cursor_dashboards.count; i++ )
+        {
+            if ( !DashboardCycleSlots( ctx, cycle, cursor_dashboards[i] ) ) { return false; }
         }
     }
     return true;
@@ -23744,6 +24467,16 @@ inline int64_t SessionsDiffPackMeasure( const Ctx & ctx, TablePackMap & seen, co
         for ( int32_t i = 0; i < cursor_signins.count; i++ )
         {
             int64_t inner = SignInOfferPackMeasure( ctx, seen, cursor_signins[i] );
+            if ( inner < 0 ) { return -1; }
+            bytes += inner;
+        }
+    }
+    { // dashboards: a by-value edge, elements in INDEX order (§2.9, §3.1)
+        TableListCursor<Dashboard> cursor_dashboards = TableListElements( ctx, value.dashboards );
+        if ( !cursor_dashboards.ok ) { return -1; }
+        for ( int32_t i = 0; i < cursor_dashboards.count; i++ )
+        {
+            int64_t inner = DashboardPackMeasure( ctx, seen, cursor_dashboards[i] );
             if ( inner < 0 ) { return -1; }
             bytes += inner;
         }
@@ -23811,6 +24544,15 @@ inline bool SessionsDiffPackEdges( const Ctx & ctx, TablePackMap & seen, const S
         for ( int32_t i = 0; i < cursor_signins.count; i++ )
         {
             if ( !SignInOfferPackEdges( ctx, seen, cursor_signins[i], placed_signins[i], base, capacity, used ) ) { return false; }
+        }
+    }
+    { // dashboards: a by-value edge, elements in INDEX order (§2.9, §3.1)
+        TableListCursor<Dashboard> cursor_dashboards = TableListElements( ctx, src.dashboards );
+        if ( !cursor_dashboards.ok ) { return false; }
+        Dashboard * placed_dashboards = (Dashboard *) ( dst.dashboards.elements.value != 0 ? ( (uint8_t *) &dst.dashboards.elements + dst.dashboards.elements.value ) : NULL );
+        for ( int32_t i = 0; i < cursor_dashboards.count; i++ )
+        {
+            if ( !DashboardPackEdges( ctx, seen, cursor_dashboards[i], placed_dashboards[i], base, capacity, used ) ) { return false; }
         }
     }
     return true;
@@ -33326,6 +34068,994 @@ inline const SignInOffer * SignInOfferReadStrict( const uint8_t * wire_file, int
     return root;
 }
 
+// ---- Dashboard: the variable-length life (docs/SPEC-TABLES.md §2, §6, §9) ----
+//
+// MUTABLE: DashboardBuilder — allocate nodes, wire them together, then Lock.
+// CONST:   one packed region, root at its base. Lock produces it and Load
+//          produces it, so a locked structure and a loaded one are the
+//          SAME representation with one view API. There is no unlock:
+//          re-editing means loading the const form into a fresh builder.
+// Dashboard is never held by value — a file-format-scale structure is a region
+// and a root pointer, not a struct you copy.
+
+struct DashboardBuilder
+{
+    TableArena arena;
+    TableWorker main;      // the calling thread's allocation front
+    TableRef root_ref;
+    uint8_t * region = NULL; // the packed const form, produced by Lock()
+    int64_t region_bytes = 0;
+
+    // THE ALLOCATOR IS THE BUILDER'S, and everything this structure ever
+    // allocates goes through it: the arena's segments, Lock's identity map,
+    // the packed region, the wire walks' numbering, and the tool path's node
+    // directory. Name your own and a profiler sees every byte under it.
+    DashboardBuilder( TableAllocator allocator = TableDefaultAllocator() )
+    {
+        TableArenaInit( arena, allocator );
+        main.arena = &arena;
+        TableSlot<Dashboard> slot = main.Alloc<Dashboard>();
+        root_ref = slot.ref;
+    }
+    ~DashboardBuilder()
+    {
+        TableArenaShutdown( arena );
+        table_release( arena.allocator, region );
+    }
+    DashboardBuilder( const DashboardBuilder & ) = delete;
+    DashboardBuilder & operator=( const DashboardBuilder & ) = delete;
+
+    // Alloc a node in THIS thread's slab: no lock, no atomic per node.
+    // The result is usable both as the node pointer and as the reference
+    // to store in a pointer field.
+    template <typename T>
+    TableSlot<T> Alloc() { return main.Alloc<T>(); }
+    // a BYTE BUFFER's node of exactly `length` bytes (docs/SPEC-TABLES.md §2.5):
+    // the bytes to write through, and the reference to store in a *bytes
+    // or *string slot; a blob past a slab takes a span of its own
+    TableBytesSlot AllocBytes( int64_t length ) { return main.AllocBytes( length ); }
+    TableStringSlot AllocString( int64_t length ) { return main.AllocString( length ); }
+    // one worker per thread; allocate on your own, and synchronize your own
+    // writes to nodes another worker allocated
+    TableWorker Worker()
+    {
+        TableWorker worker;
+        worker.arena = &arena;
+        return worker;
+    }
+
+    // GetRoot/AsConst, not Root/Const: a member function hides the type
+    // name it shares, and `table Root` is this spec's own canonical
+    // example. The checker refuses a table named after any member here,
+    // so the remaining spellings cannot collide either.
+    Dashboard * GetRoot() { return arena.locked ? NULL : (Dashboard *) TableArenaAt( arena, (uint32_t) root_ref.value ); }
+    bool Locked() const { return arena.locked; }
+    const Dashboard * AsConst() const { return (const Dashboard *) region; }
+    const uint8_t * Region() const { return region; }
+    int64_t RegionBytes() const { return region_bytes; }
+
+    // Lock is ONE WAY and it is the compaction: the segmented arena becomes
+    // one exact-packed region with zero slack, references rewritten
+    // self-relative, and the mutable life released. Single-threaded: call
+    // it after the workers have joined.
+    bool Lock();
+};
+
+inline bool DashboardBuilder::Lock()
+{
+    if ( arena.locked ) { return region != NULL; }
+    if ( root_ref.null() ) { return false; }
+    TableArenaCtx ctx = { &arena };
+    const Dashboard & root = *(const Dashboard *) TableArenaAt( arena, (uint32_t) root_ref.value );
+    // The ROOT takes the map's first entry: it is packed at offset 0, and its
+    // descent is open for the whole walk (docs/SPEC-TABLES.md §3.1).
+    TablePackMap seen;
+    TablePackMapInit( seen, arena.allocator );
+    bool root_taken = false;
+    int64_t root_slot = 0;
+    int64_t below = -1;
+    if ( TablePackMapReach( seen, (const void *) &root, 0, root_taken, root_slot ) != NULL )
+    {
+        below = DashboardPackMeasure( ctx, seen, root );
+    }
+    if ( below < 0 )
+    {
+        TablePackMapShutdown( seen );
+        return false;
+    } // a data cycle, named at the reference that closes it
+    int64_t root_extent = DashboardExtent( ctx, root );
+    if ( root_extent < 0 )
+    {
+        TablePackMapShutdown( seen );
+        return false;
+    } // the sort could not run
+    int64_t total = TableAlignUp64( TableAlignUp64( (int64_t) sizeof( Dashboard ) ) + root_extent ) + below;
+    // the AUTHORING path may allocate (§6.5), and it does so through the
+    // builder's own pair. The region comes back ZEROED, which is the
+    // allocator's contract: a packed region carries node padding.
+    uint8_t * packed = (uint8_t *) table_allocate( arena.allocator, total );
+    if ( packed == NULL )
+    {
+        TablePackMapShutdown( seen );
+        return false;
+    }
+    int64_t used = TableAlignUp64( TableAlignUp64( (int64_t) sizeof( Dashboard ) ) + root_extent );
+    Dashboard * destination = new ( packed ) Dashboard; // lifetime only: the Pack below memcpy's the whole node over it
+    // The pack walk RE-DERIVES the same numbering rather than carrying the
+    // measure's — nothing passes between them, which is what makes
+    // `used == total` below a real check and not a tautology (§3.1). The
+    // map keeps the capacity the measure paid for, so the second walk
+    // rehashes nothing.
+    TablePackMapReset( seen );
+    if ( TablePackMapReach( seen, (const void *) &root, 0, root_taken, root_slot ) == NULL ||
+        !DashboardPack( ctx, seen, root, *destination, packed, total, used ) || used != total )
+    {
+        TablePackMapShutdown( seen );
+        table_release( arena.allocator, packed );
+        return false;
+    }
+    TablePackMapShutdown( seen );
+    region = packed;
+    region_bytes = total;
+    arena.locked = true; // MONOTONIC: there is no unlock
+    TableArenaShutdown( arena );
+    return true;
+}
+
+// ---- Dashboard on the wire: the FLAT NODE TABLE (docs/SPEC-TABLES.md §3.1) ----
+//
+// A pointered save writes every reachable node ONCE, into a node table under
+// the reserved id 0xFFFF, and a pointer field rides as a u32 INDEX into it
+// under kind 17. No pointer edge is a nesting level, so a chain's length is
+// not a depth and two references to one node are one node.
+
+// DashboardNodeStorage: the region bytes one record commands, or -1 for a type id
+// this build cannot name — which keeps its index and reads null. A BYTE
+// BUFFER's record commands its header and its bytes (docs/SPEC-TABLES.md §2.5),
+// which is the one answer the record's LENGTH decides, and a blob past the
+// size cap answers kTableNodeRefused with its reason (§3.1, §6.5).
+// A MAP'S ENTRIES RIDE IN THEIR HOLDER'S EXTENT (docs/SPEC-TABLES.md §2.8),
+// so a record's storage is its type's PLUS N x sizeof( Entry ) at every
+// depth, summed from the FRAMING: N is framing and not a value, and this
+// reads no field. kTableNodeRefused is a wire whose N its L cannot carry.
+inline int64_t DashboardNodeStorage( uint64_t type_id, int64_t length, TableRefuseReason & reason )
+{
+    switch ( type_id )
+    {
+        case kTableStringTypeId: if ( length > kTableBlobMaxLength ) { reason = blob_over_size_cap; return kTableNodeRefused; } return TableBlobStorage( length, true ); // *string
+        default: break;
+    }
+    return -1;
+}
+
+// DashboardNodePlace: start one record's node's lifetime in the storage pass one
+// reserved for it, holding exactly the declared defaults — a byte buffer's
+// header holds its length, and its bytes come in pass two.
+inline void DashboardNodePlace( uint64_t type_id, uint8_t * at, int64_t length )
+{
+    switch ( type_id )
+    {
+        case kTableStringTypeId: { TableBlob * blob = (TableBlob *) at; blob->length = (uint32_t) length; blob->zero = 0; break; } // *string
+        default: break;
+    }
+}
+
+// DashboardNodeRecordBytes: one record's OWN storage, before the extent its maps
+// take (docs/SPEC-TABLES.md §2.8) — where a node's extent begins.
+inline int64_t DashboardNodeRecordBytes( uint64_t type_id )
+{
+    (void) type_id;
+    return 0;
+}
+
+// DashboardNodeAlloc: the TOOL's path — one record's node in the builder's arena.
+// Zero is the arena's null, and it is also what a type id this build cannot
+// name answers.
+inline uint32_t DashboardNodeAlloc( uint64_t type_id, TableWorker & worker, int64_t length )
+{
+    switch ( type_id )
+    {
+        case kTableStringTypeId: return (uint32_t) worker.AllocString( length ).ref.value; // *string
+        default: break;
+    }
+    return 0;
+}
+
+// DashboardNodeBody: PASS TWO's half — decode one record's body into the storage it
+// already owns.
+inline void DashboardNodeBody( uint64_t type_id, TableReader & r, const TableNodeMap & nodes, uint8_t * at )
+{
+    // the node's own EXTENT, where its lists' and maps' arrays are carved
+    // from, PRE-ORDER as the bodies decode (docs/SPEC-TABLES.md §2.8, §2.9).
+    // The tool's path carries a worker instead: there the arrays are the
+    // arena's.
+    TableExtentCarve carve;
+    carve.worker = nodes.worker;
+    if ( carve.worker == NULL )
+    {
+        TableRefuseReason reason = count_over_length; // pass one already refused what this could refuse
+        const int64_t storage = DashboardNodeStorage( type_id, r.size, reason );
+        const int64_t record = storage > 0 ? DashboardNodeRecordBytes( type_id ) : 0;
+        carve.at = at + record;
+        carve.left = storage > record ? storage - record : 0;
+    }
+    nodes.carve = &carve;
+    (void) nodes; // every node this root can name is a FIXED table
+    switch ( type_id )
+    {
+        case kTableStringTypeId: if ( r.size > 0 ) { memcpy( at + kTableBlobHeader, r.buffer, (size_t) r.size ); } break; // *string
+        default: break;
+    }
+    nodes.carve = NULL; // the cursor is ONE node's, and this node's body is done
+}
+
+// DashboardCycleOrdinal: a record's type, as the cycle check's ordinal (§3.1, §4).
+inline uint32_t DashboardCycleOrdinal( uint64_t type_id )
+{
+    switch ( type_id )
+    {
+        case 0x7fee95b66225e1fbull: return 1; // Dashboard
+        default: return 0;
+    }
+}
+
+// DashboardCycleNode: one directory node's stored slots, by its ordinal.
+template <typename Ctx>
+inline bool DashboardCycleNode( const Ctx & ctx, TableCycle & cycle, int64_t position )
+{
+    const void * node = TableCycleNode( cycle, position );
+    switch ( TableCycleOrdinal( cycle, position ) )
+    {
+        case 1: return DashboardCycleSlots( ctx, cycle, *(const Dashboard *) node );
+        default: return true;
+    }
+}
+
+// The numbering both wire walks derive, and NEITHER CARRIES THE OTHER'S: the
+// root takes index 1 and its entry stays open for the whole walk, so a
+// reference back at it is the cycle it is (§3.1).
+template <typename Ctx>
+inline bool DashboardNumberFrom( const Ctx & ctx, TableNumbering & numbering, const Dashboard & root )
+{
+    bool taken = false;
+    int64_t slot = 0;
+    if ( TablePackMapReach( numbering.seen, (const void *) &root, (int64_t) kTableNodeIndexRoot, taken, slot ) == NULL ) { return false; }
+    return DashboardNumber( ctx, numbering, root );
+}
+
+template <typename Ctx>
+inline int64_t DashboardMeasureWire( const Ctx & ctx, const Dashboard & root, TableAllocator allocator )
+{
+    TableNumbering numbering;
+    TableNumberingInit( numbering, allocator );
+    int64_t bytes = -1;
+    // A BLOB NAMED FROM TWO SLOTS is refused by name, blob_shared, and
+    // never measured as a copy per slot (docs/SPEC-TABLES.md §2.5, §16.7).
+    if ( DashboardNumberFrom( ctx, numbering, root ) && !numbering.shared )
+    {
+        TableIds ids;
+        bytes = DashboardMeasureBody( ctx, numbering, ids, root );
+        if ( bytes >= 0 )
+        {
+            const int64_t table = TableNodeTableMeasure( ctx, ids, numbering );
+            // the FORM BYTE, the ROOT BODY — its own fields, the node table
+            // and the terminator — and the ID TABLE (docs/SPEC-TABLES.md §3)
+            bytes = table < 0 || ids.overflow ? -1 : 1 + bytes + table + TableIdsBytes( ids );
+        }
+    }
+    TableNumberingShutdown( numbering );
+    return bytes;
+}
+
+template <typename Ctx>
+inline int64_t DashboardSaveWire( const Ctx & ctx, const Dashboard & root, uint8_t * buffer, int64_t capacity, TableAllocator allocator )
+{
+    TableNumbering numbering;
+    TableNumberingInit( numbering, allocator );
+    // THE WRITERS REFUSE A GRAPH WHOSE TWO SLOTS NAME ONE BLOB, by name
+    // blob_shared, never with a bare -1 from a copy per slot (docs/SPEC-TABLES.md §2.5, §16.7).
+    if ( !DashboardNumberFrom( ctx, numbering, root ) || numbering.shared )
+    {
+        TableNumberingShutdown( numbering );
+        return -1;
+    }
+    TableWriter w( buffer, capacity );
+    TableIds ids;
+    w.put8( kTableWireForm ); // the FORM BYTE is the whole header (§3)
+    // the root's own fields, then the node table's field, then the
+    // terminator: a reader that gives up inside the table has already
+    // decoded the ROOT'S OWN FIELDS (§3.1)
+    bool ok = DashboardSaveBodyFields( ctx, numbering, w, ids, root ) && TableNodeTableSave( ctx, w, ids, numbering );
+    TableNumberingShutdown( numbering );
+    if ( !ok || ids.overflow ) { return -1; }
+    w.put8( 0 ); // the ZERO REFERENCE that ends the root body
+    TableIdsWrite( w, ids );
+    if ( w.overflow ) { return -1; } // the caller's buffer was too small
+    return w.offset; // == DashboardMeasure( root )
+}
+
+inline int64_t DashboardMeasure( const Dashboard * root, TableAllocator allocator = TableDefaultAllocator() )
+{
+    if ( root == NULL ) { return -1; }
+    TableRegionCtx ctx;
+    return DashboardMeasureWire( ctx, *root, allocator );
+}
+
+inline int64_t DashboardSave( const Dashboard * root, uint8_t * buffer, int64_t capacity, TableAllocator allocator = TableDefaultAllocator() )
+{
+    if ( root == NULL ) { return -1; }
+    TableRegionCtx ctx;
+    return DashboardSaveWire( ctx, *root, buffer, capacity, allocator );
+}
+
+inline int64_t DashboardMeasure( const DashboardBuilder & builder )
+{
+    if ( builder.region != NULL ) { return DashboardMeasure( builder.AsConst(), builder.arena.allocator ); }
+    if ( builder.root_ref.null() ) { return -1; } // the root allocation failed
+    TableArenaCtx ctx = { &builder.arena };
+    return DashboardMeasureWire( ctx, *(const Dashboard *) TableArenaAt( builder.arena, (uint32_t) builder.root_ref.value ), builder.arena.allocator );
+}
+
+inline int64_t DashboardSave( const DashboardBuilder & builder, uint8_t * buffer, int64_t capacity )
+{
+    if ( builder.region != NULL ) { return DashboardSave( builder.AsConst(), buffer, capacity, builder.arena.allocator ); }
+    if ( builder.root_ref.null() ) { return -1; } // the root allocation failed
+    TableArenaCtx ctx = { &builder.arena };
+    return DashboardSaveWire( ctx, *(const Dashboard *) TableArenaAt( builder.arena, (uint32_t) builder.root_ref.value ), buffer, capacity, builder.arena.allocator );
+}
+
+// DashboardLoadMeasure: the exact region bytes a wire buffer will need, and it is
+// ONE SCAN — a record's type id gives its storage size, its length gives the
+// next record — reading no field value at all, so the caller owns the
+// allocation and can refuse a number it did not expect (§6.5).
+//
+// It reports the DATA bytes and the ATTRIBUTION bytes separately, because the
+// attribution is the wire's numbering made resident (§6.3) and a caller may
+// release it once Load returns. The answer is their sum.
+inline int64_t DashboardLoadMeasure( const uint8_t * wire_file, int64_t wire_file_bytes, int64_t * attribution_bytes = NULL, TableRefuseReason * reason_out = NULL )
+{
+    TableReport ignored;
+    TableIdTable ids_table;
+    int64_t body_bytes = 0;
+    // a FORM BYTE this build does not carry is refused by name (§3, §6.5);
+    // a short or mismatched form-1 trailer is damage named integrity_mismatch;
+    // empty and other-form inputs keep TableOpen's classification.
+    const TableOpenVerdict verdict = TableOpen( wire_file, wire_file_bytes, ids_table, body_bytes );
+    if ( verdict == TableOpenRefused )
+    {
+        if ( reason_out != NULL ) { *reason_out = unknown_form; }
+        return -1;
+    }
+    if ( verdict != TableOpenOk ) { return -1; }
+    // ANY BYTE BETWEEN THE ROOT'S TERMINATOR AND THE TABLE'S FIRST ENTRY
+    // IS MALFORMED (docs/SPEC-TABLES.md §3): the two ends of the file have
+    // met, nothing is decoded, and no region is sized from it.
+    if ( TableBodyEndsEarly( wire_file + 1, body_bytes, ids_table ) ) { return -1; }
+    const uint8_t * const wire = wire_file + 1;
+    const int64_t wire_bytes = body_bytes;
+    TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, &ignored, &ids_table );
+    TableRefuseReason reason = count_over_length;
+    int64_t root_extent = 0;
+    if ( !DashboardWireExtent( wire, wire_bytes, root_extent, &ids_table, reason ) )
+    {
+        if ( reason_out != NULL ) { *reason_out = reason; }
+        return -1;
+    }
+    int64_t data = TableAlignUp64( TableAlignUp64( (int64_t) sizeof( Dashboard ) ) + root_extent );
+    int64_t records = 0;
+    uint64_t type_id = 0;
+    const uint8_t * body = NULL;
+    int64_t length = 0;
+    while ( TableNodeScanNext( scan, type_id, body, length ) )
+    {
+        records++;
+        int64_t storage = DashboardNodeStorage( type_id, length, reason );
+        if ( storage == kTableNodeRefused )
+        {
+            if ( reason_out != NULL ) { *reason_out = reason; }
+            return -1;
+        } // an N the record's framing cannot carry, or a blob past the cap (§2.8, §2.9, §3.1)
+        if ( storage > 0 ) { data += storage; } // a type id this build cannot name commands none
+    }
+    int64_t attribution = ( records + 1 ) * (int64_t) sizeof( TableNodeDirEntry );
+    if ( attribution_bytes != NULL ) { *attribution_bytes = attribution; }
+    return data + attribution;
+}
+
+// DashboardLoadWalk: decode the strict wire into the caller's exact-sized region and
+// return the root. LOAD IS A SCAN: the decode follows no reference, and a
+// cyclic graph is refused afterwards by one linear pass over the node
+// directory (docs/SPEC-TABLES.md §3.1). Damage discards the whole load
+// (§4). NULL means refusal, damage or a CALLER's buffer that was wrong.
+inline const Dashboard * DashboardLoadWalk( uint8_t * region, int64_t region_bytes, const uint8_t * wire_file, int64_t wire_file_bytes, TableReport * report )
+{
+    TableReport ignored;
+    TableReport * out = report != NULL ? report : &ignored;
+    const int32_t non_finite_before = out->non_finite_floats;
+    const bool damaged_before = out->damaged;
+    out->damaged = false;
+    // THE FORM BYTE IS READ FIRST, then the trailer, and only then a body:
+    // a file that is both a newer form and damaged is a REFUSAL and never
+    // damage (docs/SPEC-TABLES.md §3).
+    TableIdTable ids_table;
+    int64_t body_bytes = 0;
+    const TableOpenVerdict verdict = TableOpen( wire_file, wire_file_bytes, ids_table, body_bytes );
+    if ( verdict != TableOpenOk )
+    {
+        if ( verdict == TableOpenDamaged )
+        {
+            out->damaged = true;
+            out->refuse_reason = wire_damaged;
+        }
+        else
+        {
+            out->damaged = damaged_before;
+            out->refused = true;
+            out->refuse_reason = unknown_form;
+            if ( wire_file_bytes > 0 && wire_file[0] == kTableWireMessageForm ) { out->reason = message_form_as_file; }
+            else
+            {
+                out->reason = newer_form;
+            }
+        }
+        return NULL;
+    }
+    if ( TableBodyEndsEarly( wire_file + 1, body_bytes, ids_table ) )
+    {
+        out->damaged = true; // a byte no field claims, before the table (§3)
+        out->refuse_reason = wire_damaged;
+        return NULL;
+    }
+    const uint8_t * const wire = wire_file + 1;
+    const int64_t wire_bytes = body_bytes;
+    if ( region != NULL && region_bytes > 0 && ( ( (uintptr_t) region ) & ( kTableAlign - 1 ) ) == 0 )
+    {
+        memset( region, 0, (size_t) region_bytes );
+    }
+    uint64_t type_id = 0;
+    const uint8_t * body = NULL;
+    int64_t length = 0;
+
+    // the record count and the data bytes, from the FRAMING alone
+    TableRefuseReason reason = count_over_length;
+    bool extent_ok = true;
+    int64_t root_extent = 0;
+    if ( !DashboardWireExtent( wire, wire_bytes, root_extent, &ids_table, reason ) )
+    {
+        extent_ok = false;
+    }
+    int64_t data = TableAlignUp64( TableAlignUp64( (int64_t) sizeof( Dashboard ) ) + root_extent );
+    int64_t records = 0;
+    {
+        TableReport counting;
+        TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, &counting, &ids_table );
+        while ( TableNodeScanNext( scan, type_id, body, length ) )
+        {
+            records++;
+            if ( extent_ok )
+            {
+                int64_t storage = DashboardNodeStorage( type_id, length, reason );
+                if ( storage == kTableNodeRefused ) { extent_ok = false; }
+                else if ( storage > 0 ) { data += storage; }
+            }
+        }
+    }
+    if ( !extent_ok )
+    {
+        DashboardBuilder builder;
+        Dashboard * root = builder.GetRoot();
+        const TableAllocator allocator = builder.arena.allocator;
+        TableNodeDirEntry * directory = root != NULL ? (TableNodeDirEntry *) table_allocate( allocator, ( records + 1 ) * (int64_t) sizeof( TableNodeDirEntry ) ) : NULL;
+        if ( directory == NULL )
+        {
+            out->damaged = true;
+            return NULL;
+        }
+        directory[0].offset = (uint64_t) builder.root_ref.value;
+        directory[0].type_id = 0x7fee95b66225e1fbull;
+        TableNodeMap nodes;
+        nodes.cycle_indices = true;
+        nodes.arena = true;
+        nodes.worker = &builder.main;
+        nodes.entries = directory;
+        nodes.count = records + 1;
+        nodes.once = true;
+        {
+            TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, out, &ids_table );
+            int64_t k = 0;
+            int32_t unknown_records = 0;
+            while ( TableNodeScanNext( scan, type_id, body, length ) )
+            {
+                uint32_t at = DashboardNodeAlloc( type_id, builder.main, length );
+                if ( type_id == kTableStringTypeId && !TableUtf8Valid( body, length ) )
+                {
+                    out->damaged = true;
+                    directory[k + 1].offset = kTableNodeAbsent;
+                    directory[k + 1].type_id = type_id;
+                    k++;
+                    continue;
+                }
+                if ( at == 0 )
+                {
+                    unknown_records++;
+                    directory[k + 1].offset = kTableNodeAbsent;
+                }
+                else
+                {
+                    directory[k + 1].offset = (uint64_t) at;
+                }
+                directory[k + 1].type_id = type_id;
+                k++;
+            }
+            nodes.good = TableNodeScanWhole( scan );
+            if ( nodes.good ) { out->unknown += unknown_records; }
+            else
+            {
+                out->damaged = true;
+            }
+        }
+        if ( nodes.good )
+        {
+            TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, out, &ids_table );
+            int64_t k = 0;
+            while ( TableNodeScanNext( scan, type_id, body, length ) )
+            {
+                if ( directory[k + 1].offset != kTableNodeAbsent )
+                {
+                    TableReader sub( body, length, out, &ids_table );
+                    DashboardNodeBody( type_id, sub, nodes, TableArenaAt( builder.arena, (uint32_t) directory[k + 1].offset ) );
+                    if ( nodes.refused ) { break; }
+                }
+                k++;
+            }
+        }
+        if ( !nodes.refused )
+        {
+            TableReader r( wire, wire_bytes, out, &ids_table );
+            r.nested = false;
+            TableExtentCarve root_carve;
+            root_carve.worker = &builder.main;
+            nodes.carve = &root_carve;
+            DashboardLoadBody( r, nodes, *root );
+        }
+        table_release( allocator, directory );
+        if ( TableNonFiniteRefused( out, non_finite_before ) )
+        {
+            out->damaged = out->damaged || damaged_before;
+            return NULL;
+        }
+        if ( nodes.refused && !out->damaged )
+        {
+            out->refused = true;
+            out->reason = count_over_extent_cap;
+            out->refuse_reason = count_over_extent_cap;
+            out->damaged = damaged_before;
+            return NULL;
+        }
+        out->damaged = true;
+        return NULL;
+    }
+    if ( region == NULL || region_bytes < (int64_t) sizeof( Dashboard ) )
+    {
+        out->damaged = true;
+        return NULL;
+    }
+    if ( ( ( (uintptr_t) region ) & ( kTableAlign - 1 ) ) != 0 )
+    {
+        out->damaged = true;
+        return NULL;
+    }
+    int64_t attribution = ( records + 1 ) * (int64_t) sizeof( TableNodeDirEntry );
+    if ( data + attribution > region_bytes )
+    {
+        out->damaged = true;
+        return NULL;
+    }
+
+    TableNodeMap nodes;
+    nodes.cycle_indices = true; // construction indices become offsets only after the cycle check
+    nodes.base = region;
+    nodes.entries = (TableNodeDirEntry *) ( region + data );
+    nodes.count = records + 1;
+    nodes.once = true; // the file read marks and counts a blob named twice (§2.5, §6.5)
+    TableNodeDirEntry * directory = (TableNodeDirEntry *) ( region + data );
+    directory[0].offset = 0; // position 0 is the ROOT, at offset 0 (§6.3)
+    directory[0].type_id = 0x7fee95b66225e1fbull;
+    Dashboard * root = new ( region ) Dashboard; // lifetime only: LoadBody's first act is DashboardReset
+    DashboardReset( *root );
+
+    // PASS ONE: fill the numbering from the framing, so that an index
+    // resolves whichever way it points. It reads no body.
+    {
+        TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, out, &ids_table );
+        int64_t used = TableAlignUp64( TableAlignUp64( (int64_t) sizeof( Dashboard ) ) + root_extent );
+        int64_t k = 0;
+        int32_t unknown_records = 0; // counted once the scan is known whole
+        while ( TableNodeScanNext( scan, type_id, body, length ) )
+        {
+            int64_t storage = DashboardNodeStorage( type_id, length, reason );
+            if ( type_id == kTableStringTypeId && !TableUtf8Valid( body, length ) )
+            {
+                out->damaged = true;
+                directory[k + 1].offset = kTableNodeAbsent;
+                directory[k + 1].type_id = type_id;
+                k++;
+                continue;
+            }
+            if ( storage <= 0 )
+            {
+                // a record whose type id this build cannot name KEEPS ITS
+                // INDEX, is counted once here and not once per pointer, and
+                // every reference to it reads null (§3.1)
+                unknown_records++;
+                directory[k + 1].offset = kTableNodeAbsent;
+                directory[k + 1].type_id = type_id;
+            }
+            else
+            {
+                directory[k + 1].offset = (uint64_t) used;
+                directory[k + 1].type_id = type_id;
+                DashboardNodePlace( type_id, region + used, length );
+                used += storage;
+            }
+            k++;
+        }
+        nodes.good = TableNodeScanWhole( scan );
+        // the table is whole or it is nothing: a scan that failed counts
+        // malformed and NOT the unknowns it met on the way, because the
+        // numbering they belonged to does not exist (§3.1)
+        if ( nodes.good ) { out->unknown += unknown_records; }
+        else
+        {
+            out->damaged = true;
+        }
+    }
+
+    // PASS TWO: decode each body into its own storage. A forward index
+    // resolves without scratch, because pass one already placed every node.
+    if ( nodes.good )
+    {
+        TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, out, &ids_table );
+        int64_t k = 0;
+        while ( TableNodeScanNext( scan, type_id, body, length ) )
+        {
+            if ( directory[k + 1].offset != kTableNodeAbsent )
+            {
+                TableReader sub( body, length, out, &ids_table );
+                DashboardNodeBody( type_id, sub, nodes, region + directory[k + 1].offset );
+            }
+            k++;
+        }
+    }
+
+    // and the ROOT's own body last, so every index it carries resolves
+    // against a numbering already known good or already known bad
+    TableReader r( wire, wire_bytes, out, &ids_table );
+    r.nested = false; // the ROOT body, the one that carries the node table
+    TableExtentCarve root_carve;
+    root_carve.at = region + TableAlignUp64( (int64_t) sizeof( Dashboard ) );
+    root_carve.left = root_extent;
+    nodes.carve = &root_carve; // the ROOT's extent is its own, like every node's
+    DashboardLoadBody( r, nodes, *root );
+    // A NON-FINITE FLOAT REFUSES THE READ, the strict one too, and nothing
+    // lands: the region holds no root (docs/SPEC-TABLES.md §3.3)
+    if ( TableNonFiniteRefused( out, non_finite_before ) )
+    {
+        out->damaged = out->damaged || damaged_before;
+        memset( region, 0, (size_t) region_bytes );
+        return NULL;
+    }
+    if ( !out->damaged && nodes.good )
+    {
+        TableCycle cycle;
+        TableRegionCtx cycle_ctx;
+        const bool acyclic = TableCycleBegin( cycle, directory, records + 1, region, NULL, &DashboardCycleOrdinal ) &&
+            TableCycleAcyclic( cycle, cycle_ctx, &DashboardCycleNode<TableRegionCtx> );
+        TableCycleRestore( cycle, 0, 0x7fee95b66225e1fbull );
+        {
+            TableReport restoring;
+            TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, &restoring, &ids_table );
+            int64_t k = 0;
+            while ( TableNodeScanNext( scan, type_id, body, length ) )
+            {
+                TableCycleRestore( cycle, k + 1, type_id );
+                k++;
+            }
+        }
+        TableCycleEnd( cycle );
+        if ( !acyclic ) { out->damaged = true; } // a cycle: no writer produces one
+    }
+    if ( out->damaged )
+    {
+        memset( region, 0, (size_t) region_bytes );
+        return NULL;
+    } // damage discards the whole load (§4)
+    out->damaged = damaged_before;
+    return root;
+}
+
+// The PLAIN DashboardLoad IS THE STRICT READ (docs/SPEC-TABLES.md §6.5): it
+// refuses whatever the strict read refuses — malformed, out_of_range,
+// kind-mismatched, an unknown form or wire damage — with a NULL root and
+// the supplied report overwritten with this read's report and its reason
+// set. unknown and widened alone never refuse.
+inline const Dashboard * DashboardLoad( uint8_t * region, int64_t region_bytes, const uint8_t * wire_file, int64_t wire_file_bytes, TableReport * report )
+{
+    TableReport ignored;
+    TableReport * out = report != NULL ? report : &ignored;
+    *out = TableReport(); // this read's report, not the caller's last one (§6.5)
+    const Dashboard * root = DashboardLoadWalk( region, region_bytes, wire_file, wire_file_bytes, out );
+    if ( root == NULL || out->damaged || out->refused || out->missing_required )
+    {
+        // ONE TYPED REASON on the refusal path (docs/SPEC-TABLES.md §6.5, §11).
+        if ( out->refuse_reason == ok )
+        {
+            if ( out->damaged ) { out->refuse_reason = wire_damaged; }
+            else if ( out->refused ) { out->refuse_reason = unknown_form; }
+            else if ( out->missing_required ) { out->refuse_reason = missing_required; }
+            else
+            {
+                out->refuse_reason = wire_damaged;
+            }
+        }
+        return NULL;
+    }
+    out->refuse_reason = ok;
+    return root;
+}
+
+// DashboardLoadBuilderWalk: the TOOL's path — the same strict decode into a fresh
+// builder, so loaded data can be edited and locked again. The numbering is
+// the same one; what differs is where a node lives and therefore what a
+// resolved slot holds — an arena offset here, a self-relative delta there.
+inline bool DashboardLoadBuilderWalk( DashboardBuilder & builder, const uint8_t * wire_file, int64_t wire_file_bytes, TableReport * report )
+{
+    TableReport ignored;
+    TableReport * out = report != NULL ? report : &ignored;
+    const int32_t non_finite_before = out->non_finite_floats;
+    const bool damaged_before = out->damaged;
+    out->damaged = false;
+    TableIdTable ids_table;
+    int64_t body_bytes = 0;
+    const TableOpenVerdict verdict = TableOpen( wire_file, wire_file_bytes, ids_table, body_bytes );
+    if ( verdict != TableOpenOk )
+    {
+        if ( verdict == TableOpenDamaged )
+        {
+            out->damaged = true;
+            out->refuse_reason = wire_damaged;
+        }
+        else
+        {
+            out->damaged = damaged_before;
+            out->refused = true;
+            out->refuse_reason = unknown_form;
+        }
+        return false;
+    }
+    if ( TableBodyEndsEarly( wire_file + 1, body_bytes, ids_table ) )
+    {
+        out->damaged = true; // a byte no field claims, before the table (§3)
+        out->refuse_reason = wire_damaged;
+        return false;
+    }
+    const uint8_t * const wire = wire_file + 1;
+    const int64_t wire_bytes = body_bytes;
+    Dashboard * root = builder.GetRoot();
+    if ( root == NULL )
+    {
+        out->damaged = true;
+        return false;
+    }
+    uint64_t type_id = 0;
+    const uint8_t * body = NULL;
+    int64_t length = 0;
+    int64_t records = 0;
+    {
+        TableReport counting;
+        TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, &counting, &ids_table );
+        while ( TableNodeScanNext( scan, type_id, body, length ) ) { records++; }
+    }
+    // the AUTHORING side may allocate (§6.5), and this is the tool's path.
+    // It goes through the builder's own pair, like everything else the
+    // builder reaches, and the entries come back zeroed.
+    const TableAllocator allocator = builder.arena.allocator;
+    TableNodeDirEntry * directory = (TableNodeDirEntry *) table_allocate( allocator, ( records + 1 ) * (int64_t) sizeof( TableNodeDirEntry ) );
+    if ( directory == NULL )
+    {
+        out->damaged = true;
+        return false;
+    }
+    directory[0].offset = (uint64_t) builder.root_ref.value;
+    directory[0].type_id = 0x7fee95b66225e1fbull;
+    TableNodeMap nodes;
+    nodes.cycle_indices = true; // construction indices become offsets only after the cycle check
+    nodes.base = NULL;
+    nodes.entries = directory;
+    nodes.count = records + 1;
+    nodes.arena = true; // a resolved slot holds the node's ARENA OFFSET here
+    nodes.once = true; // a blob named from two slots is one node, counted (§2.5, §16.7)
+    nodes.worker = &builder.main; // and a map's entries and a list's elements are the arena's, not a node extent's (§2.8, §2.9)
+    const int32_t missing_before = out->missing_required;
+    {
+        TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, out, &ids_table );
+        int64_t k = 0;
+        int32_t unknown_records = 0; // counted once the scan is known whole
+        while ( TableNodeScanNext( scan, type_id, body, length ) )
+        {
+            uint32_t at = DashboardNodeAlloc( type_id, builder.main, length );
+            if ( type_id == kTableStringTypeId && !TableUtf8Valid( body, length ) )
+            {
+                out->damaged = true;
+                directory[k + 1].offset = kTableNodeAbsent;
+                directory[k + 1].type_id = type_id;
+                k++;
+                continue;
+            }
+            if ( at == 0 )
+            {
+                unknown_records++;
+                directory[k + 1].offset = kTableNodeAbsent;
+            }
+            else
+            {
+                directory[k + 1].offset = (uint64_t) at;
+            }
+            directory[k + 1].type_id = type_id;
+            k++;
+        }
+        nodes.good = TableNodeScanWhole( scan );
+        if ( nodes.good ) { out->unknown += unknown_records; }
+        else
+        {
+            out->damaged = true;
+        }
+    }
+    if ( nodes.good )
+    {
+        TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, out, &ids_table );
+        int64_t k = 0;
+        while ( TableNodeScanNext( scan, type_id, body, length ) )
+        {
+            if ( directory[k + 1].offset != kTableNodeAbsent )
+            {
+                TableReader sub( body, length, out, &ids_table );
+                DashboardNodeBody( type_id, sub, nodes, TableArenaAt( builder.arena, (uint32_t) directory[k + 1].offset ) );
+                if ( nodes.refused ) { break; }
+            }
+            k++;
+        }
+    }
+    TableReader r( wire, wire_bytes, out, &ids_table );
+    r.nested = false; // the ROOT body, the one that carries the node table
+    TableExtentCarve root_carve;
+    root_carve.worker = &builder.main;
+    nodes.carve = &root_carve;
+    bool ok = !nodes.refused && DashboardLoadBody( r, nodes, *root );
+    // A NON-FINITE FLOAT REFUSES THE READ, the strict one too (§3.3)
+    if ( TableNonFiniteRefused( out, non_finite_before ) ) { ok = false; }
+    if ( out->missing_required != missing_before ) { ok = false; }
+    // A COUNT ABOVE THE int32 CAP is this path's refusal (docs/SPEC-TABLES.md
+    // §2.9): the whole-load outcome of damage, the root reset below, named
+    // count_over_extent_cap and not damage, so malformed is not set. The walk
+    // stops at the count, so a NaN this read met came before it, and the first
+    // refusal in read order names the read
+    ok = ok && !nodes.refused;
+    if ( nodes.refused && !out->damaged && out->non_finite_floats == non_finite_before )
+    {
+        out->refused = true;
+        out->reason = count_over_extent_cap;
+        out->refuse_reason = count_over_extent_cap;
+    }
+    // A CYCLIC WIRE IS DAMAGE (docs/SPEC-TABLES.md §3.1, §4)
+    if ( ok && !out->damaged && nodes.good )
+    {
+        TableCycle cycle;
+        TableArenaCtx cycle_ctx = { &builder.arena };
+        const bool acyclic = TableCycleBegin( cycle, directory, records + 1, NULL, &builder.arena, &DashboardCycleOrdinal ) &&
+            TableCycleAcyclic( cycle, cycle_ctx, &DashboardCycleNode<TableArenaCtx> );
+        TableCycleEnd( cycle );
+        if ( !acyclic ) { out->damaged = true; } // a cycle: no writer produces one
+    }
+    table_release( allocator, directory );
+    // DAMAGE DISCARDS THE WHOLE LOAD (docs/SPEC-TABLES.md §4), and so does
+    // every refusal: the root goes back to its declared defaults, so no
+    // node the walk placed is reachable from it and the builder holds
+    // nothing to use. The nodes stay in the arena, unreachable, until the
+    // builder is destroyed; Lock packs from the root and never sees them.
+    if ( out->damaged || !ok ) { DashboardReset( *root ); }
+    if ( out->damaged ) { return false; }
+    out->damaged = damaged_before;
+    return ok;
+}
+
+// The PLAIN DashboardLoadBuilder IS THE STRICT READ (docs/SPEC-TABLES.md §6.5):
+// it refuses whatever the strict read refuses — malformed, out_of_range,
+// kind-mismatched, an unknown form or wire damage — with false as its
+// refusal value and the supplied report overwritten with this read's report
+// and its reason set. unknown and widened alone never refuse.
+inline bool DashboardLoadBuilder( DashboardBuilder & builder, const uint8_t * wire_file, int64_t wire_file_bytes, TableReport * report )
+{
+    TableReport ignored;
+    TableReport * out = report != NULL ? report : &ignored;
+    *out = TableReport(); // this read's report, not the caller's last one (§6.5)
+    const bool decoded = DashboardLoadBuilderWalk( builder, wire_file, wire_file_bytes, out );
+    if ( !decoded || out->damaged || out->refused || out->missing_required )
+    {
+        // ONE TYPED REASON on the refusal path (docs/SPEC-TABLES.md §6.5, §11).
+        if ( out->refuse_reason == ok )
+        {
+            if ( out->damaged ) { out->refuse_reason = wire_damaged; }
+            else if ( out->refused ) { out->refuse_reason = unknown_form; }
+            else if ( out->missing_required ) { out->refuse_reason = missing_required; }
+            else
+            {
+                out->refuse_reason = wire_damaged;
+            }
+        }
+        Dashboard * refused_root = builder.GetRoot();
+        if ( refused_root != NULL ) { DashboardReset( *refused_root ); } // nothing of a refused read is used (§4, §6.5)
+        return false;
+    }
+    out->refuse_reason = ok;
+    return true;
+}
+
+// DashboardReadStrict is the STRICT read (docs/SPEC-TABLES.md §6.5): one call, its
+// OWN builder, the root or a refusal with ONE typed reason. The caller does
+// not measure and does not Init: the measure and the builder are this call's.
+// The packed root it returns is the caller's to release with the allocator it
+// passed (table_release( allocator, root ), the default pair when none).
+inline const Dashboard * DashboardReadStrict( const uint8_t * wire_file, int64_t wire_file_bytes, TableRefuseReason * reason = NULL, TableAllocator allocator = TableDefaultAllocator() )
+{
+    if ( reason != NULL ) { *reason = ok; }
+    int64_t attribution = 0;
+    TableRefuseReason why = ok;
+    const int64_t size = DashboardLoadMeasure( wire_file, wire_file_bytes, &attribution, &why );
+    // a count above the int32 cap is a refusal the builder read meets in read
+    // order, so a NaN before it names the read instead (§2.9): the measure,
+    // which reads no float, hands that case to the builder read below
+    if ( size < 0 && why != count_over_extent_cap )
+    {
+        if ( reason != NULL ) { *reason = why == ok ? wire_damaged : why; }
+        return NULL;
+    }
+    DashboardBuilder builder( allocator );
+    TableReport report;
+    const bool decoded = DashboardLoadBuilderWalk( builder, wire_file, wire_file_bytes, &report );
+    if ( !decoded || report.damaged || report.refused || report.missing_required )
+    {
+        if ( reason != NULL )
+        {
+            if ( report.refuse_reason != ok ) { *reason = report.refuse_reason; }
+            else if ( report.damaged ) { *reason = wire_damaged; }
+            else if ( report.refused ) { *reason = unknown_form; }
+            else if ( report.missing_required ) { *reason = missing_required; }
+            else
+            {
+                *reason = wire_damaged;
+            }
+        }
+        return NULL;
+    }
+    if ( size < 0 )
+    {
+        if ( reason != NULL ) { *reason = why; }
+        return NULL;
+    }
+    if ( !builder.Lock() )
+    {
+        if ( reason != NULL ) { *reason = allocation_failed; }
+        return NULL;
+    }
+    const Dashboard * root = builder.AsConst();
+    // the packed region is the caller's from here on, not the builder's
+    builder.region = NULL;
+    builder.region_bytes = 0;
+    if ( reason != NULL ) { *reason = ok; }
+    return root;
+}
+
 // ---- SessionsDiff: the variable-length life (docs/SPEC-TABLES.md §2, §6, §9) ----
 //
 // MUTABLE: SessionsDiffBuilder — allocate nodes, wire them together, then Lock.
@@ -42252,7 +43982,7 @@ inline int64_t HelloMeasureBodyRetain( const Ctx & ctx, const TableNumbering & n
     (void) ctx;
     (void) numbering;
     int64_t bytes = 1; // the ZERO REFERENCE that ends the body
-    if ( value.proto != 0 ) { bytes += TableLebBytes( ids.ref_at( 126, 0xf94687246d893231ull ) ) + 1 + 4; } // proto
+    if ( value.proto != 0 ) { bytes += TableLebBytes( ids.ref_at( 127, 0xf94687246d893231ull ) ) + 1 + 4; } // proto
     if ( value.min_peer != 0 ) { bytes += TableLebBytes( ids.ref_at( 45, 0x6276593b48242efcull ) ) + 1 + 4; } // min_peer
     bytes += TableRetainTailMeasure( retain, ids, path );
     return bytes;
@@ -42265,7 +43995,7 @@ inline bool HelloSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & n
     (void) numbering;
     if ( value.proto != 0 )
     {
-        w.header( ids.ref_at( 126, 0xf94687246d893231ull ), 8 ); // proto
+        w.header( ids.ref_at( 127, 0xf94687246d893231ull ), 8 ); // proto
         w.put32( uint32_t( value.proto ) );
     }
     if ( value.min_peer != 0 )
@@ -42475,7 +44205,7 @@ inline int64_t SessionInfoMeasureBodyRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 78, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
+            bytes += TableLebBytes( ids.ref_at( 79, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
         }
     }
     {
@@ -42488,7 +44218,7 @@ inline int64_t SessionInfoMeasureBodyRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_model = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_model, index_model ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 75, 0x9de543933e6e703aull ) ) + 1 + TableLebBytes( index_model );
+            bytes += TableLebBytes( ids.ref_at( 76, 0x9de543933e6e703aull ) ) + 1 + TableLebBytes( index_model );
         }
     }
     {
@@ -42517,8 +44247,8 @@ inline int64_t SessionInfoMeasureBodyRetain( const Ctx & ctx, const TableNumberi
             bytes += TableLebBytes( ids.ref_at( 32, 0x414a134c24ef8152ull ) ) + 1 + TableLebBytes( index_instance );
         }
     }
-    if ( value.auto_account != false ) { bytes += TableLebBytes( ids.ref_at( 96, 0xbf329c2c6c784fdeull ) ) + 1 + 1; } // auto_account
-    if ( value.limit_request != 0 ) { bytes += TableLebBytes( ids.ref_at( 121, 0xec5a07037be2a186ull ) ) + 1 + 8; } // limit_request
+    if ( value.auto_account != false ) { bytes += TableLebBytes( ids.ref_at( 97, 0xbf329c2c6c784fdeull ) ) + 1 + 1; } // auto_account
+    if ( value.limit_request != 0 ) { bytes += TableLebBytes( ids.ref_at( 122, 0xec5a07037be2a186ull ) ) + 1 + 8; } // limit_request
     {
         const TableBlob * blob_limit_account = TableBlobAt( ctx, value.limit_account ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
@@ -42529,7 +44259,7 @@ inline int64_t SessionInfoMeasureBodyRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_limit_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_limit_account, index_limit_account ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 86, 0xaac947ef35b48e90ull ) ) + 1 + TableLebBytes( index_limit_account );
+            bytes += TableLebBytes( ids.ref_at( 87, 0xaac947ef35b48e90ull ) ) + 1 + TableLebBytes( index_limit_account );
         }
     }
     {
@@ -42542,10 +44272,10 @@ inline int64_t SessionInfoMeasureBodyRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_limit_model = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_limit_model, index_limit_model ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 116, 0xe1e90ce0b9ed7706ull ) ) + 1 + TableLebBytes( index_limit_model );
+            bytes += TableLebBytes( ids.ref_at( 117, 0xe1e90ce0b9ed7706ull ) ) + 1 + TableLebBytes( index_limit_model );
         }
     }
-    if ( value.context_epoch != 0 ) { bytes += TableLebBytes( ids.ref_at( 84, 0xa811c78198b72d52ull ) ) + 1 + 8; } // context_epoch
+    if ( value.context_epoch != 0 ) { bytes += TableLebBytes( ids.ref_at( 85, 0xa811c78198b72d52ull ) ) + 1 + 8; } // context_epoch
     {
         const TableBlob * blob_catalog = TableBlobAt( ctx, value.catalog ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
@@ -42556,7 +44286,7 @@ inline int64_t SessionInfoMeasureBodyRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_catalog = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_catalog, index_catalog ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 127, 0xf9928605e9a2ddd8ull ) ) + 1 + TableLebBytes( index_catalog );
+            bytes += TableLebBytes( ids.ref_at( 128, 0xf9928605e9a2ddd8ull ) ) + 1 + TableLebBytes( index_catalog );
         }
     }
     bytes += TableRetainTailMeasure( retain, ids, path );
@@ -42594,7 +44324,7 @@ inline bool SessionInfoSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return false; }
-            w.header( ids.ref_at( 78, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 79, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
             w.putleb( index_account );
         }
     }
@@ -42604,7 +44334,7 @@ inline bool SessionInfoSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_model = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_model, index_model ) ) { return false; }
-            w.header( ids.ref_at( 75, 0x9de543933e6e703aull ), 17 ); // model — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 76, 0x9de543933e6e703aull ), 17 ); // model — a NODE INDEX into the flat node table
             w.putleb( index_model );
         }
     }
@@ -42630,12 +44360,12 @@ inline bool SessionInfoSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
     }
     if ( value.auto_account != false )
     {
-        w.header( ids.ref_at( 96, 0xbf329c2c6c784fdeull ), 1 ); // auto_account
+        w.header( ids.ref_at( 97, 0xbf329c2c6c784fdeull ), 1 ); // auto_account
         w.put8( value.auto_account ? 1 : 0 );
     }
     if ( value.limit_request != 0 )
     {
-        w.header( ids.ref_at( 121, 0xec5a07037be2a186ull ), 9 ); // limit_request
+        w.header( ids.ref_at( 122, 0xec5a07037be2a186ull ), 9 ); // limit_request
         w.put64( uint64_t( value.limit_request ) );
     }
     {
@@ -42644,7 +44374,7 @@ inline bool SessionInfoSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_limit_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_limit_account, index_limit_account ) ) { return false; }
-            w.header( ids.ref_at( 86, 0xaac947ef35b48e90ull ), 17 ); // limit_account — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 87, 0xaac947ef35b48e90ull ), 17 ); // limit_account — a NODE INDEX into the flat node table
             w.putleb( index_limit_account );
         }
     }
@@ -42654,13 +44384,13 @@ inline bool SessionInfoSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_limit_model = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_limit_model, index_limit_model ) ) { return false; }
-            w.header( ids.ref_at( 116, 0xe1e90ce0b9ed7706ull ), 17 ); // limit_model — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 117, 0xe1e90ce0b9ed7706ull ), 17 ); // limit_model — a NODE INDEX into the flat node table
             w.putleb( index_limit_model );
         }
     }
     if ( value.context_epoch != 0 )
     {
-        w.header( ids.ref_at( 84, 0xa811c78198b72d52ull ), 9 ); // context_epoch
+        w.header( ids.ref_at( 85, 0xa811c78198b72d52ull ), 9 ); // context_epoch
         w.put64( uint64_t( value.context_epoch ) );
     }
     {
@@ -42669,7 +44399,7 @@ inline bool SessionInfoSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_catalog = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_catalog, index_catalog ) ) { return false; }
-            w.header( ids.ref_at( 127, 0xf9928605e9a2ddd8ull ), 17 ); // catalog — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 128, 0xf9928605e9a2ddd8ull ), 17 ); // catalog — a NODE INDEX into the flat node table
             w.putleb( index_catalog );
         }
     }
@@ -43130,12 +44860,12 @@ inline int64_t EntryChangeMeasureBodyRetain( const Ctx & ctx, const TableNumberi
     if ( value.kind != EntryKind::None )
     {
         if ( !TableEnumNamed( value.kind ) ) { return -1; } // no variant names this value
-        const uint64_t ref_kind = ids.ref_at( 123, 0xef9c96d721673243ull );
+        const uint64_t ref_kind = ids.ref_at( 124, 0xef9c96d721673243ull );
         uint64_t variant_kind = 0;
         if ( !TableEnumRef( ids, value.kind, variant_kind ) ) { return -1; }
         bytes += TableLebBytes( ref_kind ) + 1 + TableLebBytes( variant_kind ); // kind: the variant's reference
     }
-    if ( value.closed != false ) { bytes += TableLebBytes( ids.ref_at( 63, 0x85530f5090e836c5ull ) ) + 1 + 1; } // closed
+    if ( value.closed != false ) { bytes += TableLebBytes( ids.ref_at( 64, 0x85530f5090e836c5ull ) ) + 1 + 1; } // closed
     if ( value.offset != 0 ) { bytes += TableLebBytes( ids.ref_at( 2, 0x0268b0f8129435caull ) ) + 1 + 8; } // offset
     {
         const TableBlob * blob_tail = TableBlobAt( ctx, value.tail ); // *string
@@ -43147,10 +44877,10 @@ inline int64_t EntryChangeMeasureBodyRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_tail = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_tail, index_tail ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 111, 0xd94c56ef0798d723ull ) ) + 1 + TableLebBytes( index_tail );
+            bytes += TableLebBytes( ids.ref_at( 112, 0xd94c56ef0798d723ull ) ) + 1 + TableLebBytes( index_tail );
         }
     }
-    if ( value.account_email_end != 0 ) { bytes += TableLebBytes( ids.ref_at( 93, 0xb2ac393f2277c4d1ull ) ) + 1 + 4; } // account_email_end
+    if ( value.account_email_end != 0 ) { bytes += TableLebBytes( ids.ref_at( 94, 0xb2ac393f2277c4d1ull ) ) + 1 + 4; } // account_email_end
     bytes += TableRetainTailMeasure( retain, ids, path );
     return bytes;
 }
@@ -43163,14 +44893,14 @@ inline bool EntryChangeSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
     if ( value.kind != EntryKind::None )
     {
         if ( !TableEnumNamed( value.kind ) ) { return false; }
-        const uint64_t ref_kind = ids.ref_at( 123, 0xef9c96d721673243ull );
+        const uint64_t ref_kind = ids.ref_at( 124, 0xef9c96d721673243ull );
         uint64_t variant_kind = 0;
         if ( !TableEnumRef( ids, value.kind, variant_kind ) ) { return false; }
         w.header( ref_kind, 30 ); w.putleb( variant_kind ); // kind
     }
     if ( value.closed != false )
     {
-        w.header( ids.ref_at( 63, 0x85530f5090e836c5ull ), 1 ); // closed
+        w.header( ids.ref_at( 64, 0x85530f5090e836c5ull ), 1 ); // closed
         w.put8( value.closed ? 1 : 0 );
     }
     if ( value.offset != 0 )
@@ -43184,13 +44914,13 @@ inline bool EntryChangeSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_tail = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_tail, index_tail ) ) { return false; }
-            w.header( ids.ref_at( 111, 0xd94c56ef0798d723ull ), 17 ); // tail — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 112, 0xd94c56ef0798d723ull ), 17 ); // tail — a NODE INDEX into the flat node table
             w.putleb( index_tail );
         }
     }
     if ( value.account_email_end != 0 )
     {
-        w.header( ids.ref_at( 93, 0xb2ac393f2277c4d1ull ), 8 ); // account_email_end
+        w.header( ids.ref_at( 94, 0xb2ac393f2277c4d1ull ), 8 ); // account_email_end
         w.put32( uint32_t( value.account_email_end ) );
     }
     if ( !TableRetainTailSave( retain, ids, w, path ) ) { return false; }
@@ -43744,10 +45474,10 @@ inline int64_t SessionChangeMeasureBodyRetain( const Ctx & ctx, const TableNumbe
     (void) numbering;
     int64_t bytes = 1; // the ZERO REFERENCE that ends the body
     if ( value.id != 0 ) { bytes += TableLebBytes( ids.ref_at( 6, 0x08b72e07b55c3ac0ull ) ) + 1 + 8; } // id
-    if ( value.changed != false ) { bytes += TableLebBytes( ids.ref_at( 115, 0xdf38879af614707bull ) ) + 1 + 1; } // changed
+    if ( value.changed != false ) { bytes += TableLebBytes( ids.ref_at( 116, 0xdf38879af614707bull ) ) + 1 + 1; } // changed
     {
         const int32_t mark_info = ids.count;
-        const uint64_t ref_info = ids.ref_at( 124, 0xf5d6a8c57ab94f05ull );
+        const uint64_t ref_info = ids.ref_at( 125, 0xf5d6a8c57ab94f05ull );
         const int64_t body_info = SessionInfoMeasureBodyRetain( ctx, numbering, ids, value.info, retain, TableRetainStepInto( path, 2, (uint32_t) ( 0 ) ) );
         if ( body_info < 0 ) { return -1; }
         if ( body_info > 1 ) { bytes += TableLebBytes( ref_info ) + 1 + TableLebBytes( (uint64_t) ( body_info ) ) + ( body_info ); } // info
@@ -43756,20 +45486,20 @@ inline int64_t SessionChangeMeasureBodyRetain( const Ctx & ctx, const TableNumbe
     if ( value.activity != Activity::Idle )
     {
         if ( !TableEnumNamed( value.activity ) ) { return -1; } // no variant names this value
-        const uint64_t ref_activity = ids.ref_at( 82, 0xa62952ad3187308cull );
+        const uint64_t ref_activity = ids.ref_at( 83, 0xa62952ad3187308cull );
         uint64_t variant_activity = 0;
         if ( !TableEnumRef( ids, value.activity, variant_activity ) ) { return -1; }
         bytes += TableLebBytes( ref_activity ) + 1 + TableLebBytes( variant_activity ); // activity: the variant's reference
     }
-    if ( value.first != 0 ) { bytes += TableLebBytes( ids.ref_at( 66, 0x89d7ed7f996f1d41ull ) ) + 1 + 8; } // first
-    if ( value.keep_from != 0 ) { bytes += TableLebBytes( ids.ref_at( 74, 0x9c234ff528703a45ull ) ) + 1 + 8; } // keep_from
+    if ( value.first != 0 ) { bytes += TableLebBytes( ids.ref_at( 67, 0x89d7ed7f996f1d41ull ) ) + 1 + 8; } // first
+    if ( value.keep_from != 0 ) { bytes += TableLebBytes( ids.ref_at( 75, 0x9c234ff528703a45ull ) ) + 1 + 8; } // keep_from
     {
         // entries: a kind 14 array of kind 13 elements, INDEX order (§2.9)
         TableListCursor<EntryChange> cursor_entries = TableListElements( ctx, value.entries );
         if ( !cursor_entries.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_entries.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_entries = ids.ref_at( 101, 0xc5b2a72c0845a253ull );
+            const uint64_t ref_entries = ids.ref_at( 102, 0xc5b2a72c0845a253ull );
             int64_t body_entries = 0;
             body_entries += 1 + TableLebBytes( (uint64_t) ( cursor_entries.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_entries = 0; elem_i_entries < cursor_entries.count; elem_i_entries++ )
@@ -43788,7 +45518,7 @@ inline int64_t SessionChangeMeasureBodyRetain( const Ctx & ctx, const TableNumbe
         if ( !cursor_queue.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_queue.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_queue = ids.ref_at( 92, 0xb11e8b146c5a21d8ull );
+            const uint64_t ref_queue = ids.ref_at( 93, 0xb11e8b146c5a21d8ull );
             int64_t body_queue = 0;
             body_queue += 1 + TableLebBytes( (uint64_t) ( cursor_queue.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_queue = 0; elem_i_queue < cursor_queue.count; elem_i_queue++ )
@@ -43801,7 +45531,7 @@ inline int64_t SessionChangeMeasureBodyRetain( const Ctx & ctx, const TableNumbe
             bytes += TableLebBytes( ref_queue ) + 1 + TableLebBytes( (uint64_t) ( body_queue ) ) + ( body_queue );
         }
     }
-    if ( value.active_agents != 0 ) { bytes += TableLebBytes( ids.ref_at( 97, 0xbfeb08aad574e406ull ) ) + 1 + 4; } // active_agents
+    if ( value.active_agents != 0 ) { bytes += TableLebBytes( ids.ref_at( 98, 0xbfeb08aad574e406ull ) ) + 1 + 4; } // active_agents
     if ( value.bus_senders_known != false ) { bytes += TableLebBytes( ids.ref_at( 27, 0x3cd29b5c25941ab8ull ) ) + 1 + 1; } // bus_senders_known
     {
         // bus_senders: a kind 14 array of kind 12 elements, INDEX order (§2.9)
@@ -43809,7 +45539,7 @@ inline int64_t SessionChangeMeasureBodyRetain( const Ctx & ctx, const TableNumbe
         if ( !cursor_bus_senders.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_bus_senders.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_bus_senders = ids.ref_at( 105, 0xcb68e7f0012df3ccull );
+            const uint64_t ref_bus_senders = ids.ref_at( 106, 0xcb68e7f0012df3ccull );
             int64_t body_bus_senders = 0;
             body_bus_senders += 1 + TableLebBytes( (uint64_t) ( cursor_bus_senders.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_bus_senders = 0; elem_i_bus_senders < cursor_bus_senders.count; elem_i_bus_senders++ )
@@ -43833,7 +45563,7 @@ inline int64_t SessionChangeMeasureBodyRetain( const Ctx & ctx, const TableNumbe
         {
             uint64_t index_primary_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) pointee_primary_account, index_primary_account ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 71, 0x8fd6d804ece1e65dull ) ) + 1 + TableLebBytes( index_primary_account );
+            bytes += TableLebBytes( ids.ref_at( 72, 0x8fd6d804ece1e65dull ) ) + 1 + TableLebBytes( index_primary_account );
         }
     }
     bytes += TableRetainTailMeasure( retain, ids, path );
@@ -43852,12 +45582,12 @@ inline bool SessionChangeSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbe
     }
     if ( value.changed != false )
     {
-        w.header( ids.ref_at( 115, 0xdf38879af614707bull ), 1 ); // changed
+        w.header( ids.ref_at( 116, 0xdf38879af614707bull ), 1 ); // changed
         w.put8( value.changed ? 1 : 0 );
     }
     {
         const int32_t mark_info = ids.count;
-        const uint64_t ref_info = ids.ref_at( 124, 0xf5d6a8c57ab94f05ull );
+        const uint64_t ref_info = ids.ref_at( 125, 0xf5d6a8c57ab94f05ull );
         const int64_t body_info = SessionInfoMeasureBodyRetain( ctx, numbering, ids, value.info, retain, TableRetainStepInto( path, 2, (uint32_t) ( 0 ) ) );
         if ( body_info < 0 ) return false; // storage invariant, refused as measure refuses it
         if ( body_info > 1 ) // all-default nested elides
@@ -43871,19 +45601,19 @@ inline bool SessionChangeSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbe
     if ( value.activity != Activity::Idle )
     {
         if ( !TableEnumNamed( value.activity ) ) { return false; }
-        const uint64_t ref_activity = ids.ref_at( 82, 0xa62952ad3187308cull );
+        const uint64_t ref_activity = ids.ref_at( 83, 0xa62952ad3187308cull );
         uint64_t variant_activity = 0;
         if ( !TableEnumRef( ids, value.activity, variant_activity ) ) { return false; }
         w.header( ref_activity, 30 ); w.putleb( variant_activity ); // activity
     }
     if ( value.first != 0 )
     {
-        w.header( ids.ref_at( 66, 0x89d7ed7f996f1d41ull ), 9 ); // first
+        w.header( ids.ref_at( 67, 0x89d7ed7f996f1d41ull ), 9 ); // first
         w.put64( uint64_t( value.first ) );
     }
     if ( value.keep_from != 0 )
     {
-        w.header( ids.ref_at( 74, 0x9c234ff528703a45ull ), 9 ); // keep_from
+        w.header( ids.ref_at( 75, 0x9c234ff528703a45ull ), 9 ); // keep_from
         w.put64( uint64_t( value.keep_from ) );
     }
     {
@@ -43891,7 +45621,7 @@ inline bool SessionChangeSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbe
         if ( !cursor_entries.ok ) { return false; }
         if ( cursor_entries.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_entries = ids.ref_at( 101, 0xc5b2a72c0845a253ull );
+            const uint64_t ref_entries = ids.ref_at( 102, 0xc5b2a72c0845a253ull );
             int64_t body_entries = 0;
             body_entries += 1 + TableLebBytes( (uint64_t) ( cursor_entries.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_entries = 0; elem_i_entries < cursor_entries.count; elem_i_entries++ )
@@ -43925,7 +45655,7 @@ inline bool SessionChangeSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbe
         if ( !cursor_queue.ok ) { return false; }
         if ( cursor_queue.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_queue = ids.ref_at( 92, 0xb11e8b146c5a21d8ull );
+            const uint64_t ref_queue = ids.ref_at( 93, 0xb11e8b146c5a21d8ull );
             int64_t body_queue = 0;
             body_queue += 1 + TableLebBytes( (uint64_t) ( cursor_queue.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_queue = 0; elem_i_queue < cursor_queue.count; elem_i_queue++ )
@@ -43953,7 +45683,7 @@ inline bool SessionChangeSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbe
     }
     if ( value.active_agents != 0 )
     {
-        w.header( ids.ref_at( 97, 0xbfeb08aad574e406ull ), 8 ); // active_agents
+        w.header( ids.ref_at( 98, 0xbfeb08aad574e406ull ), 8 ); // active_agents
         w.put32( uint32_t( value.active_agents ) );
     }
     if ( value.bus_senders_known != false )
@@ -43966,7 +45696,7 @@ inline bool SessionChangeSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbe
         if ( !cursor_bus_senders.ok ) { return false; }
         if ( cursor_bus_senders.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_bus_senders = ids.ref_at( 105, 0xcb68e7f0012df3ccull );
+            const uint64_t ref_bus_senders = ids.ref_at( 106, 0xcb68e7f0012df3ccull );
             int64_t body_bus_senders = 0;
             body_bus_senders += 1 + TableLebBytes( (uint64_t) ( cursor_bus_senders.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_bus_senders = 0; elem_i_bus_senders < cursor_bus_senders.count; elem_i_bus_senders++ )
@@ -43998,7 +45728,7 @@ inline bool SessionChangeSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbe
         {
             uint64_t index_primary_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) pointee_primary_account, index_primary_account ) ) { return false; }
-            w.header( ids.ref_at( 71, 0x8fd6d804ece1e65dull ), 17 ); // primary_account — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 72, 0x8fd6d804ece1e65dull ), 17 ); // primary_account — a NODE INDEX into the flat node table
             w.putleb( index_primary_account );
         }
     }
@@ -44784,7 +46514,7 @@ inline int64_t SecretRequestMeasureBodyRetain( const Ctx & ctx, const TableNumbe
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 78, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
+            bytes += TableLebBytes( ids.ref_at( 79, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
         }
     }
     {
@@ -44797,10 +46527,10 @@ inline int64_t SecretRequestMeasureBodyRetain( const Ctx & ctx, const TableNumbe
         {
             uint64_t index_what = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_what, index_what ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 73, 0x9be8c5f64f26c30full ) ) + 1 + TableLebBytes( index_what );
+            bytes += TableLebBytes( ids.ref_at( 74, 0x9be8c5f64f26c30full ) ) + 1 + TableLebBytes( index_what );
         }
     }
-    if ( value.asker != 0 ) { bytes += TableLebBytes( ids.ref_at( 129, 0xfb0aacbc4db97225ull ) ) + 1 + 8; } // asker
+    if ( value.asker != 0 ) { bytes += TableLebBytes( ids.ref_at( 130, 0xfb0aacbc4db97225ull ) ) + 1 + 8; } // asker
     {
         const TableBlob * blob_asker_name = TableBlobAt( ctx, value.asker_name ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
@@ -44811,7 +46541,7 @@ inline int64_t SecretRequestMeasureBodyRetain( const Ctx & ctx, const TableNumbe
         {
             uint64_t index_asker_name = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_asker_name, index_asker_name ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 62, 0x8333fca36e80cc6dull ) ) + 1 + TableLebBytes( index_asker_name );
+            bytes += TableLebBytes( ids.ref_at( 63, 0x8333fca36e80cc6dull ) ) + 1 + TableLebBytes( index_asker_name );
         }
     }
     {
@@ -44847,7 +46577,7 @@ inline bool SecretRequestSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbe
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return false; }
-            w.header( ids.ref_at( 78, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 79, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
             w.putleb( index_account );
         }
     }
@@ -44857,13 +46587,13 @@ inline bool SecretRequestSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbe
         {
             uint64_t index_what = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_what, index_what ) ) { return false; }
-            w.header( ids.ref_at( 73, 0x9be8c5f64f26c30full ), 17 ); // what — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 74, 0x9be8c5f64f26c30full ), 17 ); // what — a NODE INDEX into the flat node table
             w.putleb( index_what );
         }
     }
     if ( value.asker != 0 )
     {
-        w.header( ids.ref_at( 129, 0xfb0aacbc4db97225ull ), 9 ); // asker
+        w.header( ids.ref_at( 130, 0xfb0aacbc4db97225ull ), 9 ); // asker
         w.put64( uint64_t( value.asker ) );
     }
     {
@@ -44872,7 +46602,7 @@ inline bool SecretRequestSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbe
         {
             uint64_t index_asker_name = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_asker_name, index_asker_name ) ) { return false; }
-            w.header( ids.ref_at( 62, 0x8333fca36e80cc6dull ), 17 ); // asker_name — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 63, 0x8333fca36e80cc6dull ), 17 ); // asker_name — a NODE INDEX into the flat node table
             w.putleb( index_asker_name );
         }
     }
@@ -45178,7 +46908,7 @@ inline int64_t AccountChoiceMeasureBodyRetain( const Ctx & ctx, const TableNumbe
         {
             uint64_t index_name = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_name, index_name ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 100, 0xc4bcadba8e631b86ull ) ) + 1 + TableLebBytes( index_name );
+            bytes += TableLebBytes( ids.ref_at( 101, 0xc4bcadba8e631b86ull ) ) + 1 + TableLebBytes( index_name );
         }
     }
     {
@@ -45223,7 +46953,7 @@ inline bool AccountChoiceSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbe
         {
             uint64_t index_name = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_name, index_name ) ) { return false; }
-            w.header( ids.ref_at( 100, 0xc4bcadba8e631b86ull ), 17 ); // name — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 101, 0xc4bcadba8e631b86ull ), 17 ); // name — a NODE INDEX into the flat node table
             w.putleb( index_name );
         }
     }
@@ -45464,7 +47194,7 @@ inline int64_t AIMeasureBodyRetain( const Ctx & ctx, const TableNumbering & numb
         {
             uint64_t index_name = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_name, index_name ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 100, 0xc4bcadba8e631b86ull ) ) + 1 + TableLebBytes( index_name );
+            bytes += TableLebBytes( ids.ref_at( 101, 0xc4bcadba8e631b86ull ) ) + 1 + TableLebBytes( index_name );
         }
     }
     {
@@ -45485,7 +47215,7 @@ inline int64_t AIMeasureBodyRetain( const Ctx & ctx, const TableNumbering & numb
             bytes += TableLebBytes( ref_accounts ) + 1 + TableLebBytes( (uint64_t) ( body_accounts ) ) + ( body_accounts );
         }
     }
-    if ( value.can_auto_account != false ) { bytes += TableLebBytes( ids.ref_at( 95, 0xbb15df0a66f3b845ull ) ) + 1 + 1; } // can_auto_account
+    if ( value.can_auto_account != false ) { bytes += TableLebBytes( ids.ref_at( 96, 0xbb15df0a66f3b845ull ) ) + 1 + 1; } // can_auto_account
     bytes += TableRetainTailMeasure( retain, ids, path );
     return bytes;
 }
@@ -45501,7 +47231,7 @@ inline bool AISaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & numb
         {
             uint64_t index_name = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_name, index_name ) ) { return false; }
-            w.header( ids.ref_at( 100, 0xc4bcadba8e631b86ull ), 17 ); // name — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 101, 0xc4bcadba8e631b86ull ), 17 ); // name — a NODE INDEX into the flat node table
             w.putleb( index_name );
         }
     }
@@ -45536,7 +47266,7 @@ inline bool AISaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & numb
     }
     if ( value.can_auto_account != false )
     {
-        w.header( ids.ref_at( 95, 0xbb15df0a66f3b845ull ), 1 ); // can_auto_account
+        w.header( ids.ref_at( 96, 0xbb15df0a66f3b845ull ), 1 ); // can_auto_account
         w.put8( value.can_auto_account ? 1 : 0 );
     }
     if ( !TableRetainTailSave( retain, ids, w, path ) ) { return false; }
@@ -45812,7 +47542,7 @@ inline int64_t SignInOfferMeasureBodyRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 78, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
+            bytes += TableLebBytes( ids.ref_at( 79, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
         }
     }
     {
@@ -45825,7 +47555,7 @@ inline int64_t SignInOfferMeasureBodyRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_provider = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_provider, index_provider ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 107, 0xd02b4c8c65fb54dcull ) ) + 1 + TableLebBytes( index_provider );
+            bytes += TableLebBytes( ids.ref_at( 108, 0xd02b4c8c65fb54dcull ) ) + 1 + TableLebBytes( index_provider );
         }
     }
     {
@@ -45838,7 +47568,7 @@ inline int64_t SignInOfferMeasureBodyRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_opener = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_opener, index_opener ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 67, 0x8a28804a0a9ba5e2ull ) ) + 1 + TableLebBytes( index_opener );
+            bytes += TableLebBytes( ids.ref_at( 68, 0x8a28804a0a9ba5e2ull ) ) + 1 + TableLebBytes( index_opener );
         }
     }
     {
@@ -45888,7 +47618,7 @@ inline bool SignInOfferSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return false; }
-            w.header( ids.ref_at( 78, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 79, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
             w.putleb( index_account );
         }
     }
@@ -45898,7 +47628,7 @@ inline bool SignInOfferSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_provider = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_provider, index_provider ) ) { return false; }
-            w.header( ids.ref_at( 107, 0xd02b4c8c65fb54dcull ), 17 ); // provider — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 108, 0xd02b4c8c65fb54dcull ), 17 ); // provider — a NODE INDEX into the flat node table
             w.putleb( index_provider );
         }
     }
@@ -45908,7 +47638,7 @@ inline bool SignInOfferSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
         {
             uint64_t index_opener = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_opener, index_opener ) ) { return false; }
-            w.header( ids.ref_at( 67, 0x8a28804a0a9ba5e2ull ), 17 ); // opener — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 68, 0x8a28804a0a9ba5e2ull ), 17 ); // opener — a NODE INDEX into the flat node table
             w.putleb( index_opener );
         }
     }
@@ -46231,6 +47961,207 @@ inline bool SignInOfferLoadBodyRetain( TableReader & r, const TableNodeMap & nod
 }
 
 template <typename Ctx>
+inline int64_t DashboardMeasureBodyRetain( const Ctx & ctx, const TableNumbering & numbering, TableRetainIds & ids, const Dashboard & value, TableRetain * retain, const TableRetainPath & path )
+{
+    (void) ctx;
+    (void) numbering;
+    int64_t bytes = 1; // the ZERO REFERENCE that ends the body
+    {
+        const TableBlob * blob_name = TableBlobAt( ctx, value.name ); // *string
+        // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
+        // §3.1): the header and the index here, the bytes themselves as a
+        // record in the node table. Null is elided and a non-null blob always
+        // rides, even at length zero — null and empty are two values.
+        if ( blob_name != NULL )
+        {
+            uint64_t index_name = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_name, index_name ) ) { return -1; }
+            bytes += TableLebBytes( ids.ref_at( 101, 0xc4bcadba8e631b86ull ) ) + 1 + TableLebBytes( index_name );
+        }
+    }
+    {
+        const TableBlob * blob_url = TableBlobAt( ctx, value.url ); // *string
+        // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
+        // §3.1): the header and the index here, the bytes themselves as a
+        // record in the node table. Null is elided and a non-null blob always
+        // rides, even at length zero — null and empty are two values.
+        if ( blob_url != NULL )
+        {
+            uint64_t index_url = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_url, index_url ) ) { return -1; }
+            bytes += TableLebBytes( ids.ref_at( 36, 0x4c4e8b193dc8be7eull ) ) + 1 + TableLebBytes( index_url );
+        }
+    }
+    bytes += TableRetainTailMeasure( retain, ids, path );
+    return bytes;
+}
+
+template <typename Ctx>
+inline bool DashboardSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableRetainIds & ids, const Dashboard & value, TableRetain * retain, const TableRetainPath & path )
+{
+    (void) ctx;
+    (void) numbering;
+    {
+        const TableBlob * blob_name = TableBlobAt( ctx, value.name ); // *string
+        if ( blob_name != NULL )
+        {
+            uint64_t index_name = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_name, index_name ) ) { return false; }
+            w.header( ids.ref_at( 101, 0xc4bcadba8e631b86ull ), 17 ); // name — a NODE INDEX into the flat node table
+            w.putleb( index_name );
+        }
+    }
+    {
+        const TableBlob * blob_url = TableBlobAt( ctx, value.url ); // *string
+        if ( blob_url != NULL )
+        {
+            uint64_t index_url = 0;
+            if ( !TableNumberingIndex( numbering, (const void *) blob_url, index_url ) ) { return false; }
+            w.header( ids.ref_at( 36, 0x4c4e8b193dc8be7eull ), 17 ); // url — a NODE INDEX into the flat node table
+            w.putleb( index_url );
+        }
+    }
+    if ( !TableRetainTailSave( retain, ids, w, path ) ) { return false; }
+    return !w.overflow;
+}
+
+template <typename Ctx>
+inline bool DashboardSaveBodyRetain( const Ctx & ctx, const TableNumbering & numbering, TableWriter & w, TableRetainIds & ids, const Dashboard & value, TableRetain * retain, const TableRetainPath & path )
+{
+    if ( !DashboardSaveBodyFieldsRetain( ctx, numbering, w, ids, value, retain, path ) ) { return false; }
+    w.put8( 0 ); // the ZERO REFERENCE that ends the body
+    return !w.overflow;
+}
+
+inline bool DashboardLoadBodyRetain( TableReader & r, const TableNodeMap & nodes, Dashboard & value, TableRetain * retain, const TableRetainPath & path )
+{
+    (void) nodes;
+    if ( nodes.refused ) { return false; }
+    DashboardReset( value ); // prefill declared defaults in place, then overlay
+    // A RETAINED RECORD DIES WITH THE BODY OCCURRENCE THAT CARRIED IT
+    // (docs/SPEC-TABLES.md §6.6): this body is being established, so
+    // whatever an earlier occurrence of it left is discarded before the
+    // winning one is read. The discard moves neither counter.
+    TableRetainDiscardBody( retain, path );
+    for ( ;; )
+    {
+        uint64_t field_ref = 0;
+        if ( !r.getleb( field_ref ) )
+        {
+            r.report->damaged = true;
+            return false;
+        }
+        if ( field_ref == 0 )
+        {
+            return true;
+        }
+        if ( r.ids == NULL || field_ref > (uint64_t) r.ids->count )
+        {
+            r.report->damaged = true;
+            return false;
+        } // a reference ABOVE the entry count
+        const uint64_t field_id = r.ids->at( field_ref );
+        if ( !r.has( 1 ) )
+        {
+            r.report->damaged = true;
+            return false;
+        }
+        uint8_t kind = r.get8();
+        if ( ( field_id == kTableNodeTableFieldId && r.nested ) || field_id == kTableBuildVersionFieldId || field_id == kTableMessageVocabularyFieldId )
+        {
+            // A RESERVED ID IN ANY BODY BUT THE ONE WHOSE TRANSPORT IT IS,
+            // IS MALFORMED (docs/SPEC-TABLES.md §3.1, §3.3). The node
+            // table's is the ROOT body's alone, on the numbering's own
+            // rule — a second numbering cannot exist — and the BUILD
+            // VERSION's rides in the announcement and nowhere else. That
+            // is damage, and damage discards the whole load (§4).
+            r.report->damaged = true;
+            return false;
+        }
+        switch ( field_id )
+        {
+            case 0xc4bcadba8e631b86ull: // name
+            {
+                if ( kind != 17 )
+                {
+                    // AT A POSITION THE READER DOES NAME, a field under
+                    // kind 31 or kind 32 takes this same rule and no other (§3)
+                    r.report->refused = true;
+                    r.report->refuse_reason = kind_mismatch;
+                    if ( !r.skip( kind ) )
+                    {
+                        r.report->damaged = true;
+                        return false;
+                    }
+                    break;
+                }
+                // A POINTER FIELD'S PAYLOAD IS A NUMBER (docs/SPEC-TABLES.md §3.1): it is
+                // bounds-checked and resolved through the numbering, never FOLLOWED, so
+                // there is no traversal here and therefore no traversal bound.
+                {
+                    uint64_t node_index = 0;
+                    if ( !r.getleb( node_index ) )
+                    {
+                        r.report->damaged = true;
+                        return false;
+                    }
+                    TableNodeResolve( nodes, value.name, node_index, kTableStringTypeId, r.report ); // *string
+                }
+                break;
+            }
+            case 0x4c4e8b193dc8be7eull: // url
+            {
+                if ( kind != 17 )
+                {
+                    // AT A POSITION THE READER DOES NAME, a field under
+                    // kind 31 or kind 32 takes this same rule and no other (§3)
+                    r.report->refused = true;
+                    r.report->refuse_reason = kind_mismatch;
+                    if ( !r.skip( kind ) )
+                    {
+                        r.report->damaged = true;
+                        return false;
+                    }
+                    break;
+                }
+                // A POINTER FIELD'S PAYLOAD IS A NUMBER (docs/SPEC-TABLES.md §3.1): it is
+                // bounds-checked and resolved through the numbering, never FOLLOWED, so
+                // there is no traversal here and therefore no traversal bound.
+                {
+                    uint64_t node_index = 0;
+                    if ( !r.getleb( node_index ) )
+                    {
+                        r.report->damaged = true;
+                        return false;
+                    }
+                    TableNodeResolve( nodes, value.url, node_index, kTableStringTypeId, r.report ); // *string
+                }
+                break;
+            }
+            case 0xffffffffffffffffull:
+            {
+                if ( !r.skip( kind ) )
+                {
+                    r.report->damaged = true;
+                    return false;
+                }
+                break;
+            }
+            default:
+            {
+                r.report->unknown++;
+                if ( !TableRetainCapture( retain, r, path, field_id, kind ) )
+                {
+                    r.report->damaged = true;
+                    return false;
+                }
+                break;
+            }
+        }
+    }
+}
+
+template <typename Ctx>
 inline int64_t SessionsDiffMeasureBodyRetain( const Ctx & ctx, const TableNumbering & numbering, TableRetainIds & ids, const SessionsDiff & value, TableRetain * retain, const TableRetainPath & path )
 {
     (void) ctx;
@@ -46242,7 +48173,7 @@ inline int64_t SessionsDiffMeasureBodyRetain( const Ctx & ctx, const TableNumber
         if ( !cursor_sessions.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_sessions.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_sessions = ids.ref_at( 89, 0xacebadbd2040ebacull );
+            const uint64_t ref_sessions = ids.ref_at( 90, 0xacebadbd2040ebacull );
             int64_t body_sessions = 0;
             body_sessions += 1 + TableLebBytes( (uint64_t) ( cursor_sessions.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_sessions = 0; elem_i_sessions < cursor_sessions.count; elem_i_sessions++ )
@@ -46272,14 +48203,14 @@ inline int64_t SessionsDiffMeasureBodyRetain( const Ctx & ctx, const TableNumber
             bytes += TableLebBytes( ref_requests ) + 1 + TableLebBytes( (uint64_t) ( body_requests ) ) + ( body_requests );
         }
     }
-    if ( value.ais_known != false ) { bytes += TableLebBytes( ids.ref_at( 88, 0xab40b3dce112851eull ) ) + 1 + 1; } // ais_known
+    if ( value.ais_known != false ) { bytes += TableLebBytes( ids.ref_at( 89, 0xab40b3dce112851eull ) ) + 1 + 1; } // ais_known
     {
         // ais: a kind 14 array of kind 13 elements, INDEX order (§2.9)
         TableListCursor<AI> cursor_ais = TableListElements( ctx, value.ais );
         if ( !cursor_ais.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_ais.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_ais = ids.ref_at( 61, 0x82a6b14733b2685aull );
+            const uint64_t ref_ais = ids.ref_at( 62, 0x82a6b14733b2685aull );
             int64_t body_ais = 0;
             body_ais += 1 + TableLebBytes( (uint64_t) ( cursor_ais.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_ais = 0; elem_i_ais < cursor_ais.count; elem_i_ais++ )
@@ -46310,7 +48241,25 @@ inline int64_t SessionsDiffMeasureBodyRetain( const Ctx & ctx, const TableNumber
             bytes += TableLebBytes( ref_signins ) + 1 + TableLebBytes( (uint64_t) ( body_signins ) ) + ( body_signins );
         }
     }
-    if ( value.next_action != 0 ) { bytes += TableLebBytes( ids.ref_at( 109, 0xd6bdffc29f42fe4full ) ) + 1 + 8; } // next_action
+    if ( value.next_action != 0 ) { bytes += TableLebBytes( ids.ref_at( 110, 0xd6bdffc29f42fe4full ) ) + 1 + 8; } // next_action
+    {
+        // dashboards: a kind 14 array of kind 13 elements, INDEX order (§2.9)
+        TableListCursor<Dashboard> cursor_dashboards = TableListElements( ctx, value.dashboards );
+        if ( !cursor_dashboards.ok ) { return -1; } // the slot and the head disagree
+        if ( cursor_dashboards.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
+        {
+            const uint64_t ref_dashboards = ids.ref_at( 132, 0xff5b1282501e1438ull );
+            int64_t body_dashboards = 0;
+            body_dashboards += 1 + TableLebBytes( (uint64_t) ( cursor_dashboards.count ) ); // the element kind byte and the count
+            for ( int32_t elem_i_dashboards = 0; elem_i_dashboards < cursor_dashboards.count; elem_i_dashboards++ )
+            {
+                const int64_t elem_bytes_dashboards = DashboardMeasureBodyRetain( ctx, numbering, ids, cursor_dashboards[elem_i_dashboards], retain, TableRetainStepInto( path, 7, (uint32_t) ( elem_i_dashboards ) ) );
+                if ( elem_bytes_dashboards < 0 ) { return -1; }
+                body_dashboards += TableLebBytes( (uint64_t) ( elem_bytes_dashboards ) ) + ( elem_bytes_dashboards );
+            }
+            bytes += TableLebBytes( ref_dashboards ) + 1 + TableLebBytes( (uint64_t) ( body_dashboards ) ) + ( body_dashboards );
+        }
+    }
     bytes += TableRetainTailMeasure( retain, ids, path );
     return bytes;
 }
@@ -46325,7 +48274,7 @@ inline bool SessionsDiffSaveBodyFieldsRetain( const Ctx & ctx, const TableNumber
         if ( !cursor_sessions.ok ) { return false; }
         if ( cursor_sessions.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_sessions = ids.ref_at( 89, 0xacebadbd2040ebacull );
+            const uint64_t ref_sessions = ids.ref_at( 90, 0xacebadbd2040ebacull );
             int64_t body_sessions = 0;
             body_sessions += 1 + TableLebBytes( (uint64_t) ( cursor_sessions.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_sessions = 0; elem_i_sessions < cursor_sessions.count; elem_i_sessions++ )
@@ -46380,7 +48329,7 @@ inline bool SessionsDiffSaveBodyFieldsRetain( const Ctx & ctx, const TableNumber
     }
     if ( value.ais_known != false )
     {
-        w.header( ids.ref_at( 88, 0xab40b3dce112851eull ), 1 ); // ais_known
+        w.header( ids.ref_at( 89, 0xab40b3dce112851eull ), 1 ); // ais_known
         w.put8( value.ais_known ? 1 : 0 );
     }
     {
@@ -46388,7 +48337,7 @@ inline bool SessionsDiffSaveBodyFieldsRetain( const Ctx & ctx, const TableNumber
         if ( !cursor_ais.ok ) { return false; }
         if ( cursor_ais.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_ais = ids.ref_at( 61, 0x82a6b14733b2685aull );
+            const uint64_t ref_ais = ids.ref_at( 62, 0x82a6b14733b2685aull );
             int64_t body_ais = 0;
             body_ais += 1 + TableLebBytes( (uint64_t) ( cursor_ais.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_ais = 0; elem_i_ais < cursor_ais.count; elem_i_ais++ )
@@ -46448,8 +48397,37 @@ inline bool SessionsDiffSaveBodyFieldsRetain( const Ctx & ctx, const TableNumber
     }
     if ( value.next_action != 0 )
     {
-        w.header( ids.ref_at( 109, 0xd6bdffc29f42fe4full ), 9 ); // next_action
+        w.header( ids.ref_at( 110, 0xd6bdffc29f42fe4full ), 9 ); // next_action
         w.put64( uint64_t( value.next_action ) );
+    }
+    {
+        TableListCursor<Dashboard> cursor_dashboards = TableListElements( ctx, value.dashboards ); // dashboards
+        if ( !cursor_dashboards.ok ) { return false; }
+        if ( cursor_dashboards.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
+        {
+            const uint64_t ref_dashboards = ids.ref_at( 132, 0xff5b1282501e1438ull );
+            int64_t body_dashboards = 0;
+            body_dashboards += 1 + TableLebBytes( (uint64_t) ( cursor_dashboards.count ) ); // the element kind byte and the count
+            for ( int32_t elem_i_dashboards = 0; elem_i_dashboards < cursor_dashboards.count; elem_i_dashboards++ )
+            {
+                const int64_t elem_bytes_dashboards = DashboardMeasureBodyRetain( ctx, numbering, ids, cursor_dashboards[elem_i_dashboards], retain, TableRetainStepInto( path, 7, (uint32_t) ( elem_i_dashboards ) ) );
+                if ( elem_bytes_dashboards < 0 ) { return false; }
+                body_dashboards += TableLebBytes( (uint64_t) ( elem_bytes_dashboards ) ) + ( elem_bytes_dashboards );
+            }
+            w.header( ref_dashboards, 14 );
+            w.putleb( (uint64_t) body_dashboards ); // dashboards
+            w.put8( 13 );
+            w.putleb( (uint64_t) ( cursor_dashboards.count ) );
+            for ( int32_t elem_i_dashboards = 0; elem_i_dashboards < cursor_dashboards.count; elem_i_dashboards++ )
+            {
+                {
+                    const int64_t elem_len_dashboards = DashboardMeasureBodyRetain( ctx, numbering, ids, cursor_dashboards[elem_i_dashboards], retain, TableRetainStepInto( path, 7, (uint32_t) ( elem_i_dashboards ) ) );
+                    if ( elem_len_dashboards < 0 ) return false;
+                    w.putleb( (uint64_t) elem_len_dashboards );
+                    if ( !DashboardSaveBodyRetain( ctx, numbering, w, ids, cursor_dashboards[elem_i_dashboards], retain, TableRetainStepInto( path, 7, (uint32_t) ( elem_i_dashboards ) ) ) ) return false;
+                }
+            }
+        }
     }
     if ( !TableRetainTailSave( retain, ids, w, path ) ) { return false; }
     return !w.overflow;
@@ -47075,6 +49053,124 @@ inline bool SessionsDiffLoadBodyRetain( TableReader & r, const TableNodeMap & no
                 value.next_action = decoded_v;
                 break;
             }
+            case 0xff5b1282501e1438ull: // dashboards
+            {
+                if ( kind != 14 )
+                {
+                    // AT A POSITION THE READER DOES NAME, a field under
+                    // kind 31 or kind 32 takes this same rule and no other (§3)
+                    r.report->refused = true;
+                    r.report->refuse_reason = kind_mismatch;
+                    if ( !r.skip( kind ) )
+                    {
+                        r.report->damaged = true;
+                        return false;
+                    }
+                    break;
+                }
+                uint64_t body_len = 0;
+                if ( !r.getleb( body_len ) || !r.room( body_len ) )
+                {
+                    r.report->damaged = true;
+                    return false;
+                }
+                int64_t body_end = r.offset + (int64_t) body_len;
+                // A BODY TOO SHORT FOR ITS OWN HEADER is INERT (§4): the field keeps
+                // the value it has, no counter is raised, and the walk continues past L.
+                if ( body_len >= 2 )
+                {
+                    uint8_t elem_kind = r.get8();
+                    uint64_t count = 0;
+                    const bool counted_ok = r.getleb( count );
+                    if ( !counted_ok ) { r.report->damaged = true; }
+                    // AN ELEMENT KIND THAT DISAGREES with the reader's declaration is §3's
+                    // element-kind rule: the field reads EMPTY and one kind_mismatch counts
+                    else if ( elem_kind != 13 )
+                    {
+                        r.report->refused = true;
+                        r.report->refuse_reason = kind_mismatch;
+                        r.offset = body_end;
+                        break;
+                    }
+                    else
+                    {
+                        // THE COUNT IS THE DATA'S (§2.9): there is no bound, so out_of_range
+                        // cannot fire on it. A count above the int32 storage cap is the
+                        // fill's refusal, and it moves no counter, the widening included.
+                        // THE READ COMMITS TO REPLACE HERE (docs/SPEC-TABLES.md §6.6): the
+                        // records under this field go with the value it is about to lose.
+                        TableRetainDiscardField( retain, path, 7 );
+                        TableListFill<Dashboard> fill = TableListFillBegin( nodes, value.dashboards, count );
+                        if ( fill.refused )
+                        {
+                            nodes.refused = true;
+                            return false;
+                        }
+                        if ( !fill.ok )
+                        {
+                            r.report->damaged = true;
+                            r.offset = body_end;
+                            break;
+                        }
+                        // elements are BOUNDED by the field body: a count the length cannot
+                        // cover is damage, flags malformed, and the load is discarded
+                        // whole (§4)
+                        TableReader sub( r.buffer + r.offset, body_end - r.offset, r.report, r.ids );
+                        bool elements_consumed = true;
+                        for ( uint64_t i = 0; i < count; i++ )
+                        {
+                            Dashboard * slot = TableListFillNext( fill );
+                            if ( slot == NULL )
+                            {
+                                if ( fill.worker != NULL )
+                                {
+                                    nodes.refused = true;
+                                    return false;
+                                }
+                                r.report->damaged = true;
+                                elements_consumed = false;
+                                break;
+                            } // the arena could not carve
+                            bool landed = false;
+                            do
+                            {
+                                uint64_t elem_len_dashboards = 0;
+                                if ( !sub.getleb( elem_len_dashboards ) || !sub.room( elem_len_dashboards ) )
+                                {
+                                    r.report->damaged = true;
+                                    break;
+                                }
+                                {
+                                    TableReader elem_dashboards( sub.buffer + sub.offset, (int64_t) elem_len_dashboards, r.report, r.ids );
+                                    DashboardLoadBodyRetain( elem_dashboards, nodes, ( *slot ), retain, TableRetainStepInto( path, 7, (uint32_t) ( i ) ) );
+                                    if ( nodes.refused ) { return false; }
+                                    if ( elem_dashboards.offset != elem_dashboards.size )
+                                    {
+                                        r.report->damaged = true;
+                                        DashboardReset( ( *slot ) );
+                                    }
+                                }
+                                sub.offset += (int64_t) elem_len_dashboards;
+                                landed = true;
+                            } while ( 0 );
+                            if ( !landed )
+                            {
+                                TableListFillDrop( fill );
+                                elements_consumed = false;
+                                break;
+                            } // the element's own framing gave out before it decoded
+                        }
+                        TableListFillEnd( fill );
+                        // EVERY BYTE OF THE L IS AN ELEMENT'S (§2.9, §4): bytes left
+                        // inside the array frame after the count's elements are damage.
+                        // A narrower element kind that does not fill the frame the writer
+                        // sized is this case, and damage discards the load.
+                        if ( elements_consumed && sub.offset != sub.size ) { r.report->damaged = true; }
+                    }
+                }
+                r.offset = body_end; // the cursor closes the L (§4)
+                break;
+            }
             case 0xffffffffffffffffull:
             {
                 if ( !r.skip( kind ) )
@@ -47107,7 +49203,7 @@ inline int64_t ActionMeasureBodyRetain( const Ctx & ctx, const TableNumbering & 
     if ( value.kind != ActionKind::None )
     {
         if ( !TableEnumNamed( value.kind ) ) { return -1; } // no variant names this value
-        const uint64_t ref_kind = ids.ref_at( 123, 0xef9c96d721673243ull );
+        const uint64_t ref_kind = ids.ref_at( 124, 0xef9c96d721673243ull );
         uint64_t variant_kind = 0;
         if ( !TableEnumRef( ids, value.kind, variant_kind ) ) { return -1; }
         bytes += TableLebBytes( ref_kind ) + 1 + TableLebBytes( variant_kind ); // kind: the variant's reference
@@ -47136,7 +49232,7 @@ inline int64_t ActionMeasureBodyRetain( const Ctx & ctx, const TableNumbering & 
         {
             uint64_t index_text = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_text, index_text ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 128, 0xfa04f4ef1995407eull ) ) + 1 + TableLebBytes( index_text );
+            bytes += TableLebBytes( ids.ref_at( 129, 0xfa04f4ef1995407eull ) ) + 1 + TableLebBytes( index_text );
         }
     }
     {
@@ -47149,7 +49245,7 @@ inline int64_t ActionMeasureBodyRetain( const Ctx & ctx, const TableNumbering & 
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 78, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
+            bytes += TableLebBytes( ids.ref_at( 79, 0xa23fd2965dc429bcull ) ) + 1 + TableLebBytes( index_account );
         }
     }
     if ( value.request != 0 ) { bytes += TableLebBytes( ids.ref_at( 51, 0x6f4743b8bc5b4eb2ull ) ) + 1 + 8; } // request
@@ -47163,10 +49259,10 @@ inline int64_t ActionMeasureBodyRetain( const Ctx & ctx, const TableNumbering & 
         {
             uint64_t index_secret = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_secret, index_secret ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 87, 0xab23f0eec020c951ull ) ) + 1 + TableLebBytes( index_secret );
+            bytes += TableLebBytes( ids.ref_at( 88, 0xab23f0eec020c951ull ) ) + 1 + TableLebBytes( index_secret );
         }
     }
-    if ( value.pastes_code != false ) { bytes += TableLebBytes( ids.ref_at( 117, 0xe24950f987c59117ull ) ) + 1 + 1; } // pastes_code
+    if ( value.pastes_code != false ) { bytes += TableLebBytes( ids.ref_at( 118, 0xe24950f987c59117ull ) ) + 1 + 1; } // pastes_code
     bytes += TableRetainTailMeasure( retain, ids, path );
     return bytes;
 }
@@ -47179,7 +49275,7 @@ inline bool ActionSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
     if ( value.kind != ActionKind::None )
     {
         if ( !TableEnumNamed( value.kind ) ) { return false; }
-        const uint64_t ref_kind = ids.ref_at( 123, 0xef9c96d721673243ull );
+        const uint64_t ref_kind = ids.ref_at( 124, 0xef9c96d721673243ull );
         uint64_t variant_kind = 0;
         if ( !TableEnumRef( ids, value.kind, variant_kind ) ) { return false; }
         w.header( ref_kind, 30 ); w.putleb( variant_kind ); // kind
@@ -47205,7 +49301,7 @@ inline bool ActionSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
         {
             uint64_t index_text = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_text, index_text ) ) { return false; }
-            w.header( ids.ref_at( 128, 0xfa04f4ef1995407eull ), 17 ); // text — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 129, 0xfa04f4ef1995407eull ), 17 ); // text — a NODE INDEX into the flat node table
             w.putleb( index_text );
         }
     }
@@ -47215,7 +49311,7 @@ inline bool ActionSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
         {
             uint64_t index_account = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_account, index_account ) ) { return false; }
-            w.header( ids.ref_at( 78, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 79, 0xa23fd2965dc429bcull ), 17 ); // account — a NODE INDEX into the flat node table
             w.putleb( index_account );
         }
     }
@@ -47230,13 +49326,13 @@ inline bool ActionSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
         {
             uint64_t index_secret = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_secret, index_secret ) ) { return false; }
-            w.header( ids.ref_at( 87, 0xab23f0eec020c951ull ), 17 ); // secret — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 88, 0xab23f0eec020c951ull ), 17 ); // secret — a NODE INDEX into the flat node table
             w.putleb( index_secret );
         }
     }
     if ( value.pastes_code != false )
     {
-        w.header( ids.ref_at( 117, 0xe24950f987c59117ull ), 1 ); // pastes_code
+        w.header( ids.ref_at( 118, 0xe24950f987c59117ull ), 1 ); // pastes_code
         w.put8( value.pastes_code ? 1 : 0 );
     }
     if ( !TableRetainTailSave( retain, ids, w, path ) ) { return false; }
@@ -47576,14 +49672,14 @@ inline int64_t ActionsDiffMeasureBodyRetain( const Ctx & ctx, const TableNumberi
     (void) ctx;
     (void) numbering;
     int64_t bytes = 1; // the ZERO REFERENCE that ends the body
-    if ( value.start != 0 ) { bytes += TableLebBytes( ids.ref_at( 122, 0xee5d97ad45ad251full ) ) + 1 + 8; } // start
+    if ( value.start != 0 ) { bytes += TableLebBytes( ids.ref_at( 123, 0xee5d97ad45ad251full ) ) + 1 + 8; } // start
     {
         // actions: a kind 14 array of kind 13 elements, INDEX order (§2.9)
         TableListCursor<Action> cursor_actions = TableListElements( ctx, value.actions );
         if ( !cursor_actions.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_actions.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_actions = ids.ref_at( 85, 0xaab8aab6b2814644ull );
+            const uint64_t ref_actions = ids.ref_at( 86, 0xaab8aab6b2814644ull );
             int64_t body_actions = 0;
             body_actions += 1 + TableLebBytes( (uint64_t) ( cursor_actions.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_actions = 0; elem_i_actions < cursor_actions.count; elem_i_actions++ )
@@ -47606,7 +49702,7 @@ inline bool ActionsDiffSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
     (void) numbering;
     if ( value.start != 0 )
     {
-        w.header( ids.ref_at( 122, 0xee5d97ad45ad251full ), 9 ); // start
+        w.header( ids.ref_at( 123, 0xee5d97ad45ad251full ), 9 ); // start
         w.put64( uint64_t( value.start ) );
     }
     {
@@ -47614,7 +49710,7 @@ inline bool ActionsDiffSaveBodyFieldsRetain( const Ctx & ctx, const TableNumberi
         if ( !cursor_actions.ok ) { return false; }
         if ( cursor_actions.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_actions = ids.ref_at( 85, 0xaab8aab6b2814644ull );
+            const uint64_t ref_actions = ids.ref_at( 86, 0xaab8aab6b2814644ull );
             int64_t body_actions = 0;
             body_actions += 1 + TableLebBytes( (uint64_t) ( cursor_actions.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_actions = 0; elem_i_actions < cursor_actions.count; elem_i_actions++ )
@@ -47886,12 +49982,12 @@ inline int64_t StoreEntryMeasureBodyRetain( const Ctx & ctx, const TableNumberin
     if ( value.kind != EntryKind::None )
     {
         if ( !TableEnumNamed( value.kind ) ) { return -1; } // no variant names this value
-        const uint64_t ref_kind = ids.ref_at( 123, 0xef9c96d721673243ull );
+        const uint64_t ref_kind = ids.ref_at( 124, 0xef9c96d721673243ull );
         uint64_t variant_kind = 0;
         if ( !TableEnumRef( ids, value.kind, variant_kind ) ) { return -1; }
         bytes += TableLebBytes( ref_kind ) + 1 + TableLebBytes( variant_kind ); // kind: the variant's reference
     }
-    if ( value.closed != false ) { bytes += TableLebBytes( ids.ref_at( 63, 0x85530f5090e836c5ull ) ) + 1 + 1; } // closed
+    if ( value.closed != false ) { bytes += TableLebBytes( ids.ref_at( 64, 0x85530f5090e836c5ull ) ) + 1 + 1; } // closed
     {
         const TableBlob * blob_text = TableBlobAt( ctx, value.text ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
@@ -47902,10 +49998,10 @@ inline int64_t StoreEntryMeasureBodyRetain( const Ctx & ctx, const TableNumberin
         {
             uint64_t index_text = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_text, index_text ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 128, 0xfa04f4ef1995407eull ) ) + 1 + TableLebBytes( index_text );
+            bytes += TableLebBytes( ids.ref_at( 129, 0xfa04f4ef1995407eull ) ) + 1 + TableLebBytes( index_text );
         }
     }
-    if ( value.account_email_end != 0 ) { bytes += TableLebBytes( ids.ref_at( 93, 0xb2ac393f2277c4d1ull ) ) + 1 + 4; } // account_email_end
+    if ( value.account_email_end != 0 ) { bytes += TableLebBytes( ids.ref_at( 94, 0xb2ac393f2277c4d1ull ) ) + 1 + 4; } // account_email_end
     bytes += TableRetainTailMeasure( retain, ids, path );
     return bytes;
 }
@@ -47918,14 +50014,14 @@ inline bool StoreEntrySaveBodyFieldsRetain( const Ctx & ctx, const TableNumberin
     if ( value.kind != EntryKind::None )
     {
         if ( !TableEnumNamed( value.kind ) ) { return false; }
-        const uint64_t ref_kind = ids.ref_at( 123, 0xef9c96d721673243ull );
+        const uint64_t ref_kind = ids.ref_at( 124, 0xef9c96d721673243ull );
         uint64_t variant_kind = 0;
         if ( !TableEnumRef( ids, value.kind, variant_kind ) ) { return false; }
         w.header( ref_kind, 30 ); w.putleb( variant_kind ); // kind
     }
     if ( value.closed != false )
     {
-        w.header( ids.ref_at( 63, 0x85530f5090e836c5ull ), 1 ); // closed
+        w.header( ids.ref_at( 64, 0x85530f5090e836c5ull ), 1 ); // closed
         w.put8( value.closed ? 1 : 0 );
     }
     {
@@ -47934,13 +50030,13 @@ inline bool StoreEntrySaveBodyFieldsRetain( const Ctx & ctx, const TableNumberin
         {
             uint64_t index_text = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_text, index_text ) ) { return false; }
-            w.header( ids.ref_at( 128, 0xfa04f4ef1995407eull ), 17 ); // text — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 129, 0xfa04f4ef1995407eull ), 17 ); // text — a NODE INDEX into the flat node table
             w.putleb( index_text );
         }
     }
     if ( value.account_email_end != 0 )
     {
-        w.header( ids.ref_at( 93, 0xb2ac393f2277c4d1ull ), 8 ); // account_email_end
+        w.header( ids.ref_at( 94, 0xb2ac393f2277c4d1ull ), 8 ); // account_email_end
         w.put32( uint32_t( value.account_email_end ) );
     }
     if ( !TableRetainTailSave( retain, ids, w, path ) ) { return false; }
@@ -48304,8 +50400,8 @@ inline int64_t DriverMeasureBodyRetain( const Ctx & ctx, const TableNumbering & 
     (void) ctx;
     (void) numbering;
     int64_t bytes = 1; // the ZERO REFERENCE that ends the body
-    if ( value.next_turn != 0 ) { bytes += TableLebBytes( ids.ref_at( 65, 0x86077082e7dbf9aaull ) ) + 1 + 8; } // next_turn
-    if ( value.open_turn != 0 ) { bytes += TableLebBytes( ids.ref_at( 91, 0xb0c9e7244d27f5b1ull ) ) + 1 + 8; } // open_turn
+    if ( value.next_turn != 0 ) { bytes += TableLebBytes( ids.ref_at( 66, 0x86077082e7dbf9aaull ) ) + 1 + 8; } // next_turn
+    if ( value.open_turn != 0 ) { bytes += TableLebBytes( ids.ref_at( 92, 0xb0c9e7244d27f5b1ull ) ) + 1 + 8; } // open_turn
     {
         const TableBlob * blob_session = TableBlobAt( ctx, value.session ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
@@ -48325,7 +50421,7 @@ inline int64_t DriverMeasureBodyRetain( const Ctx & ctx, const TableNumbering & 
         if ( !cursor_waiting.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_waiting.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_waiting = ids.ref_at( 120, 0xeac9afef1a00b5e8ull );
+            const uint64_t ref_waiting = ids.ref_at( 121, 0xeac9afef1a00b5e8ull );
             int64_t body_waiting = 0;
             body_waiting += 1 + TableLebBytes( (uint64_t) ( cursor_waiting.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_waiting = 0; elem_i_waiting < cursor_waiting.count; elem_i_waiting++ )
@@ -48338,7 +50434,7 @@ inline int64_t DriverMeasureBodyRetain( const Ctx & ctx, const TableNumbering & 
             bytes += TableLebBytes( ref_waiting ) + 1 + TableLebBytes( (uint64_t) ( body_waiting ) ) + ( body_waiting );
         }
     }
-    if ( value.summary != false ) { bytes += TableLebBytes( ids.ref_at( 79, 0xa3c2813bcd780513ull ) ) + 1 + 1; } // summary
+    if ( value.summary != false ) { bytes += TableLebBytes( ids.ref_at( 80, 0xa3c2813bcd780513ull ) ) + 1 + 1; } // summary
     {
         const TableBlob * blob_session_dir = TableBlobAt( ctx, value.session_dir ); // *string
         // A BYTE BUFFER RIDES AS A NODE INDEX too (docs/SPEC-TABLES.md §2.5,
@@ -48363,12 +50459,12 @@ inline bool DriverSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
     (void) numbering;
     if ( value.next_turn != 0 )
     {
-        w.header( ids.ref_at( 65, 0x86077082e7dbf9aaull ), 9 ); // next_turn
+        w.header( ids.ref_at( 66, 0x86077082e7dbf9aaull ), 9 ); // next_turn
         w.put64( uint64_t( value.next_turn ) );
     }
     if ( value.open_turn != 0 )
     {
-        w.header( ids.ref_at( 91, 0xb0c9e7244d27f5b1ull ), 9 ); // open_turn
+        w.header( ids.ref_at( 92, 0xb0c9e7244d27f5b1ull ), 9 ); // open_turn
         w.put64( uint64_t( value.open_turn ) );
     }
     {
@@ -48386,7 +50482,7 @@ inline bool DriverSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
         if ( !cursor_waiting.ok ) { return false; }
         if ( cursor_waiting.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_waiting = ids.ref_at( 120, 0xeac9afef1a00b5e8ull );
+            const uint64_t ref_waiting = ids.ref_at( 121, 0xeac9afef1a00b5e8ull );
             int64_t body_waiting = 0;
             body_waiting += 1 + TableLebBytes( (uint64_t) ( cursor_waiting.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_waiting = 0; elem_i_waiting < cursor_waiting.count; elem_i_waiting++ )
@@ -48414,7 +50510,7 @@ inline bool DriverSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
     }
     if ( value.summary != false )
     {
-        w.header( ids.ref_at( 79, 0xa3c2813bcd780513ull ), 1 ); // summary
+        w.header( ids.ref_at( 80, 0xa3c2813bcd780513ull ), 1 ); // summary
         w.put8( value.summary ? 1 : 0 );
     }
     {
@@ -48803,7 +50899,7 @@ inline int64_t RecordMeasureBodyRetain( const Ctx & ctx, const TableNumbering & 
         if ( !cursor_changes.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_changes.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_changes = ids.ref_at( 114, 0xdf387c9af6145dcaull );
+            const uint64_t ref_changes = ids.ref_at( 115, 0xdf387c9af6145dcaull );
             int64_t body_changes = 0;
             body_changes += 1 + TableLebBytes( (uint64_t) ( cursor_changes.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_changes = 0; elem_i_changes < cursor_changes.count; elem_i_changes++ )
@@ -48842,7 +50938,7 @@ inline int64_t RecordMeasureBodyRetain( const Ctx & ctx, const TableNumbering & 
                         case ChangeType::SetDriver:
                         {
                             int64_t arm_payload_changesu = 0;
-                            const uint64_t arm_ref_changesu = ids.ref_at( 108, 0xd0aef91bc49cc38aull );
+                            const uint64_t arm_ref_changesu = ids.ref_at( 109, 0xd0aef91bc49cc38aull );
                             {
                                 const int64_t arm_body_changesu = DriverMeasureBodyRetain( ctx, numbering, ids, cursor_changes[elem_i_changes].set_driver, retain, TableRetainStepInto( TableRetainStepInto( path, 1, (uint32_t) ( elem_i_changes ) ), 1, (uint32_t) ( 2 ) ) );
                                 if ( arm_body_changesu < 0 ) { return -1; }
@@ -48854,7 +50950,7 @@ inline int64_t RecordMeasureBodyRetain( const Ctx & ctx, const TableNumbering & 
                         case ChangeType::Dequeue:
                         {
                             int64_t arm_payload_changesu = 0;
-                            const uint64_t arm_ref_changesu = ids.ref_at( 64, 0x85aac62a460aa5e5ull );
+                            const uint64_t arm_ref_changesu = ids.ref_at( 65, 0x85aac62a460aa5e5ull );
                             // a payload-free arm: the arm reference, kind 32 and a zero L are the whole of it (§2.6, §3)
                             body_changes += TableLebBytes( arm_ref_changesu ) + 1 + TableLebBytes( (uint64_t) ( arm_payload_changesu ) ) + ( arm_payload_changesu );
                             break;
@@ -48888,10 +50984,10 @@ inline int64_t RecordMeasureBodyRetain( const Ctx & ctx, const TableNumbering & 
         {
             uint64_t index_client = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_client, index_client ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 99, 0xc47ea73e7986f3deull ) ) + 1 + TableLebBytes( index_client );
+            bytes += TableLebBytes( ids.ref_at( 100, 0xc47ea73e7986f3deull ) ) + 1 + TableLebBytes( index_client );
         }
     }
-    if ( value.applied != 0 ) { bytes += TableLebBytes( ids.ref_at( 69, 0x8bf75481a1d237caull ) ) + 1 + 8; } // applied
+    if ( value.applied != 0 ) { bytes += TableLebBytes( ids.ref_at( 70, 0x8bf75481a1d237caull ) ) + 1 + 8; } // applied
     bytes += TableRetainTailMeasure( retain, ids, path );
     return bytes;
 }
@@ -48911,7 +51007,7 @@ inline bool RecordSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
         if ( !cursor_changes.ok ) { return false; }
         if ( cursor_changes.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_changes = ids.ref_at( 114, 0xdf387c9af6145dcaull );
+            const uint64_t ref_changes = ids.ref_at( 115, 0xdf387c9af6145dcaull );
             int64_t body_changes = 0;
             body_changes += 1 + TableLebBytes( (uint64_t) ( cursor_changes.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_changes = 0; elem_i_changes < cursor_changes.count; elem_i_changes++ )
@@ -48950,7 +51046,7 @@ inline bool RecordSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
                         case ChangeType::SetDriver:
                         {
                             int64_t arm_payload_changesu = 0;
-                            const uint64_t arm_ref_changesu = ids.ref_at( 108, 0xd0aef91bc49cc38aull );
+                            const uint64_t arm_ref_changesu = ids.ref_at( 109, 0xd0aef91bc49cc38aull );
                             {
                                 const int64_t arm_body_changesu = DriverMeasureBodyRetain( ctx, numbering, ids, cursor_changes[elem_i_changes].set_driver, retain, TableRetainStepInto( TableRetainStepInto( path, 1, (uint32_t) ( elem_i_changes ) ), 1, (uint32_t) ( 2 ) ) );
                                 if ( arm_body_changesu < 0 ) { return -1; }
@@ -48962,7 +51058,7 @@ inline bool RecordSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
                         case ChangeType::Dequeue:
                         {
                             int64_t arm_payload_changesu = 0;
-                            const uint64_t arm_ref_changesu = ids.ref_at( 64, 0x85aac62a460aa5e5ull );
+                            const uint64_t arm_ref_changesu = ids.ref_at( 65, 0x85aac62a460aa5e5ull );
                             // a payload-free arm: the arm reference, kind 32 and a zero L are the whole of it (§2.6, §3)
                             body_changes += TableLebBytes( arm_ref_changesu ) + 1 + TableLebBytes( (uint64_t) ( arm_payload_changesu ) ) + ( arm_payload_changesu );
                             break;
@@ -49030,7 +51126,7 @@ inline bool RecordSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
                         }
                         case ChangeType::SetDriver:
                         {
-                            const uint64_t arm_ref_changesu = ids.ref_at( 108, 0xd0aef91bc49cc38aull );
+                            const uint64_t arm_ref_changesu = ids.ref_at( 109, 0xd0aef91bc49cc38aull );
                             int64_t arm_payload_changesu = 0;
                             {
                                 const int64_t arm_body_changesu = DriverMeasureBodyRetain( ctx, numbering, ids, cursor_changes[elem_i_changes].set_driver, retain, TableRetainStepInto( TableRetainStepInto( path, 1, (uint32_t) ( elem_i_changes ) ), 1, (uint32_t) ( 2 ) ) );
@@ -49044,7 +51140,7 @@ inline bool RecordSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
                         }
                         case ChangeType::Dequeue:
                         {
-                            const uint64_t arm_ref_changesu = ids.ref_at( 64, 0x85aac62a460aa5e5ull );
+                            const uint64_t arm_ref_changesu = ids.ref_at( 65, 0x85aac62a460aa5e5ull );
                             int64_t arm_payload_changesu = 0;
                             // a payload-free arm: the arm reference, kind 32 and a zero L are the whole of it (§2.6, §3)
                             w.header( arm_ref_changesu, 32 );
@@ -49078,13 +51174,13 @@ inline bool RecordSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering & 
         {
             uint64_t index_client = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_client, index_client ) ) { return false; }
-            w.header( ids.ref_at( 99, 0xc47ea73e7986f3deull ), 17 ); // client — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 100, 0xc47ea73e7986f3deull ), 17 ); // client — a NODE INDEX into the flat node table
             w.putleb( index_client );
         }
     }
     if ( value.applied != 0 )
     {
-        w.header( ids.ref_at( 69, 0x8bf75481a1d237caull ), 9 ); // applied
+        w.header( ids.ref_at( 70, 0x8bf75481a1d237caull ), 9 ); // applied
         w.put64( uint64_t( value.applied ) );
     }
     if ( !TableRetainTailSave( retain, ids, w, path ) ) { return false; }
@@ -49650,7 +51746,7 @@ inline int64_t StoreSessionMeasureBodyRetain( const Ctx & ctx, const TableNumber
     if ( value.id != 0 ) { bytes += TableLebBytes( ids.ref_at( 6, 0x08b72e07b55c3ac0ull ) ) + 1 + 8; } // id
     {
         const int32_t mark_info = ids.count;
-        const uint64_t ref_info = ids.ref_at( 124, 0xf5d6a8c57ab94f05ull );
+        const uint64_t ref_info = ids.ref_at( 125, 0xf5d6a8c57ab94f05ull );
         const int64_t body_info = SessionInfoMeasureBodyRetain( ctx, numbering, ids, value.info, retain, TableRetainStepInto( path, 1, (uint32_t) ( 0 ) ) );
         if ( body_info < 0 ) { return -1; }
         if ( body_info > 1 ) { bytes += TableLebBytes( ref_info ) + 1 + TableLebBytes( (uint64_t) ( body_info ) ) + ( body_info ); } // info
@@ -49662,7 +51758,7 @@ inline int64_t StoreSessionMeasureBodyRetain( const Ctx & ctx, const TableNumber
         if ( !cursor_transcript.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_transcript.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_transcript = ids.ref_at( 118, 0xe4285b4aabc7d56bull );
+            const uint64_t ref_transcript = ids.ref_at( 119, 0xe4285b4aabc7d56bull );
             int64_t body_transcript = 0;
             body_transcript += 1 + TableLebBytes( (uint64_t) ( cursor_transcript.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_transcript = 0; elem_i_transcript < cursor_transcript.count; elem_i_transcript++ )
@@ -49680,7 +51776,7 @@ inline int64_t StoreSessionMeasureBodyRetain( const Ctx & ctx, const TableNumber
         if ( !cursor_queue.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_queue.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_queue = ids.ref_at( 92, 0xb11e8b146c5a21d8ull );
+            const uint64_t ref_queue = ids.ref_at( 93, 0xb11e8b146c5a21d8ull );
             int64_t body_queue = 0;
             body_queue += 1 + TableLebBytes( (uint64_t) ( cursor_queue.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_queue = 0; elem_i_queue < cursor_queue.count; elem_i_queue++ )
@@ -49695,7 +51791,7 @@ inline int64_t StoreSessionMeasureBodyRetain( const Ctx & ctx, const TableNumber
     }
     {
         const int32_t mark_driver = ids.count;
-        const uint64_t ref_driver = ids.ref_at( 103, 0xc85b78e3dea334ffull );
+        const uint64_t ref_driver = ids.ref_at( 104, 0xc85b78e3dea334ffull );
         const int64_t body_driver = DriverMeasureBodyRetain( ctx, numbering, ids, value.driver, retain, TableRetainStepInto( path, 4, (uint32_t) ( 0 ) ) );
         if ( body_driver < 0 ) { return -1; }
         if ( body_driver > 1 ) { bytes += TableLebBytes( ref_driver ) + 1 + TableLebBytes( (uint64_t) ( body_driver ) ) + ( body_driver ); } // driver
@@ -49717,7 +51813,7 @@ inline bool StoreSessionSaveBodyFieldsRetain( const Ctx & ctx, const TableNumber
     }
     {
         const int32_t mark_info = ids.count;
-        const uint64_t ref_info = ids.ref_at( 124, 0xf5d6a8c57ab94f05ull );
+        const uint64_t ref_info = ids.ref_at( 125, 0xf5d6a8c57ab94f05ull );
         const int64_t body_info = SessionInfoMeasureBodyRetain( ctx, numbering, ids, value.info, retain, TableRetainStepInto( path, 1, (uint32_t) ( 0 ) ) );
         if ( body_info < 0 ) return false; // storage invariant, refused as measure refuses it
         if ( body_info > 1 ) // all-default nested elides
@@ -49733,7 +51829,7 @@ inline bool StoreSessionSaveBodyFieldsRetain( const Ctx & ctx, const TableNumber
         if ( !cursor_transcript.ok ) { return false; }
         if ( cursor_transcript.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_transcript = ids.ref_at( 118, 0xe4285b4aabc7d56bull );
+            const uint64_t ref_transcript = ids.ref_at( 119, 0xe4285b4aabc7d56bull );
             int64_t body_transcript = 0;
             body_transcript += 1 + TableLebBytes( (uint64_t) ( cursor_transcript.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_transcript = 0; elem_i_transcript < cursor_transcript.count; elem_i_transcript++ )
@@ -49762,7 +51858,7 @@ inline bool StoreSessionSaveBodyFieldsRetain( const Ctx & ctx, const TableNumber
         if ( !cursor_queue.ok ) { return false; }
         if ( cursor_queue.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_queue = ids.ref_at( 92, 0xb11e8b146c5a21d8ull );
+            const uint64_t ref_queue = ids.ref_at( 93, 0xb11e8b146c5a21d8ull );
             int64_t body_queue = 0;
             body_queue += 1 + TableLebBytes( (uint64_t) ( cursor_queue.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_queue = 0; elem_i_queue < cursor_queue.count; elem_i_queue++ )
@@ -49790,7 +51886,7 @@ inline bool StoreSessionSaveBodyFieldsRetain( const Ctx & ctx, const TableNumber
     }
     {
         const int32_t mark_driver = ids.count;
-        const uint64_t ref_driver = ids.ref_at( 103, 0xc85b78e3dea334ffull );
+        const uint64_t ref_driver = ids.ref_at( 104, 0xc85b78e3dea334ffull );
         const int64_t body_driver = DriverMeasureBodyRetain( ctx, numbering, ids, value.driver, retain, TableRetainStepInto( path, 4, (uint32_t) ( 0 ) ) );
         if ( body_driver < 0 ) return false; // storage invariant, refused as measure refuses it
         if ( body_driver > 1 ) // all-default nested elides
@@ -50244,10 +52340,10 @@ inline int64_t ClientCounterMeasureBodyRetain( const Ctx & ctx, const TableNumbe
         {
             uint64_t index_client = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_client, index_client ) ) { return -1; }
-            bytes += TableLebBytes( ids.ref_at( 99, 0xc47ea73e7986f3deull ) ) + 1 + TableLebBytes( index_client );
+            bytes += TableLebBytes( ids.ref_at( 100, 0xc47ea73e7986f3deull ) ) + 1 + TableLebBytes( index_client );
         }
     }
-    if ( value.applied != 0 ) { bytes += TableLebBytes( ids.ref_at( 69, 0x8bf75481a1d237caull ) ) + 1 + 8; } // applied
+    if ( value.applied != 0 ) { bytes += TableLebBytes( ids.ref_at( 70, 0x8bf75481a1d237caull ) ) + 1 + 8; } // applied
     bytes += TableRetainTailMeasure( retain, ids, path );
     return bytes;
 }
@@ -50263,13 +52359,13 @@ inline bool ClientCounterSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbe
         {
             uint64_t index_client = 0;
             if ( !TableNumberingIndex( numbering, (const void *) blob_client, index_client ) ) { return false; }
-            w.header( ids.ref_at( 99, 0xc47ea73e7986f3deull ), 17 ); // client — a NODE INDEX into the flat node table
+            w.header( ids.ref_at( 100, 0xc47ea73e7986f3deull ), 17 ); // client — a NODE INDEX into the flat node table
             w.putleb( index_client );
         }
     }
     if ( value.applied != 0 )
     {
-        w.header( ids.ref_at( 69, 0x8bf75481a1d237caull ), 9 ); // applied
+        w.header( ids.ref_at( 70, 0x8bf75481a1d237caull ), 9 ); // applied
         w.put64( uint64_t( value.applied ) );
     }
     if ( !TableRetainTailSave( retain, ids, w, path ) ) { return false; }
@@ -50435,7 +52531,7 @@ inline int64_t SnapshotMeasureBodyRetain( const Ctx & ctx, const TableNumbering 
         if ( !cursor_sessions.ok ) { return -1; } // the slot and the head disagree
         if ( cursor_sessions.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_sessions = ids.ref_at( 89, 0xacebadbd2040ebacull );
+            const uint64_t ref_sessions = ids.ref_at( 90, 0xacebadbd2040ebacull );
             int64_t body_sessions = 0;
             body_sessions += 1 + TableLebBytes( (uint64_t) ( cursor_sessions.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_sessions = 0; elem_i_sessions < cursor_sessions.count; elem_i_sessions++ )
@@ -50484,7 +52580,7 @@ inline bool SnapshotSaveBodyFieldsRetain( const Ctx & ctx, const TableNumbering 
         if ( !cursor_sessions.ok ) { return false; }
         if ( cursor_sessions.count > 0 ) // an EMPTY list elides, the by-value rule (§3)
         {
-            const uint64_t ref_sessions = ids.ref_at( 89, 0xacebadbd2040ebacull );
+            const uint64_t ref_sessions = ids.ref_at( 90, 0xacebadbd2040ebacull );
             int64_t body_sessions = 0;
             body_sessions += 1 + TableLebBytes( (uint64_t) ( cursor_sessions.count ) ); // the element kind byte and the count
             for ( int32_t elem_i_sessions = 0; elem_i_sessions < cursor_sessions.count; elem_i_sessions++ )
@@ -54818,6 +56914,500 @@ inline int64_t SignInOfferSaveRetain( const SignInOffer * root, TableRetain * re
     if ( root == NULL || report == NULL ) { return -1; }
     TableRegionCtx ctx;
     return SignInOfferSaveWireRetain( ctx, *root, retain, buffer, capacity, report );
+}
+
+// DashboardNodeBodyRetain: PASS TWO's half — decode one record's body into the storage it
+// already owns.
+// EACH NODE BODY IS A PATH ROOT of its own (docs/SPEC-TABLES.md §6.6): the
+// index is the region directory's, which Load fills from the wire's framing
+// and nothing afterwards renumbers.
+inline void DashboardNodeBodyRetain( uint64_t type_id, TableReader & r, const TableNodeMap & nodes, uint8_t * at, TableRetain * retain, uint32_t node )
+{
+    // the node's own EXTENT, where its lists' and maps' arrays are carved
+    // from, PRE-ORDER as the bodies decode (docs/SPEC-TABLES.md §2.8, §2.9).
+    // The tool's path carries a worker instead: there the arrays are the
+    // arena's.
+    TableExtentCarve carve;
+    carve.worker = nodes.worker;
+    if ( carve.worker == NULL )
+    {
+        TableRefuseReason reason = count_over_length; // pass one already refused what this could refuse
+        const int64_t storage = DashboardNodeStorage( type_id, r.size, reason );
+        const int64_t record = storage > 0 ? DashboardNodeRecordBytes( type_id ) : 0;
+        carve.at = at + record;
+        carve.left = storage > record ? storage - record : 0;
+    }
+    nodes.carve = &carve;
+    (void) nodes; // every node this root can name is a FIXED table
+    (void) retain;
+    (void) node;
+    switch ( type_id )
+    {
+        case kTableStringTypeId: if ( r.size > 0 ) { memcpy( at + kTableBlobHeader, r.buffer, (size_t) r.size ); } break; // *string
+        default: break;
+    }
+    nodes.carve = NULL; // the cursor is ONE node's, and this node's body is done
+}
+
+// DashboardLoadRetain: decode the strict wire into the caller's exact-sized region and
+// return the root. LOAD IS A SCAN: the decode follows no reference, and a
+// cyclic graph is refused afterwards by one linear pass over the node
+// directory (docs/SPEC-TABLES.md §3.1). Damage discards the whole load
+// (§4). NULL means refusal, damage or a CALLER's buffer that was wrong.
+// UNDER RETENTION it also fills the caller's two stores with the fields
+// this build cannot name, and the report carries what it could not keep
+// (docs/SPEC-TABLES.md §6.6). It is Load's own path and nothing else: the
+// reader's data is exactly what it would have been with retention off.
+inline const Dashboard * DashboardLoadRetain( uint8_t * region, int64_t region_bytes, const uint8_t * wire_file, int64_t wire_file_bytes, TableRetain * retain, TableReport * report )
+{
+    TableReport ignored;
+    TableReport * out = report != NULL ? report : &ignored;
+    const int32_t non_finite_before = out->non_finite_floats;
+    const bool damaged_before = out->damaged;
+    out->damaged = false;
+    TableRetainReset( retain, TableNodeMap(), NULL );
+    // THE FORM BYTE IS READ FIRST, then the trailer, and only then a body:
+    // a file that is both a newer form and damaged is a REFUSAL and never
+    // damage (docs/SPEC-TABLES.md §3).
+    TableIdTable ids_table;
+    int64_t body_bytes = 0;
+    const TableOpenVerdict verdict = TableOpen( wire_file, wire_file_bytes, ids_table, body_bytes );
+    if ( verdict != TableOpenOk )
+    {
+        if ( verdict == TableOpenDamaged )
+        {
+            out->damaged = true;
+            out->refuse_reason = wire_damaged;
+        }
+        else
+        {
+            out->damaged = damaged_before;
+            out->refused = true;
+            out->refuse_reason = unknown_form;
+            if ( wire_file_bytes > 0 && wire_file[0] == kTableWireMessageForm ) { out->reason = message_form_as_file; }
+            else
+            {
+                out->reason = newer_form;
+            }
+        }
+        return NULL;
+    }
+    if ( TableBodyEndsEarly( wire_file + 1, body_bytes, ids_table ) )
+    {
+        out->damaged = true; // a byte no field claims, before the table (§3)
+        out->refuse_reason = wire_damaged;
+        return NULL;
+    }
+    const uint8_t * const wire = wire_file + 1;
+    const int64_t wire_bytes = body_bytes;
+    if ( region != NULL && region_bytes > 0 && ( ( (uintptr_t) region ) & ( kTableAlign - 1 ) ) == 0 )
+    {
+        memset( region, 0, (size_t) region_bytes );
+    }
+    uint64_t type_id = 0;
+    const uint8_t * body = NULL;
+    int64_t length = 0;
+
+    // the record count and the data bytes, from the FRAMING alone
+    TableRefuseReason reason = count_over_length;
+    bool extent_ok = true;
+    int64_t root_extent = 0;
+    if ( !DashboardWireExtent( wire, wire_bytes, root_extent, &ids_table, reason ) )
+    {
+        extent_ok = false;
+    }
+    int64_t data = TableAlignUp64( TableAlignUp64( (int64_t) sizeof( Dashboard ) ) + root_extent );
+    int64_t records = 0;
+    {
+        TableReport counting;
+        TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, &counting, &ids_table );
+        while ( TableNodeScanNext( scan, type_id, body, length ) )
+        {
+            records++;
+            if ( extent_ok )
+            {
+                int64_t storage = DashboardNodeStorage( type_id, length, reason );
+                if ( storage == kTableNodeRefused ) { extent_ok = false; }
+                else if ( storage > 0 ) { data += storage; }
+            }
+        }
+    }
+    if ( !extent_ok )
+    {
+        DashboardBuilder builder;
+        Dashboard * root = builder.GetRoot();
+        const TableAllocator allocator = builder.arena.allocator;
+        TableNodeDirEntry * directory = root != NULL ? (TableNodeDirEntry *) table_allocate( allocator, ( records + 1 ) * (int64_t) sizeof( TableNodeDirEntry ) ) : NULL;
+        if ( directory == NULL )
+        {
+            out->damaged = true;
+            return NULL;
+        }
+        directory[0].offset = (uint64_t) builder.root_ref.value;
+        directory[0].type_id = 0x7fee95b66225e1fbull;
+        TableNodeMap nodes;
+        nodes.cycle_indices = true;
+        nodes.arena = true;
+        nodes.worker = &builder.main;
+        nodes.entries = directory;
+        nodes.count = records + 1;
+        nodes.once = true;
+        TableRetainReset( retain, nodes, NULL );
+        {
+            TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, out, &ids_table );
+            int64_t k = 0;
+            int32_t unknown_records = 0;
+            while ( TableNodeScanNext( scan, type_id, body, length ) )
+            {
+                uint32_t at = DashboardNodeAlloc( type_id, builder.main, length );
+                if ( type_id == kTableStringTypeId && !TableUtf8Valid( body, length ) )
+                {
+                    out->damaged = true;
+                    directory[k + 1].offset = kTableNodeAbsent;
+                    directory[k + 1].type_id = type_id;
+                    k++;
+                    continue;
+                }
+                if ( at == 0 )
+                {
+                    unknown_records++;
+                    directory[k + 1].offset = kTableNodeAbsent;
+                }
+                else
+                {
+                    directory[k + 1].offset = (uint64_t) at;
+                }
+                directory[k + 1].type_id = type_id;
+                k++;
+            }
+            nodes.good = TableNodeScanWhole( scan );
+            if ( nodes.good )
+            {
+                out->unknown += unknown_records;
+                out->retain_lost += unknown_records;
+            }
+            else
+            {
+                out->damaged = true;
+            }
+        }
+        if ( nodes.good )
+        {
+            TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, out, &ids_table );
+            int64_t k = 0;
+            while ( TableNodeScanNext( scan, type_id, body, length ) )
+            {
+                if ( directory[k + 1].offset != kTableNodeAbsent )
+                {
+                    TableReader sub( body, length, out, &ids_table );
+                    DashboardNodeBodyRetain( type_id, sub, nodes, TableArenaAt( builder.arena, (uint32_t) directory[k + 1].offset ), retain, (uint32_t) ( k + 2 ) );
+                    if ( nodes.refused ) { break; }
+                }
+                k++;
+            }
+        }
+        if ( !nodes.refused )
+        {
+            TableReader r( wire, wire_bytes, out, &ids_table );
+            r.nested = false;
+            TableExtentCarve root_carve;
+            root_carve.worker = &builder.main;
+            nodes.carve = &root_carve;
+            DashboardLoadBodyRetain( r, nodes, *root, retain, TableRetainPathRoot( (const void *) root, 1 ) );
+        }
+        table_release( allocator, directory );
+        TableRetainReset( retain, TableNodeMap(), NULL );
+        if ( TableNonFiniteRefused( out, non_finite_before ) )
+        {
+            out->damaged = out->damaged || damaged_before;
+            return NULL;
+        }
+        if ( nodes.refused && !out->damaged )
+        {
+            out->refused = true;
+            out->reason = count_over_extent_cap;
+            out->refuse_reason = count_over_extent_cap;
+            out->damaged = damaged_before;
+            return NULL;
+        }
+        out->damaged = true;
+        return NULL;
+    }
+    if ( region == NULL || region_bytes < (int64_t) sizeof( Dashboard ) )
+    {
+        out->damaged = true;
+        return NULL;
+    }
+    if ( ( ( (uintptr_t) region ) & ( kTableAlign - 1 ) ) != 0 )
+    {
+        out->damaged = true;
+        return NULL;
+    }
+    int64_t attribution = ( records + 1 ) * (int64_t) sizeof( TableNodeDirEntry );
+    if ( data + attribution > region_bytes )
+    {
+        out->damaged = true;
+        return NULL;
+    }
+
+    TableNodeMap nodes;
+    nodes.cycle_indices = true; // construction indices become offsets only after the cycle check
+    nodes.base = region;
+    nodes.entries = (TableNodeDirEntry *) ( region + data );
+    nodes.count = records + 1;
+    nodes.once = true; // the file read marks and counts a blob named twice (§2.5, §6.5)
+    TableNodeDirEntry * directory = (TableNodeDirEntry *) ( region + data );
+    directory[0].offset = 0; // position 0 is the ROOT, at offset 0 (§6.3)
+    directory[0].type_id = 0x7fee95b66225e1fbull;
+    Dashboard * root = new ( region ) Dashboard; // lifetime only: LoadBody's first act is DashboardReset
+    DashboardReset( *root );
+
+    // LoadRetain RESETS BOTH STORES and writes into neither id list: a
+    // retained record carries its field's identity in the record itself,
+    // with every reference resolved (docs/SPEC-TABLES.md §6.6). The buffer
+    // belongs to this region from here on.
+    TableRetainReset( retain, nodes, region );
+
+    // PASS ONE: fill the numbering from the framing, so that an index
+    // resolves whichever way it points. It reads no body.
+    {
+        TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, out, &ids_table );
+        int64_t used = TableAlignUp64( TableAlignUp64( (int64_t) sizeof( Dashboard ) ) + root_extent );
+        int64_t k = 0;
+        int32_t unknown_records = 0; // counted once the scan is known whole
+        while ( TableNodeScanNext( scan, type_id, body, length ) )
+        {
+            int64_t storage = DashboardNodeStorage( type_id, length, reason );
+            if ( type_id == kTableStringTypeId && !TableUtf8Valid( body, length ) )
+            {
+                out->damaged = true;
+                directory[k + 1].offset = kTableNodeAbsent;
+                directory[k + 1].type_id = type_id;
+                k++;
+                continue;
+            }
+            if ( storage <= 0 )
+            {
+                // a record whose type id this build cannot name KEEPS ITS
+                // INDEX, is counted once here and not once per pointer, and
+                // every reference to it reads null (§3.1)
+                unknown_records++;
+                directory[k + 1].offset = kTableNodeAbsent;
+                directory[k + 1].type_id = type_id;
+            }
+            else
+            {
+                directory[k + 1].offset = (uint64_t) used;
+                directory[k + 1].type_id = type_id;
+                DashboardNodePlace( type_id, region + used, length );
+                used += storage;
+            }
+            k++;
+        }
+        nodes.good = TableNodeScanWhole( scan );
+        // the table is whole or it is nothing: a scan that failed counts
+        // malformed and NOT the unknowns it met on the way, because the
+        // numbering they belonged to does not exist (§3.1)
+        // A NODE RECORD whose type id this reader cannot name is one of the
+        // SIX EXCLUDED CLASSES (§6.6): it is a whole node, and putting one
+        // back means renumbering a graph the writer numbers from its own edges.
+        if ( nodes.good )
+        {
+            out->unknown += unknown_records;
+            out->retain_lost += unknown_records;
+        }
+        else
+        {
+            out->damaged = true;
+        }
+    }
+
+    // PASS TWO: decode each body into its own storage. A forward index
+    // resolves without scratch, because pass one already placed every node.
+    if ( nodes.good )
+    {
+        TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, out, &ids_table );
+        int64_t k = 0;
+        while ( TableNodeScanNext( scan, type_id, body, length ) )
+        {
+            if ( directory[k + 1].offset != kTableNodeAbsent )
+            {
+                TableReader sub( body, length, out, &ids_table );
+                DashboardNodeBodyRetain( type_id, sub, nodes, region + directory[k + 1].offset, retain, (uint32_t) ( k + 2 ) );
+            }
+            k++;
+        }
+    }
+
+    // and the ROOT's own body last, so every index it carries resolves
+    // against a numbering already known good or already known bad
+    TableReader r( wire, wire_bytes, out, &ids_table );
+    r.nested = false; // the ROOT body, the one that carries the node table
+    TableExtentCarve root_carve;
+    root_carve.at = region + TableAlignUp64( (int64_t) sizeof( Dashboard ) );
+    root_carve.left = root_extent;
+    nodes.carve = &root_carve; // the ROOT's extent is its own, like every node's
+    DashboardLoadBodyRetain( r, nodes, *root, retain, TableRetainPathRoot( (const void *) root, 1 ) );
+    // A NON-FINITE FLOAT REFUSES THE READ, the strict one too, and nothing
+    // lands: the region holds no root (docs/SPEC-TABLES.md §3.3)
+    if ( TableNonFiniteRefused( out, non_finite_before ) )
+    {
+        out->damaged = out->damaged || damaged_before;
+        memset( region, 0, (size_t) region_bytes );
+        TableRetainReset( retain, nodes, region );
+        return NULL;
+    }
+    if ( !out->damaged && nodes.good )
+    {
+        TableCycle cycle;
+        TableRegionCtx cycle_ctx;
+        const bool acyclic = TableCycleBegin( cycle, directory, records + 1, region, NULL, &DashboardCycleOrdinal ) &&
+            TableCycleAcyclic( cycle, cycle_ctx, &DashboardCycleNode<TableRegionCtx> );
+        TableCycleRestore( cycle, 0, 0x7fee95b66225e1fbull );
+        {
+            TableReport restoring;
+            TableNodeScan scan = TableNodeScanBegin( wire, wire_bytes, &restoring, &ids_table );
+            int64_t k = 0;
+            while ( TableNodeScanNext( scan, type_id, body, length ) )
+            {
+                TableCycleRestore( cycle, k + 1, type_id );
+                k++;
+            }
+        }
+        TableCycleEnd( cycle );
+        if ( !acyclic ) { out->damaged = true; } // a cycle: no writer produces one
+    }
+    if ( out->damaged )
+    {
+        memset( region, 0, (size_t) region_bytes );
+        TableRetainReset( retain, nodes, region );
+        return NULL;
+    } // damage discards the whole load (§4)
+    out->damaged = damaged_before;
+    return root;
+}
+
+// DashboardMeasureRetain and DashboardSaveRetain: the pair, with the retained tail in
+// every body it belongs to (docs/SPEC-TABLES.md §6.6). They drop the same
+// records under the same walk, so Measure's answer is the size the save
+// writes even where a record could not be placed.
+template <typename Ctx>
+inline int64_t DashboardMeasureWireRetain( const Ctx & ctx, const Dashboard & root, TableRetain * retain, TableAllocator allocator )
+{
+    TableNumbering numbering;
+    TableNumberingInit( numbering, allocator );
+    int64_t bytes = -1;
+    auto retain_measure = []( const Ctx & c, const TableNumbering & nn, TableRetainIds & ii, uint64_t type_id, const void * node, TableRetain * rt ) -> int64_t {
+        const TableRetainPath at = TableRetainPathRoot( node, 0 );
+        (void) c;
+        (void) nn;
+        (void) ii;
+        (void) rt;
+        (void) at;
+        switch ( type_id )
+        {
+            case kTableStringTypeId: return (int64_t) ( (const TableBlob *) node )->length;
+            default: break;
+        }
+        return -1;
+    };
+    if ( DashboardNumberFrom( ctx, numbering, root ) && !numbering.shared )
+    {
+        TableRetainIds ids( retain );
+        if ( retain != NULL ) { retain->id_used = 0; } // one walk fills the list, and the save's own walk refills it
+        bytes = DashboardMeasureBodyRetain( ctx, numbering, ids, root, retain, TableRetainPathRoot( (const void *) &root, 1 ) );
+        if ( bytes >= 0 )
+        {
+            const int64_t table = TableNodeTableMeasureRetain( ctx, ids, numbering, retain, retain_measure );
+            bytes = table < 0 || ids.overflow ? -1 : 1 + bytes + table + TableRetainIdsBytes( ids );
+        }
+    }
+    TableNumberingShutdown( numbering );
+    return bytes;
+}
+
+template <typename Ctx>
+inline int64_t DashboardSaveWireRetain( const Ctx & ctx, const Dashboard & root, TableRetain * retain, uint8_t * buffer, int64_t capacity, TableReport * report )
+{
+    TableNumbering numbering;
+    TableNumberingInit( numbering, TableDefaultAllocator() );
+    auto retain_measure = []( const Ctx & c, const TableNumbering & nn, TableRetainIds & ii, uint64_t type_id, const void * node, TableRetain * rt ) -> int64_t {
+        const TableRetainPath at = TableRetainPathRoot( node, 0 );
+        (void) c;
+        (void) nn;
+        (void) ii;
+        (void) rt;
+        (void) at;
+        switch ( type_id )
+        {
+            case kTableStringTypeId: return (int64_t) ( (const TableBlob *) node )->length;
+            default: break;
+        }
+        return -1;
+    };
+    auto retain_save = []( const Ctx & c, const TableNumbering & nn, TableWriter & ww, TableRetainIds & ii, uint64_t type_id, const void * node, TableRetain * rt ) -> bool {
+        const TableRetainPath at = TableRetainPathRoot( node, 0 );
+        (void) c;
+        (void) nn;
+        (void) ww;
+        (void) ii;
+        (void) rt;
+        (void) at;
+        switch ( type_id )
+        {
+            case kTableStringTypeId:
+            {
+                const TableBlob * blob = (const TableBlob *) node;
+                ww.raw( (const void *) ( blob + 1 ), (int64_t) blob->length );
+                return true;
+            }
+            default: break;
+        }
+        return false;
+    };
+    if ( !DashboardNumberFrom( ctx, numbering, root ) || numbering.shared )
+    {
+        TableNumberingShutdown( numbering );
+        return -1;
+    }
+    TableWriter w( buffer, capacity );
+    TableRetainIds ids( retain );
+    if ( retain != NULL ) { retain->id_used = 0; }
+    TableRetainClearPlaced( retain );
+    w.put8( kTableWireForm ); // the FORM BYTE is the whole header (§3)
+    // the root's own fields, then the RETAINED TAIL, then the node table's
+    // field: a retained field is one of the root's own values, and the tail
+    // is pinned before the large and damage-prone part (§6.6, §3.1)
+    bool ok = DashboardSaveBodyFieldsRetain( ctx, numbering, w, ids, root, retain, TableRetainPathRoot( (const void *) &root, 1 ) ) &&
+        TableNodeTableSaveRetain( ctx, w, ids, numbering, retain, retain_measure, retain_save );
+    TableNumberingShutdown( numbering );
+    if ( !ok || ids.overflow ) { return -1; }
+    w.put8( 0 ); // the ZERO REFERENCE that ends the root body
+    TableRetainIdsWrite( w, ids );
+    if ( w.overflow ) { return -1; } // the caller's buffer was too small
+    // THE SAVE'S OWN SHARE OF retain_lost, read after the save (§6.6): every
+    // record the walk did not place, counted once.
+    TableRetainCountLost( retain, report );
+    return w.offset;
+}
+
+inline int64_t DashboardMeasureRetain( const Dashboard * root, TableRetain * retain, TableAllocator allocator = TableDefaultAllocator() )
+{
+    if ( root == NULL ) { return -1; }
+    TableRegionCtx ctx;
+    return DashboardMeasureWireRetain( ctx, *root, retain, allocator );
+}
+
+// SaveRetain REFUSES A NULL REPORT and returns -1 (docs/SPEC-TABLES.md
+// §6.6): the save is the only place a caller learns that a record was
+// dropped, so the report is required here where it is optional everywhere
+// else. A surface that let a caller retain, save and never find out would
+// be a promise it could not check.
+inline int64_t DashboardSaveRetain( const Dashboard * root, TableRetain * retain, uint8_t * buffer, int64_t capacity, TableReport * report )
+{
+    if ( root == NULL || report == NULL ) { return -1; }
+    TableRegionCtx ctx;
+    return DashboardSaveWireRetain( ctx, *root, retain, buffer, capacity, report );
 }
 
 // SessionsDiffNodeBodyRetain: PASS TWO's half — decode one record's body into the storage it
@@ -59546,6 +62136,37 @@ inline const SignInOffer * SignInOfferOpen( const void * bytes, uint64_t length,
     return (const SignInOffer *) TableCookOpen( bytes, length, (uint64_t) sizeof( SignInOffer ), (uint64_t) 8, reason );
 }
 
+// DashboardOpen: match the header and POINT. On a match the bytes ARE what this
+// build wrote, in this build's layout and this build's byte order, so there
+// is nothing to validate and nothing to fix up and the root comes back as it
+// lies. On ANY refusal it returns NULL and NAMES the refusal in the caller's
+// TableRefuseReason, the first failing clause in §7's order (a wrong build
+// version is a re-cook, a foreign order a cross-endian cook, a truncated
+// file a bad download, an unaligned base the caller's own buffer), and the
+// caller falls back to a wire load, which is the path that carries every
+// version. The reason is written on the refusal path only; a caller that
+// passes nothing gets the null alone.
+//
+// It is O(1) IN THE FILE'S SIZE — the header and nothing per node — so a one
+// megabyte cook and a one gigabyte cook open in the same time, and a mapped
+// file's pages are touched only as they are used. That is a property of
+// touching nothing at open rather than a separate mechanism.
+//
+// A REFERENCE INSIDE THE REGION IS DEREFERENCED THROUGH DashboardAt: the slot holds
+// the signed self-relative byte delta of §6.3, so a deref is one add and
+// needs no base pointer, a whole region relocates by plain memcpy, and a
+// delta of zero is null.
+//
+// There is ONE entry point and no strict twin: a build either wrote this
+// file or it did not, and the build version is what says which. Validating a
+// file whose provenance a person doubts is schema cook-check, offline,
+// over the ATTRIBUTION part beside the data — a person's decision, never a
+// parameter on a load.
+inline const Dashboard * DashboardOpen( const void * bytes, uint64_t length, TableRefuseReason * reason = NULL )
+{
+    return (const Dashboard *) TableCookOpen( bytes, length, (uint64_t) sizeof( Dashboard ), (uint64_t) 8, reason );
+}
+
 // SessionsDiffOpen: match the header and POINT. On a match the bytes ARE what this
 // build wrote, in this build's layout and this build's byte order, so there
 // is nothing to validate and nothing to fix up and the root comes back as it
@@ -59853,6 +62474,8 @@ inline bool AICookBody( const Ctx & ctx, const TableCookRegion & region, uint8_t
 template <typename Ctx>
 inline bool SignInOfferCookBody( const Ctx & ctx, const TableCookRegion & region, uint8_t * at, const SignInOffer & value, TableByteOrder order );
 template <typename Ctx>
+inline bool DashboardCookBody( const Ctx & ctx, const TableCookRegion & region, uint8_t * at, const Dashboard & value, TableByteOrder order );
+template <typename Ctx>
 inline bool SessionsDiffCookBody( const Ctx & ctx, const TableCookRegion & region, uint8_t * at, const SessionsDiff & value, TableByteOrder order );
 template <typename Ctx>
 inline bool ActionCookBody( const Ctx & ctx, const TableCookRegion & region, uint8_t * at, const Action & value, TableByteOrder order );
@@ -60002,6 +62625,14 @@ inline bool SignInOfferCookBody( const Ctx & ctx, const TableCookRegion & region
 }
 
 template <typename Ctx>
+inline bool DashboardCookBody( const Ctx & ctx, const TableCookRegion & region, uint8_t * at, const Dashboard & value, TableByteOrder order )
+{
+    if ( !table_cook_ref( region, at + 0, (const void *) TableBlobAt( ctx, value.name ), order ) ) { return false; } // name
+    if ( !table_cook_ref( region, at + 8, (const void *) TableBlobAt( ctx, value.url ), order ) ) { return false; } // url
+    return true;
+}
+
+template <typename Ctx>
 inline bool SessionsDiffCookBody( const Ctx & ctx, const TableCookRegion & region, uint8_t * at, const SessionsDiff & value, TableByteOrder order )
 {
     (void) ctx;
@@ -60017,6 +62648,8 @@ inline bool SessionsDiffCookBody( const Ctx & ctx, const TableCookRegion & regio
     table_cook_put( at + 64, 0, 8, order ); // signins: the array's delta, filled by the extent writer
     table_cook_put( at + 72, 0, 4, order ); // and its count
     table_cook_put( at + 80, (uint64_t) value.next_action, 8, order );
+    table_cook_put( at + 88, 0, 8, order ); // dashboards: the array's delta, filled by the extent writer
+    table_cook_put( at + 96, 0, 4, order ); // and its count
     return true;
 }
 
@@ -60153,6 +62786,8 @@ template <typename Ctx>
 inline bool AICookExtent( const Ctx & ctx, const TableCookRegion & region, uint8_t * extent, int64_t & at, uint8_t * record, const AI & value, TableByteOrder order );
 template <typename Ctx>
 inline bool SignInOfferCookExtent( const Ctx & ctx, const TableCookRegion & region, uint8_t * extent, int64_t & at, uint8_t * record, const SignInOffer & value, TableByteOrder order );
+template <typename Ctx>
+inline bool DashboardCookExtent( const Ctx & ctx, const TableCookRegion & region, uint8_t * extent, int64_t & at, uint8_t * record, const Dashboard & value, TableByteOrder order );
 template <typename Ctx>
 inline bool SessionsDiffCookExtent( const Ctx & ctx, const TableCookRegion & region, uint8_t * extent, int64_t & at, uint8_t * record, const SessionsDiff & value, TableByteOrder order );
 template <typename Ctx>
@@ -60416,6 +63051,22 @@ inline bool SignInOfferCookExtent( const Ctx & ctx, const TableCookRegion & regi
     return true; // no list or map below this record
 }
 
+// DashboardCookExtent: Dashboard's arrays into the node's extent, PRE-ORDER, a map's entries
+// in ASCENDING key order and a list's elements in INDEX order, each through its
+// own cook writer (§2.8, §2.9, §7.6).
+template <typename Ctx>
+inline bool DashboardCookExtent( const Ctx & ctx, const TableCookRegion & region, uint8_t * extent, int64_t & at, uint8_t * record, const Dashboard & value, TableByteOrder order )
+{
+    (void) ctx;
+    (void) region;
+    (void) extent;
+    (void) at;
+    (void) record;
+    (void) value;
+    (void) order;
+    return true; // no list or map below this record
+}
+
 // SessionsDiffCookExtent: SessionsDiff's arrays into the node's extent, PRE-ORDER, a map's entries
 // in ASCENDING key order and a list's elements in INDEX order, each through its
 // own cook writer (§2.8, §2.9, §7.6).
@@ -60485,6 +63136,20 @@ inline bool SessionsDiffCookExtent( const Ctx & ctx, const TableCookRegion & reg
         for ( int32_t i = 0; i < cursor.count; i++ ) // INDEX order, live elements only
         {
             if ( !SignInOfferCookBody( ctx, region, array + i * 56, cursor[i], order ) ) { return false; }
+        }
+    }
+    { // dashboards: an unbounded array
+        TableListCursor<Dashboard> cursor = TableListElements( ctx, value.dashboards );
+        if ( !cursor.ok ) { return false; }
+        at = ( at + 7 ) & ~(int64_t) 7; // at alignof( Dashboard )
+        uint8_t * array = extent + at;
+        at += (int64_t) cursor.count * 16; // the whole array FIRST
+        // the SIXTEEN BYTES of the slot: the self-relative delta, then the count
+        table_cook_put( record + 88, cursor.count > 0 ? (uint64_t) (int64_t) ( array - ( record + 88 ) ) : 0, 8, order );
+        table_cook_put( record + 96, (uint64_t) (uint32_t) cursor.count, 4, order );
+        for ( int32_t i = 0; i < cursor.count; i++ ) // INDEX order, live elements only
+        {
+            if ( !DashboardCookBody( ctx, region, array + i * 16, cursor[i], order ) ) { return false; }
         }
     }
     return true;
@@ -60893,13 +63558,22 @@ inline bool SignInOfferCookNode( const Ctx & ctx, const TableCookRegion & region
     return SignInOfferCookExtent( ctx, region, at + 56, extent_at, at, value, order );
 }
 
+// DashboardCookNode: one node, the record, then the extent its lists and maps take (§2.8, §2.9).
+template <typename Ctx>
+inline bool DashboardCookNode( const Ctx & ctx, const TableCookRegion & region, uint8_t * at, const Dashboard & value, TableByteOrder order )
+{
+    if ( !DashboardCookBody( ctx, region, at, value, order ) ) { return false; }
+    int64_t extent_at = 0;
+    return DashboardCookExtent( ctx, region, at + 16, extent_at, at, value, order );
+}
+
 // SessionsDiffCookNode: one node, the record, then the extent its lists and maps take (§2.8, §2.9).
 template <typename Ctx>
 inline bool SessionsDiffCookNode( const Ctx & ctx, const TableCookRegion & region, uint8_t * at, const SessionsDiff & value, TableByteOrder order )
 {
     if ( !SessionsDiffCookBody( ctx, region, at, value, order ) ) { return false; }
     int64_t extent_at = 0;
-    if ( !SessionsDiffCookExtent( ctx, region, at + 88, extent_at, at, value, order ) ) { return false; }
+    if ( !SessionsDiffCookExtent( ctx, region, at + 104, extent_at, at, value, order ) ) { return false; }
     return extent_at == SessionsDiffExtent<Ctx, true>( ctx, value ); // the extent written is the extent measured, or no header is written
 }
 
@@ -62468,6 +65142,191 @@ inline bool SignInOfferCook( const SignInOfferBuilder & builder, void * out, uin
     return SignInOfferCookFrom( ctx, *(const SignInOffer *) TableArenaAt( builder.arena, (uint32_t) builder.root_ref.value ), out, capacity, order, builder.arena.allocator );
 }
 
+// DashboardCookLayout: the tool's own Layout (docs/SPEC-TABLES.md §7.2) over one
+// numbering — the root at zero, then every node in index order at
+// align_up( offset, alignof ) for its OWN type, no slack between them, the
+// data length rounded to the greatest alignment among them and never below
+// eight. The offsets go into the region's table when it has one, and are only
+// summed when it does not (a measure). A type id the numbering carries that
+// this root cannot name is the two walks disagreeing, and it is refused.
+// A NODE'S SIZE DEPENDS ON ITS VALUE where a list or a map rides in its extent
+// (docs/SPEC-TABLES.md §2.8), so the layout takes the resolution context
+// the numbering walked and reads the same arrays that walk read.
+template <typename Ctx>
+inline bool DashboardCookLayout( const Ctx & ctx, const Dashboard & root, const TableNumbering & numbering, TableCookRegion & region )
+{
+    region.numbering = &numbering;
+    region.count = numbering.count + 1;
+    (void) root;
+    (void) ctx;
+    int64_t offset = 16; // the root, at zero
+    int64_t align = 8;
+    if ( region.offsets != NULL ) { region.offsets[0] = 0; }
+    for ( int64_t k = 0; k < numbering.count; k++ )
+    {
+        int64_t size = 0;
+        int64_t node_align = 0;
+        switch ( numbering.entries[k].type_id )
+        {
+            case kTableStringTypeId:
+                size = kTableBlobHeader + (int64_t) ( (const TableBlob *) numbering.entries[k].node )->length + 1;
+                node_align = 8;
+                break; // *string
+            default: return false;
+        }
+        offset = ( offset + node_align - 1 ) & ~( node_align - 1 );
+        if ( region.offsets != NULL ) { region.offsets[k + 1] = offset; }
+        offset += size;
+        if ( node_align > align ) { align = node_align; }
+    }
+    region.bytes = ( offset + align - 1 ) & ~( align - 1 );
+    region.align = align;
+    return true;
+}
+
+// DashboardCookMeasureFrom: the whole cooked file's bytes for one graph — the header,
+// the data part and the attribution part (§7.1). IT DEPENDS ON THE VALUE,
+// because the answer is the numbering: the depth-first walk of §3.1 is run
+// here and run again by the write, and neither carries the other's (§7.6). A
+// data cycle is refused by the walk and answers -1.
+template <typename Ctx>
+inline int64_t DashboardCookMeasureFrom( const Ctx & ctx, const Dashboard & root, TableAllocator allocator )
+{
+    TableNumbering numbering;
+    TableNumberingInit( numbering, allocator );
+    TableCookRegion region;
+    int64_t bytes = -1;
+    if ( DashboardNumberFrom( ctx, numbering, root ) && DashboardCookLayout( ctx, root, numbering, region ) )
+    {
+        const int64_t data_offset = ( kTableCookHeaderBytes + region.align - 1 ) & ~( region.align - 1 );
+        bytes = data_offset + region.bytes + region.count * (int64_t) sizeof( TableNodeDirEntry );
+    }
+    TableNumberingShutdown( numbering );
+    return bytes;
+}
+
+// DashboardCookFrom: write one cooked file of a pointered graph, in the byte order
+// the caller names. The bytes are `schema cook`'s, byte for byte (§7.6).
+//
+// THE CALLER OWNS THE OUTPUT and nothing is allocated toward it. What is
+// allocated is the numbering — the identity map, the entry array and one
+// offset per node — through the pair handed in, and released before this
+// returns (§6.5, §13.9). A capacity short of the measure writes nothing.
+//
+// THE HEADER IS WRITTEN LAST. A reference the numbering did not carry is
+// found while a body is being written, and a write that refuses there has
+// already put bytes in the buffer; with no magic ahead of them, no Open can
+// mistake them for a cook.
+template <typename Ctx>
+inline bool DashboardCookFrom( const Ctx & ctx, const Dashboard & root, void * out, uint64_t capacity, TableByteOrder order, TableAllocator allocator )
+{
+    if ( out == NULL ) { return false; }
+    TableNumbering numbering;
+    TableNumberingInit( numbering, allocator );
+    TableCookRegion region;
+    bool ok = DashboardNumberFrom( ctx, numbering, root );
+    if ( ok )
+    {
+        region.offsets = (int64_t *) table_allocate( allocator, ( numbering.count + 1 ) * (int64_t) sizeof( int64_t ) );
+        ok = region.offsets != NULL && DashboardCookLayout( ctx, root, numbering, region );
+    }
+    if ( ok )
+    {
+        const int64_t data_offset = ( kTableCookHeaderBytes + region.align - 1 ) & ~( region.align - 1 );
+        const int64_t attribution = region.count * (int64_t) sizeof( TableNodeDirEntry );
+        const int64_t need = data_offset + region.bytes + attribution;
+        ok = (uint64_t) need <= capacity;
+        if ( ok )
+        {
+            uint8_t * raw = (uint8_t *) out;
+            memset( raw, 0, (size_t) need ); // EVERY BYTE NO FIELD COVERS IS ZERO (§7.2)
+            region.base = raw + data_offset;
+            // the DATA part: the root at the region's base, then every numbered
+            // node at the offset the layout gave it, each through its own writer
+            ok = DashboardCookNode( ctx, region, region.base, root, order );
+            for ( int64_t k = 0; ok && k < numbering.count; k++ )
+            {
+                uint8_t * at = region.base + region.offsets[k + 1];
+                const void * node = numbering.entries[k].node;
+                switch ( numbering.entries[k].type_id )
+                {
+                    case kTableStringTypeId:
+                    {
+                        const TableBlob * blob = (const TableBlob *) node; // *string
+                        table_cook_put( at, (uint64_t) blob->length, 4, order );
+                        table_cook_bytes( at + kTableBlobHeader, (const void *) ( blob + 1 ), (int64_t) blob->length, (int64_t) blob->length );
+                        break;
+                    }
+                    default:
+                        ok = false;
+                        break;
+                }
+            }
+            // the ATTRIBUTION part: the node directory (§6.3), one entry per node
+            // in index order, for `schema cook-check`
+            uint8_t * entry = raw + data_offset + region.bytes;
+            table_cook_put( entry, 0, 8, order );
+            table_cook_put( entry + 8, 0x7fee95b66225e1fbull, 8, order ); // the root: fnv1a64( "Dashboard" )
+            for ( int64_t k = 0; k < numbering.count; k++ )
+            {
+                entry += sizeof( TableNodeDirEntry );
+                table_cook_put( entry, (uint64_t) region.offsets[k + 1], 8, order );
+                table_cook_put( entry + 8, numbering.entries[k].type_id, 8, order );
+            }
+            // and the HEADER (§7.1), every word a u64 in the order the file is
+            // produced in; the two RESERVED words are the memset's zeros
+            if ( ok )
+            {
+                table_cook_put( raw + 0, TableCookMagic, 8, order );
+                table_cook_put( raw + 8, BuildVersion, 8, order );
+                table_cook_put( raw + 16, (uint64_t) ( order == TableByteOrder::Big ? 2 : 1 ), 8, order );
+                table_cook_put( raw + 24, (uint64_t) region.bytes, 8, order );
+                table_cook_put( raw + 32, (uint64_t) attribution, 8, order );
+                table_cook_put( raw + 40, (uint64_t) region.align, 8, order );
+            }
+        }
+    }
+    table_release( allocator, region.offsets );
+    TableNumberingShutdown( numbering );
+    return ok;
+}
+
+// DashboardCookMeasure / DashboardCook over a REGION root — a locked builder's AsConst, a
+// region DashboardLoad produced, or an opened cook — with the pair the numbering
+// allocates through as an optional last argument, as the wire's own entries
+// take it (§13.9).
+inline int64_t DashboardCookMeasure( const Dashboard * root, TableAllocator allocator = TableDefaultAllocator() )
+{
+    if ( root == NULL ) { return -1; }
+    TableRegionCtx ctx;
+    return DashboardCookMeasureFrom( ctx, *root, allocator );
+}
+
+inline bool DashboardCook( const Dashboard * root, void * out, uint64_t capacity, TableByteOrder order, TableAllocator allocator = TableDefaultAllocator() )
+{
+    if ( root == NULL ) { return false; }
+    TableRegionCtx ctx;
+    return DashboardCookFrom( ctx, *root, out, capacity, order, allocator );
+}
+
+// and over a BUILDER, locked or not: the builder's own pair, and the arena
+// encoding while it is still mutable (§6.3).
+inline int64_t DashboardCookMeasure( const DashboardBuilder & builder )
+{
+    if ( builder.region != NULL ) { return DashboardCookMeasure( builder.AsConst(), builder.arena.allocator ); }
+    if ( builder.root_ref.null() ) { return -1; } // the root allocation failed
+    TableArenaCtx ctx = { &builder.arena };
+    return DashboardCookMeasureFrom( ctx, *(const Dashboard *) TableArenaAt( builder.arena, (uint32_t) builder.root_ref.value ), builder.arena.allocator );
+}
+
+inline bool DashboardCook( const DashboardBuilder & builder, void * out, uint64_t capacity, TableByteOrder order )
+{
+    if ( builder.region != NULL ) { return DashboardCook( builder.AsConst(), out, capacity, order, builder.arena.allocator ); }
+    if ( builder.root_ref.null() ) { return false; } // the root allocation failed
+    TableArenaCtx ctx = { &builder.arena };
+    return DashboardCookFrom( ctx, *(const Dashboard *) TableArenaAt( builder.arena, (uint32_t) builder.root_ref.value ), out, capacity, order, builder.arena.allocator );
+}
+
 // SessionsDiffCookLayout: the tool's own Layout (docs/SPEC-TABLES.md §7.2) over one
 // numbering — the root at zero, then every node in index order at
 // align_up( offset, alignof ) for its OWN type, no slack between them, the
@@ -62485,7 +65344,7 @@ inline bool SessionsDiffCookLayout( const Ctx & ctx, const SessionsDiff & root, 
     region.count = numbering.count + 1;
     const int64_t root_extent = SessionsDiffExtent<Ctx, true>( ctx, root );
     if ( root_extent < 0 ) { return false; }
-    int64_t offset = 88 + root_extent; // the root at zero, its extent behind it
+    int64_t offset = 104 + root_extent; // the root at zero, its extent behind it
     int64_t align = 8;
     if ( region.offsets != NULL ) { region.offsets[0] = 0; }
     for ( int64_t k = 0; k < numbering.count; k++ )
@@ -64207,6 +67066,8 @@ static_assert( __is_trivially_copyable( AI ), "AI must stay relocatable" );
 static_assert( __is_standard_layout( AI ), "AI must stay standard-layout for offsetof" );
 static_assert( __is_trivially_copyable( SignInOffer ), "SignInOffer must stay relocatable" );
 static_assert( __is_standard_layout( SignInOffer ), "SignInOffer must stay standard-layout for offsetof" );
+static_assert( __is_trivially_copyable( Dashboard ), "Dashboard must stay relocatable" );
+static_assert( __is_standard_layout( Dashboard ), "Dashboard must stay standard-layout for offsetof" );
 static_assert( __is_trivially_copyable( SessionsDiff ), "SessionsDiff must stay relocatable" );
 static_assert( __is_standard_layout( SessionsDiff ), "SessionsDiff must stay standard-layout for offsetof" );
 static_assert( __is_trivially_copyable( Action ), "Action must stay relocatable" );
@@ -64311,7 +67172,11 @@ static_assert( offsetof( SignInOffer, opener ) == 24, "SignInOffer's field opene
 static_assert( offsetof( SignInOffer, host ) == 32, "SignInOffer's field host moved: the build version was taken over offset 32 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( SignInOffer, url ) == 40, "SignInOffer's field url moved: the build version was taken over offset 40 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( SignInOffer, code_wanted ) == 48, "SignInOffer's field code_wanted moved: the build version was taken over offset 48 (docs/SPEC-TABLES.md §20.3)" );
-static_assert( sizeof( SessionsDiff ) == 88, "SessionsDiff's sizeof moved: the build version was taken over 88, so a cook of it would not be this build's file (docs/SPEC-TABLES.md §20.3)" );
+static_assert( sizeof( Dashboard ) == 16, "Dashboard's sizeof moved: the build version was taken over 16, so a cook of it would not be this build's file (docs/SPEC-TABLES.md §20.3)" );
+static_assert( alignof( Dashboard ) == 8, "Dashboard's alignof moved: the build version was taken over 8 (docs/SPEC-TABLES.md §20.3)" );
+static_assert( offsetof( Dashboard, name ) == 0, "Dashboard's field name moved: the build version was taken over offset 0 (docs/SPEC-TABLES.md §20.3)" );
+static_assert( offsetof( Dashboard, url ) == 8, "Dashboard's field url moved: the build version was taken over offset 8 (docs/SPEC-TABLES.md §20.3)" );
+static_assert( sizeof( SessionsDiff ) == 104, "SessionsDiff's sizeof moved: the build version was taken over 104, so a cook of it would not be this build's file (docs/SPEC-TABLES.md §20.3)" );
 static_assert( alignof( SessionsDiff ) == 8, "SessionsDiff's alignof moved: the build version was taken over 8 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( SessionsDiff, sessions ) == 0, "SessionsDiff's field sessions moved: the build version was taken over offset 0 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( SessionsDiff, requests ) == 16, "SessionsDiff's field requests moved: the build version was taken over offset 16 (docs/SPEC-TABLES.md §20.3)" );
@@ -64320,6 +67185,7 @@ static_assert( offsetof( SessionsDiff, ais ) == 40, "SessionsDiff's field ais mo
 static_assert( offsetof( SessionsDiff, ais_sent ) == 56, "SessionsDiff's field ais_sent moved: the build version was taken over offset 56 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( SessionsDiff, signins ) == 64, "SessionsDiff's field signins moved: the build version was taken over offset 64 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( SessionsDiff, next_action ) == 80, "SessionsDiff's field next_action moved: the build version was taken over offset 80 (docs/SPEC-TABLES.md §20.3)" );
+static_assert( offsetof( SessionsDiff, dashboards ) == 88, "SessionsDiff's field dashboards moved: the build version was taken over offset 88 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( sizeof( Action ) == 64, "Action's sizeof moved: the build version was taken over 64, so a cook of it would not be this build's file (docs/SPEC-TABLES.md §20.3)" );
 static_assert( alignof( Action ) == 8, "Action's alignof moved: the build version was taken over 8 (docs/SPEC-TABLES.md §20.3)" );
 static_assert( offsetof( Action, kind ) == 0, "Action's field kind moved: the build version was taken over offset 0 (docs/SPEC-TABLES.md §20.3)" );
@@ -64385,6 +67251,7 @@ static_assert( alignof( SessionChange ) <= kTableAlign, "SessionsDiff.sessions: 
 static_assert( alignof( SecretRequest ) <= kTableAlign, "SessionsDiff.requests: an unbounded array's element alignment must fit the arena's" );
 static_assert( alignof( AI ) <= kTableAlign, "SessionsDiff.ais: an unbounded array's element alignment must fit the arena's" );
 static_assert( alignof( SignInOffer ) <= kTableAlign, "SessionsDiff.signins: an unbounded array's element alignment must fit the arena's" );
+static_assert( alignof( Dashboard ) <= kTableAlign, "SessionsDiff.dashboards: an unbounded array's element alignment must fit the arena's" );
 static_assert( alignof( Action ) <= kTableAlign, "ActionsDiff.actions: an unbounded array's element alignment must fit the arena's" );
 static_assert( alignof( DriverWaitingText ) <= kTableAlign, "Driver.waiting: an unbounded array's element alignment must fit the arena's" );
 static_assert( alignof( Change ) <= kTableAlign, "Record.changes: an unbounded array's element alignment must fit the arena's" );
@@ -64405,6 +67272,7 @@ inline const TableTypeInfo * SecretRequestTableType();
 inline const TableTypeInfo * AccountChoiceTableType();
 inline const TableTypeInfo * AITableType();
 inline const TableTypeInfo * SignInOfferTableType();
+inline const TableTypeInfo * DashboardTableType();
 inline const TableTypeInfo * SessionsDiffTableType();
 inline const TableTypeInfo * ActionTableType();
 inline const TableTypeInfo * ActionsDiffTableType();
@@ -64432,6 +67300,7 @@ extern const TableTypeInfo SecretRequestTableInfo;
 extern const TableTypeInfo AccountChoiceTableInfo;
 extern const TableTypeInfo AITableInfo;
 extern const TableTypeInfo SignInOfferTableInfo;
+extern const TableTypeInfo DashboardTableInfo;
 extern const TableTypeInfo SessionsDiffTableInfo;
 extern const TableTypeInfo ActionTableInfo;
 extern const TableTypeInfo ActionsDiffTableInfo;
@@ -64548,6 +67417,13 @@ inline const TableFieldInfo SignInOfferTableFields[] = {
 inline const TableTypeInfo SignInOfferTableInfo = { "SignInOffer", (uint32_t) sizeof( SignInOffer ), 7, SignInOfferTableFields, +[]( void * p ) { SignInOfferReset( *(SignInOffer *) p ); }, true, TableDocNone, 0, NULL, false };
 inline const TableTypeInfo * SignInOfferTableType() { return &SignInOfferTableInfo; }
 
+inline const TableFieldInfo DashboardTableFields[] = {
+    { "name", "name", "string", 0xc4bcadba8e631b86ull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( Dashboard, name ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
+    { "url", "url", "string", 0x4c4e8b193dc8be7eull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( Dashboard, url ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
+};
+inline const TableTypeInfo DashboardTableInfo = { "Dashboard", (uint32_t) sizeof( Dashboard ), 2, DashboardTableFields, +[]( void * p ) { DashboardReset( *(Dashboard *) p ); }, true, TableDocNone, 0, NULL, false };
+inline const TableTypeInfo * DashboardTableType() { return &DashboardTableInfo; }
+
 inline const TableFieldInfo SessionsDiffTableFields[] = {
     { "sessions", "sessions", "SessionChange", 0xacebadbd2040ebacull, 13, true, false, NULL, NULL, true, false, 0, (uint32_t) offsetof( SessionsDiff, sessions ), (uint32_t) sizeof( SessionChange ), (uint32_t) offsetof( SessionsDiff, sessions.count ), 0xffffffffu, &SessionChangeTableInfo, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, []( TableWorker & worker, void * slot, const char *, int32_t, int64_t cmd ) -> void * { if ( cmd < 0 ) { schema_table_list_drop_last_( *worker.arena, *(TableList<SessionChange> *) slot ); return NULL; } return (void *) TableListPlace( worker, *(TableList<SessionChange> *) slot ); }, "", TableDocNone, 0, NULL, true, false, 0, 0, false },
     { "requests", "requests", "SecretRequest", 0x7166d3e80f26d1f3ull, 13, true, false, NULL, NULL, true, false, 0, (uint32_t) offsetof( SessionsDiff, requests ), (uint32_t) sizeof( SecretRequest ), (uint32_t) offsetof( SessionsDiff, requests.count ), 0xffffffffu, &SecretRequestTableInfo, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, []( TableWorker & worker, void * slot, const char *, int32_t, int64_t cmd ) -> void * { if ( cmd < 0 ) { schema_table_list_drop_last_( *worker.arena, *(TableList<SecretRequest> *) slot ); return NULL; } return (void *) TableListPlace( worker, *(TableList<SecretRequest> *) slot ); }, "", TableDocNone, 0, NULL, true, false, 0, 0, false },
@@ -64556,8 +67432,9 @@ inline const TableFieldInfo SessionsDiffTableFields[] = {
     { "ais_sent", "ais_sent", "bool", 0x6b65e9dac83a16e9ull, 1, false, false, NULL, NULL, false, false, 0, (uint32_t) offsetof( SessionsDiff, ais_sent ), (uint32_t) sizeof( SessionsDiff::ais_sent ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
     { "signins", "signins", "SignInOffer", 0x5fbecccd50c74838ull, 13, true, false, NULL, NULL, true, false, 0, (uint32_t) offsetof( SessionsDiff, signins ), (uint32_t) sizeof( SignInOffer ), (uint32_t) offsetof( SessionsDiff, signins.count ), 0xffffffffu, &SignInOfferTableInfo, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, []( TableWorker & worker, void * slot, const char *, int32_t, int64_t cmd ) -> void * { if ( cmd < 0 ) { schema_table_list_drop_last_( *worker.arena, *(TableList<SignInOffer> *) slot ); return NULL; } return (void *) TableListPlace( worker, *(TableList<SignInOffer> *) slot ); }, "", TableDocNone, 0, NULL, true, false, 0, 0, false },
     { "next_action", "next_action", "uint64", 0xd6bdffc29f42fe4full, 9, false, false, NULL, NULL, false, false, 0, (uint32_t) offsetof( SessionsDiff, next_action ), (uint32_t) sizeof( SessionsDiff::next_action ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
+    { "dashboards", "dashboards", "Dashboard", 0xff5b1282501e1438ull, 13, true, false, NULL, NULL, true, false, 0, (uint32_t) offsetof( SessionsDiff, dashboards ), (uint32_t) sizeof( Dashboard ), (uint32_t) offsetof( SessionsDiff, dashboards.count ), 0xffffffffu, &DashboardTableInfo, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, []( TableWorker & worker, void * slot, const char *, int32_t, int64_t cmd ) -> void * { if ( cmd < 0 ) { schema_table_list_drop_last_( *worker.arena, *(TableList<Dashboard> *) slot ); return NULL; } return (void *) TableListPlace( worker, *(TableList<Dashboard> *) slot ); }, "", TableDocNone, 0, NULL, true, false, 0, 0, false },
 };
-inline const TableTypeInfo SessionsDiffTableInfo = { "SessionsDiff", (uint32_t) sizeof( SessionsDiff ), 7, SessionsDiffTableFields, +[]( void * p ) { SessionsDiffReset( *(SessionsDiff *) p ); }, true, TableDocNone, 0, NULL, false };
+inline const TableTypeInfo SessionsDiffTableInfo = { "SessionsDiff", (uint32_t) sizeof( SessionsDiff ), 8, SessionsDiffTableFields, +[]( void * p ) { SessionsDiffReset( *(SessionsDiff *) p ); }, true, TableDocNone, 0, NULL, false };
 inline const TableTypeInfo * SessionsDiffTableType() { return &SessionsDiffTableInfo; }
 
 inline const TableFieldInfo ActionTableFields[] = {
@@ -64703,6 +67580,13 @@ int64_t AIToJson( const AI * root, char * buffer, int64_t capacity, TableAllocat
 bool SignInOfferFromJson( SignInOfferBuilder & builder, const char * text, int64_t bytes, TableReport * report );
 int64_t SignInOfferToJsonMeasure( const SignInOffer * root, TableAllocator allocator = TableDefaultAllocator() );
 int64_t SignInOfferToJson( const SignInOffer * root, char * buffer, int64_t capacity, TableAllocator allocator = TableDefaultAllocator() );
+
+// Dashboard in and out of a JSON text (docs/SPEC-TABLES.md §16.7): read into a
+// builder, written from a region's const root. A node named more than once
+// carries `&node` in the text. Defined in NexusTable.cpp; link it to use them.
+bool DashboardFromJson( DashboardBuilder & builder, const char * text, int64_t bytes, TableReport * report );
+int64_t DashboardToJsonMeasure( const Dashboard * root, TableAllocator allocator = TableDefaultAllocator() );
+int64_t DashboardToJson( const Dashboard * root, char * buffer, int64_t capacity, TableAllocator allocator = TableDefaultAllocator() );
 
 // SessionsDiff in and out of a JSON text (docs/SPEC-TABLES.md §16.7): read into a
 // builder, written from a region's const root. A node named more than once
@@ -64980,6 +67864,31 @@ int64_t SignInOfferSaveTextForm( const char * document, int64_t document_bytes, 
 // *edited_bytes set to what it needs. A refusal names itself in *refusal
 // and leaves the old document untouched.
 bool SignInOfferEditTextForm( const char * document, int64_t document_bytes, const TableTextFormEdit * edits, int64_t count, char * buffer, int64_t capacity, int64_t * edited_bytes, SignInOfferBuilder & builder, const char ** refusal );
+
+// DashboardLoadTextForm reads one Dashboard from the hand-editable text form
+// (docs/SPEC-TABLES.md §16.9): the strict s-expression document, resolved
+// against the field kinds and landed through the JSON walk. A refusal
+// names itself in *refusal (§16.9.4).
+bool DashboardLoadTextForm( const char * text, int64_t bytes, DashboardBuilder & builder, const char ** refusal );
+
+// DashboardLoadTextForm with the DOCUMENT retains the source bytes (§16.9.3):
+// *document and *document_bytes are the caller's own text, so a read then
+// DashboardSaveTextForm with no edit is the input byte for byte.
+bool DashboardLoadTextForm( const char * text, int64_t bytes, const char ** document, int64_t * document_bytes, DashboardBuilder & builder, const char ** refusal );
+
+// DashboardSaveTextForm writes the document a Load or Edit returned
+// (docs/SPEC-TABLES.md §16.9.3): the retained bytes, so a read then a
+// write with no edit is the input byte for byte. It answers the byte
+// count, or -1 when capacity cannot hold the document.
+int64_t DashboardSaveTextForm( const char * document, int64_t document_bytes, char * buffer, int64_t capacity );
+
+// DashboardEditTextForm replaces existing scalar values (§16.9.3): each edit's
+// token span and nothing else, all spans taken from the original document,
+// a semantic no-op keeping the old spelling. On success *edited_bytes is
+// the edited document's length; a short buffer answers false with
+// *edited_bytes set to what it needs. A refusal names itself in *refusal
+// and leaves the old document untouched.
+bool DashboardEditTextForm( const char * document, int64_t document_bytes, const TableTextFormEdit * edits, int64_t count, char * buffer, int64_t capacity, int64_t * edited_bytes, DashboardBuilder & builder, const char ** refusal );
 
 // SessionsDiffLoadTextForm reads one SessionsDiff from the hand-editable text form
 // (docs/SPEC-TABLES.md §16.9): the strict s-expression document, resolved
