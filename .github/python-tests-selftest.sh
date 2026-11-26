@@ -3,6 +3,8 @@
 # test, an expected failure, a module that does not import, an empty tier and a list row naming no test each fail.
 # Exits 1 if any case comes out otherwise. Run from the repository's root.
 set -uo pipefail
+# No bytecode next to the planted cases.
+export PYTHONDONTWRITEBYTECODE=1
 cases=tests/ci/python-skips
 out=$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/unittest-skips.XXXXXX")
 trap 'rm -f "$out"' EXIT
