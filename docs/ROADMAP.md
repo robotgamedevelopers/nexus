@@ -20,9 +20,12 @@
 | Writer thread: the store's write and flush run off the server loop's thread, and the loop keeps sending state to the windows while a flush runs, holding back only the acknowledgement until it is durable. mosh cannot hold that back: unmodified, it sends as ack_num the newest remote state it has received, on any tick, so the acknowledgement is bound to received state, and modifying mosh is out (AGENTS.md). So the acknowledgement moves up into nexus: the server's state carries each window's durable applied counter (the number the store has flushed), and the window trims its held actions by that counter, not by mosh's ack, and sends them again after a reconnect as it does now; the state shown is the durable state, or marks what is not yet durable. Changes the Link model (the window's held list, ExactlyOnce across a crash), the Applier, the window's trimming, and their trace binding | ❌ |
 | Server loop bound to a model: a spec of one pass of nexus-server's loop (the batch applied with the drivers held, its one flush, the drivers released, the state set, the links' ticks at the next pass, and a crash anywhere in it), and the real loop's trace (hold, flush, release, tick, with the fs seam's crashes) checked against it in CI, with reversed witnesses for a release, a state or a tick before the flush | ✅ |
 | iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend (later) | ❌ |
+| iPhone depth: a TLA+ layout model and trace check for the momentum list scroll (finger_scroll), as the rules for index arithmetic ask | ❌ |
+| iOS lock depth: a trace check binding the iOS lock glue to ClientLock.tla, so the lock the phone shows is the lock the model proves | ❌ |
+| Login switch bound to its model: the hub's sign-in-then-switch (SignInClaim naming a session and another account, switchTo, switchSignedIn, dropSwitches, the learned email) driven by a random walk of sign-ins that succeed, fail, are declined or are refused as another account's identity, and logouts, its trace checked by TLC as a behaviour of models/LoginSwitch.tla in CI beside its witnesses | ❌ |
 | Install through AI, no installer: a person in their own AI, on their own subscription, points it at this repo; the AI builds nexus from source by README, installs nexus-server as a login item, and sets nexus up with one friend, its own harness and account. No sprint, no fleet. README is the installer and is proven by a cold run on a clean Mac. After the friends layer. (later) | ❌ |
 | Real isolation, for people who need it: everything on the fleet (friends, fleet workers on API billing, and CI workers) runs inside a sandboxed VM or container, so nothing it runs can reach the machine's own files, logins or services. The token wall today is best effort (docs/secrets.md). Candidates to try, none chosen, by host, in docs/secrets.md "Real isolation: candidates": on Mac hosts Tart (a separate program only: source-available, never taken in), Apple's containerization and container tool, Lima, lume, vfkit, Podman's VM mode; on Linux and WSL2 libkrun through BoxLite or microsandbox, Firecracker with Fireactions for CI runners, Cloud Hypervisor, gVisor, Kata Containers, Podman, Incus; on any host Kubernetes (agent-sandbox, a runner controller) or VMs on GCP or AWS; bubblewrap and nsjail as the process-level baseline. Day-to-day friends on a Mac stay on the process sandbox (GPU and Xcode natively). (later) | ❌ |
-| complete | 7% |
+| complete | 5% |
 
 [Source data](roadmap.sexp)
 
@@ -62,7 +65,13 @@
 | HDR and wide gamut: the window asks Prax for its HDR swap chain (half floats, extended sRGB, EDR, gamut-mapped to the display) once Prax's display pass keeps alpha for a see-through window, and once nexus draws colours past sRGB or brighter than SDR white (later) | ❌ |
 | Windows: the native overlay window reaches nexus-server inside WSL2 over a local socket, with a functional test across that boundary in CI (wsl2-functional on captain drives the native window through WSL interop); its terminal tabs are WSL2 shells in the WSL2 home directory, never cmd or PowerShell. Waits on Prax: the window needs Prax's Win32 lib/app to compile. nexus-server builds and tests inside WSL2 and on Linux since 2026-11-25, over nexus's workaround for Prax's lib/process link error there (cmake/prax_environ.h) (later) | ❌ |
 | The window reconnects by itself when its server stops or is replaced, and after a crash, with no message and the state cursor grey meanwhile; it names itself (--client) and resends from its first unacknowledged action (--next) | ✅ |
-| complete | 20% |
+| Windows depth: hold actions until the relay's Hello is read and the phase is running (wantsWrite, relay_life.cpp:197; the model's Write requires running plus a witness), so a missing or mismatched relay cannot swallow sign-in steps and secrets | ❌ |
+| Windows depth: start wsl.exe with PROC_THREAD_ATTRIBUTE_HANDLE_LIST (relay_port_win.cpp:136) so it does not inherit the pipes of other child processes | ❌ |
+| Windows depth: one relay at a time holds for wsl.exe, not for the Linux relay; fix the comments and OneRelay to say so, and bind the port's real check in the trace, which relay_walk.cpp:204 re-implements | ❌ |
+| Windows depth: close the trace binding gaps (ten of seventeen review plants escaped the trace): constrain ranWell by the relay's run time (RelayLife.tla:171); model the tells as a sequence with a no-repeat invariant; unit tests for the acked_+1 re-cut, acked going down, and ended() after stop(); widen the CI seeds | ❌ |
+| Windows depth: a watchdog for a hung relay; keep the NEXUS_WSL_RELAY test hook out of shipping builds; show a notice when history requests are dropped; show a bubble for a message sent when nextAction()==0 (frame_host.cpp:779-783) | ❌ |
+| Linux desktop window: waits on Prax's Wayland backend (asked of Patrick); until then the Linux build is the server only | ❌ |
+| complete | 12% |
 
 [Source data](roadmap.sexp)
 
@@ -151,3 +160,39 @@ Mechanisms taken from pi (earendil-works/pi, MIT), bottom up, each secured befor
 [Source data](roadmap.sexp)
 
 <!-- nova-work:lessons-from-pi:end -->
+
+## Apple Watch
+
+<!-- nova-work:apple-watch:start -->
+
+| feature | done |
+|---|:---:|
+| iPhone-side WatchConnectivity relay: the watch's only route to the server, with the phone lock enforced there | ❌ |
+| Live, not latched, wrist and lock state: nothing is spoken while locked, including cues and notices (NexusWatchApp.swift:16-20, Client.swift:94-120) | ❌ |
+| A core timeout on Listening, so a voice turn that hears nothing ends (voice_turn.cpp:263) | ❌ |
+| Two prompts to the same AI lose the first reply: keep both (relay.cpp:483, 414-419) | ❌ |
+| Persist across restarts: the relay's events_ and awaits_ over a phone restart (relay.h:225,232); epoch_ and ack_ over a watch restart (relay.cpp:282-292); unapplied_ so lost prompts are told (nexus_watch.cpp:46) | ❌ |
+| Mac relay host: a per-launch token and a Content-Type check on every request (watch/host/main.swift:134-171) | ❌ |
+| A frame from another watch id must not reset state, nor be accepted while locked (relay.cpp:335-348) | ❌ |
+| Extend Relay.tla and relay_walk to the lock, events and replies, audio, a watch switch and an unknown AI; three review plants escaped (relay.cpp:452, 360, 272) | ❌ |
+| Speak recorder failures aloud, and validate the audio format; the model tests are too slow under load | ❌ |
+| A fleet Mac with Xcode (mini-m5) for the nightly speech test | ❌ |
+| Run on a real paired watch | ❌ |
+| complete | 0% |
+
+[Source data](roadmap.sexp)
+
+<!-- nova-work:apple-watch:end -->
+
+## Client lock
+
+<!-- nova-work:client-lock:start -->
+
+| feature | done |
+|---|:---:|
+| Bind the lock trace check to the view's real lock screen and input gate: the walk drives WindowLock and FrameHost::event, not ClientLock alone. | ❌ |
+| complete | 0% |
+
+[Source data](roadmap.sexp)
+
+<!-- nova-work:client-lock:end -->
