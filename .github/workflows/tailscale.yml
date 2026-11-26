@@ -65,6 +65,10 @@ on:
         description: with prime, saves no cache (tailscale-windows.yml's cold build measures a cold one)
         type: boolean
         default: false
+      tests:
+        description: "the tests to run, a ctest label regex: unit from ci.yml (each pull request), functional from the nightly, both when it primes"
+        type: string
+        default: '^(unit|functional)$'
       rosetta:
         description: macOS also builds the x86_64 slice and runs it under Rosetta (false from ci.yml, whose 2 minutes it does not fit; the nightly runs it)
         type: boolean
@@ -166,7 +170,9 @@ jobs:
         run: cmake --build build-tailscale --parallel "$JOBS" --target tailscale_checks
       - name: Tests (arm64)
         if: ${{ steps.caches.outputs.build == 'true' }}
-        run: bash .github/ctest.sh --test-dir build-tailscale -L tailscale -j "$TEST_JOBS" --output-on-failure
+        env:
+          TESTS: ${{ inputs.tests }}
+        run: bash .github/ctest.sh --test-dir build-tailscale -L "$TESTS" -j "$TEST_JOBS" --output-on-failure
       # The x86_64 slice runs every group (tests/tailscale/CMakeLists.txt's lists), side by side as ctest runs them; the
       # children that lock_two_process and quiet start are the program again, which macOS runs as its native (arm64)
       # slice.
@@ -207,7 +213,7 @@ jobs:
           TARGET: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash .github/tailscale-status.sh
 
-  # On the fleet's Linux runners with clang and lld, as build-and-unit-linux; also the licence notices
+  # On the fleet's Linux runners with clang and lld, as ci.yml's build-linux; also the licence notices
   # (src/tailscale/NOTICES.md) against the modules the shim links on every platform.
   tailscale-linux:
     runs-on: ubuntu-24.04
@@ -294,7 +300,9 @@ jobs:
         run: cmake --build build-tailscale --parallel "$JOBS" --target tailscale_checks
       - name: Tests
         if: ${{ steps.caches.outputs.build == 'true' }}
-        run: bash .github/ctest.sh --test-dir build-tailscale -L tailscale -j "$TEST_JOBS" --output-on-failure
+        env:
+          TESTS: ${{ inputs.tests }}
+        run: bash .github/ctest.sh --test-dir build-tailscale -L "$TESTS" -j "$TEST_JOBS" --output-on-failure
       - name: Primed
         if: ${{ steps.caches.outputs.build == 'true' }}
         shell: bash
