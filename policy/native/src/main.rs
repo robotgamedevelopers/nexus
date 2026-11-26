@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail, ensure};
 use nexus_policy_runtime::{Bundle, LIMIT, Program, read};
 use std::{
     collections::BTreeMap,
-    env, fs,
+    env,
     io::{self, Read, Write},
     path::{Path, PathBuf},
 };
@@ -112,7 +112,7 @@ fn run() -> Result<()> {
     tmp.as_file().sync_all()?;
     tmp.persist(&path)?;
     #[cfg(unix)]
-    fs::File::open(&dir)?.sync_all()?;
+    std::fs::File::open(&dir)?.sync_all()?;
     println!("Applied {} policy to {}", side, path.display());
     Ok(())
 }
