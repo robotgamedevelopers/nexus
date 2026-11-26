@@ -350,7 +350,7 @@ bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
     // The person's input reaches nexus only while it is unlocked (ClientLock::input, which also restarts the idle
     // time). Locked, only the lock screen takes it (FrameHost::event with View::lockScreen): nothing is queued for
     // later.
-    if (isInputEvent(*e) && a.iosLock->drawsContent() && !a.iosLock->input(e->time)) {
+    if (isInputEvent(*e) && a.iosLock->drawsContent() && !a.iosLock->input(e->time, resetsIdle(*e))) {
         syncLockScreen(a);   // the idle timeout locked it at this input, which is dropped
         return true;
     }

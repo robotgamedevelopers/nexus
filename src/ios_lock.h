@@ -76,8 +76,11 @@ public:
     // Time is `now`.
     void tick(double now);
 
-    // The person's input at `now`: whether it reaches nexus. While locked it does not, and is dropped.
-    bool input(double now);
+    // The person's input at `now`: whether it reaches nexus. While locked it does not, and is dropped. Only
+    // deliberate input (frame_host.h resetsIdle: a key, text, a press, a scroll, a paste, a drop) starts the idle time
+    // again; other input (a pointer or a drag passing over, a gesture) only lets time pass, as on the desktop
+    // (window_lock.cpp), so that nothing but the person's act keeps nexus unlocked.
+    bool input(double now, bool deliberate = true);
 
     // A frame: whether it draws nexus's content (unlocked), or the lock screen alone.
     bool frame();

@@ -92,9 +92,10 @@ void IosLock::tick(double now) {
     step({IosLockStep::Op::Tick, 0, LockAnswer::Failed, LockReason::None, now, false});
 }
 
-bool IosLock::input(double now) {
+bool IosLock::input(double now, bool deliberate) {
     // Time first, as its own step: an input after the idle timeout finds the window locked, and is dropped.
     tick(now);
+    if (!deliberate) return lock_.drawsContent();
     const bool delivered = lock_.input(now);
     step({IosLockStep::Op::Input, 0, LockAnswer::Failed, LockReason::None, now, delivered});
     return delivered;

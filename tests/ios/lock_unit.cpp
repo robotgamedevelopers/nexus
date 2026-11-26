@@ -11,6 +11,7 @@
 //   refusal_waits_for_a_tap                   promptsWhenActive(Failed) is true
 //   input_reaches_nexus_only_unlocked         input() returns true while locked
 //   idle_timeout_locks                        tick() does nothing
+//   passing_input_keeps_nothing_unlocked      input(now, false) starts the idle time again
 //   no_prompt_unless_active                   unlock() does not check that the app is active
 //   active_uncovers                           Active does not take the cover away
 //   launch_asks_once_active                   the first Active does not ask
@@ -219,6 +220,20 @@ void idle_timeout_locks() {
     CHECK(sys2.requests.size() == 1);
 }
 
+// A pointer passing over the window (an iPad's trackpad), a drag or a gesture is input that is not deliberate: it reaches
+// nexus while unlocked, but never starts the idle time again, so it never keeps nexus unlocked (as window_lock.cpp).
+void passing_input_keeps_nothing_unlocked() {
+    ClientLock lock(kIdle);
+    System sys;
+    IosLock glue(lock, sys.make());
+    unlockedAt(glue, 100);
+    CHECK(glue.input(100 + kIdle - 1, false));   // delivered, but the idle time runs on from 100
+    CHECK(glue.drawsContent());
+    CHECK(!glue.input(100 + kIdle, false));      // the timeout: dropped, and locked
+    CHECK(!glue.drawsContent());
+    CHECK(lock.reason() == LockReason::Idle);
+}
+
 void no_prompt_unless_active() {
     ClientLock lock(kIdle);
     System sys;
@@ -265,6 +280,7 @@ int main() {
     refusal_waits_for_a_tap();
     input_reaches_nexus_only_unlocked();
     idle_timeout_locks();
+    passing_input_keeps_nothing_unlocked();
     no_prompt_unless_active();
     active_uncovers();
     reasons_that_prompt();

@@ -22,3 +22,4 @@ policy_unit_stale_bundle                    pr       NEXUS_POLICY_TOOL_TESTS    
 policy_unit_stale_bundle_applied            pr       NEXUS_POLICY_TOOL_TESTS            # what apply writes from this commit is not stale
 client_lock_unit                            pr       ALWAYS              # the client lock's rules (no content without the owner's authentication)
 window_lock_unit                            pr       NEXUS_WINDOW        # the client lock's window gate, over the fake authenticator
+ios_lock_unit                               pr       NEXUS_IOS           # the client lock's iOS part (Face ID), over the real lock
