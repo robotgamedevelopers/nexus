@@ -608,16 +608,20 @@ jobs:
           NEXUS_WALL_FRESH_PROFILE: '1'
           NEXUS_WALL_RUN: ${{ matrix.run }}
         # Where this runner's own login reaches hulk, ssh there must work from the sandbox too, and from there no
-        # login back to this machine; a runner with no fleet login skips that probe.
+        # login back to this machine. A runner with no login to hulk fails the job by name (the rest of the wall still
+        # runs first): no probe is ever skipped.
         run: |
           if ssh -o BatchMode=yes -o ConnectTimeout=5 hulk true 2>/dev/null; then
             export NEXUS_WALL_SSH_HOST=hulk NEXUS_WALL_SSH_BACK="$(hostname -s)"
+            ssh_out=ran
           else
-            echo "no login to hulk from $(hostname -s) as $(id -un): the ssh-out probe is skipped"
+            echo "::error title=ssh-out probe::no login to hulk from $(hostname -s) as $(id -un): the token wall's ssh-out probe cannot run, and no probe is skipped; the fleet gives this runner's login a key for hulk"
+            ssh_out=missing
           fi
           # Separate runner workspaces still share /tmp/.mcp.json during SDK setup.
           # Serialize just this test on each Linux host, including across workflow runs.
           flock "$HOME/.cache/nexus-ci/claude-wall.lock" npm run test:functional
+          [ "$ssh_out" = ran ]
 
   # The WSL2 terminal test (wsl2-terminal below), built with MSVC on a GitHub-hosted Windows runner as ci.yml's windows
   # job builds it (.github/actions/windows-build, from cache-warm's cache when there is one; no limit here).
@@ -1081,14 +1085,18 @@ jobs:
           NEXUS_WALL_REPORT: '1'
           NEXUS_WALL_RUN: ${{ matrix.run }}
         # Where this runner's own login reaches hulk, ssh there must work from the sandbox too, and from there no
-        # login back to this machine; a runner with no fleet login skips that probe.
+        # login back to this machine. A runner with no login to hulk fails the job by name (the rest of the wall still
+        # runs first): no probe is ever skipped.
         run: |
           if ssh -o BatchMode=yes -o ConnectTimeout=5 hulk true 2>/dev/null; then
             export NEXUS_WALL_SSH_HOST=hulk NEXUS_WALL_SSH_BACK="$(hostname -s)"
+            ssh_out=ran
           else
-            echo "no login to hulk from $(hostname -s) as $(id -un): the ssh-out probe is skipped"
+            echo "::error title=ssh-out probe::no login to hulk from $(hostname -s) as $(id -un): the token wall's ssh-out probe cannot run, and no probe is skipped; the fleet gives this runner's login a key for hulk"
+            ssh_out=missing
           fi
           npm run test:functional
+          [ "$ssh_out" = ran ]
 
   # The macOS Release build, with Prax's ThinLTO, and its unit and functional tests, on the fleet Mac with no time
   # limit: ci.yml builds Debug per pull request (no LTO, whose link alone took about 36 s on a hosted runner). The frame
