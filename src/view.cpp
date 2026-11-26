@@ -37,6 +37,10 @@ using namespace style;
 constexpr PrKitTextRole kSelectedTabRole = PrKitTextRole_MonoStrong;
 constexpr PrKitTextRole kTabRole = PrKitTextRole_MonoNum;
 constexpr PrKitTextRole kAccountRole = PrKitTextRole_Caption;
+// The text of a menu item in the kit's dialogs (the /account and /login rows), and the room kept either side of a dialog
+// whose rows are cut to fit (accountDialog).
+constexpr PrKitTextRole kDialogRowRole = PrKitTextRole_Body;
+constexpr float kDialogMargin = 60;
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Records for what no kit part draws: the window's frame and background, the transcript's scroller and column, the chat
@@ -1102,6 +1106,10 @@ struct Builder {
             colors = prLayoutColorStyleIntern(tree, &ink);
             prLayoutTreeFrameSetStyle(tree, text, prLayoutStyleIntern(tree, &titleStyle));
             if (!current.empty()) accountDropdown(title, current);
+            if (active && model.tab(i).kind == TabKind::AI) {
+                view.menuAnchor = tab;          // a press here opens the account menu (routeAccountMenu)
+                view.menuAnchorText = text;
+            }
             view.tabNodes[i] = tab;
         }
         // A click on a tab, or Left or Right on a focused one, selects in the kit: made through the model's select_tab.
@@ -1119,6 +1127,7 @@ struct Builder {
         view.accountAnchor = kPrLayoutNodeNone;
         view.accountMenu = kPrLayoutNodeNone;
         view.accountRows.clear();
+        view.menuAnchor = view.menuAnchorText = kPrLayoutNodeNone;
         if (!view.windowApp.surface.showTabs) return;
         const bool exchanges = std::any_of(view.windowApp.groups.begin(), view.windowApp.groups.end(),
             [](const TabGroup& group) { return !group.acceptsFrom.empty(); });
@@ -1994,6 +2003,11 @@ struct Builder {
             return;
         }
         if (plan.delivery == policy::Delivery::SignOut) {
+            // With a server, /logout asks first, naming the email (accountDialog); the dialog signs out.
+            if (view.logoutTarget) {
+                if (openAccountDialog(view, AccountMenuView::Dialog::Logout)) model.set_draft(active, {});
+                return;
+            }
             if (!view.signOut)
                 view.problem = "Connect to the Nexus server to sign out.";
             else if (view.signOut())
@@ -2195,8 +2209,10 @@ struct Builder {
             }
         }
         view.prompt = edit;
-        // The focus is the secret dialog's while it shows (secretDialog).
-        if (!pickerInput && asking == nullptr && prUiFocus(ui) != edit && !view.promptDismissed)
+        // The focus is the secret dialog's while it shows (secretDialog), and the account dialog's while it shows
+        // (accountDialog): Prax's modal takes focus into its content, and its Escape closes it.
+        if (!pickerInput && asking == nullptr && view.accounts.dialog == AccountMenuView::Dialog::None &&
+                prUiFocus(ui) != edit && !view.promptDismissed)
             prUiSetFocus(ui, edit);
         PrStringView changed{};
         const bool coming = view.cutComing;
@@ -2362,6 +2378,197 @@ struct Builder {
         if (prUiKeyPressed(ui, claim, PrAppKey_Escape, 0) && view.hide) view.hide();
     }
 
+    // The width of `text` in the tab label's unselected face (kTabRole), the face the account menu's rows are set in.
+    float menuTextWidth(std::string_view text, PrKitTextRole role = kTabRole) {
+        if (!view.windowShaper && !fallbackTabShaper)
+            fallbackTabShaper.reset(prTextShaperCreate(PrTextShaperBackend_Default));
+        auto* shaper = view.windowShaper ? view.windowShaper : fallbackTabShaper.get();
+        if (!tabLayout) tabLayout.reset(prTextLayoutCreate());
+        if (!shaper || !kit->fonts[role]) return float(text.size()) * kit->theme.types[role].size * 0.6f;
+        const PrTextLayoutDesc desc{.text = sv(text), .font = kit->fonts[role], .shaper = shaper};
+        prTextLayoutSet(tabLayout.get(), &desc);
+        return std::ceil(prTextLayoutExtent(tabLayout.get()).x);
+    }
+
+    // Sets a node's box to `at` in the viewport (position fixed), above everything the round drew before it.
+    void placeFixed(PrLayoutNode node, const MenuBox& at, unsigned fill, float opacity, float corner) {
+        auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, node));
+        auto& boxGroup = record.groups[PrLayoutGroup_Box];
+        auto box = prLayoutBoxStyleRecord(tree, boxGroup);
+        box.position = PrLayoutPosition_Fixed;
+        box.inset[PrRectSide_Left] = px(at.left);
+        box.inset[PrRectSide_Top] = px(at.top);
+        box.inset[PrRectSide_Right] = box.inset[PrRectSide_Bottom] = prLayoutLengthAuto();
+        box.width = px(at.width());
+        box.height = px(at.height());
+        boxGroup = prLayoutBoxStyleIntern(tree, &box);
+        auto& decorationGroup = record.groups[PrLayoutGroup_Decoration];
+        auto decoration = prLayoutDecorationStyleRecord(tree, decorationGroup);
+        decoration.background = prColor16FromColor(faded(rgb(fill), opacity));
+        radius(decoration, corner);
+        decorationGroup = prLayoutDecorationStyleIntern(tree, &decoration);
+        prLayoutTreeFrameSetStyle(tree, node, prLayoutStyleIntern(tree, &record));
+    }
+
+    // A row's box inside the menu: its height, and its fill (the row under the finger is lit).
+    void placeRow(PrLayoutNode node, float height, float left, float right, std::optional<unsigned> fill, float opacity) {
+        auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, node));
+        auto& boxGroup = record.groups[PrLayoutGroup_Box];
+        auto box = prLayoutBoxStyleRecord(tree, boxGroup);
+        box.position = PrLayoutPosition_Static;
+        box.display = PrLayoutDisplay_Flex;
+        for (auto& edge : box.inset) edge = prLayoutLengthAuto();
+        box.height = px(height);
+        box.minHeight = px(height);
+        box.width = prLayoutLengthPercent(100);
+        padding(box, 0, right, 0, left);
+        boxGroup = prLayoutBoxStyleIntern(tree, &box);
+        auto& flexGroup = record.groups[PrLayoutGroup_Flex];
+        auto flex = prLayoutFlexStyleRecord(tree, flexGroup);
+        flex.direction = PrLayoutFlexDirection_Row;
+        flex.alignItems = PrLayoutAlignment_Center;
+        flex.justifyContent = PrLayoutAlignment_SpaceBetween;
+        flexGroup = prLayoutFlexStyleIntern(tree, &flex);
+        auto& decorationGroup = record.groups[PrLayoutGroup_Decoration];
+        auto decoration = prLayoutDecorationStyleRecord(tree, decorationGroup);
+        decoration.background = fill ? prColor16FromColor(faded(rgb(*fill), opacity)) : prColor16FromColor(PrColor{0, 0, 0, 0});
+        decorationGroup = prLayoutDecorationStyleIntern(tree, &decoration);
+        prLayoutTreeFrameSetStyle(tree, node, prLayoutStyleIntern(tree, &record));
+    }
+
+    // The account menu under the active AI's tab (account_menu.h), while the finger that opened it is down: one row per
+    // signed-in account, the current one marked, then "Sign in to another account…". Its top is just below the tab's
+    // highlight and its left edge on the highlight's; each row's text starts where the tab label's text starts, in the
+    // tab label's size and the unselected weight, cut with "…" and never wrapped. Nothing about the tab changes.
+    void accountDropMenu(PrLayoutNode window) {
+        auto& menu = view.accounts;
+        menu.node = kPrLayoutNodeNone;
+        menu.rowNodes.clear();
+        menu.rowTexts.clear();
+        if (!menu.gesture.open() || !model.tab_count() || model.tab(model.active()).id != menu.tab || menu.rows.empty())
+            return;
+        const auto& s = view.windowApp.surface.accountMenu;
+        float widest = 0;
+        const float markWidth = menuTextWidth(s.mark) + menuTextWidth(" ");
+        for (const auto& row : menu.rows) widest = std::max(widest, menuTextWidth(row.text) + (row.current ? markWidth : 0));
+        const float inset = menu.textInset >= 0 ? menu.textInset : s.paddingX;
+        AccountMenuStyle placed = s;
+        placed.paddingX = std::max(inset, 0.0f);
+        menu.layout = layoutAccountMenu(menu.anchor, menu.rows.size(), widest, kit->theme.types[kTabRole].size,
+                                        view.extent.x, placed);
+        const auto layer = element(window, Part::SelectorLayer);
+        placeFixed(layer, menu.layout.menu, s.fill, 1, s.radius);
+        menu.node = layer;
+        const auto hovered = menu.gesture.hovered();
+        for (std::size_t i = 0; i < menu.rows.size(); ++i) {
+            const auto& row = menu.rows[i];
+            const auto node = prUiElement(ui, layer, prHashString(sv(row.signIn ? std::string("+sign-in") : row.account), 0),
+                                          style(ui, look, Part::SelectorLayer), 0);
+            const bool lit = hovered && *hovered == i;
+            placeRow(node, menu.layout.rows[i].height(), placed.paddingX, s.paddingX,
+                     lit ? std::optional<unsigned>(s.hoverFill) : std::nullopt, s.hoverOpacity);
+            const float room = menu.layout.textMax - (row.current ? markWidth : 0);
+            const auto shown = ellipsize(row.text, room, [&](std::string_view t) { return menuTextWidth(t); });
+            auto appearance = textStyle(kTabRole, PrKitTone_Primary);
+            appearance.wrap = PrKitWrap_Clip;
+            const auto text = label(node, shown, appearance);
+            ink(text, s.ink);
+            if (row.current) {
+                const auto mark = label(node, s.mark, appearance);
+                ink(mark, s.markInk);
+            }
+            menu.rowNodes.push_back(node);
+            menu.rowTexts.push_back(text);
+        }
+    }
+
+    // The /account, /login and /logout dialogs (openAccountDialog): Prax's dialog, over the AI's page. /account lists the
+    // signed-in accounts, the current one checked, and "Sign in to another account…"; /login the accounts that need
+    // signing in; /logout asks to confirm, naming the email. Closing one changes nothing.
+    void accountDialog(PrLayoutNode window) {
+        auto& menu = view.accounts;
+        using Dialog = AccountMenuView::Dialog;
+        if (menu.dialog != Dialog::None && (!model.tab_count() || model.tab(model.active()).id != menu.dialogTab ||
+                asking != nullptr))
+            menu.dialog = Dialog::None;
+        if (menu.dialog == Dialog::None) {
+            if (menu.dialogShown) {
+                prKitSetOpen(kit, window, false);
+                menu.dialogShown = false;
+            }
+            return;
+        }
+        const bool fresh = !menu.dialogShown;
+        if (fresh) {
+            prKitSetOpen(kit, window, true);
+            menu.dialogShown = true;
+        }
+        const char* title = menu.dialog == Dialog::Account ? "Account" : menu.dialog == Dialog::Login ? "Sign in" : "Sign out";
+        PrKitDialog dialog{};
+        dialog.key = prHashString(sv(std::string("account-dialog/") + title), 0);
+        dialog.title = sv(std::string_view(title));
+        const PrLayoutNode body = prKitDialog(kit, window, dialog, typedDialogStyle());
+        if (body == kPrLayoutNodeNone) {
+            if (!fresh) menu.dialog = Dialog::None;
+            menu.dialogShown = false;
+            return;
+        }
+        auto about = textStyle(PrKitTextRole_Body, PrKitTone_Primary);
+        about.wrap = PrKitWrap_Wrap;
+        const std::string name(model.tab(model.active()).displayName());
+        if (menu.dialog == Dialog::Logout) {
+            label(body, "Sign " + name + " out of " + menu.logoutShown + "? This deletes its saved login.", about);
+            label(body, menu.logoutNext.empty() ? name + " will ask you to sign in." :
+                name + " moves to " + menu.logoutNext + ".", textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted));
+            const auto row = prKitBox(kit, body, {}, {.direction = PrKitDirection_Row, .align = PrKitAlign_Center});
+            const auto cancel = prKitButton(kit, row, {.key = prHashString(sv("logout-cancel"), 0), .text = sv("Cancel")}, {});
+            const auto confirm = prKitButton(kit, row, {.key = prHashString(sv("logout-confirm"), 0), .text = sv("Sign out")},
+                                             {.variant = PrKitButtonVariant_Primary});
+            if (prKitActivated(kit, cancel)) menu.dialog = Dialog::None;
+            if (prKitActivated(kit, confirm)) {
+                menu.dialog = Dialog::None;
+                if (view.logout && !view.logout() && view.problem.empty())
+                    view.problem = "Could not sign out. Your account is unchanged.";
+            }
+            return;
+        }
+        if (menu.dialogRows.empty()) {
+            label(body, menu.dialog == Dialog::Login ?
+                "Every account linked to " + name + " is signed in. To add another, ask your AI to add one (docs/accounts.md)." :
+                name + " has no signed-in account.", about);
+            return;
+        }
+        const auto list = prKitMenu(kit, body, {}, {});
+        std::optional<AccountMenuRow> chosen;
+        // A row's text is cut with "…" to the dialog's room (account_menu.dialog_text_em of the menu item's text), and
+        // never past the window less a margin: a long email never runs out of the dialog.
+        const auto& s = view.windowApp.surface.accountMenu;
+        const float room = std::max(0.0f, std::min(s.dialogTextEm * kit->theme.types[kDialogRowRole].size,
+                                                   view.extent.x - 2 * kDialogMargin));
+        for (const auto& row : menu.dialogRows) {
+            const std::string shown = ellipsize(row.text, room,
+                                                [&](std::string_view t) { return menuTextWidth(t, kDialogRowRole); });
+            const auto item = prKitMenuItem(kit, list,
+                {.key = prHashString(sv(row.signIn ? std::string("+sign-in") : row.account), 0), .text = sv(shown),
+                 .icon = PrStudioIconKind_None, .checked = row.current}, {});
+            PrKitPlace size{};
+            size.height = prKitPx(std::max(view.windowApp.surface.accountMenu.rowHeight, kMinRowHeight));
+            prKitPlace(kit, item, size);
+            if (prKitActivated(kit, item)) chosen = row;
+        }
+        if (!chosen) return;
+        const auto kind = menu.dialog;
+        menu.dialog = Dialog::None;
+        if (chosen->signIn) {
+            openAccountDialog(view, Dialog::Login);
+        } else if (kind == Dialog::Login) {
+            if (view.loginAccount) view.loginAccount(chosen->account);
+        } else if (!chosen->current && view.switchAccount) {
+            if (view.playChirp) view.playChirp(view.windowApp.surface.confirmChirp);
+            view.switchAccount(chosen->account);
+        }
+    }
+
     void build(PrLayoutNode parent) {
         if (view.lockScreen) {
             lockScreen(parent);
@@ -2405,8 +2612,10 @@ struct Builder {
         // only while no tab is being dragged: a claim comes before Prax's own Escape, which cancels a drag (ui.cpp
         // routeKey), so during a drag Escape cancels it and hides nothing. While composing it is the input method's.
         // While the secret dialog shows, Escape is the dialog's (it cancels the request) and hides nothing.
+        // So is it the account dialog's while that shows: Escape closes it, changes nothing and hides nothing.
         asking = view.secrets != nullptr ? view.secrets->showing() : nullptr;
-        if (hides && !pickerInput && asking == nullptr && prUiDragging(ui) == nullptr &&
+        if (hides && !pickerInput && asking == nullptr && view.accounts.dialog == AccountMenuView::Dialog::None &&
+                prUiDragging(ui) == nullptr &&
                 prUiKeyPressed(ui, keys, PrAppKey_Escape, 0) && !composing && view.hide)
             view.hide();
         std::erase_if(view.sentFlashes, [&](const View::SentFlash& flash) {
@@ -2437,6 +2646,8 @@ struct Builder {
             view.cutComing = false;
         }
         page(window, composing);
+        accountDropMenu(window);
+        accountDialog(window);
         const bool dialog = view.accountMenu != kPrLayoutNodeNone || asking != nullptr;
         if (dialog && !view.dialogVisible) view.chirp(view.windowApp.surface.dialogChirp);
         if (!dialog) view.energyAccount.clear();
@@ -2647,6 +2858,13 @@ struct Builder {
             case WindowCommand::AccountCommand:
                 if (view.accountCommand) view.accountCommand(key.type);
                 break;
+            case WindowCommand::AccountMenu: {
+                using Dialog = AccountMenuView::Dialog;
+                pickerInput = true;
+                const auto dialog = key.type == "login" ? Dialog::Login : key.type == "logout" ? Dialog::Logout : Dialog::Account;
+                if (openAccountDialog(view, dialog) && model.tab_count()) model.set_draft(model.active(), {});
+                break;
+            }
             case WindowCommand::Zoom:
                 view.askedTextSteps = policy::textZoom(*view.application, {}, view.askedTextSteps,
                     key.argument, -kTextStepsDown, kTextStepsUp);
@@ -3029,6 +3247,131 @@ bool routePromptPointer(View& view, PrUi* ui, const PrAppEvent& event) {
     redirected.pointer.position = q;
     prUiPushEvent(ui, kPrUiViewportMain, &redirected);
     return true;
+}
+
+bool openAccountDialog(View& view, AccountMenuView::Dialog dialog) {
+    using Dialog = AccountMenuView::Dialog;
+    auto& menu = view.accounts;
+    if (!view.model || !view.model->tab_count() || view.model->tab(view.model->active()).kind != TabKind::AI) {
+        view.problem = "Open an AI's tab to choose its account.";
+        return false;
+    }
+    const Tab& tab = view.model->tab(view.model->active());
+    const std::string name(tab.displayName());
+    menu.gesture.cancel();
+    menu.dialogRows.clear();
+    if (dialog == Dialog::Account) {
+        const auto rows = view.accountMenuRows ? view.accountMenuRows() : std::nullopt;
+        if (!rows) {
+            view.problem = view.accountMenuRows ? name + " has no accounts on this server, or a switch is on its way." :
+                "Connect to the Nexus server to choose an account.";
+            return false;
+        }
+        menu.dialogRows = *rows;
+    } else if (dialog == Dialog::Login) {
+        if (!view.accountLoginRows) {
+            view.problem = "Connect to the Nexus server to sign in.";
+            return false;
+        }
+        menu.dialogRows = view.accountLoginRows();
+    } else if (dialog == Dialog::Logout) {
+        if (!view.logoutTarget || !view.logoutTarget(menu.logoutAccount, menu.logoutShown, menu.logoutNext)) {
+            if (view.problem.empty()) view.problem = "Connect to the Nexus server to sign out.";
+            return false;
+        }
+    } else {
+        return false;
+    }
+    view.problem.clear();
+    menu.dialog = dialog;
+    menu.dialogTab = tab.id;
+    return true;
+}
+
+bool routeAccountMenu(View& view, PrUi* ui, const PrAppEvent& event) {
+    auto& menu = view.accounts;
+    auto& gesture = menu.gesture;
+    gesture.setThreshold(view.windowApp.surface.accountMenu.tabMoveThreshold);
+    const PrVec2 p = event.pointer.position;
+    AccountMenuGesture::Step step;
+    switch (event.kind) {
+        case PrAppEventKind_PointerDown: {
+            bool onAnchor = false;
+            std::optional<std::vector<AccountMenuRow>> rows;
+            const bool free = menu.dialog == AccountMenuView::Dialog::None &&
+                (view.secrets == nullptr || view.secrets->showing() == nullptr) && !view.accountPicker &&
+                view.choiceKind.empty();
+            if (ui && free && event.pointer.button == 0 && view.model && view.model->tab_count() &&
+                    view.model->tab(view.model->active()).kind == TabKind::AI && view.accountMenuRows) {
+                auto* tree = prUiTree(ui);
+                if (view.menuAnchor != kPrLayoutNodeNone && prLayoutNodeIsValid(tree, view.menuAnchor)) {
+                    const auto r = prLayoutRectToPx(prLayoutNodeBounds(tree, view.menuAnchor, PrLayoutCoordinates_Viewport));
+                    const MenuBox box{r.left, r.top, r.right, r.bottom};
+                    if (box.contains(p.x, p.y) && (rows = view.accountMenuRows()) && !rows->empty()) {
+                        onAnchor = true;
+                        menu.anchor = box;
+                        menu.textInset = -1;
+                        if (view.menuAnchorText != kPrLayoutNodeNone && prLayoutNodeIsValid(tree, view.menuAnchorText)) {
+                            const auto t = prLayoutRectToPx(prLayoutNodeBounds(tree, view.menuAnchorText,
+                                                                               PrLayoutCoordinates_Viewport));
+                            menu.textInset = std::max(0.0f, t.left - box.left);
+                        }
+                    }
+                }
+            }
+            step = gesture.down(p.x, p.y, onAnchor);
+            if (step.opened) {
+                menu.tab = view.model->tab(view.model->active()).id;
+                menu.rows = std::move(*rows);
+                menu.layout = {};
+                if (view.playChirp) view.playChirp(view.windowApp.surface.openChirp);
+            }
+            break;
+        }
+        case PrAppEventKind_PointerMove: {
+            const auto before = gesture.hovered();
+            step = gesture.move(p.x, p.y, menu.layout);
+            if (step.startTabMove && ui) {
+                // The press was the menu's; it becomes the tab's drag: the strip gets the press where it began, then
+                // this movement, past the kit's own threshold, as if it had seen them all along.
+                PrAppEvent press = event;
+                press.kind = PrAppEventKind_PointerDown;
+                press.pointer.position = PrVec2{gesture.originX(), gesture.originY()};
+                prUiPushEvent(ui, kPrUiViewportMain, &press);
+                prUiPushEvent(ui, kPrUiViewportMain, &event);
+                prUiRequestFrame(ui);
+                return true;
+            }
+            if (gesture.hovered() != before && gesture.hovered() && view.playChirp)
+                view.playChirp(view.windowApp.surface.stepChirp);
+            break;
+        }
+        case PrAppEventKind_PointerUp: {
+            const auto rows = menu.rows;
+            step = gesture.up(p.x, p.y, menu.layout);
+            if (step.chosen && *step.chosen < rows.size()) {
+                const auto& row = rows[*step.chosen];
+                if (row.signIn) {
+                    openAccountDialog(view, AccountMenuView::Dialog::Login);
+                } else if (!row.current && view.switchAccount) {
+                    if (view.playChirp) view.playChirp(view.windowApp.surface.confirmChirp);
+                    view.switchAccount(row.account);
+                }
+            }
+            break;
+        }
+        case PrAppEventKind_PointerCancel:
+            step = gesture.cancel();
+            break;
+        default:
+            return false;
+    }
+    if (step.closed) {
+        menu.tab = ~std::size_t(0);
+        menu.rows.clear();
+    }
+    if ((step.consumed || step.closed) && ui) prUiRequestFrame(ui);
+    return step.consumed;
 }
 
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {
