@@ -13,6 +13,11 @@ if(DEFINED ENV{GITHUB_ACTIONS} AND DEFINED ENV{RUNNER_NAME})
     cmake_path(GET NEXUS_CARGO PARENT_PATH policy_cargo_bin)
     find_program(NEXUS_RUSTC rustc HINTS "${policy_cargo_bin}" REQUIRED)
     list(APPEND policy_cargo_env "RUSTC=${NEXUS_RUSTC}")
+    # blake3's build script reruns when CC or CFLAGS changes, and every crate above it (pagable, starlark_map,
+    # starlark_syntax, starlark) is rebuilt with it. ci.yml's build-linux sets CC=clang for the whole job, cache-warm
+    # does not, so the cached target directory was stale for every pull request that touched the crate (58 s of a
+    # 2-minute job, PR #131). Cargo runs without the job's C compiler settings, so its fingerprints match everywhere.
+    list(PREPEND policy_cargo_env --unset=CC --unset=CXX --unset=CFLAGS --unset=CXXFLAGS)
     set(policy_cache_home "$ENV{HOME}")
     if(WIN32)
         set(policy_cache_home "$ENV{USERPROFILE}")
