@@ -1087,3 +1087,35 @@ jobs:
             echo "no login to hulk from $(hostname -s) as $(id -un): the ssh-out probe is skipped"
           fi
           npm run test:functional
+
+  # The Python tests that need a real Mac (.github/python-native-tests.txt): macOS Seatbelt, APFS's case-insensitive
+  # file system, and the vendors' own CLIs (codex, grok, agy, and Muse through NEXUS_TEST_MUSE_BINARY), which the
+  # fleet installs on its Mac runners. server-policy runs every other Python test on each PR. No test here needs a key
+  # or a sign-in. .github/python-tests.py fails on any skip, so a CLI missing from the runner fails this job by name.
+  python-native:
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: The vendors' CLIs on the runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for cli in codex grok agy muse; do
+            if path=$(command -v "$cli"); then echo "$cli: $path"; else missing+=("$cli"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error title=python-native::no ${missing[*]} on $(hostname -s)'s runner PATH: the fleet installs them on its Mac runners; their tests below fail by name"
+          fi
+          if path=$(command -v muse); then echo "NEXUS_TEST_MUSE_BINARY=$path" >> "$GITHUB_ENV"; fi
+      - name: The native tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime=$(mktemp -d "$RUNNER_TEMP/nexus-native.XXXXXX")
+          trap 'rm -rf "$runtime"' EXIT
+          python3 -m venv "$runtime"
+          "$runtime/bin/python" -I -m pip --disable-pip-version-check install ./policy ./drivers/rpc
+          "$runtime/bin/python" .github/python-tests.py --tier native --start drivers/rpc

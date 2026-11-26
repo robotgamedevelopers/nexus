@@ -119,6 +119,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - name: The Python runner fails on a skip, as planted
+        run: bash .github/python-tests-selftest.sh
+      # .github/python-tests.py fails on any skip, an empty run or a test the tier list names but cannot find. The tests
+      # that need a real Mac (.github/python-native-tests.txt) are not this job's: the nightly python-native job runs them.
       - name: Exercise the installed Starlark host and driver launcher
         shell: bash
         run: |
@@ -127,8 +131,8 @@ jobs:
           trap 'rm -rf "$runtime"' EXIT
           python3 -m venv "$runtime"
           "$runtime/bin/python" -I -m pip --disable-pip-version-check install ./policy ./drivers/rpc
-          "$runtime/bin/python" -m unittest discover -s policy -v
-          "$runtime/bin/python" -m unittest discover -s drivers/rpc -v
+          "$runtime/bin/python" .github/python-tests.py --tier pr --start policy
+          "$runtime/bin/python" .github/python-tests.py --tier pr --start drivers/rpc
 
   claude-driver:
     runs-on: ubuntu-24.04

@@ -1,0 +1,26 @@
+# The Python tests that need a real Mac: macOS Seatbelt, a case-insensitive file system (APFS's default), or a
+# vendor's own CLI on the PATH (codex, grok and agy; Muse through NEXUS_TEST_MUSE_BINARY). They run only in the nightly
+# python-native job on the macOS fleet runner; server-policy runs every other test on each PR. A test lives in exactly
+# one of the two. .github/python-tests.py reads this file: a row naming a test that does not exist fails the run, and so
+# does any skip. None of these tests needs a key or a sign-in: they use fixture tokens, a local fixture issuer on
+# 127.0.0.1, or a login started in a clean home and abandoned.
+#
+# <start directory> <unittest id>
+drivers/rpc test_antigravity_account.AntigravityAccounts.test_same_provider_accounts_and_keychain_are_isolated
+drivers/rpc test_antigravity_account.AntigravityAccounts.test_dialogue_and_vendor_permissions
+drivers/rpc test_antigravity_account.AntigravityAccounts.test_symlinked_config_directory_is_refused
+drivers/rpc test_antigravity_account.AntigravityAccounts.test_promotion_requires_a_persisted_login_and_preserves_previous_grant
+drivers/rpc test_antigravity_account.AntigravityAccounts.test_promotion_retry_after_rename_and_grant_stamp
+drivers/rpc test_antigravity_account.AntigravityAccounts.test_real_vendor_uses_private_file_and_preserves_permission_denies
+drivers/rpc test_antigravity_account.AntigravityAccounts.test_real_vendor_login_in_clean_home
+drivers/rpc test_codex_account.Accounts.test_real_sandbox
+drivers/rpc test_codex_account.Accounts.test_real_app_server_selects_profile_for_new_and_resumed_threads
+drivers/rpc test_codex_account.Accounts.test_real_device_login_with_local_issuer
+drivers/rpc test_grok_account.NativeGrok.test_new_and_resumed_dialogues_have_no_local_tools
+drivers/rpc test_grok_account.NativeGrok.test_native_sandbox_denies_other_accounts
+drivers/rpc test_grok_account.NativeGrok.test_native_device_flow
+drivers/rpc test_muse_account.NativeMuseTests.test_real_login_and_cold_subscription_without_model_turn
+drivers/rpc test_muse_account.NativeMuseTests.test_approved_login_survives_mint_outage_and_missing_receipt
+drivers/rpc test_muse_account.NativeMuseTests.test_unsubscribed_replacement_keeps_original_grant
+drivers/rpc test_muse_account.NativeMuseTests.test_empty_toolset_replaces_old_session_toolset_on_resume
+drivers/rpc test_driver.AccountFiles.test_case_aliases_of_provider_and_receipt_are_refused
