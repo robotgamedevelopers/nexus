@@ -68,6 +68,7 @@ jobs:
         uses: ./.github/actions/build-share
         with:
           name: build-macos
+          libraries: protobuf abseil
 
   tests-macos:
     needs: build-macos
@@ -90,15 +91,8 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      # The link's programs load Homebrew's protobuf at run time.
-      - name: Tools the image lacks
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! brew list --versions protobuf >/dev/null 2>&1; then
-            HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 \
-              HOMEBREW_NO_ENV_HINTS=1 brew install --quiet protobuf
-          fi
+      # The build tree, and Homebrew's protobuf and abseil that the link's programs load at run time, as build-macos
+      # installed and linked them.
       - name: The build tree
         uses: ./.github/actions/build-fetch
         with:

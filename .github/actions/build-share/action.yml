@@ -11,22 +11,45 @@ inputs:
   name:
     description: the artifact's name (one per configuration)
     required: true
+  libraries:
+    description: >-
+      Homebrew formulae whose libraries the tree's programs load at run time (macOS: protobuf abseil), shared with the
+      tree as installed here, so a test job needs no Homebrew install (12 to 32 s on a hosted Mac) and runs against
+      the very versions the programs were linked with
+    default: ""
 runs:
   using: composite
   steps:
     - name: Pack the build tree
       shell: bash
+      env:
+        LIBRARIES: ${{ inputs.libraries }}
       run: |
         set -euo pipefail
         if ! command -v zstd >/dev/null 2>&1; then echo "::error::no zstd on $(hostname -s)"; exit 1; fi
         start=$(date +%s)
         tar -cf - --exclude='*.o' --exclude='*.a' --exclude='*.obj' --exclude='build/_deps/slang-src' --exclude='build/_deps/prax-subbuild' build | zstd -q -T0 -1 -o "$RUNNER_TEMP/build.tar.zst"
         echo "packed $(du -h "$RUNNER_TEMP/build.tar.zst" | cut -f1) in $(( $(date +%s) - start )) s"
+        paths=()
+        if [ -n "$LIBRARIES" ]; then
+          prefix=$(brew --prefix)
+          for formula in $LIBRARIES; do
+            if [ ! -e "$prefix/opt/$formula" ]; then
+              echo "::error::build-share: Homebrew's $formula is not installed here, so its libraries cannot be shared"
+              exit 1
+            fi
+            paths+=("$prefix/opt/$formula" "$(cd "$prefix/opt/$formula" && pwd -P)")
+          done
+          tar -cPf - "${paths[@]}" | zstd -q -T0 -1 -o "$RUNNER_TEMP/libraries.tar.zst"
+          echo "shared $LIBRARIES: $(du -h "$RUNNER_TEMP/libraries.tar.zst" | cut -f1)"
+        fi
     - name: Upload
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: ${{ inputs.name }}
-        path: ${{ runner.temp }}/build.tar.zst
+        path: |
+          ${{ runner.temp }}/build.tar.zst
+          ${{ runner.temp }}/libraries.tar.zst
         compression-level: 0
         retention-days: 1
         if-no-files-found: error
