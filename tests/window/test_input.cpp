@@ -1346,7 +1346,7 @@ void markdownListsAndLinks() {
     if (!first || !second || !nested) return;
     PrLayoutRect lines[16]{};
     auto boxes = [&](PrLayoutNode node, size_t size) {
-        return prLayoutNodeTextRangeBoxes(h.tree, node, 0, size, PrLayoutCoordinates_Viewport, lines, 16);
+        return prLayoutNodeTextRangeBoxes(h.tree, node, 0, static_cast<uint32_t>(size), PrLayoutCoordinates_Viewport, lines, 16);
     };
     CHECK(boxes(first, words.size()) >= 2);
     float x = prLayoutUnitToPx(lines[0].left);
@@ -1402,7 +1402,7 @@ void longInlineCommandWrapsInTheReply() {
             PrLayoutRect word{};
             CHECK(body && heading);
             if (!body || !heading) return PrVec2{};
-            CHECK(prLayoutNodeTextRangeBoxes(h.tree, body, prose.find("wrapper:"), prose.size(),
+            CHECK(prLayoutNodeTextRangeBoxes(h.tree, body, static_cast<uint32_t>(prose.find("wrapper:")), static_cast<uint32_t>(prose.size()),
                 PrLayoutCoordinates_Viewport, &word, 1) == 1);
             return PrVec2{prLayoutUnitToPx(word.left) - h.bounds(heading).left,
                 prLayoutUnitToPx(word.top) - h.bounds(heading).top};
@@ -1414,7 +1414,7 @@ void longInlineCommandWrapsInTheReply() {
         CHECK(code);
         if (!code) continue;
         PrLayoutRect lines[64]{};
-        const auto count = prLayoutNodeTextRangeBoxes(h.tree, code, 0, command.size(),
+        const auto count = prLayoutNodeTextRangeBoxes(h.tree, code, 0, static_cast<uint32_t>(command.size()),
             PrLayoutCoordinates_Viewport, lines, 64);
         CHECK(count > 1 && count < 64);
         const auto reply = h.bounds(prLayoutNodeFirstChild(h.tree, entries[1]));
@@ -2273,7 +2273,8 @@ void accountPickerIsAnExplicitChoice() {
     h.view.activateSignIn = [&] { ++signIns; return true; };
     link.sent.clear();
     const auto arrow = [&](bool next, PrAppModifierFlags modifiers) {
-        h.key(next ? PrAppKey_Down : PrAppKey_Up, next ? PrAppKeyCode_ArrowDown : PrAppKeyCode_ArrowUp, modifiers);
+        h.key(static_cast<PrAppKey>(next ? PrAppKey_Down : PrAppKey_Up),
+            static_cast<PrAppKeyCode>(next ? PrAppKeyCode_ArrowDown : PrAppKeyCode_ArrowUp), modifiers);
         h.frame();
     };
     const auto preview = [&](const std::string& wanted, const std::string& current) {
@@ -3230,7 +3231,7 @@ int main(int argc, char** argv) {
         CHECK(h.view.accountRows.size() == 3);
         if (h.view.accountRows.size() != 3) return 1;
         for (unsigned i = 0; i < 3; ++i)
-            CHECK(h.hasText(h.view.accountRows[i], std::string(1, 'a' + i) + "@example.test"));
+            CHECK(h.hasText(h.view.accountRows[i], std::string(1, static_cast<char>('a' + i)) + "@example.test"));
         const auto menu = h.bounds(h.view.accountMenu);
         CHECK(std::abs((menu.left + menu.right) / 2 - h.extent.x / 2) < 2);
         CHECK(std::abs((menu.top + menu.bottom - h.extent.y) / 2) < 2);

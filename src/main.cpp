@@ -65,6 +65,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <sstream>
 #include <cstring>
 #include <fstream>
 #include <filesystem>
@@ -115,11 +116,24 @@
 #include "url_opener.h"
 #include "view.h"
 #include "ui_audio.h"
+#include "policy/stale.h"
+
+// The window's live link to nexus-server: over mosh from this process (NEXUS_LINK, macOS and Linux), or on Windows
+// through nexus-link-relay inside WSL2 (NEXUS_RELAY, src/relay/relay_port.h).
+#if NEXUS_LINK || NEXUS_RELAY
+#define NEXUS_LIVE_LINK 1
+#else
+#define NEXUS_LIVE_LINK 0
+#endif
 
 #if NEXUS_LINK
 #include "link/bootstrap.h"
 #include "link/client_port.h"
-#include "policy/stale.h"
+#endif
+#if NEXUS_RELAY
+#include "relay/relay_port.h"
+#endif
+#if NEXUS_LIVE_LINK
 #include "sync/client.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
@@ -191,8 +205,8 @@ struct App {
     };
     std::shared_ptr<LockInbox> lockInbox = std::make_shared<LockInbox>();
     std::unique_ptr<LockEvents> lockEvents;     // the events Prax does not report, from start()
-#if NEXUS_LINK
-    std::unique_ptr<link::ClientPort> link;
+#if NEXUS_LIVE_LINK
+    std::unique_ptr<LinkPort> link;
 #endif
 };
 
@@ -216,7 +230,7 @@ constexpr double kLockTickSeconds = 5;
 // How long after a show the overlay must have the keyboard. Not measured: Prax gives an overlay the keyboard within
 // prAppWindowFocus, so this only has to outlast the frames that report it (a guess, as the earlier code's was).
 constexpr double kKeyCheckSeconds = 0.5;
-#if NEXUS_LINK
+#if NEXUS_LIVE_LINK
 // How long a --tab past the launch's tabs waits for the server's AIs. Not measured: the link's bootstrap (ssh, then
 // nexus-server's start) takes a few seconds on the fleet, and this leaves room for a slow one.
 constexpr int kTabWaitSeconds = 20;
@@ -1112,18 +1126,18 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nexus: --state draws a screenshot only, without --server; --lost needs --state\n");
         return 2;
     }
-#if !NEXUS_LINK
+#if !NEXUS_LIVE_LINK
     if (state != nullptr) {
         std::fprintf(stderr, "nexus: this build has no --state (it was configured with -DNEXUS_LINK=OFF)\n");
         return 2;
     }
 #endif
-#if NEXUS_LINK
+#if NEXUS_LIVE_LINK
     if (server == nullptr && state == nullptr && shot == nullptr && !demo && !demoTerminal && !bench && !printConfig)
         server = clientConfig().serverHost.c_str();
 #endif
     if (server != nullptr) {
-#if NEXUS_LINK
+#if NEXUS_LIVE_LINK
         if (shot != nullptr || demo || demoTerminal || bench != 0 || printConfig) {
             std::fprintf(stderr, "nexus: --server runs the live window only, without --screenshot, --demo, "
                 "--demo-terminal, --bench or --print-window-config\n");
@@ -1144,7 +1158,9 @@ int main(int argc, char** argv) {
         const auto hotkey = overlayBinding(policy, why);
         if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
         std::string name;
-        for (const auto modifier : {PrAppModifierFlag_Shift, PrAppModifierFlag_Control, PrAppModifierFlag_Alt, PrAppModifierFlag_Super}) {
+        for (const PrAppModifierFlags modifier : {PrAppModifierFlags(PrAppModifierFlag_Shift),
+                 PrAppModifierFlags(PrAppModifierFlag_Control), PrAppModifierFlags(PrAppModifierFlag_Alt),
+                 PrAppModifierFlags(PrAppModifierFlag_Super)}) {
             if (!(hotkey.modifiers & modifier)) continue;
             const auto label = prAppModifierName(modifier);
             name += modifier == style::kCommand ? style::kCommandName : std::string(label.data, label.size);
@@ -1169,7 +1185,7 @@ int main(int argc, char** argv) {
     // The AIs are the server's (AGENTS.md "AI tabs"): none until its state arrives over the link, or, for a
     // screenshot of a state file, the file's (sync/client.h aisOf).
     const bool fromState = state != nullptr;
-#if NEXUS_LINK
+#if NEXUS_LIVE_LINK
     sync::Sessions held;
     if (fromState) {
         std::ifstream in(state, std::ios::binary);
@@ -1230,7 +1246,7 @@ int main(int argc, char** argv) {
     }
     // The sprint tab first, and no AIs yet.
     static Model model({}, fromState || clientConfig().sprintEnabled);
-#if NEXUS_LINK
+#if NEXUS_LIVE_LINK
     if (fromState) {
         sync::AIStrip{}.take(model, held);
         if (!tabGiven) tab = model.active() + 1;
@@ -1395,8 +1411,9 @@ int main(int argc, char** argv) {
         };
     }
     a.host.hitch = &a.hitch;
-#if NEXUS_LINK
+#if NEXUS_LIVE_LINK
     if (server != nullptr) {
+#if NEXUS_LINK
         link::ClientLink::Options options;
         options.bootstrap.host = server;
         // --server-command, else the config's server-command: run in place of nexus-server new (the mock, docs/mock.md).
@@ -1408,12 +1425,28 @@ int main(int argc, char** argv) {
                 return 2;
             }
         }
+#else
+        // On Windows the link runs inside WSL2 (relay/relay_port.h): for "localhost" the server in WSL2 beside it, for
+        // another host over ssh from WSL2. NEXUS_WSL_RELAY, when set, is the relay's command there instead of
+        // ~/.local/bin/nexus-link-relay (relay/relay_words.h): the program, then what follows the host (a test's `-- COMMAND`), split at
+        // spaces.
+        relay::RelayPort::Options options;
+        options.host = server;
+        if (const char* relayWords = std::getenv("NEXUS_WSL_RELAY")) {
+            std::istringstream words(relayWords);
+            for (std::string word; words >> word;) options.relay.push_back(word);
+        }
+#endif
         options.wake = [&a] {
             if (PrApp* app = a.wakeApp.load())
                 prAppWake(app);
         };
         a.host.uploadWake = options.wake;
+#if NEXUS_LINK
         a.link = std::make_unique<link::ClientPort>(std::move(options));
+#else
+        a.link = std::make_unique<relay::RelayPort>(std::move(options));
+#endif
         a.host.connect(a.link.get(), server);
         // A --tab past the tabs at launch names an AI's tab, perhaps, that the server's AIs bring: the window
         // waits for them, up to kTabWaitSeconds or until the link fails, before it judges the tab, and opens on it.
@@ -1511,8 +1544,8 @@ int main(int argc, char** argv) {
                 int(status));
         if (status != PrStatus_Ok || a.failed)
             code = 1;
-#if NEXUS_LINK
-        a.link.reset();     // mosh's shutdown, so the server ends this session
+#if NEXUS_LIVE_LINK
+        a.link.reset();     // mosh's shutdown (the relay's, on Windows), so the server ends this session
 #endif
         printStats(a.stats);
     }

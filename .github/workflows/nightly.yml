@@ -236,6 +236,10 @@ jobs:
           - shard: reconnect
             run: '^tlc_reconnect'
             build: reconnect_walk
+          # The native window's relays in WSL2 (models/RelayLife.tla): spec, witnesses and the code's walks.
+          - shard: relay
+            run: '^tlc_relay'
+            build: relay_walk
           # One pass of nexus-server's loop (models/LoopPass.tla): its temporal instance in loop-pass-spec (no walk
           # build), and its two-window instance, eleven reversed witnesses, five seeded code walks and five faulty
           # walks in loop-pass-rest.
@@ -258,7 +262,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk service_process_functional
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_ais$|signin|reconnect|loop_pass|bus_delivery|client_lock)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_ais$|signin|reconnect|relay|loop_pass|bus_delivery|client_lock)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang
@@ -675,8 +679,9 @@ jobs:
           flock "$HOME/.cache/nexus-ci/claude-wall.lock" npm run test:functional
           [ "$ssh_out" = ran ]
 
-  # The WSL2 terminal test (wsl2-terminal below), built with MSVC on a fleet Windows runner (captain's Windows side) as
-  # ci.yml's windows job builds it (.github/actions/windows-build, the runner's own build directory; no limit here).
+  # The WSL2 terminal and link tests (wsl2-terminal and wsl2-link below), built with MSVC on a fleet Windows runner
+  # (captain's Windows side) as ci.yml's windows job builds them (.github/actions/windows-build, the runner's own build
+  # directory; no limit here).
   windows-wsl2-test:
     runs-on: [self-hosted, nexus-pr, Windows, X64]
     timeout-minutes: 60
@@ -694,6 +699,14 @@ jobs:
         with:
           name: wsl2-terminal-test
           path: ${{ env.NEXUS_BUILD }}\tests\window\Release\nexus_wsl2_terminal_tests.exe
+          if-no-files-found: error
+          retention-days: 1
+      # The window's link across the WSL2 boundary (tests/relay/wsl2_link.cpp), for wsl2-link to run.
+      - name: Keep the WSL2 link test for wsl2-link
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wsl2-link-test
+          path: ${{ env.NEXUS_BUILD }}\tests\relay\Release\nexus_wsl2_link_tests.exe
           if-no-files-found: error
           retention-days: 1
 
@@ -731,6 +744,68 @@ jobs:
           set -euo pipefail
           chmod +x "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"
           "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"
+
+  # The native window's link across the WSL2 boundary for real (tests/relay/wsl2_link.cpp, run by
+  # tests/relay/wsl2_link.sh): windows-wsl2-test builds the test with MSVC on a GitHub-hosted runner, and it runs here,
+  # on captain's WSL2 runners, through WSL interop, as the user whose WSL2 distribution that is. This job builds the
+  # Linux side it reaches, inside WSL2 with clang and the runner's ccache: nexus-link-relay, nexus-server and the fake
+  # driver. The test's port starts the relay through wsl.exe; the relay bootstraps a nexus-server with a home of its own
+  # under /tmp (--local, no ssh) and keeps mosh's session to it; the test ensures ada's session, sends a prompt and
+  # reads it and ada's reply back from the server's state, then queues six and finds each once.
+  wsl2-link:
+    needs: windows-wsl2-test
+    runs-on: [self-hosted, nexus-nightly, Linux, X64, wsl2]
+    timeout-minutes: 30
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Inside WSL2, with interop to Windows, and caches outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          kernel=$(cat /proc/sys/kernel/osrelease)
+          case "$kernel" in
+            *microsoft*WSL2*|*WSL2*) echo "WSL2 kernel $kernel${WSL_DISTRO_NAME:+, distro $WSL_DISTRO_NAME}" ;;
+            *) echo "::error::$(hostname -s) is not inside WSL2 (kernel $kernel): the wsl2 label belongs only to runners in captain's WSL2 distro"; exit 1 ;;
+          esac
+          if [ ! -e /proc/sys/fs/binfmt_misc/WSLInterop ]; then
+            echo "::error::WSL interop is off on $(hostname -s) (no /proc/sys/fs/binfmt_misc/WSLInterop): Windows programs cannot start from here; turn it on in /etc/wsl.conf ([interop] enabled=true)"
+            exit 1
+          fi
+          caches="$HOME/.cache/nexus-ci"
+          mkdir -p "$caches/ccache" "$caches/lto" "$caches/$RUNNER_NAME/prax-downloads"
+          {
+            echo "NEXUS_CACHES=$caches"
+            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+            echo "CCACHE_DIR=$caches/ccache"
+            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+            echo "CCACHE_MAXSIZE=4G"
+            echo "JOBS=$(sh .github/job-cores.sh)"
+          } >> "$GITHUB_ENV"
+      - name: Build the relay, nexus-server and the fake driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNEXUS_SANDBOX_TOOLS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto" > /dev/null
+          cmake --build build --parallel "$JOBS" --target nexus-link-relay nexus-server nexus_fake_driver
+      - name: The test windows-wsl2-test built
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wsl2-link-test
+          path: ${{ runner.temp }}/wsl2-link
+      - name: wsl2_link (functional)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x "$RUNNER_TEMP/wsl2-link/nexus_wsl2_link_tests.exe"
+          tests/relay/wsl2_link.sh "$RUNNER_TEMP/wsl2-link/nexus_wsl2_link_tests.exe" build/nexus-link-relay \
+            build/nexus-server build/tests/driver/nexus-fake-driver "/tmp/nexus-wsl2-link-$RUNNER_NAME"
 
   # The frame budget (docs/frame-budget.md): the frame thread timed on the real clock, against budgets set on the fleet's
   # Macs, so on a fleet Mac (a shared 3-core hosted VM is not that machine; ci.yml says so). Built Release with the
@@ -821,25 +896,25 @@ jobs:
           - part: walks
             half: 1
             targets: >-
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
               migration_walk takeover_walk steering_walk
           - part: walks
             half: 2
             targets: >-
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
               migration_walk takeover_walk steering_walk
           - part: walks
             half: 3
             targets: >-
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
               migration_walk takeover_walk steering_walk
           - part: walks
             half: 4
             targets: >-
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
               migration_walk takeover_walk steering_walk
     steps:
@@ -971,6 +1046,12 @@ jobs:
           done
           for fault in --faulty-cached --faulty-no-reset; do
             walk build/tests/sync/reconnect_walk 1 1000 "$fault"
+          done
+          for seed in 1 2 3 4; do
+            walk build/tests/relay/relay_walk "$seed" 1000
+          done
+          for fault in --faulty-resend --faulty-early-end --faulty-ack-delivered; do
+            walk build/tests/relay/relay_walk 1 1000 "$fault"
           done
           for seed in 1 2 3 4 5 6 7 8; do
             walk build/tests/sync/secrets_walk "$seed" 2000
@@ -1465,7 +1546,7 @@ jobs:
             model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
             store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
             nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
-            overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+            overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
             journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
             migration_walk takeover_walk steering_walk
       - name: Share the build tree
@@ -1628,6 +1709,12 @@ jobs:
           done
           for fault in --faulty-cached --faulty-no-reset; do
             walk build/tests/sync/reconnect_walk 1 1000 "$fault"
+          done
+          for seed in 1 2 3 4; do
+            walk build/tests/relay/relay_walk "$seed" 1000
+          done
+          for fault in --faulty-resend --faulty-early-end --faulty-ack-delivered; do
+            walk build/tests/relay/relay_walk 1 1000 "$fault"
           done
           # the secret dialog's walks, each failing if a value's bytes reach anything but the keeper
           for seed in 1 2 3 4 5 6 7 8; do

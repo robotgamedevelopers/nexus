@@ -18,7 +18,7 @@ name: windows-build
 description: The runner's own build directory, configure and build of nexus's native Windows part on a fleet runner
 inputs:
   target:
-    description: the one target to build (empty for all; ci.yml gives tier_pr_build)
+    description: the targets to build, separated by spaces (empty for all; ci.yml gives tier_pr_build and nexus)
     default: ""
 outputs:
   build:
@@ -139,11 +139,12 @@ runs:
         }
     # Configured on every run with every NEXUS_* option given, so a kept CMakeCache.txt (the runner's build directory,
     # shared by every branch that runs there) never decides what is built: another branch's options are set back here.
+    # The window and its logic, and not the link, which on Windows runs inside WSL2 (CMakeLists.txt says why).
     - name: Configure (Release, MSVC x64)
       shell: pwsh
       run: |
         cmake -S . -B $env:NEXUS_BUILD -A x64 "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE" `
-          -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DNEXUS_LINK=OFF
+          -DNEXUS_WINDOW=ON -DNEXUS_WINDOW_LOGIC=ON -DNEXUS_LINK=OFF
         if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
     - name: Build
       shell: pwsh
@@ -152,7 +153,7 @@ runs:
       run: |
         $start = Get-Date
         $only = @()
-        if ($env:TARGET) { $only = @("--target", $env:TARGET) }
+        if ($env:TARGET) { $only = @('--target') + @($env:TARGET -split ' ' | Where-Object { $_ }) }
         cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS @only
         if ($LASTEXITCODE -ne 0) { throw "cmake --build exited $LASTEXITCODE" }
         Write-Output "built in $([int]((Get-Date) - $start).TotalSeconds) s"
