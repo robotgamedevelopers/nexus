@@ -1106,7 +1106,7 @@ struct Builder {
             colors = prLayoutColorStyleIntern(tree, &ink);
             prLayoutTreeFrameSetStyle(tree, text, prLayoutStyleIntern(tree, &titleStyle));
             if (!current.empty()) accountDropdown(title, current);
-            if (active && model.tab(i).kind == TabKind::Friend) {
+            if (active && model.tab(i).kind == TabKind::AI) {
                 view.menuAnchor = tab;          // a press here opens the account menu (routeAccountMenu)
                 view.menuAnchorText = text;
             }
@@ -3252,7 +3252,7 @@ bool routePromptPointer(View& view, PrUi* ui, const PrAppEvent& event) {
 bool openAccountDialog(View& view, AccountMenuView::Dialog dialog) {
     using Dialog = AccountMenuView::Dialog;
     auto& menu = view.accounts;
-    if (!view.model || !view.model->tab_count() || view.model->tab(view.model->active()).kind != TabKind::Friend) {
+    if (!view.model || !view.model->tab_count() || view.model->tab(view.model->active()).kind != TabKind::AI) {
         view.problem = "Open an AI's tab to choose its account.";
         return false;
     }
@@ -3302,7 +3302,7 @@ bool routeAccountMenu(View& view, PrUi* ui, const PrAppEvent& event) {
                 (view.secrets == nullptr || view.secrets->showing() == nullptr) && !view.accountPicker &&
                 view.choiceKind.empty();
             if (ui && free && event.pointer.button == 0 && view.model && view.model->tab_count() &&
-                    view.model->tab(view.model->active()).kind == TabKind::Friend && view.accountMenuRows) {
+                    view.model->tab(view.model->active()).kind == TabKind::AI && view.accountMenuRows) {
                 auto* tree = prUiTree(ui);
                 if (view.menuAnchor != kPrLayoutNodeNone && prLayoutNodeIsValid(tree, view.menuAnchor)) {
                     const auto r = prLayoutRectToPx(prLayoutNodeBounds(tree, view.menuAnchor, PrLayoutCoordinates_Viewport));

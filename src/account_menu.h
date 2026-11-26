@@ -53,7 +53,7 @@ inline bool pickable(const sync::AccountChoice& a) {
 
 // The menu's and the /account dialog's rows: the AI's signed-in accounts in the server's order, the current one marked,
 // then the row that signs in another account (/login). An account that needs signing in is not here: /login lists it.
-inline std::vector<AccountMenuRow> accountMenuRows(const sync::ServerFriend& roster, const std::string& current) {
+inline std::vector<AccountMenuRow> accountMenuRows(const sync::ServerAI& roster, const std::string& current) {
     std::vector<AccountMenuRow> rows;
     for (const auto& a : roster.accounts) {
         if (!pickable(a) || a.needsSignIn) continue;
@@ -64,7 +64,7 @@ inline std::vector<AccountMenuRow> accountMenuRows(const sync::ServerFriend& ros
 }
 
 // The /login dialog's rows: the AI's linked accounts that need signing in, in the server's order.
-inline std::vector<AccountMenuRow> accountLoginRows(const sync::ServerFriend& roster) {
+inline std::vector<AccountMenuRow> accountLoginRows(const sync::ServerAI& roster) {
     std::vector<AccountMenuRow> rows;
     for (const auto& a : roster.accounts) {
         if (pickable(a) && a.needsSignIn) rows.push_back({a.name, accountShownAs(a), false, false});
@@ -74,7 +74,7 @@ inline std::vector<AccountMenuRow> accountLoginRows(const sync::ServerFriend& ro
 
 // Where an AI goes after /logout of `leaving`: the next signed-in account after it in the server's order, wrapping;
 // none (empty) when no other is signed in, and the AI then shows the sign-in prompt.
-inline std::string accountAfterLogout(const sync::ServerFriend& roster, const std::string& leaving) {
+inline std::string accountAfterLogout(const sync::ServerAI& roster, const std::string& leaving) {
     const auto& list = roster.accounts;
     const auto at = std::find_if(list.begin(), list.end(), [&](const auto& a) { return a.name == leaving; });
     const std::size_t start = at == list.end() ? 0 : std::size_t(at - list.begin()) + 1;

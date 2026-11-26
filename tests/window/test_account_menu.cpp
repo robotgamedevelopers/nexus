@@ -86,7 +86,7 @@ struct Window {
     PrUi* ui = nullptr;
     PrKit* kit = nullptr;
     Look look;
-    Model model{std::vector<FriendInfo>{}, true};
+    Model model{std::vector<AIInfo>{}, true};
     View view;
     FrameHost host;
     test::FakeLink link;
@@ -143,7 +143,7 @@ struct Window {
         s->info = {"stella", "claude", "", "", ""};
         link.state.phase = sync::LinkPhase::Connected;
         link.state.sessions = sync::Sessions({r, s});
-        link.state.sessions.setFriends({{"rowan", rowan}, {"stella", {}}});
+        link.state.sessions.setAIs({{"rowan", rowan}, {"stella", {}}});
         link.state.sessions.setOffers(offers);
         link.state.sessions.setNextAction(link.sent.size() + 1);
         link.changed = true;
@@ -189,7 +189,7 @@ struct Window {
 
     std::size_t tabOf(const std::string& name) const {
         for (std::size_t i = 0; i < model.tab_count(); ++i) {
-            if (model.tab(i).kind == TabKind::Friend && model.tab(i).name == name) return i;
+            if (model.tab(i).kind == TabKind::AI && model.tab(i).name == name) return i;
         }
         return model.tab_count();
     }
@@ -344,7 +344,7 @@ void pressThenSidewaysDragMovesTheTab() {
     CHECK(w.switches().empty());
 }
 
-// A press on another AI's tab never opens the menu: it selects that tab, as ever. Plant: open on any friend tab.
+// A press on another AI's tab never opens the menu: it selects that tab, as ever. Plant: open on any AI tab.
 void pressOnAnotherTabNeverOpens() {
     Window w;
     const PrVec2 at = w.centre(w.tabNode("stella"));
@@ -610,7 +610,7 @@ void logoutOfTheLastAccountMovesNowhere() {
 // The rows from a roster, pure: signed-in accounts only, the current marked, the sign-in row last; and where /logout
 // sends the AI.
 void rowsFromTheRoster() {
-    sync::ServerFriend roster{"rowan", {{"a1", "Home", false, "h@x"}, {"+cmd"}, {"a2", "", true}, {"a3", "Lab", false}}};
+    sync::ServerAI roster{"rowan", {{"a1", "Home", false, "h@x"}, {"+cmd"}, {"a2", "", true}, {"a3", "Lab", false}}};
     const auto rows = accountMenuRows(roster, "a3");
     CHECK(rows.size() == 3 && rows[0].text == "h@x" && !rows[0].current && rows[1].text == "Lab" && rows[1].current &&
           rows[2].signIn);

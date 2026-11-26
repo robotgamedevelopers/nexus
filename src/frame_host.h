@@ -239,7 +239,7 @@ private:
     // /login: the session and the account signing in while the session stays on its own; it switches once signed in.
     std::optional<std::pair<sync::SessionId, std::string>> pendingLogin_;
     std::string logoutNext_;    // /logout: the account the AI moves to after, chosen as the dialog opened
-    const sync::ServerFriend* rosterOf(sync::SessionId session) const;
+    const sync::ServerAI* rosterOf(sync::SessionId session) const;
     std::optional<std::string> signInTarget() const;
     std::uint64_t claimAccount(sync::SessionId session, const std::string& account);
     void startLogin(const std::string& account);

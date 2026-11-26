@@ -56,17 +56,17 @@ nexus::sync::Sessions withAccounts(const nexus::sync::Sessions& held) {
         auto copy = std::make_shared<nexus::sync::SessionView>(*s);
         copy->info.account = "home";
         sessions.push_back(copy);
-        if (std::find(names.begin(), names.end(), s->info.friendName) == names.end()) names.push_back(s->info.friendName);
+        if (std::find(names.begin(), names.end(), s->info.aiName) == names.end()) names.push_back(s->info.aiName);
     }
     nexus::sync::Sessions out = held;
     out.replaceSessions(std::move(sessions));
-    std::vector<nexus::sync::ServerFriend> friends;
-    if (held.friendsKnown()) {
-        for (const auto& f : held.friends()) friends.push_back({f.name, accounts});
+    std::vector<nexus::sync::ServerAI> ais;
+    if (held.aisKnown()) {
+        for (const auto& f : held.ais()) ais.push_back({f.name, accounts});
     } else {
-        for (const auto& name : names) friends.push_back({name, accounts});
+        for (const auto& name : names) ais.push_back({name, accounts});
     }
-    out.setFriends(std::move(friends));
+    out.setAIs(std::move(ais));
     return out;
 }
 
