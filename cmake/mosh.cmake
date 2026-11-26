@@ -22,6 +22,9 @@ FetchContent_Declare(mosh
 # mosh has no CMakeLists.txt, so this only fetches it; its sources are compiled by the target below.
 FetchContent_MakeAvailable(mosh)
 
+find_package(ZLIB REQUIRED)
+# iOS builds protobuf's lite runtime and takes a pinned protoc (cmake/ios_link.cmake): nothing to find on the machine.
+if(NOT NEXUS_IOS)
 # protobuf's own CMake package where it is installed (Homebrew's); else CMake's FindProtobuf, for distributions that
 # ship protobuf without that package (Ubuntu's libprotobuf-dev), which gives the same protobuf::libprotobuf-lite target
 # and protobuf_generate.
@@ -35,7 +38,6 @@ if(NOT protobuf_FOUND AND NOT Protobuf_FOUND)
         "point CMAKE_PREFIX_PATH at it; or configure with -DNEXUS_LINK=OFF to build without nexus-server and the "
         "client's --server.")
 endif()
-find_package(ZLIB REQUIRED)
 
 # A protobuf library built for a newer macOS than CMAKE_OSX_DEPLOYMENT_TARGET (Homebrew builds for the macOS it runs
 # on) makes whatever links it need that newer macOS: nexus's own targets, made after this point, are built for it, so
@@ -54,6 +56,7 @@ if(VTOOL AND protobuf_lite)
         set(CMAKE_OSX_DEPLOYMENT_TARGET ${protobuf_minos})
     endif()
 endif()
+endif() # NOT NEXUS_IOS
 
 # config.h, from the checks mosh's configure.ac makes for the files built here.
 check_include_file_cxx(sys/uio.h HAVE_SYS_UIO_H)
@@ -118,9 +121,19 @@ add_library(mosh_transport STATIC
     ${mosh_SOURCE_DIR}/src/crypto/base64.cc
     ${mosh_SOURCE_DIR}/src/crypto/ocb_internal.cc
     ${mosh_SOURCE_DIR}/src/util/timestamp.cc)
+if(NEXUS_IOS)
+    # protoc 21.12 for the building Mac, the generator of the runtime built for iOS (cmake/ios_link.cmake).
+    add_custom_command(OUTPUT "${mosh_proto_dir}/transportinstruction.pb.cc" "${mosh_proto_dir}/transportinstruction.pb.h"
+        COMMAND "${NEXUS_PROTOC}" --cpp_out=${mosh_proto_dir} -I${mosh_SOURCE_DIR}/src/protobufs
+            ${mosh_SOURCE_DIR}/src/protobufs/transportinstruction.proto
+        DEPENDS ${mosh_SOURCE_DIR}/src/protobufs/transportinstruction.proto
+        VERBATIM)
+    target_sources(mosh_transport PRIVATE "${mosh_proto_dir}/transportinstruction.pb.cc")
+else()
 protobuf_generate(TARGET mosh_transport LANGUAGE cpp
     IMPORT_DIRS ${mosh_SOURCE_DIR}/src/protobufs
     PROTOC_OUT_DIR "${mosh_proto_dir}")
+endif()
 # SYSTEM: the transport's templates (networktransport-impl.h, transportsender-impl.h) are instantiated in nexus's own
 # translation units, which compile with nexus's warnings as errors; mosh's headers are not ours to change.
 target_include_directories(mosh_transport SYSTEM PUBLIC

@@ -7,8 +7,15 @@
 #include <utility>
 #include <vector>
 
+#include "pr/hash.h"
+#include "pr/ui_records.h"
+
+#include "platform.h"
 #include "board.h"
+#if NEXUS_PROCESSES
+#include "command.h"
 #include "terminals.h"
+#endif
 
 static_assert(nexus::kPromptBytes == nexus::sync::Limits{}.text, "the prompt holds what the server takes");
 
@@ -51,6 +58,7 @@ void FrameHost::keepSelection() {
 void FrameHost::keepTerminals() {
     if (!keep || terminals == nullptr || terminalStore == nullptr)
         return;
+#if NEXUS_PROCESSES
     PraxTerminals* t = terminals;
     std::vector<std::string> directories = terminalDirectories(*model,
         [t](std::size_t id) { return t->workingDirectory(id); });
@@ -75,6 +83,7 @@ void FrameHost::keepTerminals() {
         }
     }
     keepSelection();
+#endif
 }
 
 void FrameHost::personSelected() {
@@ -262,6 +271,10 @@ void FrameHost::pollLink() {
     if (link == nullptr || !link->poll(&s))
         return;
     if (!s.cut.empty()) showCut(s.cut);
+    // The first dashboard's address, as the server says it (empty: none), for the sprint tab's page, until the strip
+    // holds a tab for each dashboard.
+    if (board != nullptr && s.phase == sync::LinkPhase::Connected)
+        board->offer(s.sessions.dashboards().empty() ? std::string() : s.sessions.dashboards().front().url);
     // The AIs first, so that an AI's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
         for (const auto& [name, claim] : pendingClaims_) {
@@ -783,6 +796,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
                 } else link->send(std::move(action));
                 return;
             }
+#if NEXUS_PROCESSES
             const auto aiName = model->tab(i).name;
             const auto instance = current ? current->info.instance : "";
             view->outgoing.push_back({tabId, 0, action.text});
@@ -815,6 +829,12 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
                 if (wake) wake();
             });
             return;
+#else
+            // Unreachable: this build stages no file (stageFile), so no prompt names one.
+            (void)current;
+            link->send(std::move(action));
+            return;
+#endif
         }
         if (!why.empty())
             view->problem = why;
@@ -848,6 +868,9 @@ void FrameHost::showState(const sync::Sessions& state, bool lost) {
 
 void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAppDisplay& display) {
     ++pasteFrame_;
+    // Another tab chosen: its prompt takes the focus, as a switch does (View::promptDismissed).
+    if (view->promptDismissed && (model->tab_count() == 0 || model->tab(model->active()).id != tapTab_))
+        view->promptDismissed = false;
     if (!upload_.valid()) std::erase_if(stagedFiles_, [&](const StagedFile& file) {
         if (pasteFrame_ - file.frame < 3) return false;
         for (size_t i = 0; i < model->tab_count(); ++i) {
@@ -858,6 +881,7 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
         return true;
     });
     view->hitch = hitch;
+#if NEXUS_PROCESSES
     if (terminals != nullptr) {
         // Each terminal's foreground process, for its tab's label, read where its working directory is read.
         HitchScope scope(hitch, Phase::Terminals);
@@ -866,6 +890,7 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
             terminals->deliver(ui);
         }
     }
+#endif
     {
         HitchScope scope(hitch, Phase::Keep);
         keepTerminals();
@@ -903,6 +928,13 @@ bool FrameHost::stageFile(std::string name, std::string bytes) {
     if (view->lockScreen) return false;
     if (!ui || view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt ||
         (view->secrets && view->secrets->showing()) || !model->tab_count()) return false;
+#if !NEXUS_PROCESSES
+    // An attachment goes to the server through a child process (ssh running nexus-receive, the upload worker above),
+    // which this build cannot start (build_parts.h). The in-app ssh (link/inapp_ssh.h) runs only the link's commands.
+    (void)bytes;
+    view->problem = "Attaching " + name + " is not available on iOS yet; nothing was sent.";
+    return false;
+#endif
     if (name.empty() || name == "." || name == ".." || name.size() > 255 ||
         name.find_first_of("/\\") != std::string::npos || std::any_of(name.begin(), name.end(),
             [](unsigned char c) { return c < 32 || c == 127; })) {
@@ -991,11 +1023,73 @@ bool resetsIdle(const PrAppEvent& e) {
     }
 }
 
+namespace {
+
+// How far a press may move and still be a tap, logical px: further, it is a drag or a scroll.
+constexpr float kTapSlop = 10;
+
+bool inside(PrLayoutTree* tree, PrLayoutNode node, PrVec2 p) {
+    if (node == kPrLayoutNodeNone || !prLayoutNodeIsValid(tree, node)) return false;
+    const PrRect r = prLayoutRectToPx(prLayoutNodeBounds(tree, node, PrLayoutCoordinates_Viewport));
+    return p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom;
+}
+
+} // namespace
+
+void FrameHost::watchTap(const PrAppEvent& e) {
+    if (!view->tapEndsEditing || ui == nullptr) return;
+    PrLayoutTree* tree = prUiTree(ui);
+    switch (e.kind) {
+    case PrAppEventKind_PointerDown:
+        tapping_ = e.pointer.button == 0;
+        tapDown_ = e.pointer.position;
+        // A press in the prompt's box takes editing back up.
+        if (inside(tree, view->promptBox, tapDown_)) view->promptDismissed = false;
+        break;
+    case PrAppEventKind_PointerMove:
+        if (tapping_) {
+            const float dx = e.pointer.position.x - tapDown_.x, dy = e.pointer.position.y - tapDown_.y;
+            if (dx * dx + dy * dy > kTapSlop * kTapSlop) tapping_ = false;
+        }
+        break;
+    case PrAppEventKind_PointerCancel:
+    case PrAppEventKind_Scroll:
+    case PrAppEventKind_Gesture:
+        tapping_ = false;
+        break;
+    case PrAppEventKind_PointerUp: {
+        if (!tapping_) break;
+        tapping_ = false;
+        if (inside(tree, view->promptBox, tapDown_)) break;
+        for (const PrLayoutNode tab : view->tabNodes) {
+            if (inside(tree, tab, tapDown_)) return;     // a tab switches, as it does
+        }
+        if (view->prompt != kPrLayoutNodeNone && prUiFocus(ui) == view->prompt) prUiSetFocus(ui, kPrLayoutNodeNone);
+        view->promptDismissed = true;
+        tapTab_ = model->tab_count() != 0 ? model->tab(model->active()).id : ~std::size_t(0);
+        break;
+    }
+    case PrAppEventKind_KeyDown:
+    case PrAppEventKind_Text:
+    case PrAppEventKind_Paste:
+        // A key typed (a hardware keyboard's) goes to the prompt again.
+        if (view->promptDismissed) {
+            view->promptDismissed = false;
+            if (view->prompt != kPrLayoutNodeNone && prLayoutNodeIsValid(tree, view->prompt))
+                prUiSetFocus(ui, view->prompt);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 bool FrameHost::event(const PrAppEvent& e) {
     HitchScope scope(hitch, Phase::Input);
     // While locked (View::lockScreen) no input reaches anything but the lock screen: no key reaches a terminal's shell,
     // the Dashboard's page or the prompt, and nothing is pasted or dropped. What is not input (a resize, a timer) passes.
     if (view->lockScreen && isInputEvent(e)) return !lockScreenTakes(e);
+    watchTap(e);
     // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
     // reaches the sprint tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {
@@ -1015,6 +1109,7 @@ bool FrameHost::event(const PrAppEvent& e) {
     if (board != nullptr && board->event(e)) {
         return true;
     }
+#if NEXUS_PROCESSES
     // Typed into a terminal tab before its screen can take it: held for its shell, in order.
     if (terminals != nullptr && model->tab_count() != 0) {
         const Tab& tab = model->tab(model->active());
@@ -1022,6 +1117,7 @@ bool FrameHost::event(const PrAppEvent& e) {
             return true;
         }
     }
+#endif
     if (ui == nullptr || (e.kind != PrAppEventKind_Text && e.kind != PrAppEventKind_Paste) ||
             view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt) {
         return false;
@@ -1050,6 +1146,31 @@ bool FrameHost::event(const PrAppEvent& e) {
 
 void FrameHost::build(PrKit* kit, PrLayoutNode root) {
     buildWindow(*view, kit, root);
+}
+
+namespace {
+
+// The box the window is built in above the on-screen keyboard (FrameHost::buildAbove).
+struct AboveKeyboard {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
+    float width;
+    float height;
+
+    void make(const View&, PrLayoutBoxStyle& box) const {
+        box.boxSizing = PrLayoutBoxSizing_BorderBox;
+        box.display = PrLayoutDisplay_Flex;
+        box.width = prLayoutLengthPx(width);
+        box.height = prLayoutLengthPx(height);
+    }
+};
+
+} // namespace
+
+void FrameHost::buildAbove(PrKit* kit, PrLayoutNode root, PrVec2 box) {
+    view->extent = box;
+    const PrLayoutNode above = prUiElement(ui, root, prHashString(PrStringView{"above-keyboard", 14}, 0),
+        pr::uiStyle(ui, *view, AboveKeyboard{view->extent.x, view->extent.y}), 0);
+    build(kit, above);
 }
 
 } // namespace nexus

@@ -567,7 +567,7 @@ bool parseTextScale(std::string_view text, int* steps, std::string* error) {
     return true;
 }
 
-int loadTextScale(const TabOrderStore& store, int lo, int hi, std::string* warning) {
+int loadTextScale(const TabOrderStore& store, int lo, int hi, std::string* warning, int unsaved) {
     warning->clear();
     std::string text;
     std::string error;
@@ -576,11 +576,11 @@ int loadTextScale(const TabOrderStore& store, int lo, int hi, std::string* warni
         if (!error.empty())
             *warning = "the saved text scale " + store.where + " is not used: " + error +
                 "; deleting it resets the scale";
-        return 0;
+        return unsaved;
     }
     if (!parseTextScale(text, &steps, &error)) {
         *warning = "the saved text scale " + store.where + " is not used: " + error + "; deleting it resets the scale";
-        return 0;
+        return unsaved;
     }
     if (steps < lo || steps > hi) {
         const int clamped = steps < lo ? lo : hi;

@@ -1,0 +1,69 @@
+#!/bin/sh
+# The forced command for an iPhone's or iPad's ssh key on the server's machine (docs/ios.md): the key may run the two
+# commands the app's link runs (src/link/bootstrap.h, src/link/client_port.h), `nexus-server new` and
+# `nexus-server history-page`, and nothing else: no shell, no other program, no forwarding (with `restrict`).
+#
+#   restrict,command="$HOME/.local/bin/nexus-ios-gate" ecdsa-sha2-nistp256 AAAA... nexus-ios
+#
+# ssh puts the command the app asked for in SSH_ORIGINAL_COMMAND: `exec "$SHELL" -l -c '<words>'`, each word quoted
+# (bootstrap.cpp remoteLine). The gate takes the words back out, refuses any word outside a plain set of characters
+# (letters, digits, and _ . : , = / + -), checks their shape, and runs them itself in the login shell, as the link asks.
+set -eu
+
+refuse() {
+    echo "nexus-ios-gate: $1; this key runs only nexus-server new and nexus-server history-page" >&2
+    exit 126
+}
+
+line=${SSH_ORIGINAL_COMMAND:-}
+prefix='exec "$SHELL" -l -c '
+case $line in
+    "$prefix"*) ;;
+    *) refuse "not the link's command" ;;
+esac
+rest=${line#"$prefix"}
+# The outer quotes, then each word's own quotes, which arrive as '\'' inside them.
+case $rest in
+    "'"*"'") ;;
+    *) refuse "not one quoted line" ;;
+esac
+rest=${rest#"'"}
+rest=${rest%"'"}
+q="'\\''"
+words=""
+while [ -n "$rest" ]; do
+    case $rest in
+        "$q"*) rest=${rest#"$q"} ;;
+        *) refuse "a word is not quoted" ;;
+    esac
+    word=${rest%%"$q"*}
+    [ "$word" != "$rest" ] || refuse "a word is not closed"
+    rest=${rest#"$word$q"}
+    case $word in
+        "" | *[!A-Za-z0-9_.:,=/+-]*) refuse "a word holds more than letters, digits and _ . : , = / + -" ;;
+    esac
+    words="$words $word"
+    case $rest in
+        " "*) rest=${rest# } ;;
+        "") ;;
+        *) refuse "words are not apart" ;;
+    esac
+done
+
+# [env NEXUS_<NAME>=<value>...] nexus-server new|history-page <arguments>
+set -- $words
+if [ "${1:-}" = env ]; then
+    shift
+    while [ $# -gt 0 ]; do
+        case $1 in
+            NEXUS_[A-Z_]*=*) shift ;;
+            *) break ;;
+        esac
+    done
+fi
+[ "${1:-}" = nexus-server ] || refuse "not nexus-server"
+case ${2:-} in
+    new | history-page) ;;
+    *) refuse "not new or history-page" ;;
+esac
+exec "$SHELL" -l -c "exec$words"

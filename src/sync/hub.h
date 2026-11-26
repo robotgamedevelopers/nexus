@@ -455,6 +455,9 @@ public:
     // The state for the link of the window whose claim token is `opener`: state() with the URL of each flow that
     // window holds. state() itself carries no URL.
     Sessions stateFor(const std::string& opener, const std::string& client = {}) const;
+    // The dashboards every window's state carries (Sessions::dashboards), in order.
+    void setDashboards(std::vector<Dashboard> list) { dashboards_ = std::move(list); }
+    const std::vector<Dashboard>& dashboards() const { return dashboards_; }
     const SignInDesk& signIns() const { return signIns_; }
     // The walk's faulty runs alone: SignInDesk's seams.
     void injectSignInClaimFault() { signIns_.injectClaimFault(); }
@@ -512,6 +515,7 @@ private:
     std::map<SessionId, EntryRef> open_;     // each session's open entry, if it has one
     std::map<SessionId, std::pair<Activity, std::uint32_t>> activity_; // each session's activity, if not Idle
     Sessions state_;
+    std::vector<Dashboard> dashboards_;
     std::optional<SessionId> primary_;
     std::optional<accounts::Registry> accounts_;
     AccountsKeeper* keeper_ = nullptr;
