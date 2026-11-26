@@ -2975,7 +2975,7 @@ void sprintTabSaysWhyThereIsNoPage() {
     h.view.board = nullptr;
     h.frame();
     h.frame();
-    CHECK(h.hasText(prLayoutTreeRoot(h.tree), "this build has no sprint board"));
+    CHECK(h.hasText(prLayoutTreeRoot(h.tree), "this build has no dashboard"));
 }
 
 // The text scale's keys zoom the page.
