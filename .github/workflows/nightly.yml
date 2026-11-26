@@ -1182,7 +1182,8 @@ jobs:
           bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
           -j "$TEST_JOBS" --output-on-failure
 
-  # Windows, as ci.yml's windows job builds it, on hosted Windows: the unit tests too slow for a pull request.
+  # Windows, as ci.yml's windows job builds it, on hosted Windows: the unit tests too slow for a pull request. The WSL2
+  # terminal test needs a WSL2 distribution, which hosted Windows lacks: wsl2-terminal runs it on captain.
   windows-nightly:
     runs-on: windows-2025
     defaults:
@@ -1196,7 +1197,7 @@ jobs:
         uses: ./.github/actions/windows-build
       - name: The tier_nightly tests
         run: |
-          & ./.github/ctest.ps1 --test-dir "$env:NEXUS_BUILD" -C Release -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$' -j $env:TEST_JOBS --output-on-failure
+          & ./.github/ctest.ps1 --test-dir "$env:NEXUS_BUILD" -C Release -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver|wsl2_terminal)$' -j $env:TEST_JOBS --output-on-failure
           if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }
 
   # The protocol's conformance cases against the Claude driver as a process (ctest -L claude_driver) on hosted Ubuntu,
