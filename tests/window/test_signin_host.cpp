@@ -315,9 +315,10 @@ void oldServerSaysSo() {
     remote.signIn.received(offering("tokWindowA1", page, "studio", "antigravity"));
     remote.signIn.step();
     CHECK(remote.opened.empty() && remote.gates.empty() && remote.port.sent.empty());
-    CHECK(remote.signIn.problem.find("too old") != std::string::npos &&
-          remote.signIn.problem.find("antigravity-main") != std::string::npos &&
-          remote.signIn.problem.find("127.0.0.1") == std::string::npos);
+    // The whole line: the attempt this window claimed holds the flow until its deadline, so it says when to retry.
+    CHECK(remote.signIn.problem ==
+          "nexus-server is too old to sign in to antigravity-main from another machine. Update nexus-server, or once "
+          "this attempt ends (within 10 minutes), press Sign in in a Nexus window on the server's machine.");
     Fixture near("127.0.0.1", "studio");
     near.signIn.loopback = true;
     near.signIn.activeTab = [&] { return tab; };

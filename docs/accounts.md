@@ -152,7 +152,8 @@ refused with a plain line in the session. Something that is not a code (two word
 window says so and keeps the field open. If the server refuses a code, the field opens again so you can paste the
 right one. A Nexus window from before this cannot take a code: the server says so in the session, and an updated
 window signs in. A server from before this can sign Antigravity in only from a window on its own machine; a window
-elsewhere says the server is too old.
+elsewhere says the server is too old. Its attempt holds the sign-in until it ends, within 10 minutes; then press
+**Sign in** in a window on the server's machine.
 
 When an AI has at least two linked subscription accounts, **auto** is the first menu choice and the
 stock server profile uses it for fresh sessions. It starts on the first signed-in linked subscription. When
