@@ -26,11 +26,12 @@
 // screenshot show one after a command has printed. The terminal tabs open at quit come back at launch, in their order,
 // each a new login shell in the directory its shell last worked in (tab_order.h).
 //
-// The first tab is always the sprint tab: nova-sprint's served board (board.h), at the address in the sprint's record
-// (sprint.h) or the client config's sprint-url (client_home.h). The AI tabs are the server's AIs (frame_host.h
+// The first tabs are the server's dashboards (sync/dashboards.h), one tab each, labelled with its name; with none, there is
+// no dashboard tab. A dashboard's tab shows the page at the address the server gives for it (board.h, frame_host.h
+// takeDashboards); the window looks up no address itself. The AI tabs are the server's AIs (frame_host.h
 // takeAIs), in the order the person last left them. The window opens on the tab selected when it last quit
-// (tab_order.h), or the sprint tab if that tab is gone or nothing is saved; --tab N opens tab N, and a screenshot
-// without --tab shows the sprint tab. The text scale (Command-plus and Command-minus) is saved as it changes and comes
+// (tab_order.h), or the first tab if that tab is gone or nothing is saved; --tab N opens tab N, and a screenshot
+// without --tab shows the first tab. The text scale (Command-plus and Command-minus) is saved as it changes and comes
 // back at launch.
 // --backdrop draws the screenshot see-through,
 // as the overlay is, over coloured stripes in place of the screen behind it.
@@ -50,7 +51,7 @@
 // --state FILE draws the screenshot's AI tabs from a server's state file (sync/sessions.h stateFile; the AIs
 // layer's functional test writes them from the fake driver: tests/server/drivers_functional.cpp, case window), as the
 // window shows it once the server is heard; --lost draws it as the window does once it has lost the server. It draws
-// from the file alone: no home, no config, no saved tab order, and no sprint board; the AI tabs are the state's
+// from the file alone: no home, no config, no saved tab order, and no dashboard page; the AI tabs are the state's
 // AIs (sync/client.h aisOf: its list, or the AIs of its sessions in order of session id).
 //
 // Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop] [--locked]
@@ -176,10 +177,10 @@ struct App {
     bool backdrop = false;          // --backdrop: the screenshot is see-through over stripes
     std::unique_ptr<PraxTerminals> terminals;   // over the window's kit, from open() to close()
     std::vector<Machine> machines;  // the fleet's machines, which name a terminal tab in ssh to one (remote.h)
-    std::unique_ptr<PraxBoard> board;           // the sprint tab's page, over the window's kit, from open() to close()
+    std::unique_ptr<PraxBoard> board;           // a dashboard tab's page, over the window's kit, from open() to close()
     // The sign-in page and the board's links, opened in the system's browser off the frame thread, open() to close().
     std::unique_ptr<UrlOpener> urls;
-    std::function<SprintBoardAddress()> findBoard; // the board's address; unset, the sprint's (board.h)
+    bool statePages = true;         // false with --state: a screenshot of a state file loads no dashboard's page
     unsigned bench = 0;     // with --bench, frames to draw back to back before stopping
     FrameStats stats;
     // Kept across launches (tab_order.h); a screenshot keeps nothing. The terminal tabs reopened at launch, by Tab::id,
@@ -274,7 +275,7 @@ void carryOut(App& a, OverlayAct act) {
         std::fprintf(stderr, "nexus: the overlay could not be given the whole screen (no native view, window or "
             "screen), so it covers the screen's work area only, inside the menu bar or the taskbar\n");
     if (!prAppWindowIsVisible(window)) {
-        if (!a.view.lockScreen && a.board && a.model->tab_count() && a.model->tab(a.model->active()).kind == TabKind::Sprint)
+        if (!a.view.lockScreen && a.board && a.model->tab_count() && a.model->tab(a.model->active()).kind == TabKind::Dashboard)
             a.board->prepare({});
         a.preparingReveal = true;
         a.revealFrameReady = false;
@@ -517,11 +518,9 @@ bool open(void* context, PrStudioWindow* window) {
     const auto lockedNow = [&a] { return a.lock && !a.lock->drawsContent(); };
     const auto logLine = [](const std::string& line) { std::fprintf(stderr, "nexus: %s\n", line.c_str()); };
     board.open = openUnlessLocked(a.urls->handle(), lockedNow, logLine);
-    // Linked to a server: the board it says it serves, and this window's own lookup only if it says none.
-    board.fromServer = a.link != nullptr;
     if (a.overlay)
         board.visible = [&a] { return overlayVisible(a); };
-    if (clientConfig().sprintEnabled) a.board = std::make_unique<PraxBoard>(board);
+    a.board = std::make_unique<PraxBoard>(board);
     a.view.board = a.board.get();
     a.host.terminals = a.terminals.get();
     a.host.board = a.board.get();
@@ -606,7 +605,7 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     if (a.preparingReveal) {
         // A locked window shows the lock screen alone: it waits for no page.
         const bool sprint = !a.view.lockScreen && a.board && a.model->tab_count() &&
-            a.model->tab(a.model->active()).kind == TabKind::Sprint;
+            a.model->tab(a.model->active()).kind == TabKind::Dashboard;
         a.revealFrameReady = !sprint || (a.boardRevealStep && a.board->readyToReveal(*a.boardRevealStep));
         return;
     }
@@ -747,7 +746,7 @@ void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
     }
 }
 
-// While the sprint tab shows, its page takes the events it is routed (sprint.h routeBoardEvent); the rest go to the
+// While a dashboard tab shows, its page takes the events it is routed (sprint.h routeBoardEvent); the rest go to the
 // window's tree.
 bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
     auto& a = appOf(context);
@@ -840,7 +839,6 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     PraxBoard::Desc boardDesc;
     boardDesc.kit = off.kit();
     boardDesc.fonts = a.fonts;
-    boardDesc.find = a.findBoard;
     auto board = std::make_unique<PraxBoard>(boardDesc);
     a.view.board = board.get();
     auto frame = [&] {
@@ -850,15 +848,25 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
             board->wait();
         }, [&] { board->wait(); });
     };
-    if (a.model->tab_count() != 0 && a.model->tab(a.model->active()).kind == TabKind::Sprint) {
-        // The board's page, once it has loaded and painted its first answers, within 20 s; or the line that says why
-        // it has none.
-        for (int i = 0; i < 1000 && !board->settled(); ++i) {
-            frame();
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    if (a.model->tab_count() != 0 && a.model->tab(a.model->active()).kind == TabKind::Dashboard) {
+        // The dashboard's page at the address the server gave, once it has loaded and painted its first answers,
+        // within 20 s; or the line that says why it has none.
+        const std::string& name = a.model->tab(a.model->active()).name;
+        const std::string url = a.host.dashboardUrl(name);
+        if (!a.statePages) {
+            std::fprintf(stderr, "nexus: a screenshot of a state file loads no dashboard's page\n");
+        } else if (url.empty()) {
+            std::fprintf(stderr, "nexus: the server gave no address for the dashboard \"%s\"\n", name.c_str());
+        } else {
+            board->offer(url);
+            for (int i = 0; i < 1000 && !board->settled(); ++i) {
+                frame();
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+            if (!board->settled())
+                std::fprintf(stderr, "nexus: the dashboard \"%s\" did not settle: %s\n", name.c_str(),
+                    board->problem().c_str());
         }
-        if (!board->settled())
-            std::fprintf(stderr, "nexus: the sprint board did not settle: %s\n", board->problem().c_str());
     }
     if (a.demoTerminal) {
         // A terminal tab running /bin/sh in the home directory, after a command has printed, within 10 s.
@@ -1015,7 +1023,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     // A screenshot draws a state file or the demo, never the person's own window: that would be the window without the
-    // lock (the sprint board, the AIs' tabs, the terminals).
+    // lock (the dashboards, the AIs' tabs, the terminals).
     if (shot != nullptr && state == nullptr && !demo && !demoTerminal) {
         std::fprintf(stderr, "nexus: --screenshot draws a state file (--state) or the demo (--demo, --demo-terminal) "
             "only, never the live window\n");
@@ -1060,7 +1068,7 @@ int main(int argc, char** argv) {
         policy::Host policy("client");
         if (!home.empty()) policy.watch(home + "/policy.bundle.json");
         WindowApplication description;
-        description.update(policy, "sprint", {}, false, false, 0, 0);
+        description.update(policy, "dashboard", {}, false, false, 0, 0);
         std::string why;
         const auto hotkey = overlayBinding(policy, why);
         if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
@@ -1151,10 +1159,18 @@ int main(int argc, char** argv) {
                 "AIs taken off it are kept in this window only, until it quits\n", loggable(server).c_str());
         }
     }
-    // The sprint tab first, and no AIs yet.
-    static Model model({}, fromState || clientConfig().sprintEnabled);
+    // No dashboards and no AIs yet: both are the server's (sync/dashboards.h, sync/client.h), and arrive with its
+    // state; a screenshot of a state file has the file's dashboards from the start.
+    static Model model({});
 #if NEXUS_LIVE_LINK
     if (fromState) {
+        // The state file's dashboards as a server's are taken (frame_host.h takeDashboards): each one checked.
+        std::vector<std::string> refused;
+        std::vector<std::string> dashboards;
+        for (const sync::Dashboard& d : sync::shownDashboards(held.dashboards(), &refused)) dashboards.push_back(d.name);
+        for (const std::string& why : refused)
+            std::fprintf(stderr, "nexus: the state file has %s\n", loggable(why).c_str());
+        model.sync_dashboards(dashboards);
         sync::AIStrip{}.take(model, held);
         if (!tabGiven) tab = model.active() + 1;
     }
@@ -1165,17 +1181,14 @@ int main(int argc, char** argv) {
     bool haveLayout = false;
     bool layoutReadable = true;
     if (live) {
+        // A refused layout file is kept aside and the window saves its own (tab_order.h loadLayout): never silent, and
+        // never a reason to stop saving for good.
         layoutStore = writer.wrap(fileLayoutStore());
-        std::string text, error;
-        if (layoutStore.read(&text, &error)) {
-            haveLayout = parseLayout(text, &savedLayout);
-            if (!haveLayout) error = "unrecognized or malformed layout";
-        }
-        if (!error.empty()) {
-            layoutReadable = false;
-            std::fprintf(stderr, "nexus: %s could not be restored (%s); leaving the file in place\n",
-                         layoutStore.where.c_str(), error.c_str());
-        }
+        LayoutLoad load = loadLayout(layoutStore, fileRefusedLayoutStore());
+        if (!load.warning.empty()) std::fprintf(stderr, "nexus: %s\n", load.warning.c_str());
+        savedLayout = std::move(load.layout);
+        haveLayout = load.have;
+        layoutReadable = load.keep;
     }
     TabLayout layout(std::move(savedLayout));
     if (tabGiven) layout.personSelected();
@@ -1226,7 +1239,7 @@ int main(int argc, char** argv) {
             a.host.groupPolicyReady = true;
             a.host.restoreLayout();
         };
-        a.view.windowApp.update(*a.view.application, "sprint", {}, false, false, 0, model.tab_count(), {});
+        a.view.windowApp.update(*a.view.application, "dashboard", {}, false, false, 0, model.tab_count(), {});
         model.set_tab_groups(a.view.windowApp.groups);
         model.select_tab(savedTabPosition(model, SavedTab{}));
         a.view.restoreTabLayout();
@@ -1244,10 +1257,10 @@ int main(int argc, char** argv) {
         a.lock = std::make_unique<WindowLock>(idle, systemLockAuthenticator(), lockHooks(a, !windowed && live));
     }
     // The window opens on the tab --tab names; without it, on the tab selected when nexus last quit, found by who it is
-    // or, for a terminal, by its place among the terminals (tab_order.h), or the sprint tab. A saved AI's tab is
+    // or, for a terminal, by its place among the terminals (tab_order.h), or the first tab. A saved AI's tab is
     // selected once the server's AIs arrive (sync/ai_strip.h). A --tab past the tabs there at launch, with a
     // server, is judged once the server's AIs have arrived (below, after the link starts). A screenshot without
-    // --tab uses the state file's primary chat when present, or the sprint tab.
+    // --tab uses the state file's primary chat when present, or the first tab.
     SavedTab savedTab;
     bool savedSelection = haveLayout && !a.host.layout.saved().selected.empty();
     if (!tabGiven && live && !haveLayout) {
@@ -1385,7 +1398,7 @@ int main(int argc, char** argv) {
     // it has lost the server).
     if (fromState) {
         a.host.showState(held, lost);
-        a.findBoard = [] { return SprintBoardAddress{"", "a screenshot of a state file shows no sprint board"}; };
+        a.statePages = false;
     }
 #endif
     // --demo: sample entries after what the state file holds, in the active tab if it is an AI's.

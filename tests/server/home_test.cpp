@@ -69,8 +69,8 @@ void serverConfig() {
 
     // dashboard: none by default; one line each, `<url> <name>`, kept in order, the name the rest of the line.
     CHECK(readServerConfig("machine studio\n", "/s/config", &s, &warnings, &why) && s.dashboards.empty());
-    CHECK(readServerConfig("dashboard http://100.76.29.55:8080/ Dashboard\n", "/s/config", &s, &warnings, &why));
-    CHECK((warnings.empty() && s.dashboards == std::vector<sync::Dashboard>{{"Dashboard", "http://100.76.29.55:8080/"}}));
+    CHECK(readServerConfig("dashboard http://100.64.0.1:8080/ Dashboard\n", "/s/config", &s, &warnings, &why));
+    CHECK((warnings.empty() && s.dashboards == std::vector<sync::Dashboard>{{"Dashboard", "http://100.64.0.1:8080/"}}));
     CHECK(readServerConfig("dashboard https://b.example/x Build farm\n# a note\ndashboard http://a:1/ Dashboard\n"
                            "dashboard http://c:2/  Third  one \n", "/s/config", &s, &warnings, &why));
     CHECK(s.dashboards == (std::vector<sync::Dashboard>{{"Build farm", "https://b.example/x"},

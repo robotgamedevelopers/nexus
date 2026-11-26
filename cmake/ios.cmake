@@ -8,8 +8,8 @@
 #         -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_TYPE=Release            (devices: builds, signed ad hoc)
 #
 # What iOS cannot have is left out by design, never built to fail at run time: the system starts no processes for an
-# app, so there is no nexus-server here, no terminal tab (a local shell), no sprint tab (its board's address comes from
-# running nova-sprint), and nothing over Prax's lib/process. The window's logic that needs none of these (its home and
+# app, so there is no nexus-server here, no terminal tab (a local shell), and nothing over
+# Prax's lib/process. The window's logic that needs none of these (its home and
 # its saved preferences, src/client_home.h and src/tab_order.h) is built on its own (nexus_ios_logic), and
 # src/build_parts.h says which parts a build holds (NEXUS_PROCESSES). The link to nexus-server is the desktop's (mosh's
 # transport after `nexus-server new` over ssh), with the ssh inside the app (src/link/inapp_ssh.h) and the libraries the
@@ -29,9 +29,9 @@ else()
 endif()
 set(NEXUS_RUST_TARGET_ENV "IPHONEOS_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
 
-# The desktop window (the overlay over AppKit, its terminals and sprint tab), its logic over lib/process, and the
+# The desktop window (the overlay over AppKit, its terminals and dashboard tabs), its logic over lib/process, and the
 # desktop link and nexus-server (NEXUS_LINK: the link over /usr/bin/ssh, with the server) are not iOS's. The defaults are set here, before CMakeLists.txt's options read them; turning one on fails.
-set(NEXUS_WINDOW OFF CACHE BOOL "Build the window (the app, its view, terminals and sprint tab, and their tests)")
+set(NEXUS_WINDOW OFF CACHE BOOL "Build the window (the app, its view, terminals and dashboard tabs, and their tests)")
 set(NEXUS_WINDOW_LOGIC OFF CACHE BOOL "Build the window's logic over Prax's lib/process, and what uses it")
 set(NEXUS_LINK OFF CACHE BOOL "Build nexus-server and the window's --server over mosh's transport (needs protobuf)")
 foreach(desktop NEXUS_WINDOW NEXUS_WINDOW_LOGIC NEXUS_LINK NEXUS_TAILSCALE)
@@ -108,8 +108,8 @@ function(nexus_ios_targets)
         prax::markdown prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app
         prax::core_cpp)
 
-    # The sprint tab's page (board.h): the desktop's, with the board's address from the server alone (no lookup here:
-    # sprint.h findSprintBoard runs a process), over Prax's page stack as the desktop's nexus_board.
+    # A dashboard tab's page (board.h): the desktop's, at the address the server gives for it, over Prax's page stack
+    # as the desktop's nexus_board.
     add_library(nexus_ios_board STATIC src/board.cpp src/sprint.cpp)
     target_compile_definitions(nexus_ios_board PRIVATE NEXUS_DISPLAY_VERSION="v${PROJECT_VERSION}")
     target_include_directories(nexus_ios_board PUBLIC src)

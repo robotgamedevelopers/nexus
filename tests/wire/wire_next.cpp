@@ -87,6 +87,13 @@ Bytes nextSessions() {
     setText(b.main, other->account, "a2");
     setText(b.main, other->provider, "claude");
     setText(b.main, other->opener, "*");
+    // Two dashboards, in the server's order.
+    Dashboard* board = SessionsDiffDashboardsAdd(b.main, b.GetRoot()->dashboards);
+    setText(b.main, board->name, "Dashboard");
+    setText(b.main, board->url, "http://board.test:8080/");
+    Dashboard* farm = SessionsDiffDashboardsAdd(b.main, b.GetRoot()->dashboards);
+    setText(b.main, farm->name, "Build farm");
+    setText(b.main, farm->url, "https://ci.test/board");
     if (!b.Lock()) {
         return Bytes();
     }
@@ -151,6 +158,9 @@ Read nextReadSessions(const Bytes& bytes) {
         const TableBytesView url = TableBytesAt(o.url);
         out.urls.push_back(url.data == nullptr ? std::string() :
             std::string(reinterpret_cast<const char*>(url.data), static_cast<std::size_t>(url.length)));
+    }
+    for (const Dashboard& board : d->dashboards) {
+        out.dashboards.push_back(textOf(board.name) + " " + textOf(board.url));
     }
     if (d->sessions.size() < 1) {
         return out;

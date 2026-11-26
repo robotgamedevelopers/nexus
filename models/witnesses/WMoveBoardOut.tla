@@ -1,13 +1,11 @@
--------------------------- MODULE WMoveBeforeSprint --------------------------
-\* Reversed witness: the move rule takes the sprint tab for an AI's (one
-\* zone for both), so an AI can be dropped onto position 0 and the sprint
-\* tab is pushed behind it. SprintFirst must reject it.
+---------------------------- MODULE WMoveBoardOut ----------------------------
+\* Reversed witness: a dashboard can be dragged anywhere: a move from a dashboard's tab is taken whatever the zone at
+\* `to`, so a dashboard lands among the AIs or the terminals. MovePlaces must reject it: a move across zones returned
+\* true.
 EXTENDS MCWindow
 
-AIZone(id) == IF TabKind(id) = "Sprint" THEN 1 ELSE Zone(id)
-
 BrokenMove(from, to) ==
-    IF from \in Tabs /\ to \in Tabs /\ AIZone(At(from)) = AIZone(At(to))
+    IF from \in Tabs /\ to \in Tabs /\ (Zone(At(from)) = 0 \/ Zone(At(from)) = Zone(At(to)))
     THEN /\ order' = Moved(order, from, to)
          /\ active' = MovedIndex(active, from, to)
          /\ last' = DidMove(from, to, TRUE)

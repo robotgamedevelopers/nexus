@@ -37,7 +37,7 @@ struct TranscriptEdit {
 };
 
 // Native presentation and lifecycle. The active fork separately assigns each tab type to a group.
-enum class TabKind { Sprint, AI, Terminal, Extension };
+enum class TabKind { Dashboard, AI, Terminal, Extension };
 
 // The built-in order used by older window descriptions without tab groups.
 int zone(TabKind kind);
@@ -52,9 +52,9 @@ struct TabGroup {
 
 struct Tab {
     std::size_t id;     // who the tab is, wherever it stands, never reused: an AI's place in the constructor's list;
-                        // the sprint tab's the number of those AIs; for a terminal, and an AI added later, the
-                        // next id after every one handed out before
-    std::string name;   // an AI's; empty for the sprint tab and a terminal
+                        // a dashboard's from the constructor the number of those AIs plus its place in its list; for a
+                        // terminal, and an AI or dashboard added later, the next id after every one handed out before
+    std::string name;   // an AI's, or a dashboard's (its identity in the strip and its label); empty for a terminal
     std::string model;
     std::vector<Entry> transcript;   // a terminal's stays empty
     std::string draft;
@@ -72,11 +72,13 @@ struct Tab {
 
 class Model {
 public:
-    // With `sprint`, the sprint tab first, then one tab per AI, in order; without, the AI tabs alone. Active tab
-    // 0. The AI list may be empty. The window always makes its model with the sprint tab, and with no AIs: they
-    // come from the server (main.cpp, sync/client.h applyAIs). The model's tests make it both ways, and
-    // models/Window.tla checks both (its constant Sprint).
-    explicit Model(const std::vector<AIInfo>& ais, bool sprint = false);
+    // One tab per dashboard, in the order given, with the ids N..N+B-1 (N the number of AIs), then one tab per AI, in
+    // order, with the ids 0..N-1. An empty name, or a name given before, makes no tab (the ids stay contiguous over
+    // the tabs made). Active tab 0, and its id the selection history; with no tabs, active 0 and an empty history.
+    // Either list may be empty. The windows make their model with no dashboards and no AIs: both come from the server
+    // (main.cpp, sync/client.h applyAIs, sync/dashboards.h). models/Window.tla checks it (Init, the constant
+    // BoardList).
+    explicit Model(const std::vector<AIInfo>& ais, const std::vector<std::string>& dashboards = {});
     std::size_t tab_count() const;
     std::size_t active() const;                  // 0 when there are no tabs
     const Tab& tab(std::size_t i) const;         // i < tab_count()
@@ -115,7 +117,7 @@ public:
                                  // selection_history()), returns its new id
     bool dismiss_tab(std::size_t i); // window policy authorized closing this tab; preserves selection history
     bool close_tab(std::size_t i); // a terminal's tab: removes it, the tabs after shift left, its id leaves
-                                   // selection_history(), true; the sprint tab, an AI's tab or i >= tab_count(): false,
+                                   // selection_history(), true; a dashboard's, an AI's tab or i >= tab_count(): false,
                                    // no change. If it was active, the tab selected before it is active: the last id left
                                    // in selection_history(). With none left, the tab now at i, or the last tab if it was
                                    // the last, or none (0) if no tabs remain; a tab that shows so is then the history
@@ -137,6 +139,26 @@ public:
     // linear in the tabs and the history): the same strip, active tab and history as that loop. `gone` is asked once
     // per AI's tab, in strip order. Returns the ids of the tabs removed, in strip order.
     std::vector<std::size_t> remove_ais(const std::function<bool(const Tab&)>& gone);
+    // Window.tla's AddBoard: a tab for the dashboard `name` at the end of the dashboards' zone (after every dashboard,
+    // before every AI and terminal), with a new id, holding nothing; true. The active tab stays active, wherever it now
+    // stands, and selection_history() is untouched, but for a model with no tabs, where the new tab is active and its
+    // id the history. False and no change for an empty name, or a name a dashboard's tab already has.
+    bool add_dashboard(std::string name);
+    // Window.tla's RemoveBoard: i a dashboard's tab: removed by close_tab's rule (the tabs after shift left, its id
+    // leaves selection_history(), and if it was active the tab selected before it is active); true. Any other tab, or
+    // i >= tab_count(): false, no change.
+    bool remove_dashboard(std::size_t i);
+    // The strip brought to the server's dashboard list `names` (sync/dashboards.h, in the server's order): remove_dashboard
+    // of every dashboard's tab whose name is not in `names`, then add_dashboard of every name in `names` with no tab, in
+    // `names`' order. The tabs that stay keep the place the person gave them; a new one goes at the dashboards' end. A
+    // rename is a remove and an add. Returns the names removed, in strip order, and the names added, in the order added:
+    // both empty when the strip already matched. Nothing but those calls, so Window.tla's RemoveBoard and AddBoard cover it.
+    struct DashboardChanges {
+        std::vector<std::string> removed;
+        std::vector<std::string> added;
+        bool empty() const { return removed.empty() && added.empty(); }
+    };
+    DashboardChanges sync_dashboards(const std::vector<std::string>& names);
     // The ids of the tabs selected, most recent last, each once, open tabs only: the tab active at the start, then each
     // select_tab and add_terminal, and a tab that shows because every tab in the history closed. While there are tabs,
     // its last id is the active tab's. Kept for this run only.

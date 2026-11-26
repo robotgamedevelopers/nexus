@@ -34,6 +34,7 @@
 #include "pr/kit.h"
 #include "pr/kit_panel.h"
 #include "pr/layout_query.h"
+#include "pr/layout_style.h"
 #include "pr/layout_tree.h"
 #include "pr/text.h"
 #include "pr/ui.h"
@@ -94,7 +95,7 @@ struct Window {
     PrUi* ui = nullptr;
     PrKit* kit = nullptr;
     Look look;
-    Model model{std::vector<AIInfo>{}, true};
+    Model model{std::vector<AIInfo>{}};
     View view;
     FrameHost host;
     test::FakeLink link;
@@ -107,6 +108,10 @@ struct Window {
     bool editing = false;       // the last frame edited text: the backend's keyboard is up
     int rose = -1;              // the frame after the one that first edited text, while editing; -1: down
     bool wantsFrame = false;    // the last frame asked for another
+    // The window opens on the Dashboard, as one whose last selection was the Dashboard does: the first frame that has
+    // the server's tabs selects it before anything is drawn. Without it the window opens on the first AI's tab, which
+    // the server's state names first.
+    bool opensOnDashboard = true;
 
     explicit Window(const Device& d, bool turned = false)
         : extent(turned ? PrVec2{d.size.y, d.size.x} : d.size), device(d), safe(turned ? d.turned : d.upright) {
@@ -126,6 +131,7 @@ struct Window {
         host.ui = ui;
         host.connect(&link, "server.test");
         link.ais({"rowan", "stella"});
+        link.dashboards({{"Dashboard", "http://dashboard.test/"}});
     }
 
     ~Window() {
@@ -160,6 +166,14 @@ struct Window {
         rect = keyboardRect(a, switching);
         const float room = roomAboveKeyboard(extent, safe, rect);
         host.beginFrame(kit, fonts, time, prAppDisplayDefault());
+        if (opensOnDashboard) {
+            for (std::size_t i = 0; i < model.tab_count(); ++i) {
+                if (model.tab(i).kind != TabKind::Dashboard) continue;
+                model.select_tab(i);
+                opensOnDashboard = false;
+                break;
+            }
+        }
         PrUiFrameDesc desc{.time = time, .delta = 1.0 / 120, .extent = extent, .maxRounds = 4,
             .display = prAppDisplayDefault(), .preferences = {}};
         struct Round { Window* w; PrVec2 box; } round{this, contentBox(extent, safe, room)};
@@ -249,6 +263,19 @@ struct Window {
         return prLayoutRectToPx(prLayoutNodeBounds(tree, node, PrLayoutCoordinates_Viewport));
     }
 
+    // The prompt's value (the text area's first child) as the last frame laid it out: false while the prompt has none,
+    // and in the bold weight where the look asks for one (Builder::prompt). A frame that showed the prompt with its
+    // value unstyled drew the draft in the body's weight for that frame.
+    bool promptValueStyled() const {
+        if (view.prompt == kPrLayoutNodeNone) return false;
+        const PrLayoutNode value = prLayoutNodeFirstChild(tree, view.prompt);
+        if (value == kPrLayoutNodeNone) return false;
+        if (!look.prompt.bold) return true;
+        const PrLayoutStyle record = prLayoutStyleRecord(tree, prLayoutNodeStyle(tree, value));
+        const PrLayoutFontStyle font = prLayoutFontStyleRecord(tree, record.groups[PrLayoutGroup_Font]);
+        return font.font != nullptr && prTextFontStyle(font.font).weight == 700;
+    }
+
     // The prompt's place in the window, empty if it has none.
     PrRect promptBounds() const {
         if (view.prompt == kPrLayoutNodeNone) return {};
@@ -269,7 +296,7 @@ void firstSwitch(const Device& d, const Arrival& a) {
     Window w(d, true);
     const char* device = d.name;
     for (int i = 0; i < 10; ++i) w.frame(a);
-    CHECK(w.model.tab_count() > 0 && w.model.tab(w.model.active()).kind == TabKind::Sprint);
+    CHECK(w.model.tab_count() > 0 && w.model.tab(w.model.active()).kind == TabKind::Dashboard);
     CHECK(!w.editing);                      // the Dashboard edits no text: the keyboard is down
     const std::size_t rowan = w.tabOf("rowan");
     CHECK(rowan < w.model.tab_count());
@@ -277,7 +304,7 @@ void firstSwitch(const Device& d, const Arrival& a) {
     w.model.select_tab(rowan);
     PrLayoutNode focus = prUiFocus(w.ui);
     bool editing = w.editing;
-    int refocused = 0, toggled = 0, askedLate = 0, covered = 0, outside = 0;
+    int refocused = 0, toggled = 0, askedLate = 0, covered = 0, outside = 0, unstyled = 0;
     for (int i = 0; i < 300; ++i) {
         if (i == 150) {
             // The device turned: the window's extent swaps, and its next frames settle the same way.
@@ -285,6 +312,7 @@ void firstSwitch(const Device& d, const Arrival& a) {
         }
         w.frame(a, i == 0);
         outside += !w.promptInsideSafeArea();
+        unstyled += !w.promptValueStyled();
         const PrRect prompt = w.promptBounds();
         const bool shows = w.rect.bottom > w.rect.top;
         if (shows && prompt.bottom > prompt.top && prompt.bottom > w.rect.top) ++covered;
@@ -294,16 +322,18 @@ void firstSwitch(const Device& d, const Arrival& a) {
         editing = w.editing;
         if ((i >= 30 && i < 150) || i >= 180) askedLate += w.wantsFrame;
     }
-    if (refocused > 1 || toggled > 1 || askedLate != 0 || covered != 0 || outside != 0) {
+    if (refocused > 1 || toggled > 1 || askedLate != 0 || covered != 0 || outside != 0 || unstyled != 0) {
         std::fprintf(stderr, "%s, rect %s: of 300 frames, the focus changed in %d, the keyboard in %d, %d of the "
-            "settled ones asked for another, the keyboard covered the prompt in %d, and it left the safe area in %d\n",
-            device, a.name, refocused, toggled, askedLate, covered, outside);
+            "settled ones asked for another, the keyboard covered the prompt in %d, it left the safe area in %d, and "
+            "its value was unstyled in %d\n", device, a.name, refocused, toggled, askedLate, covered, outside,
+            unstyled);
     }
     CHECK(refocused <= 1);
     CHECK(toggled <= 1);
     CHECK(askedLate == 0);
     CHECK(covered == 0);
     CHECK(outside == 0);
+    CHECK(unstyled == 0);                   // the switch's own frame shows the value styled
     CHECK(w.editing);                       // the prompt has the focus: the keyboard is up
     CHECK(focus != kPrLayoutNodeNone && focus == w.view.prompt);
     const float inside = w.extent.y - w.safe.top - w.safe.bottom;

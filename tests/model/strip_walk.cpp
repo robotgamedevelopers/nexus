@@ -143,9 +143,9 @@ int main(int argc, char** argv) {
     pool.push_back(kBad);
     Rng rng{seed};
 
-    // The start: a saved AI (or none), a strip with the sprint tab, nothing kept.
+    // The start: a saved AI (or none), a strip with one dashboard, nothing kept.
     std::string saved = rng.below(2) == 0 ? std::string() : names[rng.below(names.size())];
-    auto model = std::make_unique<Model>(std::vector<nexus::AIInfo>{}, true);
+    auto model = std::make_unique<Model>(std::vector<nexus::AIInfo>{}, std::vector<std::string>{"sprint"});
     auto strip = std::make_unique<AIStrip>(order, saved, KeptDrafts{});
     const std::string firstSaved = saved;
     std::vector<std::string> trace{record("start", {}, false, "", "", *model, *strip)};
@@ -222,7 +222,7 @@ int main(int argc, char** argv) {
                 saved = active.kind == TabKind::AI ? active.name : std::string();
             }
             KeptDrafts kept = forget ? KeptDrafts{} : strip->kept();
-            model = std::make_unique<Model>(std::vector<nexus::AIInfo>{}, true);
+            model = std::make_unique<Model>(std::vector<nexus::AIInfo>{}, std::vector<std::string>{"sprint"});
             strip = std::make_unique<AIStrip>(order, ignoreSaved ? std::string() : saved, std::move(kept));
             haveLast = false;
             ++restarts;

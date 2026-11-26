@@ -2,7 +2,7 @@
 // on iPhone and iPad. A second client of nexus-server, a thin portal as the desktop window is (AGENTS.md): it sends the
 // person's input and shows the server's state. There is no overlay and no hotkey (an app's window is the system's to
 // show), and what an iOS app cannot run is left out of this build (platform.h NEXUS_PROCESSES): no terminal tabs and no
-// attachment upload. The sprint tab shows the board at the address the server sends (board.h offer).
+// attachment upload. A dashboard tab shows the page at the address the server sends for it (board.h offer).
 //
 // It reaches nexus-server as the desktop window does, over mosh's transport after `nexus-server new` over ssh
 // (link/client.h), with the ssh inside the app (link/inapp_ssh.h): the server is `--server user@host`, the client
@@ -82,9 +82,9 @@ struct App {
     FrameHost host;
     std::atomic<PrApp*> wakeApp{nullptr};   // while the window is open: for the link's thread to wake it
     std::unique_ptr<link::ClientPort> link;
-    bool linked = false;                    // the window reaches a server (not a state file): it has the sprint tab
+    bool linked = false;                    // the window reaches a server (not a state file): it has dashboard tabs
     std::string home;                       // the client home, for the board's storage
-    std::unique_ptr<PraxBoard> board;       // the sprint tab's page, while the window is open
+    std::unique_ptr<PraxBoard> board;       // the dashboard tabs' page, while the window is open
     TextInputStart textInput;               // whether the frames edit text, for the keyboard's start (keyboard_start.h)
     PrAppInsets safeArea{};                 // the frame's safe area, which Prax pads the window's panel by
     float keyboardRoom = 0;                 // px of content above the on-screen keyboard this frame; 0: none covers it
@@ -166,7 +166,7 @@ bool open(void* context, PrStudioWindow* window) {
         return a.window && prAppDataWriteText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard,
             {text.data(), text.size()}) == PrStatus_Ok;
     };
-    // The sprint tab's page, the board at the address the server sends (board.h offer): this build looks none up.
+    // The dashboard tabs' page, at the address the server sends for the one showing (board.h offer): none looked up.
     if (a.linked) {
         PraxBoard::Desc board;
         board.kit = prStudioWindowKit(window);
@@ -176,7 +176,6 @@ bool open(void* context, PrStudioWindow* window) {
         if (!a.home.empty()) board.storageDirectory = a.home + "/dashboard-storage";
         board.initialExtent = {1000, 780};
         board.open = a.urls->handle();
-        board.fromServer = true;
         a.board = std::make_unique<PraxBoard>(board);
         a.view.board = a.board.get();
         a.host.board = a.board.get();
@@ -280,21 +279,12 @@ void keepHome(App& a, const std::string& home) {
     std::vector<std::string> savedOrder = loadTabOrderNames(order, &warning);
     if (!warning.empty()) std::fprintf(stderr, "nexus: %s\n", warning.c_str());
 
-    SavedLayout savedLayout;
-    bool haveLayout = false;
-    bool layoutReadable = true;
-    std::string text, error;
-    if (layoutStore.read(&text, &error)) {
-        haveLayout = parseLayout(text, &savedLayout);
-        if (!haveLayout) error = "unrecognized or malformed layout";
-    }
-    if (!error.empty()) {
-        layoutReadable = false;
-        std::fprintf(stderr, "nexus: %s could not be restored (%s); leaving the file in place\n",
-            layoutStore.where.c_str(), error.c_str());
-    }
-    a.host.layout = TabLayout(std::move(savedLayout));
-    a.host.layoutStore = layoutReadable ? &layoutStore : nullptr;
+    // As the desktop window's (main.cpp): a refused layout file is kept aside and the app saves its own.
+    LayoutLoad load = loadLayout(layoutStore, fileRefusedLayoutStore());
+    if (!load.warning.empty()) std::fprintf(stderr, "nexus: %s\n", load.warning.c_str());
+    const bool haveLayout = load.have;
+    a.host.layout = TabLayout(std::move(load.layout));
+    a.host.layoutStore = load.keep ? &layoutStore : nullptr;
     a.view.restoreTabLayout = [&a] {
         if (!a.view.windowApp.layoutGeneration) return;
         a.host.groupPolicyReady = true;
@@ -365,7 +355,7 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    static Model model({}, state == nullptr);   // the sprint tab (the Dashboard) when linked, as on the desktop
+    static Model model({});   // no dashboards and no AIs yet: both are the server's, as on the desktop
     App a;
     a.model = &model;
     a.view.model = &model;

@@ -31,6 +31,7 @@ struct Read {
     std::vector<std::uint64_t> requests;    // each open secret request's id
     std::vector<std::uint64_t> signins;     // each sign-in flow's id (a reader that knows them: this build's, a later's)
     std::vector<std::string> urls;          // each flow's URL, as it read (empty: none)
+    std::vector<std::string> dashboards;    // each dashboard, as "<name> <url>", in order (a reader that knows them)
 };
 
 // What a reader of the later version made of an actions diff: the read's report, then each action, in order.
@@ -59,7 +60,8 @@ struct ReadHello {
 
 // The later version: a sessions diff, from an empty state, of two sessions: the first with the added field set and
 // entries that include the added kind (Image), the second with the added activity (Waiting), and two sign-in flows
-// (format 5's, which the later version keeps: 4, held by this window, its URL set, and 5, held by another); a record
+// (format 5's, which the later version keeps: 4, held by this window, its URL set, and 5, held by another), and two
+// dashboards ("Dashboard" at http://board.test:8080/, then "Build farm" at https://ci.test/board); a record
 // whose changes include the added arm (set_title); and its readers of each.
 Bytes nextSessions();
 Bytes nextRecord();

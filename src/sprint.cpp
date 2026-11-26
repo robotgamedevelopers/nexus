@@ -13,141 +13,6 @@
 
 namespace nexus {
 
-// The board's address from the sprint's record runs nova-config, a process: none of it where the build runs no processes
-// (iOS: build_parts.h), whose board takes its address from nexus-server alone (board.cpp).
-#if NEXUS_PROCESSES
-namespace {
-
-constexpr const char* kShown = "nova-config service show sprint-run --json";
-constexpr const char* kSetUrl = "give the board's address in nexus's client config (a line `sprint-url http://<host>:<port>/` "
-    "in ~/.nexus/client/config)";
-
-std::string_view view(PrStringView s) {
-    return s.data != nullptr ? std::string_view(s.data, s.size) : std::string_view();
-}
-
-PrStringView pr(std::string_view s) {
-    return PrStringView{s.data(), s.size()};
-}
-
-std::string trimmed(std::string s) {
-    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' '))
-        s.pop_back();
-    return s;
-}
-
-bool startsWith(std::string_view s, std::string_view prefix) {
-    return s.substr(0, prefix.size()) == prefix;
-}
-
-SprintBoardAddress failed(std::string error) {
-    return SprintBoardAddress{{}, std::move(error)};
-}
-
-// The address a client reaches a server listening on `listen` (host:port) at.
-std::string reachable(std::string_view listen) {
-    std::size_t colon = listen.rfind(':');
-    std::string_view host = colon == std::string_view::npos ? std::string_view() : listen.substr(0, colon);
-    std::string_view port = colon == std::string_view::npos ? listen : listen.substr(colon + 1);
-    if (host.empty() || host == "0.0.0.0" || host == "[::]" || host == "::")
-        host = "127.0.0.1";
-    return "http://" + std::string(host) + ":" + std::string(port) + "/";
-}
-
-} // namespace
-
-Command sprintRunCommand(const char* override, const char* shell) {
-    return novaConfigCommand(override, shell, {"service", "show", "sprint-run", "--json"});
-}
-
-SprintBoardAddress parseSprintRun(std::string_view json) {
-    PrJson* doc = prJsonCreate();
-    size_t at = 0;
-    if (!prJsonParse(doc, pr(json), &at)) {
-        prJsonDestroy(doc);
-        return failed(std::string(kShown) + " printed something that is not JSON (stopped at byte " +
-            std::to_string(at) + "); run it in a terminal to see what it prints, or " + kSetUrl);
-    }
-    PrJsonValueIndex status = prJsonMember(doc, prJsonMember(doc, 0, pr("result")), pr("status"));
-    if (prJsonKind(doc, status) == PrJsonKind_String && view(prJsonString(doc, status)) != "ok") {
-        std::string s(view(prJsonString(doc, status)));
-        prJsonDestroy(doc);
-        return failed(std::string(kShown) + " answered status " + s + "; run it in a terminal to see why, or " +
-            kSetUrl);
-    }
-    PrJsonValueIndex items = prJsonMember(doc, 0, pr("items"));
-    PrJsonValueIndex item = prJsonKind(doc, items) == PrJsonKind_Array ? prJsonFirst(doc, items) : kPrJsonMissing;
-    PrJsonValueIndex argv = item != kPrJsonMissing ? prJsonMember(doc, prJsonMember(doc, item, pr("fields")),
-        pr("argv")) : kPrJsonMissing;
-    if (prJsonKind(doc, argv) != PrJsonKind_Array) {
-        prJsonDestroy(doc);
-        return failed(std::string(kShown) + " printed no service with an argv; set the sprint up with `nova-sprint up`, "
-            "or " + kSetUrl);
-    }
-    std::vector<std::string> words;
-    for (PrJsonValueIndex i = prJsonFirst(doc, argv); i != kPrJsonMissing; i = prJsonAfter(doc, argv, i))
-        words.emplace_back(prJsonKind(doc, i) == PrJsonKind_String ? view(prJsonString(doc, i)) : std::string_view());
-    prJsonDestroy(doc);
-    for (std::size_t k = 0; k < words.size(); ++k) {
-        std::string_view w = words[k];
-        if (w == "--listen" && k + 1 < words.size() && !words[k + 1].empty())
-            return SprintBoardAddress{reachable(words[k + 1]), {}};
-        if (startsWith(w, "--listen=") && w.size() > 9)
-            return SprintBoardAddress{reachable(w.substr(9)), {}};
-    }
-    return failed("the sprint's run service (" + std::string(kShown) + ") has no --listen address in its argv, so it "
-        "serves no board; set it up again with `nova-sprint up`, or " + kSetUrl);
-}
-
-SprintBoardAddress findSprintBoard(const char* override, const Command& command, const CommandRunner& run) {
-    if (override != nullptr && *override != 0) {
-        std::string_view url(override);
-        if (!startsWith(url, "http://") && !startsWith(url, "https://"))
-            return failed("the client config's sprint-url is \"" + std::string(url) + "\", which is not an http:// or "
-                "https:// address; " + kSetUrl + ", or remove the line to read the sprint's record");
-        return SprintBoardAddress{std::string(url), {}};
-    }
-    CommandResult r = run(command, kSprintRunTimeoutSeconds);
-    const std::string cmd = "`" + command.shown + "`";
-    const std::string fix = std::string("put the full path of nova-config in nexus's client config (a line "
-        "`nova-config <path>` in ~/.nexus/client/config), or install nova-tools so that nova-config is on your login "
-        "shell's PATH, or ") + kSetUrl;
-    switch (r.end) {
-        case CommandResult::End::NotFound:
-            return failed("cannot find the sprint board: " + command.program + " was not found to run " + cmd + "; " +
-                fix);
-        case CommandResult::End::NotStarted:
-            return failed("cannot find the sprint board: " + cmd + " could not start; " + fix);
-        case CommandResult::End::TimedOut:
-            return failed("cannot find the sprint board: " + cmd + " did not finish within " +
-                std::to_string(kSprintRunTimeoutSeconds) + " seconds and was stopped; run it in a terminal to see "
-                "where it waits (the store may be unreachable), or " + kSetUrl);
-        case CommandResult::End::Signaled:
-            return failed("cannot find the sprint board: " + cmd + " was ended by signal " + std::to_string(r.code) +
-                "; run it in a terminal to see why, or " + kSetUrl);
-        case CommandResult::End::Exited:
-            break;
-    }
-    if (r.code != 0) {
-        std::string why = trimmed(r.err);
-        std::string error = "cannot find the sprint board: " + cmd + " exited with status " + std::to_string(r.code);
-        if (r.code == 127)
-            error += " (command not found)";
-        error += why.empty() ? " and printed nothing on standard error" : ": " + why;
-        error += r.code == 127 ? "; " + fix : std::string("; if the sprint is not set up, run `nova-sprint up`; or ") +
-            kSetUrl;
-        return failed(error);
-    }
-    return parseSprintRun(r.out);
-}
-
-SprintBoardAddress findSprintBoard() {
-    const ClientConfig& config = clientConfig();
-    return findSprintBoard(config.sprintUrl.c_str(), sprintRunCommand(config.novaConfig.c_str(), std::getenv("SHELL")),
-        runCommand);
-}
-#endif
-
 BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPage) {
     switch (event.kind) {
         case PrAppEventKind_PointerMove:
@@ -372,6 +237,10 @@ bool linkLeavesBoard(std::string_view href, std::string_view document, std::stri
     if (target.size() == 6 && startsWithFold(target, "_blank"))
         return true;
     return withoutFragment(href) != withoutFragment(document);
+}
+
+bool linkOpensOutside(std::string_view url) {
+    return startsWithFold(url, "http://") || startsWithFold(url, "https://") || startsWithFold(url, "mailto:");
 }
 
 std::string sprintPrelude(std::string_view standardZone, std::string_view daylightZone) {

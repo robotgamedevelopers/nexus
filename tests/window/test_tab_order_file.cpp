@@ -102,13 +102,13 @@ void clientHomeFiles() {
     CHECK(chmod(top.c_str(), 0755) == 0 && makeClientHome(dir, &why) && modeOf(top) == 0700);
     // No config: the defaults. A config: its settings, and its problems named by file and line.
     ClientConfig c = readClientConfig(dir);
-    CHECK(c.path == dir + "/config" && c.novaConfig.empty() && c.sprintUrl.empty() && c.problems.empty());
-    const std::string text = "nova-config /opt/nova-config\nsprint-url http://h:1/\nwho knows\n";
+    CHECK(c.path == dir + "/config" && c.novaConfig.empty() && !c.serverSet && c.problems.empty());
+    const std::string text = "nova-config /opt/nova-config\nserver h\nwho knows\n";
     const std::string path = dir + "/config";
     CHECK(prFileWrite(PrStringView{path.data(), path.size()},
         PrByteView{reinterpret_cast<const uint8_t*>(text.data()), text.size()}));
     c = readClientConfig(dir);
-    CHECK(c.novaConfig == "/opt/nova-config" && c.sprintUrl == "http://h:1/");
+    CHECK(c.novaConfig == "/opt/nova-config" && c.serverHost == "h");
     CHECK(c.problems.size() == 1 && c.problems[0].find(path + " line 3:") != std::string::npos);
     // No HOME: the stores say so and write nothing.
     CHECK(unsetenv("HOME") == 0);
@@ -124,7 +124,7 @@ void clientHomeFiles() {
 // identity. The same snapshot respects a fork which disallows the prior cross-group move.
 static void mixedLayout() {
     const SavedLayout wanted{"extension:8", {
-        {"sprint", "dashboards", ""}, {"extension:4", "ais", "notes"}, {"ai:ada", "ais", ""},
+        {"dashboard:Dashboard", "dashboards", ""}, {"extension:4", "ais", "notes"}, {"ai:ada", "ais", ""},
         {"terminal:2", "ais", "/same"}, {"terminal:3", "terminals", "/same"}, {"extension:8", "writing", "notes"}}};
     SavedLayout read;
     CHECK(parseLayout(formatLayout(wanted), &read) && read == wanted);
@@ -145,8 +145,8 @@ static void mixedLayout() {
         return true;
     };
     for (bool crossing : {true, false}) {
-        Model model({}, true);
-        model.set_tab_groups({{"dashboards", {"sprint"}}, {"ais", {"ai"}, false,
+        Model model({}, {"Dashboard"});
+        model.set_tab_groups({{"dashboards", {"dashboard"}}, {"ais", {"ai"}, false,
             crossing ? std::vector<std::string>{"terminals", "writing"} : std::vector<std::string>{}},
             {"terminals", {"terminal"}, true}, {"writing", {"notes"}, true}});
         TabLayout layout(read);
@@ -175,7 +175,7 @@ static void mixedLayout() {
     }
     // A plugin may become available after launch. Respect a focus choice made while waiting for it.
     TabLayout delayed(wanted);
-    Model partial({}, true);
+    Model partial({}, {"Dashboard"});
     delayed.reopenTerminals(partial);
     delayed.restore(partial, [](const auto&, auto*, auto*) { return false; }, false);
     delayed.capture(partial, {"/same", "/same"}, false);
@@ -183,13 +183,13 @@ static void mixedLayout() {
     CHECK(partial.select_tab(0));
     delayed.personSelected();
     delayed.restore(partial, extension, true);
-    CHECK(partial.tab(partial.active()).kind == TabKind::Sprint);
+    CHECK(partial.tab(partial.active()).kind == TabKind::Dashboard);
     delayed.capture(partial, {"/same", "/same"}, true);
-    CHECK(delayed.saved().selected == "sprint" && delayed.saved().tabs.size() == 5);
+    CHECK(delayed.saved().selected == "dashboard:Dashboard" && delayed.saved().tabs.size() == 5);
     SavedLayout aiFocus = wanted;
     aiFocus.selected = "ai:ada";
     TabLayout pending(aiFocus);
-    Model waiting({}, true);
+    Model waiting({}, {"Dashboard"});
     pending.reopenTerminals(waiting);
     pending.restore(waiting, extension, false);
     pending.capture(waiting, {"/same", "/same"}, false);
@@ -223,11 +223,11 @@ int main() {
     const std::string selectedPath = "tab-order-test/nexus/selected-tab.txt";
     prFileRemove(PrStringView{selectedPath.data(), selectedPath.size()});
     TabOrderStore selected = fileTabOrderStore(selectedPath);
-    Model sprint(loaded, true);
+    Model sprint(loaded, {"sprint"});
     CHECK(loadSelectedTab(selected, sprint, &warning) == 0 && warning.empty());        // no file yet: the sprint tab
     CHECK(sprint.select_tab(1) && sprint.move_tab(1, 3));                              // "a" selected, then last
     CHECK(saveSelectedTab(selected, sprint, &error));
-    Model relaunched(loadTabOrder(store, loaded, &warning), true);
+    Model relaunched(loadTabOrder(store, loaded, &warning), {"sprint"});
     CHECK(relaunched.tab(3).name == "a" && loadSelectedTab(selected, relaunched, &warning) == 3 && warning.empty());
     // The text scale, in a file beside them: nothing saved is the default; a saved scale comes back; a file that is not
     // a text scale warns and gives the default.
@@ -247,13 +247,13 @@ int main() {
     prFileRemove(PrStringView{terminalsPath.data(), terminalsPath.size()});
     TabOrderStore terminals = fileTabOrderStore(terminalsPath);
     CHECK(loadTerminals(terminals, &warning).empty() && warning.empty());
-    Model open(loaded, true);
+    Model open(loaded, {"sprint"});
     open.add_terminal();
     open.add_terminal();
     CHECK(saveTerminals(terminals, {"/tmp", ""}, &error) && saveSelectedTab(selected, open, &error));
     const std::vector<std::string> reopened = loadTerminals(terminals, &warning);
     CHECK(reopened == (std::vector<std::string>{"/tmp", ""}) && warning.empty());
-    Model back(loaded, true);
+    Model back(loaded, {"sprint"});
     for (std::size_t k = 0; k < reopened.size(); ++k)
         back.add_terminal();
     CHECK(back.tab_count() == 6);

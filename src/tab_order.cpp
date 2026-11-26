@@ -22,6 +22,7 @@
 
 #include "accounts/registry.h"
 #include "client_home.h"
+#include "sync/dashboards.h"
 
 namespace nexus {
 
@@ -158,10 +159,18 @@ TabOrderStore fileStoreNamed(std::string_view name) {
 }
 
 // The first line of the selected tab's file: what it is, and its format's version. Version 1 saved a terminal as
-// "terminal", by no place, since terminals were not kept.
-constexpr std::string_view kSelectedHeader = "nexus selected tab 2";
+// "terminal", by no place, since terminals were not kept. Versions 1 and 2 saved every dashboard as "sprint", from when
+// there was one; version 3 saves a dashboard by its name, and "first" for a tab it keeps no name of.
+constexpr std::string_view kSelectedHeader = "nexus selected tab 3";
+constexpr std::string_view kSelectedHeader2 = "nexus selected tab 2";
 constexpr std::string_view kSelectedHeader1 = "nexus selected tab 1";
 constexpr std::string_view kAIPrefix = "ai ";
+constexpr std::string_view kDashboardPrefix = "dashboard ";
+constexpr std::string_view kFirstWord = "first";
+// The one dashboard's word in a selected tab file of version 1 or 2, and its key in a layout saved before dashboards
+// were kept by name: read as the first dashboard's (TabLayout::restore), and saved by name at the next save.
+constexpr std::string_view kOldSprint = "sprint";
+constexpr std::string_view kDashboardKey = "dashboard:";
 // What the saved files said before the friend names became AI: the selected tab's "friend <name>", the layout's
 // "friend:<name>" keys and "friends" group. Read as the AI's, and written the new way at the next save; the word
 // stays here only.
@@ -196,6 +205,10 @@ TabOrderStore fileLayoutStore() {
     return fileStoreNamed("tab-layout.json");
 }
 
+TabOrderStore fileRefusedLayoutStore() {
+    return fileStoreNamed("tab-layout.refused.json");
+}
+
 std::string formatLayout(const SavedLayout& layout) {
     std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);
     prJsonWriterBeginObject(w.get());
@@ -217,11 +230,19 @@ std::string formatLayout(const SavedLayout& layout) {
     return std::string(text.data, text.size) + "\n";
 }
 
-bool parseLayout(std::string_view text, SavedLayout* layout) {
+bool parseLayout(std::string_view text, SavedLayout* layout, std::string* why) {
+    std::string unused;
+    if (why == nullptr) why = &unused;
+    const auto refuse = [why](std::string reason) {
+        *why = std::move(reason);
+        return false;
+    };
     std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
     auto* d = doc.get();
-    if (!prJsonParse(d, pr(text), nullptr) || prJsonNumber(d, prJsonMember(d, 0, pr("version")), 0) != 1)
-        return false;
+    if (!prJsonParse(d, pr(text), nullptr))
+        return refuse("it is not JSON");
+    if (prJsonNumber(d, prJsonMember(d, 0, pr("version")), 0) != 1)
+        return refuse("it is not a version 1 layout");
     auto stringAt = [&](PrJsonValueIndex index, std::string& out) {
         if (prJsonKind(d, index) != PrJsonKind_String) return false;
         const auto value = prJsonString(d, index);
@@ -231,7 +252,7 @@ bool parseLayout(std::string_view text, SavedLayout* layout) {
     SavedLayout result;
     const auto tabs = prJsonMember(d, 0, pr("tabs"));
     if (prJsonKind(d, tabs) != PrJsonKind_Array || !stringAt(prJsonMember(d, 0, pr("selected")), result.selected))
-        return false;
+        return refuse("it has no tabs list or no selected tab");
     result.selected = currentKey(std::move(result.selected));
     std::set<std::string> seen;
     for (auto i = prJsonFirst(d, tabs); i != kPrJsonMissing; i = prJsonAfter(d, tabs, i)) {
@@ -239,33 +260,66 @@ bool parseLayout(std::string_view text, SavedLayout* layout) {
         if (prJsonKind(d, i) != PrJsonKind_Array || prJsonCount(d, i) != 3 ||
             !stringAt(prJsonElement(d, i, 0), row.key) || !stringAt(prJsonElement(d, i, 1), row.group) ||
             !stringAt(prJsonElement(d, i, 2), row.detail))
-            return false;
+            return refuse("a tab is not three strings");
         row.key = currentKey(std::move(row.key));
         if (row.group == kOldAIGroup) row.group = "ais";
-        if (!seen.insert(row.key).second) return false;
+        if (!seen.insert(row.key).second) return refuse("the tab \"" + row.key + "\" is in it twice");
         const std::string_view key(row.key);
         if (key.starts_with("terminal:") || key.starts_with("extension:")) {
             auto number = key.substr(key.find(':') + 1);
             if (number.empty() || number.size() > 20 || number.front() == '0' ||
                 number.find_first_not_of("0123456789") != number.npos ||
                 (key.starts_with("extension:") && row.detail.empty()))
-                return false;
-        } else if (!(key == "sprint" || key == "primary" ||
+                return refuse("the tab \"" + row.key + "\" is not a terminal or extension this build knows");
+        } else if (!(key == kOldSprint || key == "primary" ||
+                     (key.starts_with(kDashboardKey) &&
+                      sync::dashboardNameProblem(key.substr(kDashboardKey.size())).empty()) ||
                      (key.starts_with("ai:") && accounts::isName(key.substr(3)))) ||
                    !row.detail.empty()) {
-            return false;
+            return refuse("the tab \"" + row.key + "\" is not a tab this build knows");
         }
         result.tabs.push_back(std::move(row));
     }
-    if (!result.selected.empty() && !seen.contains(result.selected)) return false;
+    if (!result.selected.empty() && !seen.contains(result.selected))
+        return refuse("its selected tab \"" + result.selected + "\" is not among its tabs");
     *layout = std::move(result);
     return true;
+}
+
+LayoutLoad loadLayout(const TabOrderStore& store, const TabOrderStore& aside) {
+    LayoutLoad load;
+    std::string text, error;
+    if (!store.read(&text, &error)) {
+        if (!error.empty()) {
+            load.keep = false;
+            load.warning = "the saved tab layout " + store.where + " could not be read (" + error + "): the window starts "
+                "without it and saves no layout until it is readable again, or deleted";
+        }
+        return load;
+    }
+    std::string why;
+    if (parseLayout(text, &load.layout, &why)) {
+        load.have = true;
+        return load;
+    }
+    load.layout = {};
+    std::string copied;
+    if (aside.write(text, &copied)) {
+        load.warning = "the saved tab layout " + store.where + " is refused (" + why + "): it is kept as " + aside.where +
+            ", and the window starts without it and saves its layout anew";
+        return load;
+    }
+    load.keep = false;
+    load.warning = "the saved tab layout " + store.where + " is refused (" + why + ") and could not be kept as " +
+        aside.where + " (" + copied + "): the window starts without it and leaves it in place, saving no layout this "
+        "run; deleting it resets the layout";
+    return load;
 }
 
 TabLayout::TabLayout(SavedLayout saved) : saved_(std::move(saved)), pending_(saved_.selected) {}
 
 std::string TabLayout::keyOf(const Tab& tab) {
-    if (tab.kind == TabKind::Sprint) return "sprint";
+    if (tab.kind == TabKind::Dashboard) return std::string(kDashboardKey) + tab.name;
     if (tab.primaryChat()) return "primary";
     if (tab.kind == TabKind::AI) return "ai:" + tab.name;
     auto& key = localKeys_[tab.id];
@@ -295,6 +349,15 @@ void TabLayout::restore(Model& model, const std::function<bool(const std::string
     std::map<std::string, std::size_t> ids;
     const auto activeId = model.tab_count() ? model.tab(model.active()).id : ~std::size_t{};
     for (std::size_t i = 0; i < model.tab_count(); ++i) ids[keyOf(model.tab(i))] = model.tab(i).id;
+    // A layout saved when there was one dashboard keeps it as "sprint": it is the first dashboard the layout does not
+    // also keep by name, until the next save keeps that one by its name.
+    for (std::size_t i = 0; i < model.tab_count() && !ids.contains(std::string(kOldSprint)); ++i) {
+        const Tab& tab = model.tab(i);
+        if (tab.kind != TabKind::Dashboard) continue;
+        const std::string named = keyOf(tab);
+        if (std::none_of(saved_.tabs.begin(), saved_.tabs.end(), [&](const auto& row) { return row.key == named; }))
+            ids[std::string(kOldSprint)] = tab.id;
+    }
     std::set<std::string> opened;
     for (const auto& [id, key] : localKeys_) opened.insert(key);
     std::vector<std::pair<std::size_t, std::string>> order;
@@ -315,7 +378,9 @@ void TabLayout::restore(Model& model, const std::function<bool(const std::string
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
         if (model.tab(i).id == wanted && model.active() != i) model.select_tab(i);
     }
-    if (selected != ids.end() || pending_.starts_with("terminal:") || (aisKnown && pending_.starts_with("ai:")))
+    // A saved AI's or dashboard's tab is waited for until the server's state is known (the dashboards come with its AIs).
+    if (selected != ids.end() || pending_.starts_with("terminal:") ||
+        (aisKnown && (pending_.starts_with("ai:") || pending_.starts_with(kDashboardKey) || pending_ == kOldSprint)))
         pending_.clear();
 }
 
@@ -347,7 +412,8 @@ void TabLayout::capture(const Model& model, const std::vector<std::string>& dire
         if (live.contains(old.key)) {
             if (!waiting.empty()) preceding[old.key].swap(waiting);
         } else if ((old.key == "primary" && (!aisKnown || pending_ == old.key)) ||
-                   (!aisKnown && old.key.starts_with("ai:")) ||
+                   (!aisKnown && (old.key.starts_with("ai:") || old.key.starts_with(kDashboardKey) ||
+                                  old.key == kOldSprint)) ||
                    (!opened.contains(old.key) && old.key.starts_with("extension:"))) {
             waiting.push_back(old);
         }
@@ -415,8 +481,10 @@ std::string formatSelectedTab(const Model& model) {
     std::string text(kSelectedHeader);
     text += '\n';
     const Tab* tab = model.tab_count() != 0 ? &model.tab(model.active()) : nullptr;
-    if (tab == nullptr || tab->kind == TabKind::Sprint || tab->kind == TabKind::Extension) {
-        text += "sprint";
+    if (tab == nullptr || tab->kind == TabKind::Extension) {
+        text += kFirstWord;
+    } else if (tab->kind == TabKind::Dashboard) {
+        text += std::string(kDashboardPrefix) + tab->name;
     } else if (tab->kind == TabKind::Terminal) {
         std::size_t place = 0;
         for (std::size_t i = 0; i <= model.active(); ++i)
@@ -436,7 +504,7 @@ bool parseSelectedTab(std::string_view text, SavedTab* saved, std::string* error
     }
     std::size_t end = text.find('\n');
     const std::string_view header = text.substr(0, end);
-    if (header != kSelectedHeader && header != kSelectedHeader1) {
+    if (header != kSelectedHeader && header != kSelectedHeader2 && header != kSelectedHeader1) {
         *error = "its first line is not \"" + std::string(kSelectedHeader) + "\"";
         return false;
     }
@@ -446,13 +514,23 @@ bool parseSelectedTab(std::string_view text, SavedTab* saved, std::string* error
         *error = "it names no tab";
         return false;
     }
-    if (line == "sprint")
+    // The first dashboard, or the first tab: "first", or the one dashboard's "sprint" of version 1 or 2.
+    if ((header == kSelectedHeader && line == kFirstWord) || (header != kSelectedHeader && line == kOldSprint))
         return true;
+    if (header == kSelectedHeader && line.substr(0, kDashboardPrefix.size()) == kDashboardPrefix) {
+        const std::string name(line.substr(kDashboardPrefix.size()));
+        if (std::string problem = sync::dashboardNameProblem(name); !problem.empty()) {
+            *error = "its dashboard line names no dashboard (" + problem + ")";
+            return false;
+        }
+        saved->name = name;
+        return true;
+    }
     if (header == kSelectedHeader1 && line == kTerminalWord) {
         saved->kind = TabKind::Terminal;
         return true;
     }
-    if (header == kSelectedHeader && line.substr(0, kTerminalPrefix.size()) == kTerminalPrefix) {
+    if (header != kSelectedHeader1 && line.substr(0, kTerminalPrefix.size()) == kTerminalPrefix) {
         // A place from 1, in at most kMaxStepDigits digits: far past any number of tabs.
         const std::string_view digits = line.substr(kTerminalPrefix.size());
         bool ok = !digits.empty() && digits.size() <= kMaxStepDigits && digits[0] != '0';
@@ -479,22 +557,29 @@ bool parseSelectedTab(std::string_view text, SavedTab* saved, std::string* error
         saved->name = std::string(line.substr(prefix.size()));
         return true;
     }
-    *error = "its second line \"" + std::string(line) + "\" is not sprint, terminal <n> or ai <name>";
+    *error = "its second line \"" + std::string(line) + "\" is not first, dashboard <name>, terminal <n> or ai <name>";
     return false;
 }
 
 std::size_t savedTabPosition(const Model& model, const SavedTab& saved) {
     std::size_t terminals = 0;
-    std::size_t sprint = 0;
+    std::size_t first = 0;
+    bool dashboard = false;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
         const Tab& tab = model.tab(i);
-        if (tab.kind == TabKind::Sprint) sprint = i;
+        if (tab.kind == TabKind::Dashboard && !dashboard) {
+            first = i;
+            dashboard = true;
+        }
+        if (saved.kind == TabKind::Dashboard && tab.kind == TabKind::Dashboard && !saved.name.empty() &&
+            tab.name == saved.name)
+            return i;
         if (saved.kind == TabKind::AI && tab.kind == TabKind::AI && tab.name == saved.name)
             return i;
         if (saved.kind == TabKind::Terminal && tab.kind == TabKind::Terminal && ++terminals == saved.terminal)
             return i;
     }
-    return sprint;
+    return first;
 }
 
 SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning, bool* loaded) {

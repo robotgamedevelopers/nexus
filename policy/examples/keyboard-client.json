@@ -16,9 +16,6 @@
     "selected_weight": 700,
     "reserve_width": true
   },
-  "tab_labels": {
-    "sprint": "Dashboard"
-  },
   "transcript_style": {
     "pending_outline_width": 3,
     "sent_outline_width": 0,

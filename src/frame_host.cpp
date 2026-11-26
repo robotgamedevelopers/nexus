@@ -73,7 +73,7 @@ void FrameHost::keepTerminals() {
     const std::size_t focus = model->tab_count() ? model->tab(model->active()).id : ~std::size_t{};
     if (layoutStore && groupPolicyReady && !strip.pending() &&
         (directoriesChanged || savedLayoutRevision != model->layout_revision() || savedLayoutFocus != focus)) {
-        layout.capture(*model, directories, rosterKnown);
+        layout.capture(*model, directories, serverKnown());
         std::string error;
         if (layoutStore->write(formatLayout(layout.saved()), &error)) {
             savedLayoutRevision = model->layout_revision();
@@ -101,8 +101,34 @@ void FrameHost::restoreLayout() {
         *group = it->second.group;
         *title = it->second.title;
         return true;
-    }, rosterKnown);
+    }, serverKnown());
     if (model->tab_count()) view->selectedId = model->tab(model->active()).id;
+}
+
+std::string FrameHost::dashboardUrl(const std::string& name) const {
+    const auto url = dashboardUrls_.find(name);
+    return url == dashboardUrls_.end() ? std::string() : url->second;
+}
+
+void FrameHost::takeDashboards(const sync::Sessions& state) {
+    const std::vector<sync::Dashboard>& list = state.dashboards();
+    if (dashboardsTaken_ && list == *dashboardsTaken_) return;
+    const bool first = !dashboardsTaken_;
+    dashboardsTaken_ = list;
+    dashboardUrls_.clear();
+    std::vector<std::string> refused;
+    std::vector<std::string> names;
+    for (const sync::Dashboard& d : sync::shownDashboards(list, &refused)) {
+        dashboardUrls_.emplace(d.name, d.url);
+        names.push_back(d.name);
+    }
+    for (const std::string& why : refused)
+        std::fprintf(stderr, "nexus: %s sent %s\n", host.c_str(), loggable(why).c_str());
+    // The first list ends the layout's wait for a saved dashboard (serverKnown), so it restores even with no change.
+    if (model->sync_dashboards(names).empty() && !first) return;
+    restoreLayout();
+    // A tab the server's list selected (the strip was empty, or the one showing went) is no choice of the person's.
+    if (view != nullptr && model->tab_count() != 0) view->selectedId = model->tab(model->active()).id;
 }
 
 void FrameHost::takeAIs(const sync::Sessions& state) {
@@ -271,10 +297,6 @@ void FrameHost::pollLink() {
     if (link == nullptr || !link->poll(&s))
         return;
     if (!s.cut.empty()) showCut(s.cut);
-    // The first dashboard's address, as the server says it (empty: none), for the sprint tab's page, until the strip
-    // holds a tab for each dashboard.
-    if (board != nullptr && s.phase == sync::LinkPhase::Connected)
-        board->offer(s.sessions.dashboards().empty() ? std::string() : s.sessions.dashboards().front().url);
     // The AIs first, so that an AI's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
         for (const auto& [name, claim] : pendingClaims_) {
@@ -313,6 +335,7 @@ void FrameHost::pollLink() {
                 s.sessions.nextAction() > pending.second.action;
         });
         takeAIs(s.sessions);
+        takeDashboards(s.sessions);
     }
     mirror.apply(*model, s.sessions);
     if (s.phase == sync::LinkPhase::Connected) {
@@ -990,7 +1013,6 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
                 }
                 if (result.action.text.size() > kPromptBytes) result.error = "Attachment paths exceed the prompt limit.";
                 ready.set_value(std::move(result));
-                if (wake) wake();
             });
             return;
 #else
@@ -1023,6 +1045,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
 void FrameHost::showState(const sync::Sessions& state, bool lost) {
     accountState_ = state;
     takeAIs(state);
+    takeDashboards(state);
     mirror.apply(*model, state);
     phase = sync::LinkPhase::Connected;
     refreshPicker();
@@ -1082,6 +1105,12 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
     }
     if (board != nullptr) {
         HitchScope scope(hitch, Phase::Board);
+        // The page is the active dashboard's: its address as the server gives it (one page, which a switch of
+        // dashboard tabs navigates).
+        if (model->tab_count() != 0 && model->tab(model->active()).kind == TabKind::Dashboard) {
+            const std::string url = dashboardUrl(model->tab(model->active()).name);
+            if (!url.empty()) board->offer(url);
+        }
         board->frame(time, display);
     }
 }
@@ -1255,7 +1284,7 @@ bool FrameHost::event(const PrAppEvent& e) {
     if (view->lockScreen && isInputEvent(e)) return !lockScreenTakes(e);
     watchTap(e);
     // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
-    // reaches the sprint tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
+    // reaches a dashboard tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {
         return false;
     }

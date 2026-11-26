@@ -14,13 +14,17 @@
 #   FAULTY      with WALK: send walks the test-only model with a faulty send, queue the one with a faulty queue,
 #               move the one whose move_tab leaves active behind, queue-cap the one whose queue drops its oldest past
 #               four, send-trim the one whose send strips trailing spaces, send-dedup the one whose send of the
-#               text just sent appends nothing, close the one whose close_tab removes an AI, sprint-move the one
-#               whose move_tab puts the sprint tab among the AIs, sprint-close the one whose close_tab removes the
-#               sprint tab, close-fallback the one whose close of the active tab ignores the selection history,
-#               remove-ai (with CHURN) the one whose remove_ai leaves the tab's id in the history;
+#               text just sent appends nothing, close the one whose close_tab removes an AI, board-move the one
+#               whose move_tab puts a dashboard among the AIs, board-close the one whose close_tab removes a
+#               dashboard, close-fallback the one whose close of the active tab ignores the selection history,
+#               remove-ai (with CHURN) the one whose remove_ai leaves the tab's id in the history, add-board (with
+#               BOARDCHURN) the one whose add_dashboard puts the tab at the AIs' end, remove-board (with BOARDCHURN)
+#               the one whose remove_dashboard leaves the tab's id in the history;
 #               for label_walk, before the one that takes the label to return to at a session's first observation
-#   NOSPRINT    with WALK: ON walks a model made without the sprint tab
+#   BOARDS      with WALK: the constructor's dashboard list trace_walk makes the model with (--boards, 0 to 3; 1 unless
+#               given)
 #   CHURN       with WALK: ON walks the AIs coming and going (trace_walk --ais-churn)
+#   BOARDCHURN  with WALK: ON walks the dashboards coming and going (trace_walk --boards-churn)
 #   LINKWALK    optional, in place of WALK: tests/sync's link_walk program; it is run first and writes
 #               LinkTraceData.tla into WORK, with SEED, STEPS and WINDOWS (its windows), and FAULTY one of applier,
 #               mirror, tail, close or ensure
@@ -480,10 +484,14 @@ elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
         list(APPEND walk_args --faulty-send-dedup)
     elseif(FAULTY STREQUAL "close")
         list(APPEND walk_args --faulty-close)
-    elseif(FAULTY STREQUAL "sprint-move")
-        list(APPEND walk_args --faulty-sprint-move)
-    elseif(FAULTY STREQUAL "sprint-close")
-        list(APPEND walk_args --faulty-sprint-close)
+    elseif(FAULTY STREQUAL "board-move")
+        list(APPEND walk_args --faulty-board-move)
+    elseif(FAULTY STREQUAL "board-close")
+        list(APPEND walk_args --faulty-board-close)
+    elseif(FAULTY STREQUAL "add-board")
+        list(APPEND walk_args --faulty-add-board)
+    elseif(FAULTY STREQUAL "remove-board")
+        list(APPEND walk_args --faulty-remove-board)
     elseif(FAULTY STREQUAL "close-fallback")
         list(APPEND walk_args --faulty-close-fallback)
     elseif(FAULTY STREQUAL "remove-ai")
@@ -492,13 +500,16 @@ elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
         list(APPEND walk_args --faulty-before)
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
         message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not send, queue, move, queue-cap, send-trim, send-dedup, "
-            "close, sprint-move, sprint-close, close-fallback, remove-ai or before")
+            "close, board-move, board-close, close-fallback, remove-ai, add-board, remove-board or before")
     endif()
-    if(NOSPRINT)
-        list(APPEND walk_args --no-sprint)
+    if(DEFINED BOARDS AND NOT "${BOARDS}" STREQUAL "")
+        list(APPEND walk_args --boards "${BOARDS}")
     endif()
     if(CHURN)
         list(APPEND walk_args --ais-churn)
+    endif()
+    if(BOARDCHURN)
+        list(APPEND walk_args --boards-churn)
     endif()
     if(NOT DEFINED DATA OR "${DATA}" STREQUAL "")
         set(DATA WindowTraceData)

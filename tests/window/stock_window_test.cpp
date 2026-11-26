@@ -36,12 +36,13 @@ int main() {
     nexus::policy::Host host("client");
     nexus::WindowApplication window;
     const std::string ui = R"({"tabs":[)"
-        R"({"kind":"sprint","label":"sprint","group":"","type":""},)"
+        R"({"kind":"dashboard","label":"fleet board","group":"","type":""},)"
         R"({"kind":"ai","label":"rowan","group":"","type":""},)"
         R"({"kind":"ai","label":"stella","group":"","type":""}],)"
         R"("dismissed":false,"help_visible":false,"draft":"","logout":false})";
     window.update(host, "ai", "", true, false, 1, 3, "", {}, false, {}, ui);
-    const std::vector<std::string> expected{"Dashboard", "Rowan", "Stella"};
+    // A dashboard's tab shows its own name, as the server gives it; an AI's is capitalised.
+    const std::vector<std::string> expected{"fleet board", "Rowan", "Stella"};
     if (window.surface.tabTitles != expected)
         std::fprintf(stderr, "tab titles: [%s], expected [%s]\n", joined(window.surface.tabTitles).c_str(),
             joined(expected).c_str());

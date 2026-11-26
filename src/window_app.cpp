@@ -143,7 +143,7 @@ bool readGroups(const PrJson* d, const std::map<std::string, TabType>& types, st
         return false;
     }
     closable = mayClose == PrJsonKind_True;
-    std::set<std::string> members{"ai", "terminal", "sprint"}, ids;
+    std::set<std::string> members{"ai", "terminal", "dashboard"}, ids;
     for (const auto& type : types) {
         if (!members.insert(type.first).second) {
             why = "tab type conflicts with a native type: " + type.first;
@@ -573,7 +573,7 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
     for (uint32_t i = 0; i < prJsonCount(d, list); ++i) {
         const auto panelName = stringAt(d, prJsonElement(d, list, i));
         Panel panel;
-        if (panelName == "board" && tab == "sprint") panel = Panel::Board;
+        if (panelName == "board" && tab == "dashboard") panel = Panel::Board;
         else if (panelName == "terminal" && tab == "terminal") panel = Panel::Terminal;
         else if (panelName == "spacer") panel = Panel::Spacer;
         else if (panelName == "transcript" && (tab == "ai" || tab == "empty")) panel = Panel::Transcript;

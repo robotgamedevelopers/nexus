@@ -57,3 +57,47 @@ nova-sprint up --as <incoming-name> --take-over --reason "<human-approved reason
 ```
 
 The previous coordinator may be offline. Sprint records the change, returns any cards in that coordinator's hand to the queue and sends the former coordinator a notice with the reason when possible. Confirm the new coordinator on the Dashboard. If the intended recipient already owns the seat, the handoff is complete.
+
+## Deploying a new build to a running server
+
+A running nexus-server is replaced through placement and handover, never by stopping it by hand. Each step uses
+`nexus-server`'s own verbs (`nexus-server builds help`, `nexus-server handover help`). Below, `OLD` is the build
+serving now (`~/.nexus/server/current`) and `NEW` is the folder you assemble.
+
+1. Build the server, the app and the drivers that changed from one commit, after its tests pass.
+2. Assemble `NEW` with only what `builds place` takes: `bin/` (with `bin/nexus-server`), `nexus.app/`, and
+   `drivers/`. Copy any driver that did not change from `OLD`. Then write the formats file:
+   `NEW/bin/nexus-server builds formats > NEW/formats`.
+3. Compare the file lists: `diff <(cd OLD && find . | sort) <(cd NEW && find . | sort)`. Every line that differs
+   should be a change you meant to make.
+4. Hash the tree and write the evidence that its tests passed:
+   ```sh
+   H=$(NEW/bin/nexus-server builds hash NEW)
+   printf 'nexus-test-evidence 1\ntree %s\nresult pass\nrun <commit: the suites run and their counts>\n' "$H" > evidence
+   ```
+5. Place it: `NEW/bin/nexus-server builds place NEW --evidence evidence`. The build is now
+   `~/.nexus/server/builds/$H`, read-only and checked against its manifest.
+6. Hand over: `~/.nexus/server/current/bin/nexus-server handover $H`. If the new build does not reach SERVING, the
+   handover rolls back to the previous build by itself (exit status 5). `handover status` shows the current and
+   previous builds.
+7. Check that the server answers, that the AI sessions came back with the same AIs, and that the windows reconnected.
+   If any of these fails, hand back to the previous build at once: `nexus-server handover <previous hash>`.
+
+`~/.nexus/server/config` is read only when the server starts. After you edit it (a `dashboard` line, for example),
+run `nexus-server drain` and then `nexus-server handover resume`, which starts the current build again with the
+sessions it drained.
+
+To update the desktop client, sign the new `nexus.app` with the same identity as the old one, keep the old app beside
+it, and restart the client only. To update an iPhone or iPad, install in place with `tools/ios-device-run`. Never
+uninstall the app first: that deletes the device's key.
+
+### Upgrade notes
+
+- **Dashboards.** Dashboards replace the client's `sprint` and `sprint-url` settings. Each dashboard tab is now a
+  `dashboard <url> <name>` line in the server's `~/.nexus/server/config`. Remove `sprint-url` from the client's
+  `~/.nexus/client/config` and add the server's line in the same deploy, so the tab does not disappear.
+- **An applied policy bundle shadows the shipped rules.** If `~/.nexus/client/policy.bundle.json` or
+  `~/.nexus/server/policy.bundle.json` came from an older `nexus-policy apply`, the new build runs those older rules in
+  place of the ones it ships. Re-apply from the current commit, or move the file aside (keep it) so the host uses the
+  rules packaged with its binary. A `tab_labels` entry for the old `sprint` tab kind no longer does anything: a
+  dashboard tab's label is the name on its `dashboard` line.

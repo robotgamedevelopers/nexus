@@ -45,27 +45,30 @@ void home() {
 
 void config() {
     // Both keys, with a comment and a blank line.
-    ClientConfig c = clientConfigFrom("# mine\n\nnova-config /opt/nova/bin/nova-config\nsprint-url http://studio:8000/\n",
+    ClientConfig c = clientConfigFrom("# mine\n\nnova-config /opt/nova/bin/nova-config\nserver studio\n",
         "/h/.nexus/client/config");
     CHECK(c.path == "/h/.nexus/client/config" && c.problems.empty());
-    CHECK(c.novaConfig == "/opt/nova/bin/nova-config" && c.sprintUrl == "http://studio:8000/");
-    // None: the defaults (nova-config from the PATH, the board from the sprint's record).
+    CHECK(c.novaConfig == "/opt/nova/bin/nova-config" && c.serverHost == "studio" && c.serverSet);
+    // None: the defaults (nova-config from the PATH, the server on this machine).
     c = clientConfigFrom("", "/c");
-    CHECK(c.novaConfig.empty() && c.sprintUrl.empty() && c.problems.empty());
-    CHECK(c.sprintEnabled);
-    CHECK(c.serverHost == "localhost");
     CHECK(clientConfigFrom("server studio\n", "/c").serverHost == "studio");
     CHECK(c.serverCommand.empty());
     CHECK(clientConfigFrom("server-command /usr/bin/env HOME=/m/home /b/nexus-server new --dir /m/server\n", "/c")
         .serverCommand == "/usr/bin/env HOME=/m/home /b/nexus-server new --dir /m/server");
-    CHECK(!clientConfigFrom("sprint off\n", "/c").sprintEnabled);
-    CHECK(!clientConfigFrom("sprint maybe\n", "/c").problems.empty());
+    CHECK(c.novaConfig.empty() && c.problems.empty());
+    CHECK(c.serverHost == "localhost" && !c.serverSet);
+    // The dashboards are nexus-server's: the window's old dashboard settings are not settings, each a warning, and the
+    // rest of the file is used.
+    c = clientConfigFrom("sprint off\nsprint-url http://studio:8000/\nserver studio\n", "/c");
+    CHECK(c.serverHost == "studio" && c.problems.size() == 2);
+    CHECK(has(c.problems[0], "/c line 1:") && has(c.problems[0], "\"sprint\" is not a setting"));
+    CHECK(has(c.problems[1], "/c line 2:") && has(c.problems[1], "\"sprint-url\" is not a setting"));
     // An unknown key is a warning and the rest is used; a malformed line is an error, and its key stays unset. Errors
     // come before warnings.
-    c = clientConfigFrom("theme dark\nsprint-url\nnova-config /n\n", "/c");
-    CHECK(c.novaConfig == "/n" && c.sprintUrl.empty());
+    c = clientConfigFrom("theme dark\nserver\nnova-config /n\n", "/c");
+    CHECK(c.novaConfig == "/n" && c.serverHost == "localhost" && !c.serverSet);
     CHECK(c.problems.size() == 2);
-    CHECK(has(c.problems[0], "/c line 2:") && has(c.problems[0], "`sprint-url` has no value"));
+    CHECK(has(c.problems[0], "/c line 2:") && has(c.problems[0], "`server` has no value"));
     CHECK(has(c.problems[1], "/c line 1:") && has(c.problems[1], "\"theme\" is not a setting"));
 }
 

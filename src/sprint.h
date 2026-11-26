@@ -1,10 +1,6 @@
-// The sprint tab's logic that runs without a page: where nova-sprint serves its board, which events go to the page, and
-// the script and style nexus adds to the page. The page itself is board.h's, over Prax's HTML view.
-//
-// The board's address is read from the sprint's own record: the service `sprint-run` in nova-config, which
-// `nova-sprint up` installs to run `nova-sprint run --listen <host:port>`, and which `nova-sprint up` and `check` read
-// back. (`nova-sprint show run` names the same service, but answers only a name hooked in to the sprint's bus, which an
-// app launched at login is not.) The client config's `sprint-url` (client_home.h) overrides it with the board's address.
+// A dashboard tab's logic that runs without a page: which events go to the page, and the script and style nexus adds to
+// the page (written for nova-sprint's board, and harmless on another). The page itself is board.h's, over Prax's HTML
+// view; its address is the server's (frame_host.h takeDashboards).
 
 #pragma once
 
@@ -18,43 +14,14 @@
 
 namespace nexus {
 
-// The board's address, or why there is none: one line for the tab, saying what failed and what to do.
-struct SprintBoardAddress {
-    std::string url;            // http://<host:port>/, empty when `error` is set
-    std::string error;
-};
-
-// The lookup of the board's address in the sprint's record, which runs nova-config: not where the build runs no processes
-// (iOS: build_parts.h), whose board takes its address from nexus-server alone.
-#if NEXUS_PROCESSES
-// How long findSprintBoard waits for nova-config. It runs off the window's thread.
-constexpr int kSprintRunTimeoutSeconds = 5;
-
-// The command that reads the sprint's run service: novaConfigCommand with `service show sprint-run --json`.
-Command sprintRunCommand(const char* override, const char* shell);
-
-// Reads the command's JSON: {"result": {"status": "ok"}, "items": [{"fields": {"argv": [...]}}]}, whose argv holds
-// `--listen <host:port>`. A host the service listens on everywhere (empty, 0.0.0.0 or ::) is reached at 127.0.0.1.
-// Pure: no OS.
-SprintBoardAddress parseSprintRun(std::string_view json);
-
-// The board's address: `override` (the client config's sprint-url) if set, else what `command` prints, run with `run`. Every error
-// names what failed and what to do.
-SprintBoardAddress findSprintBoard(const char* override, const Command& command, const CommandRunner& run);
-
-// findSprintBoard with the client config's sprint-url, sprintRunCommand(its nova-config, SHELL) and runCommand. Blocks for up to
-// kSprintRunTimeoutSeconds: call it off the window's thread. Not where the build runs no processes (iOS: build_parts.h).
-SprintBoardAddress findSprintBoard();
-#endif
-
-// Where an event goes while the sprint tab shows.
+// Where an event goes while a dashboard tab shows.
 enum class BoardRoute {
     Window,     // the window's own tree: the tab strip, and the keys nexus binds
     Page,       // the page only
     Both,       // a pointer move: the page and the strip each track the pointer
 };
 
-// The route of `event` while the sprint tab shows. `inPage` is true if the pointer is over the page's rectangle;
+// The route of `event` while a dashboard tab shows. `inPage` is true if the pointer is over the page's rectangle;
 // `pressInPage` is true if the button now held was pressed over the page. Every Command chord (Command-1 to Command-0,
 // Command-T, Command-W, the text scale's keys) and Escape (which hides the overlay) stay with the window, but for
 // Command-Up and Command-Down, which scroll the page to its top and its bottom as on macOS; other keys,
@@ -114,13 +81,18 @@ constexpr std::string_view kSprintRepoLinkStyle =
     "footer:has(> a[href^=\"https://github.com/\"][href$=\"/nova-sprint\"]:only-child), "
     "footer:has(> a[href^=\"https://github.com/\"][href$=\"/nova-sprint/\"]:only-child) { display: none !important; }\n";
 
-// Whether a click on a link would take the sprint tab off the board, so that board.h opens the link in the system's
+// Whether a click on a link would take a dashboard tab off the board, so that board.h opens the link in the system's
 // browser instead and the tab stays on the board. `href` is the link's URL as the page resolves it, `document` the
 // board's document's URL, and `target` the link's target attribute. A link to another document leaves, wherever it
 // is (another site, or another page of the board's server); so does a link with target _blank, which a browser opens
 // in a new tab. A link to a place in the board's own document (the same URL but for its fragment) stays, as does a
 // link with no URL or a javascript: one, which runs in the page.
 bool linkLeavesBoard(std::string_view href, std::string_view document, std::string_view target);
+
+// Whether board.h gives a link that leaves a dashboard's page to the system to open: only an http://, https:// or
+// mailto: one (the scheme in any case). Any other (file:, data:, javascript:, a custom app's scheme) is refused, so
+// that a page cannot have the system open a file or start an app; board.h says so on stderr and opens nothing.
+bool linkOpensOutside(std::string_view url);
 constexpr std::string_view kSprintStyleId = "nexus-sprint-style";
 // The Cost breakdown panel in nova-sprint's index.html: <section class="panel spend">.
 constexpr std::string_view kSpendSelector = ".panel.spend";

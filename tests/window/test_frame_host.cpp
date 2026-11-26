@@ -29,7 +29,7 @@ int failures = 0;
 using test::FakeLink;
 
 struct Window {
-    Model model{{}, true};
+    Model model{{}};
     View view;
     FakeLink link;
     FrameHost host;
@@ -41,7 +41,7 @@ struct Window {
         host.view = &view;
         host.strip = sync::AIStrip({}, savedAI, {});
         host.connect(&link, "studio");
-        view.selectedId = model.tab(model.active()).id;
+        if (model.tab_count() != 0) view.selectedId = model.tab(model.active()).id;
     }
 
     // What the view's round does after its strips (view.cpp): a selected tab other than the one at the round before
@@ -71,18 +71,20 @@ void removedTabIsNoChoice() {
     w.host.pollLink();
     w.round();
     CHECK(w.chosen == 0);
-    // The person chooses ada, then bo.
+    // The person chooses bo, then ada, then bo (ada shows first: the server lists no dashboard).
+    CHECK(w.model.select_tab(w.tabOf("bo")));
+    w.round();
     CHECK(w.model.select_tab(w.tabOf("ada")));
     w.round();
     CHECK(w.model.select_tab(w.tabOf("bo")));
     w.round();
-    CHECK(w.chosen == 2);
+    CHECK(w.chosen == 3);
     // bo goes from the server's AIs: ada shows again, by the strip, not by the person.
     w.link.ais({"ada"});
     w.host.pollLink();
     CHECK(w.model.tab(w.model.active()).name == "ada");
     w.round();
-    CHECK(w.chosen == 2);
+    CHECK(w.chosen == 3);
 }
 
 // The saved tab arrives and the strip selects it: not the person's choice either; a later choice is.
@@ -126,6 +128,141 @@ void loggableEscapesAndCuts() {
     CHECK(loggable(std::string(78, 'a') + "\xff" + "b") == std::string(78, 'a') + "...");
     CHECK(loggable(std::string(76, 'a') + "\xff" + "b") == std::string(76, 'a') + "\\xff...");
     CHECK(loggable("").empty());
+}
+
+// The names of the dashboard tabs, in strip order.
+std::vector<std::string> dashboardTabs(const Model& model) {
+    std::vector<std::string> names;
+    for (std::size_t i = 0; i < model.tab_count(); ++i)
+        if (model.tab(i).kind == TabKind::Dashboard) names.push_back(model.tab(i).name);
+    return names;
+}
+
+// The server's list of dashboards is the window's dashboard tabs: none, one, several, in its order, at the head of the
+// strip and labelled with each one's name; each tab's address is the one the server gave for it; a dashboard that
+// leaves the list loses its tab, and an address that changes is the new one.
+void dashboardsAreTheServersList() {
+    Window w("");
+    w.link.ais({"ada"});
+    w.host.pollLink();
+    CHECK(dashboardTabs(w.model).empty() && w.model.tab_count() == 1);
+    CHECK(w.host.dashboardUrl("Dashboard").empty());
+
+    w.link.dashboards({{"Dashboard", "http://100.64.0.1:8080/"}});
+    w.host.pollLink();
+    CHECK(dashboardTabs(w.model) == std::vector<std::string>{"Dashboard"});
+    CHECK(w.model.tab(0).kind == TabKind::Dashboard && w.model.tab(1).name == "ada");
+    CHECK(w.host.dashboardUrl("Dashboard") == "http://100.64.0.1:8080/");
+
+    w.link.dashboards({{"Dashboard", "http://100.64.0.1:8080/"}, {"Builds", "https://ci.test/"},
+        {"Costs", "http://costs.test:9000/"}});
+    w.host.pollLink();
+    CHECK((dashboardTabs(w.model) == std::vector<std::string>{"Dashboard", "Builds", "Costs"}));
+    CHECK(w.model.tab(3).name == "ada");
+    CHECK(w.host.dashboardUrl("Builds") == "https://ci.test/" && w.host.dashboardUrl("Costs") == "http://costs.test:9000/");
+
+    // The same names, one address moved: the same tabs, the new address.
+    w.link.dashboards({{"Dashboard", "http://100.64.0.1:8080/"}, {"Builds", "https://ci.test/next/"},
+        {"Costs", "http://costs.test:9000/"}});
+    w.host.pollLink();
+    CHECK((dashboardTabs(w.model) == std::vector<std::string>{"Dashboard", "Builds", "Costs"}));
+    CHECK(w.host.dashboardUrl("Builds") == "https://ci.test/next/");
+
+    w.link.dashboards({{"Dashboard", "http://100.64.0.1:8080/"}, {"Costs", "http://costs.test:9001/"}});
+    w.host.pollLink();
+    CHECK((dashboardTabs(w.model) == std::vector<std::string>{"Dashboard", "Costs"}));
+    CHECK(w.host.dashboardUrl("Builds").empty() && w.host.dashboardUrl("Costs") == "http://costs.test:9001/");
+
+    w.link.dashboards({});
+    w.host.pollLink();
+    CHECK(dashboardTabs(w.model).empty() && w.model.tab_count() == 1 && w.model.tab(0).name == "ada");
+    CHECK(w.host.dashboardUrl("Dashboard").empty());
+}
+
+// A dashboard the window cannot show (a bad address), a name given twice, and one past the most a window shows get no
+// tab; the rest of the list does.
+void aDashboardTheWindowCannotShowHasNoTab() {
+    Window w("");
+    std::vector<sync::Dashboard> list{{"Bad", "ftp://files.test/"}, {"Good", "http://good.test/"},
+        {"Good", "http://other.test/"}};
+    for (std::size_t i = 0; i < sync::kDashboardsMax; ++i) list.push_back({"D" + std::to_string(i), "http://d.test/"});
+    w.link.dashboards(list);
+    w.host.pollLink();
+    const std::vector<std::string> tabs = dashboardTabs(w.model);
+    CHECK(tabs.size() == sync::kDashboardsMax);
+    CHECK(!tabs.empty() && tabs.front() == "Good" && tabs.back() == "D" + std::to_string(sync::kDashboardsMax - 2));
+    CHECK(w.host.dashboardUrl("Bad").empty() && w.host.dashboardUrl("Good") == "http://good.test/");
+    CHECK(w.host.dashboardUrl("D" + std::to_string(sync::kDashboardsMax - 1)).empty());
+}
+
+// A window that starts with a dashboard tab (an older window's, or a model built with one) loses it when the first
+// state the server sends lists none.
+void theFirstStateWithNoDashboardsLeavesNoTab() {
+    Window w("");
+    CHECK(w.model.add_dashboard("Old"));
+    w.link.ais({"ada"});
+    w.host.pollLink();
+    CHECK(dashboardTabs(w.model).empty());
+}
+
+// The saved layout orders and selects the dashboards when the server's first state brings them with its AIs: the
+// layout waits for both (FrameHost::serverKnown), and FrameHost::takeDashboards restores it once their tabs are in.
+// Two dashboards saved by name, the second first and selected, come back so; a layout saved with the one sprint tab
+// comes back on the first dashboard. The server's next state, with no change, moves nothing.
+void savedLayoutPlacesTheServersDashboards() {
+    const std::vector<TabGroup> groups{{"dashboards", {"dashboard"}}, {"ais", {"ai"}}, {"terminals", {"terminal"}, true}};
+    const TabOrderStore store{"/fake/tab-layout.json", [](std::string*, std::string*) { return false; },
+        [](const std::string&, std::string*) { return true; }};
+    const std::vector<sync::Dashboard> list{{"Dashboard", "http://a.test/"}, {"Builds", "http://b.test/"}};
+    {
+        Window w("");
+        CHECK(w.model.set_tab_groups(groups));
+        w.host.layout = TabLayout(SavedLayout{"dashboard:Builds", {{"dashboard:Builds", "dashboards", ""},
+            {"dashboard:Dashboard", "dashboards", ""}, {"ai:ada", "ais", ""}}});
+        w.host.layoutStore = &store;
+        w.host.groupPolicyReady = true;
+        w.link.ais({"ada"});
+        w.link.dashboards(list);
+        w.host.pollLink();
+        CHECK((dashboardTabs(w.model) == std::vector<std::string>{"Builds", "Dashboard"}));
+        CHECK(w.model.tab(w.model.active()).name == "Builds");
+        w.round();
+        CHECK(w.chosen == 0);
+        CHECK(w.model.select_tab(w.tabOf("ada")));
+        w.round();
+        w.link.changed = true;     // the same state again
+        w.host.pollLink();
+        CHECK(w.model.tab(w.model.active()).name == "ada" && w.model.tab(0).name == "Builds");
+    }
+    {
+        Window w("");
+        CHECK(w.model.set_tab_groups(groups));
+        w.host.layout = TabLayout(SavedLayout{"sprint", {{"sprint", "dashboards", ""}, {"ai:ada", "ais", ""}}});
+        w.host.layoutStore = &store;
+        w.host.groupPolicyReady = true;
+        w.link.ais({"ada"});
+        w.link.dashboards(list);
+        w.host.pollLink();
+        CHECK((dashboardTabs(w.model) == std::vector<std::string>{"Dashboard", "Builds"}));
+        CHECK(w.model.tab(w.model.active()).name == "Dashboard");
+    }
+    // The one sprint tab's layout, from a server that now has no dashboard: the wait ends with the first state, and
+    // the layout saved after it reads again (no selected tab left that it does not hold).
+    {
+        Window w("");
+        CHECK(w.model.set_tab_groups(groups));
+        w.host.layout = TabLayout(SavedLayout{"sprint", {{"sprint", "dashboards", ""}, {"ai:ada", "ais", ""}}});
+        w.host.layoutStore = &store;
+        w.host.groupPolicyReady = true;
+        w.link.ais({"ada"});
+        w.link.dashboards({});
+        w.host.pollLink();
+        w.host.layout.capture(w.model, {}, true);
+        SavedLayout read;
+        std::string why;
+        CHECK(parseLayout(formatLayout(w.host.layout.saved()), &read, &why) && why.empty());
+        CHECK(read == (SavedLayout{"ai:ada", {{"ai:ada", "ais", ""}}}));
+    }
 }
 
 void extensionTargetsItsConfiguredConversation() {
@@ -286,7 +423,7 @@ void automaticAccountIsASelectionMode() {
 }
 
 void savedStateShowsTheSelectedEmailWithoutStartingSignIn() {
-    Model model({}, true);
+    Model model({}, {"sprint"});
     View view;
     view.model = &model;
     FrameHost host;
@@ -517,6 +654,10 @@ int main() {
     logoutUsesTheConfirmedAccountAndReturnsToSignIn();
     savedStateShowsTheSelectedEmailWithoutStartingSignIn();
     extensionTargetsItsConfiguredConversation();
+    dashboardsAreTheServersList();
+    aDashboardTheWindowCannotShowHasNoTab();
+    theFirstStateWithNoDashboardsLeavesNoTab();
+    savedLayoutPlacesTheServersDashboards();
     removedTabIsNoChoice();
     savedTabArrivingIsNoChoice();
     waitOutlastsOtherAIs();

@@ -212,8 +212,8 @@ int main(int argc, char** argv) {
         }
         held = withAccounts(held);
     }
-    // No sprint tab on iOS (platform.h NEXUS_PROCESSES).
-    nexus::Model model({}, false);
+    // No tab yet: the state's AIs and dashboards come with it (state_window.h showHeldState, frame_host.h takeDashboards).
+    nexus::Model model({});
     nexus::Look look;
     nexus::View view;
     view.model = &model;

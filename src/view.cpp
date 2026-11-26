@@ -1032,11 +1032,11 @@ struct Builder {
     void select(std::size_t index) {
         if (index >= model.tab_count()) return;
         const auto& tab = model.tab(index);
-        if (view.board && tab.kind == TabKind::Sprint && model.active() != index) {
+        if (view.board && tab.kind == TabKind::Dashboard && model.active() != index) {
             if (view.pendingBoardId != tab.id) view.board->prepare(boardExtent());
             view.pendingBoardId = tab.id;
             if (!view.board->prepared()) { prUiRequestFrame(ui); return; }
-        } else if (view.board && tab.kind == TabKind::Sprint) {
+        } else if (view.board && tab.kind == TabKind::Dashboard) {
             view.board->home();
         }
         if (view.pendingBoardId && view.board) view.board->cancelPreparation();
@@ -1162,7 +1162,7 @@ struct Builder {
         keepFocusOnTheActiveTab();
     }
 
-    // A press focuses the tab it lands on (ui.cpp PointerDown), a drag included, and the sprint tab has no prompt to
+    // A press focuses the tab it lands on (ui.cpp PointerDown), a drag included, and a dashboard tab has no prompt to
     // take the focus back: left there, the focus ring stood on the dragged tab once a key made the focus visible (an
     // Escape that hid the overlay), and Enter or Space reaching the tree selected it. So the keyboard focus never rests
     // on a tab other than the active one: it goes to the active tab, and the prompt or a terminal takes it from there
@@ -1176,13 +1176,11 @@ struct Builder {
         }
     }
 
-    // An AI's tab shows the AI's name; the sprint tab "sprint"; a terminal's its label (Terminals::title: the
-    // machine its ssh reaches, or the title its shell set). An untitled terminal starts blank.
+    // An AI's tab shows the AI's name; a dashboard's its name (the server's, sync/dashboards.h); a terminal's its label
+    // (Terminals::title: the machine its ssh reaches, or the title its shell set). An untitled terminal starts blank.
     std::string label(const Tab& tab) {
-        if (tab.kind == TabKind::AI || tab.kind == TabKind::Extension)
+        if (tab.kind == TabKind::AI || tab.kind == TabKind::Extension || tab.kind == TabKind::Dashboard)
             return std::string(tab.displayName());
-        if (tab.kind == TabKind::Sprint)
-            return "Dashboard";
         return view.terminals != nullptr ? view.terminals->title(tab.id) : std::string();
     }
 
@@ -1238,8 +1236,17 @@ struct Builder {
         view.transcript = kPrLayoutNodeNone;
         promptGone();
         HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(tab.id));
+        // A terminal that comes to show drops the focus the tab before it left. The terminal's view is the first element
+        // under `window`, as is what the tab before declared there (with the centred account menu, an AI's panels,
+        // which hold the prompt), so it is the same node: while the focus stood on the gone prompt, the terminal found
+        // the focus within its view (prUiIsFocusWithin) and asked for none, the round ended with no focus, and what was
+        // typed went nowhere.
+        if (view.terminalShown != tab.id) {
+            view.terminalShown = tab.id;
+            prUiSetFocus(ui, kPrLayoutNodeNone);
+        }
         // A shell that cannot run here at all (on Windows, no WSL2): the line that says what is missing, centred as the
-        // sprint tab's is.
+        // a dashboard tab's is.
         const std::string problem = view.terminals->problem(tab.id);
         if (!problem.empty()) {
             PrLayoutNode box = element(window, Part::BoardBox);
@@ -1251,7 +1258,7 @@ struct Builder {
         view.terminals->show(tab.id, window);
     }
 
-    // The sprint tab: its page fills the window's width and the height below the strip, with no prompt; or, while there
+    // A dashboard tab: its page fills the window's width and the height below the strip, with no prompt; or, while there
     // is no page to show, the line that says why. With no AIs, a caption beneath the board gives the reason.
     // Like a terminal tab, it leaves the AI shown before with its scroll and its draft.
     void sprint(PrLayoutNode window) {
@@ -2588,7 +2595,7 @@ struct Builder {
         view.energyAnimating = false;
         view.breathing = false;     // until an AI's transcript draws a busy cursor this round
         // The window's keys are claimed on the outermost node of the round: the parent the host builds under (the
-        // studio window's surface, the tree's root), else the window. With no focus, as on the sprint tab, which has no
+        // studio window's surface, the tree's root), else the window. With no focus, as on a dashboard tab, which has no
         // prompt, Prax routes a key from the tree's root up (ui.cpp routeKey), so a claim on the window, below the root,
         // would never be reached; with focus, the node is still an ancestor of the focused prompt or terminal.
         const PrLayoutNode keys = parent != kPrLayoutNodeNone ? parent : window;
@@ -2602,7 +2609,7 @@ struct Builder {
         pickerInput = pickerInput || view.accountPicker.has_value() || !view.choiceKind.empty();
         serviceTerminals();
         // On a terminal tab Escape is not claimed: the terminal claims it for its shell. Command-Escape does nothing
-        // there or on the sprint tab (it is captured below all the same). On the sprint tab Escape hides.
+        // there or on a dashboard tab (it is captured below all the same). On a dashboard tab Escape hides.
         const TabKind activeKind = model.tab_count() == 0 ? TabKind::AI : model.tab(model.active()).kind;
         const bool hides = activeKind != TabKind::Terminal;
         // While an input method composes, its Enter commits the composition and its Escape cancels it (the KeyDown comes
@@ -2629,8 +2636,8 @@ struct Builder {
                 content.y -= look.tabs.height * k() + 1 + 2; // strip and divider
             view.terminals->startPending(content);
         }
-        // A click on the sprint tab, selected already or not, takes its page back to the board (Board::home).
-        if (beforeStrip == model.active() && view.windowApp.surface.showTabs && view.board && model.tab_count() && model.tab(model.active()).kind == TabKind::Sprint &&
+        // A click on a dashboard tab, selected already or not, takes its page back to the board (Board::home).
+        if (beforeStrip == model.active() && view.windowApp.surface.showTabs && view.board && model.tab_count() && model.tab(model.active()).kind == TabKind::Dashboard &&
                 prUiClicked(ui, view.tabNodes[model.active()], 0))
             view.board->home();
         // the strip may have selected or moved a tab: read the active tab again
@@ -2719,7 +2726,7 @@ struct Builder {
         for (std::size_t i = 0; i < model.tab_count(); ++i) {
             const auto& tab = model.tab(i);
             prJsonWriterBeginObject(w);
-            field("kind", tab.kind == TabKind::AI ? "ai" : tab.kind == TabKind::Sprint ? "sprint" :
+            field("kind", tab.kind == TabKind::AI ? "ai" : tab.kind == TabKind::Dashboard ? "dashboard" :
                           tab.kind == TabKind::Extension ? "extension" : "terminal");
             field("label", label(tab));
             field("group", tab.group);
@@ -2773,7 +2780,7 @@ struct Builder {
         const auto describe = [&] {
             const Tab* active = model.tab_count() ? &model.tab(model.active()) : nullptr;
             const char* kind = !active ? "empty" : active->kind == TabKind::AI ? "ai" :
-                active->kind == TabKind::Terminal ? "terminal" : active->kind == TabKind::Sprint ? "sprint" : "extension";
+                active->kind == TabKind::Terminal ? "terminal" : active->kind == TabKind::Dashboard ? "dashboard" : "extension";
             if (!active || view.choiceTab != active->id || (view.secrets && view.secrets->showing())) {
                 view.choiceKind.clear();
                 view.choiceValue.clear();
@@ -2946,6 +2953,8 @@ struct Builder {
         }
         if (std::find(panels.begin(), panels.end(), Panel::Prompt) == panels.end())
             promptGone();
+        if (std::find(panels.begin(), panels.end(), Panel::Terminal) == panels.end())
+            view.terminalShown = ~std::size_t(0);
         if (view.windowApp.surface.items && !asking) window = element(window, Part::AIPanels);
         for (const auto panel : panels) {
             switch (panel) {

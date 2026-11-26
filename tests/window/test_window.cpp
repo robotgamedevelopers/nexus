@@ -180,14 +180,14 @@ void storeSavesAndRestores() {
 void sprintTabIsNeverSavedAndStaysFirst() {
     const std::vector<AIInfo> loaded = named({"a", "b", "c"});
     MemoryStore mem;
-    Model model(loaded, true);
+    Model model(loaded, {"sprint"});
     CHECK(model.move_tab(3, 1));
     CHECK(aiTabNames(model) == (std::vector<std::string>{"c", "a", "b"}));
     std::string error;
     CHECK(saveTabOrder(mem.store(), model, &error));
     std::string warning;
-    Model again(loadTabOrder(mem.store(), loaded, &warning), true);
-    CHECK(again.tab_count() == 4 && again.tab(0).kind == TabKind::Sprint && again.tab(1).name == "c");
+    Model again(loadTabOrder(mem.store(), loaded, &warning), {"sprint"});
+    CHECK(again.tab_count() == 4 && again.tab(0).kind == TabKind::Dashboard && again.tab(1).name == "c");
 }
 
 void terminalTabsAreNeverSaved() {
@@ -232,25 +232,25 @@ void savedNamesAndTabLoadAlone() {
 
     MemoryStore selection;
     SavedTab saved = loadSavedTab(selection.store(), &warning);
-    CHECK(saved.kind == TabKind::Sprint && warning.empty());
+    CHECK(saved.kind == TabKind::Dashboard && warning.empty());
     CHECK(saveSelectedTab(selection.store(), model, &error));
     saved = loadSavedTab(selection.store(), &warning);
     CHECK(saved.kind == TabKind::AI && saved.name == "a" && warning.empty());
     selection.text = "junk\n";
     saved = loadSavedTab(selection.store(), &warning);
-    CHECK(saved.kind == TabKind::Sprint && has(warning, "deleting it resets the selection"));
+    CHECK(saved.kind == TabKind::Dashboard && has(warning, "deleting it resets the selection"));
 }
 
 void selectedTabTextRoundTrips() {
     SavedTab saved;
     std::string error;
-    Model model(named({"alex", "zhi yǎ"}), true);
-    CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.kind == TabKind::Sprint);
+    Model model(named({"alex", "zhi yǎ"}), {"sprint"});
+    CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.kind == TabKind::Dashboard);
     model.select_tab(2);
     CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error));
     CHECK(saved.kind == TabKind::AI && saved.name == "zhi yǎ");
     model.add_terminal();
-    CHECK(formatSelectedTab(model) == "nexus selected tab 2\nterminal 1\n");
+    CHECK(formatSelectedTab(model) == "nexus selected tab 3\nterminal 1\n");
     CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.kind == TabKind::Terminal &&
         saved.terminal == 1);
     model.add_terminal();
@@ -270,7 +270,7 @@ void selectedTabTextRoundTrips() {
         CHECK(has(error, bad));
     }
     CHECK(!parseSelectedTab("nexus selected tab 1\nterminal 1\n", &saved, &error) && has(error, "terminal 1"));
-    CHECK(!parseSelectedTab("nexus selected tab 3\nsprint\n", &saved, &error) && has(error, "first line"));
+    CHECK(!parseSelectedTab("nexus selected tab 4\nsprint\n", &saved, &error) && has(error, "first line"));
     CHECK(!parseSelectedTab("AI alex\n", &saved, &error) && has(error, "first line"));
     CHECK(!parseSelectedTab("nexus selected tab 1\n", &saved, &error) && has(error, "no tab"));
     CHECK(!parseSelectedTab("nexus selected tab 1\nwindow\n", &saved, &error) && has(error, "window"));
@@ -285,13 +285,13 @@ void selectedTabComesBackByIdentity() {
     const std::vector<AIInfo> loaded = named({"alex", "emma", "rowan"});
     MemoryStore order;
     MemoryStore selection;
-    Model model(loaded, true);
+    Model model(loaded, {"sprint"});
     CHECK(model.select_tab(1) && model.tab(1).name == "alex");
     CHECK(model.move_tab(1, 3));
     std::string error;
     CHECK(saveTabOrder(order.store(), model, &error) && saveSelectedTab(selection.store(), model, &error));
     std::string warning;
-    Model again(loadTabOrder(order.store(), loaded, &warning), true);
+    Model again(loadTabOrder(order.store(), loaded, &warning), {"sprint"});
     CHECK(again.tab(3).name == "alex");
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 3 && warning.empty());
     // The sprint tab saved, with alex last: the sprint tab, never the last AI.
@@ -299,7 +299,7 @@ void selectedTabComesBackByIdentity() {
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
     // emma saved, then the AI list changes order: emma wherever she now stands.
     CHECK(model.select_tab(1) && model.tab(1).name == "emma" && saveSelectedTab(selection.store(), model, &error));
-    Model reordered(named({"rowan", "alex", "emma"}), true);
+    Model reordered(named({"rowan", "alex", "emma"}), {"sprint"});
     CHECK(loadSelectedTab(selection.store(), reordered, &warning) == 3);
 }
 
@@ -307,13 +307,13 @@ void selectedTabComesBackByIdentity() {
 // in the list, or a file that is not a selection: the sprint tab. Only the bad file warns.
 void selectedTabFallsBackToTheSprintTab() {
     MemoryStore selection;
-    Model model(named({"a", "b"}), true);
+    Model model(named({"a", "b"}), {"sprint"});
     std::string warning;
     CHECK(loadSelectedTab(selection.store(), model, &warning) == 0 && warning.empty());
     model.add_terminal();
     std::string error;
     CHECK(saveSelectedTab(selection.store(), model, &error));
-    Model again(named({"a", "b"}), true);
+    Model again(named({"a", "b"}), {"sprint"});
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
     again.add_terminal();
     selection.text = "nexus selected tab 1\nterminal\n";
@@ -330,6 +330,147 @@ void selectedTabFallsBackToTheSprintTab() {
     selection.writeError = "Permission denied";
     CHECK(!saveSelectedTab(selection.store(), again, &error));
     CHECK(has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
+}
+
+// Each dashboard is saved by its name, in the selected tab's file as in the layout (below): a relaunch comes back to the
+// dashboard of that name wherever the server's list puts it. Version 1 and 2 files said "sprint" for every dashboard,
+// from when there was one: that is the first dashboard, never the last.
+void selectedDashboardByName() {
+    SavedTab saved;
+    std::string error;
+    Model model(named({"ada"}), {"Dashboard", "Builds", "Costs"});
+    CHECK(model.select_tab(1) && model.tab(1).name == "Builds");
+    CHECK(formatSelectedTab(model) == "nexus selected tab 3\ndashboard Builds\n");
+    CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error));
+    CHECK(saved.kind == TabKind::Dashboard && saved.name == "Builds");
+    Model again(named({"ada"}), {"Costs", "Dashboard", "Builds"});
+    CHECK(savedTabPosition(again, saved) == 2);
+    saved.name = "Gone";
+    CHECK(savedTabPosition(again, saved) == 0);
+    Model bare(named({"ada", "bo"}));
+    CHECK(savedTabPosition(bare, saved) == 0);
+    CHECK(parseSelectedTab("nexus selected tab 2\nsprint\n", &saved, &error) && saved.kind == TabKind::Dashboard &&
+        saved.name.empty() && savedTabPosition(again, saved) == 0);
+    CHECK(parseSelectedTab("nexus selected tab 1\nsprint\n", &saved, &error) && saved.name.empty());
+    CHECK(parseSelectedTab("nexus selected tab 3\nfirst\n", &saved, &error) && saved.kind == TabKind::Dashboard &&
+        saved.name.empty());
+    CHECK(!parseSelectedTab("nexus selected tab 3\nsprint\n", &saved, &error) && has(error, "sprint"));
+    CHECK(!parseSelectedTab("nexus selected tab 2\ndashboard Builds\n", &saved, &error) && has(error, "Builds"));
+    CHECK(!parseSelectedTab("nexus selected tab 3\ndashboard \n", &saved, &error) && has(error, "dashboard"));
+    CHECK(!parseSelectedTab("nexus selected tab 3\ndashboard a\x01" "b\n", &saved, &error) && has(error, "control"));
+    // An extension's tab is kept by no name: the first tab.
+    CHECK(model.open_extension("notes", "writing", "Notes") != 0);
+    CHECK(model.tab(model.active()).kind == TabKind::Extension);
+    CHECK(formatSelectedTab(model) == "nexus selected tab 3\nfirst\n");
+}
+
+// The layout keeps each dashboard by its name ("dashboard:<name>"): two dashboards save, read back and come back in
+// their saved order with the saved one selected. Keyed by kind alone, two dashboards made a file with one key twice,
+// which the window refused at the next launch.
+void layoutKeepsDashboardsByName() {
+    const auto noType = [](const std::string&, std::string*, std::string*) { return false; };
+    const std::vector<TabGroup> groups{{"dashboards", {"dashboard"}}, {"ais", {"ai"}}, {"terminals", {"terminal"}, true}};
+    Model model(named({"ada"}), {"Dashboard", "Builds"});
+    CHECK(model.set_tab_groups(groups));
+    CHECK(model.move_tab(1, 0) && model.tab(0).name == "Builds" && model.select_tab(0));
+    TabLayout layout;
+    layout.capture(model, {}, true);
+    const SavedLayout want{"dashboard:Builds", {{"dashboard:Builds", "dashboards", ""},
+        {"dashboard:Dashboard", "dashboards", ""}, {"ai:ada", "ais", ""}}};
+    CHECK(layout.saved() == want);
+    SavedLayout read;
+    std::string why;
+    CHECK(parseLayout(formatLayout(layout.saved()), &read, &why) && read == want);
+    Model again(named({"ada"}), {"Dashboard", "Builds"});
+    CHECK(again.set_tab_groups(groups) && again.select_tab(2));
+    TabLayout restored(read);
+    restored.restore(again, noType, true);
+    CHECK(again.tab(0).name == "Builds" && again.tab(1).name == "Dashboard" && again.active() == 0);
+    restored.capture(again, {}, true);
+    CHECK(restored.saved() == want);
+    // A key twice, or a dashboard key with no name or a name no dashboard can have: refused, saying why.
+    CHECK(!parseLayout(R"({"version":1,"selected":"","tabs":[["dashboard:B","dashboards",""],["dashboard:B","ais",""]]})",
+        &read, &why) && has(why, "\"dashboard:B\" is in it twice"));
+    CHECK(!parseLayout(R"({"version":1,"selected":"","tabs":[["dashboard:","dashboards",""]]})", &read, &why) &&
+        has(why, "dashboard:"));
+    CHECK(!parseLayout("{\"version\":1,\"selected\":\"\",\"tabs\":[[\"dashboard:a\\u0001b\",\"dashboards\",\"\"]]}", &read,
+        &why) && has(why, "not a tab this build knows"));
+    CHECK(!parseLayout(R"({"version":1,"selected":"","tabs":[["dashboard:B","dashboards","x"]]})", &read, &why));
+    CHECK(!parseLayout("[", &read, &why) && has(why, "not JSON"));
+    CHECK(!parseLayout(R"({"version":2,"selected":"","tabs":[]})", &read, &why) && has(why, "version 1"));
+    CHECK(!parseLayout(R"({"version":1,"selected":"ai:bo","tabs":[]})", &read, &why) && has(why, "ai:bo"));
+}
+
+// A layout saved when there was one dashboard keyed it "sprint" (the owner's file from before dashboards): it reads,
+// waits while the server's dashboards have not arrived, then is the first dashboard, and the next save keeps that one
+// by name. A "sprint" beside dashboards the file names is the first dashboard it does not name.
+void layoutFromOneDashboardMigrates() {
+    const auto noType = [](const std::string&, std::string*, std::string*) { return false; };
+    const std::vector<TabGroup> groups{{"dashboards", {"dashboard"}}, {"ais", {"ai"}}, {"terminals", {"terminal"}, true}};
+    SavedLayout old;
+    CHECK(parseLayout(R"({"version":1,"selected":"sprint","tabs":[["sprint","dashboards",""],["ai:ada","ais",""],)"
+        R"(["ai:bo","ais",""]]})", &old));
+    Model model({});
+    CHECK(model.set_tab_groups(groups));
+    TabLayout layout(old);
+    layout.restore(model, noType, false);
+    layout.capture(model, {}, false);
+    CHECK(layout.saved() == old);   // nothing from the server yet: the file as it was
+    model.add_ai({"bo", {}});
+    model.add_ai({"ada", {}});
+    model.sync_dashboards({"Dashboard"});
+    layout.restore(model, noType, true);
+    CHECK(model.tab(model.active()).kind == TabKind::Dashboard && model.tab(model.active()).name == "Dashboard");
+    CHECK(model.tab(1).name == "ada" && model.tab(2).name == "bo");
+    layout.capture(model, {}, true);
+    CHECK(layout.saved() == (SavedLayout{"dashboard:Dashboard", {{"dashboard:Dashboard", "dashboards", ""},
+        {"ai:ada", "ais", ""}, {"ai:bo", "ais", ""}}}));
+    SavedLayout read;
+    CHECK(parseLayout(formatLayout(layout.saved()), &read) && read == layout.saved());
+
+    SavedLayout mixed;
+    CHECK(parseLayout(R"({"version":1,"selected":"sprint","tabs":[["dashboard:Dashboard","dashboards",""],)"
+        R"(["sprint","dashboards",""]]})", &mixed));
+    Model two(named({}), {"Dashboard", "Costs"});
+    CHECK(two.set_tab_groups(groups));
+    TabLayout both(mixed);
+    both.restore(two, noType, true);
+    CHECK(two.tab(two.active()).name == "Costs");
+}
+
+// A layout file this build refuses is loud, kept, and never stops the window saving: its text is copied whole beside
+// it and the window starts without it and saves its own (tab_order.h loadLayout). Only when the copy cannot be made is
+// the file left alone and nothing saved this run; the next launch tries again.
+void refusedLayoutIsKeptAsideAndSavingGoesOn() {
+    MemoryStore file;
+    MemoryStore aside;
+    TabOrderStore asideStore = aside.store();
+    asideStore.where = "/fake/tab-layout.refused.json";
+    LayoutLoad load = loadLayout(file.store(), asideStore);
+    CHECK(!load.have && load.keep && load.warning.empty() && aside.writes == 0);
+    const SavedLayout one{"ai:ada", {{"ai:ada", "ais", ""}}};
+    CHECK(file.store().write(formatLayout(one), nullptr));
+    load = loadLayout(file.store(), asideStore);
+    CHECK(load.have && load.keep && load.warning.empty() && load.layout == one && aside.writes == 0);
+    // The file two dashboards made when both were keyed "sprint".
+    const std::string twice =
+        R"({"version":1,"selected":"sprint","tabs":[["sprint","dashboards",""],["sprint","dashboards",""]]})" "\n";
+    file.text = twice;
+    load = loadLayout(file.store(), asideStore);
+    CHECK(!load.have && load.keep && load.layout == SavedLayout{});
+    CHECK(aside.writes == 1 && aside.text == twice);
+    CHECK(has(load.warning, "/fake/tab-order.txt") && has(load.warning, "/fake/tab-layout.refused.json"));
+    CHECK(has(load.warning, "\"sprint\" is in it twice") && has(load.warning, "saves its layout anew"));
+    // The copy cannot be made: the file stays, and this run saves no layout.
+    aside.writeError = "Permission denied";
+    load = loadLayout(file.store(), asideStore);
+    CHECK(!load.have && !load.keep && has(load.warning, "Permission denied"));
+    CHECK(has(load.warning, "leaves it in place") && has(load.warning, "saving no layout this run"));
+    CHECK(file.text == twice);
+    // A file that cannot be read: said, and this run saves none.
+    file.readError = "Input/output error";
+    load = loadLayout(file.store(), asideStore);
+    CHECK(!load.have && !load.keep && has(load.warning, "Input/output error") && has(load.warning, "could not be read"));
 }
 
 void textScaleTextRoundTrips() {
@@ -386,7 +527,7 @@ void textScaleLoadsClampsAndWarns() {
 // The terminal tabs' directories, in the order the tabs stand, among AIs and behind the sprint tab; a directory a
 // line cannot hold, or none, is the home directory.
 void terminalDirectoriesFollowTheStrip() {
-    Model model(named({"a", "b"}), true);
+    Model model(named({"a", "b"}), {"sprint"});
     const std::size_t one = model.add_terminal();
     const std::size_t two = model.add_terminal();
     const std::size_t three = model.add_terminal();
@@ -397,7 +538,7 @@ void terminalDirectoriesFollowTheStrip() {
     dirs[three] = "/a b/three";
     CHECK(model.move_tab(5, 3));
     CHECK(terminalDirectories(model, of) == (std::vector<std::string>{"/a b/three", "/one", ""}));
-    CHECK(terminalDirectories(Model(named({"a"}), true), of).empty());
+    CHECK(terminalDirectories(Model(named({"a"}), {"sprint"}), of).empty());
 }
 
 void terminalsTextRoundTrips() {
@@ -448,7 +589,7 @@ void terminalsLoadAndFallBack() {
 void selectedTerminalComesBackByPlace() {
     MemoryStore terminals;
     MemoryStore selection;
-    Model model(named({"a", "b"}), true);
+    Model model(named({"a", "b"}), {"sprint"});
     const std::size_t one = model.add_terminal();
     const std::size_t two = model.add_terminal();
     model.add_terminal();
@@ -458,7 +599,7 @@ void selectedTerminalComesBackByPlace() {
     CHECK(saveTerminals(terminals.store(), terminalDirectories(model, [&](std::size_t id) { return dirs[id]; }), &error));
     CHECK(saveSelectedTab(selection.store(), model, &error));
     std::string warning;
-    Model again(named({"a", "b", "c"}), true);
+    Model again(named({"a", "b", "c"}), {"sprint"});
     const std::vector<std::string> reopened = loadTerminals(terminals.store(), &warning);
     CHECK(reopened == (std::vector<std::string>{"/one", "/two", ""}));
     for (std::size_t k = 0; k < reopened.size(); ++k)
@@ -649,6 +790,10 @@ int main() {
     selectedTabTextRoundTrips();
     selectedTabComesBackByIdentity();
     selectedTabFallsBackToTheSprintTab();
+    selectedDashboardByName();
+    layoutKeepsDashboardsByName();
+    layoutFromOneDashboardMigrates();
+    refusedLayoutIsKeptAsideAndSavingGoesOn();
     savedOrderIsApplied();
     tabOrderTextRoundTrips();
     storeSavesAndRestores();

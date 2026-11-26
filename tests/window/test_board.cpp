@@ -1,4 +1,4 @@
-// The sprint tab's page (src/board.h) over Prax's HTML stack, headless: a fixture board served from memory through the
+// A dashboard tab's page (src/board.h) over Prax's HTML stack, headless: a fixture board served from memory through the
 // board's test network (Prax's null network and an intercepting fetcher: no socket, no live board), shown by the nexus
 // view over a Prax UI context with no window and no GPU. The page's clocks are made up and stepped by the test; the
 // fixture's script uses what the served board uses: a 1 s poll of /api/sprint with fetch, Intl.DateTimeFormat's parts,
@@ -51,6 +51,8 @@ bool has(const std::string& s, const std::string& part) {
 }
 
 constexpr const char* kUrl = "http://board.test:8080/";
+// A second dashboard, on another server: a plain page.
+constexpr const char* kOtherUrl = "http://other.test:9000/";
 
 // The fixture: a dark page whose own background is the board's --bg, with an opaque tile, and the board's script
 // habits.
@@ -123,6 +125,17 @@ constexpr const char* kLinksPage = R"HTML(<!doctype html>
 <script>document.getElementById("kept").addEventListener("click", function (e) { e.preventDefault(); });</script>
 </body></html>)HTML";
 
+// Links that leave the board by scheme: only the http, https and mailto ones open outside the window.
+constexpr const char* kSchemesPage = R"HTML(<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>schemes</title>
+<style>html, body { margin: 0; } a { display: block; height: 40px; }</style></head>
+<body><a id="file" href="file:///etc/hosts">a file</a>
+<a id="data" href="data:text/html,%3Cp%3Ehi%3C%2Fp%3E">a data page</a>
+<a id="app" href="x-nexus-test:open">an app's scheme</a>
+<a id="mail" href="mailto:someone@example.test">mail</a>
+<a id="secure" href="HTTPS://other.test/x">another site</a>
+</body></html>)HTML";
+
 // The served board's header and footer in their shape (nova-sprint's index.html): the logo tile and the wordmark in the
 // brand's h1, the live clock on the right, the footer's link to the repository; and a link to another repository.
 // Its "friends" section ids and labels are nova-sprint's own, so the word stays in this page only.
@@ -156,6 +169,7 @@ struct Server {
     int pages = 0;                  // requests for the page
     int polls = 0;                  // requests for /api/sprint
     int cards = 0;                  // requests for a card's page, /cards/...
+    int others = 0;                 // requests for the second dashboard's page
     std::string body;               // the last answer's body, kept while the fetch copies it
 
     static void answer(void* context, PrFetchInterceptRequest* request) {
@@ -174,6 +188,9 @@ struct Server {
             ++s.polls;
             type.value = PrStringView{"application/json", 16};
             s.body = R"({"landed": 1234567, "cents": "12345678901", "build": ")" + s.build + "\"}";
+        } else if (url == kOtherUrl) {
+            ++s.others;
+            s.body = "<!doctype html><title>other</title><p>the second dashboard</p>";
         } else if (has(url, "/cards/")) {
             ++s.cards;
             s.body = "<!doctype html><title>card</title><p>a card</p>";
@@ -205,7 +222,7 @@ struct Clock {
 struct Harness {
     Server server;
     Clock clock;
-    Model model{std::vector<AIInfo>{AIInfo{"f1", "m"}}, true};
+    Model model{std::vector<AIInfo>{AIInfo{"f1", "m"}}, std::vector<std::string>{"Dashboard"}};
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     PrFontSet* fonts = prFontSetCreate(nullptr);
     PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
@@ -220,8 +237,8 @@ struct Harness {
     double time = 1000;
     PrVec2 extent{1000, 780};       // the window's, px
 
-    explicit Harness(std::function<SprintBoardAddress()> find = nullptr, bool prewarm = false, std::string storageDirectory = {},
-        bool fromServer = false) {
+    // `offered`: the board starts with no address and waits for one (offer), as a window's does; otherwise kUrl.
+    explicit Harness(bool prewarm = false, std::string storageDirectory = {}, bool offered = false) {
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 1};
@@ -234,10 +251,7 @@ struct Harness {
         b.storageDirectory = std::move(storageDirectory);
         b.kit = kit;
         b.fonts = fonts;
-        b.fromServer = fromServer;
-        if (find)
-            b.find = find;
-        else if (!fromServer)
+        if (!offered)
             b.url = kUrl;
         b.answer = Server::answer;
         b.answerContext = &server;
@@ -464,8 +478,8 @@ void anUnreachableBoardSaysWhyAndRecovers() {
     Harness h;
     h.server.down = true;
     h.frames(10);
-    CHECK(has(h.board->problem(), "cannot load the sprint board from http://board.test:8080/"));
-    CHECK(has(h.board->problem(), "nova-sprint up") && has(h.board->problem(), "sprint-url http://<host>:<port>/"));
+    CHECK(has(h.board->problem(), "cannot load the dashboard from http://board.test:8080/"));
+    CHECK(has(h.board->problem(), "`dashboard` line in nexus-server's config"));
     h.server.down = false;
     h.frames(100);      // 5 s: not yet
     CHECK(!h.board->problem().empty() && h.server.pages == 0);
@@ -474,48 +488,39 @@ void anUnreachableBoardSaysWhyAndRecovers() {
     CHECK(h.board->problem().empty() && has(h.text(), "landed 1,234,567"));
 }
 
-// The address lookup's failure is the tab's line.
-void aFailedLookupIsTheLine() {
-    Harness h([] { return SprintBoardAddress{{}, "cannot find the sprint board: nova-config was not found"}; });
-    for (int i = 0; i < 200 && h.board->problem().find("cannot find") == std::string::npos; ++i)
-        h.frame();
-    CHECK(h.board->problem() == "cannot find the sprint board: nova-config was not found");
-    CHECK(h.server.pages == 0);
-}
-
-// The lookup's address is the page's.
-void aFoundAddressLoads() {
-    Harness h([] { return SprintBoardAddress{kUrl, {}}; }, true);
-    h.model.select_tab(1);
-    for (int i = 0; i < 200 && !h.board->settled(); ++i) h.frame();
-    CHECK(h.board->settled() && h.server.pages == 1);
-    h.model.select_tab(0);
-    h.frame();
-    CHECK(h.board->problem().empty() && has(h.text(), "first") && h.server.pages == 1);
-}
-
-// Linked to a server, the board waits for the address the server's state gives and says so, never looking one up;
-// once given, it is the page's.
+// The board waits for the address the server gives and says so; an empty one is none, and it keeps waiting. Once
+// given, the address is the page's.
 void theServersAddressLoads() {
-    std::atomic<int> lookups{0};
-    Harness h([&lookups] { ++lookups; return SprintBoardAddress{{}, "looked up"}; }, true, {}, true);
+    Harness h(true, {}, true);
     h.model.select_tab(0);
     for (int i = 0; i < 20 && h.board->problem().empty(); ++i) h.frame();
     CHECK(h.board->problem().find("waiting for nexus-server") != std::string::npos && h.server.pages == 0);
+    h.board->offer({});
+    h.frames(20);
+    CHECK(h.board->problem().find("waiting for nexus-server") != std::string::npos && h.server.pages == 0);
     h.board->offer(kUrl);
     for (int i = 0; i < 200 && !h.board->settled(); ++i) h.frame();
-    CHECK(h.board->settled() && h.server.pages == 1 && lookups == 0);
+    CHECK(h.board->settled() && h.server.pages == 1);
     CHECK(h.board->problem().empty() && has(h.text(), "first"));
 }
 
-// A server that gives no address (none it knows, or older than the field): the window's own lookup, as unlinked.
-void anEmptyServerAddressLooksUp() {
-    std::atomic<int> lookups{0};
-    Harness h([&lookups] { ++lookups; return SprintBoardAddress{kUrl, {}}; }, true, {}, true);
+// Another dashboard's address, offered once the page has one (its tab shows), is a navigation: the page shows the
+// other dashboard, and offering the first again goes back to it. The same address offered again does nothing.
+void aNewAddressNavigates() {
+    Harness h(true, {}, true);
     h.model.select_tab(0);
-    h.board->offer({});
+    h.board->offer(kUrl);
     for (int i = 0; i < 200 && !h.board->settled(); ++i) h.frame();
-    CHECK(h.board->settled() && h.server.pages == 1 && lookups == 1);
+    CHECK(h.board->settled() && h.server.pages == 1 && has(h.text(), "first"));
+    h.board->offer(kUrl);
+    h.frames(5);
+    CHECK(h.server.pages == 1);
+    h.board->offer(kOtherUrl);
+    for (int i = 0; i < 200 && !has(h.text(), "the second dashboard"); ++i) h.frame();
+    CHECK(h.server.others == 1 && has(h.text(), "the second dashboard") && h.board->problem().empty());
+    h.board->offer(kUrl);
+    for (int i = 0; i < 200 && !has(h.text(), "first"); ++i) h.frame();
+    CHECK(h.server.pages == 2 && has(h.text(), "first"));
 }
 
 // The Cost breakdown reaches one gap above the bottom of the first screen at a tall window and a short one, the gap the
@@ -733,6 +738,24 @@ void linksThatLeaveTheBoardOpenInTheBrowser() {
     CHECK(h.server.pages == 2 && h.board->documentUrl() == kUrl && h.board->settled());
 }
 
+// A link that leaves the board goes to the system only when it is http, https or mailto (sprint.h linkOpensOutside):
+// a file:, data: or other app's link is refused (stderr says so), opens nothing, and the page stays on the board.
+void onlyWebAndMailLinksOpenOutside() {
+    Harness h;
+    h.server.page = kSchemesPage;
+    h.frames(10);
+    CHECK(h.board->settled());
+    for (const char* id : {"file", "data", "app"}) {
+        h.click(id);
+        CHECK(h.opened.empty() && h.board->documentUrl() == kUrl);
+    }
+    h.click("mail");
+    CHECK((h.opened == std::vector<std::string>{"mailto:someone@example.test"}));
+    h.click("secure");
+    CHECK(h.opened.size() == 2 && h.opened.back().find("other.test/x") != std::string::npos);
+    CHECK(h.board->documentUrl() == kUrl && h.server.pages == 1);
+}
+
 // The embedded header uses the short name and hides the logo. The footer's link to nova-sprint's
 // repository is not rendered, and a footer that held only it is not either; in a footer with more, the rest stays.
 // Another link still renders, and still opens in the browser.
@@ -861,7 +884,7 @@ void dashboardReaderState() {
         function poll(){fetch("/api/sprint").then(r=>r.json())}
         </script></body>)HTML";
     {
-        Harness h(nullptr, false, dir.string());
+        Harness h(false, dir.string());
         h.server.page = page;
         h.frames(10);
         h.click("fold");
@@ -877,7 +900,7 @@ void dashboardReaderState() {
         CHECK(h.scrollTop() == 550);
     }
     {
-        Harness h(nullptr, false, dir.string());
+        Harness h(false, dir.string());
         h.server.page = page;
         h.frames(10);
         CHECK(has(h.text(), "closed"));
@@ -898,13 +921,12 @@ int main() {
     preparationWaitsForTheNewChart();
     aNewBuildReloadsWithThePrelude();
     anUnreachableBoardSaysWhyAndRecovers();
-    aFailedLookupIsTheLine();
-    aFoundAddressLoads();
     theServersAddressLoads();
-    anEmptyServerAddressLooksUp();
+    aNewAddressNavigates();
     theCostBreakdownFillsTheFirstScreen();
     keysAndTheWheelScrollSmoothly();
     linksThatLeaveTheBoardOpenInTheBrowser();
+    onlyWebAndMailLinksOpenOutside();
     theRepositoryLinkIsHidden();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);

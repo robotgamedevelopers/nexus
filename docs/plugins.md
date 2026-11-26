@@ -35,7 +35,7 @@ The stock client reads the ordered `tab_groups` array from the fork's `config.js
 ```json
 {
   "tab_groups": [
-    {"id":"dashboards", "types":["sprint"], "closable":false},
+    {"id":"dashboards", "types":["dashboard"], "closable":false},
     {"id":"ais", "types":["ai"], "closable":false},
     {"id":"terminals", "types":["terminal"], "closable":true}
   ]
@@ -56,7 +56,12 @@ To change the rules for a running window, edit the fork's client Starlark or JSO
 ## Saved tab layout
 
 The client writes the selected tab, tab order, groups and terminal working directories together in
-`~/.nexus/client/tab-layout.json`. Each open terminal and extension instance has its own saved identity.
+`~/.nexus/client/tab-layout.json`. Each open terminal and extension instance has its own saved identity; an AI is
+kept by its name, and a dashboard by the name the server gives it, so two dashboards never share a key. A layout
+saved when there was one dashboard (its `sprint` key) is read as the first dashboard and saved by name after. A
+layout file the client refuses is never silent and never stops it saving: it says why on stderr, copies the file
+whole to `tab-layout.refused.json` beside it, and saves a new layout. Only if that copy cannot be written does it
+leave the file in place and save no layout until the next launch.
 On the first launch without a layout file, the client reads the earlier `tab-order.txt`, `selected-tab.txt`
 and `terminals.txt` preferences.
 

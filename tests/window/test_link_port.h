@@ -31,6 +31,13 @@ struct FakeLink final : LinkPort {
         state = std::move(s);
         changed = true;
     }
+
+    // The server's dashboards, the AIs as they are.
+    void dashboards(std::vector<sync::Dashboard> list) {
+        state.phase = sync::LinkPhase::Connected;
+        state.sessions.setDashboards(std::move(list));
+        changed = true;
+    }
 };
 
 } // namespace nexus::test

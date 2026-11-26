@@ -280,7 +280,7 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
     // text, as such a window always has.
     for (const std::uint32_t format : {sync::kStateFormat, std::uint32_t(0)}) {
         const bool older = format == 0;
-        Model model(kAIs, true);
+        Model model(kAIs, {"sprint"});
         sync::Mirror mirror;
         const auto start = Clock::now();
         link::ClientLink::Options options;
@@ -411,7 +411,7 @@ private:
 // One headless window over a ClientSession of its own, driven by the test's loop.
 struct Window {
     std::unique_ptr<link::ClientSession> session;
-    Model model{kAIs, true};
+    Model model{kAIs, {"sprint"}};
     sync::Mirror mirror;
     std::uint64_t mirroredNum = ~std::uint64_t(0);
     void after() {
@@ -1161,7 +1161,7 @@ int secret(const std::string& binary, const std::string& dir, const std::string&
 // told of each tab removed.
 struct ServerWindow {
     std::unique_ptr<link::ClientSession> session;
-    Model model{{}, false};
+    Model model{{}};
     sync::Mirror mirror;
     sync::AIStrip strip;
     std::uint64_t mirroredNum = ~std::uint64_t(0);
@@ -1831,7 +1831,7 @@ int takeover(const std::string& binary, const std::string& dir) {
     CHECK(pid > 0);
     CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
 
-    Model model(kAIs, true);
+    Model model(kAIs, {"sprint"});
     sync::Mirror mirror;
     link::ClientLink::Options options;
     options.bootstrap = server.bootstrap("localhost");

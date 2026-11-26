@@ -1,6 +1,6 @@
 # Tests of the window model (src/model.h), with three labels:
 #   unit           model_test: the model's behaviour and edges, logic only
-#   model          TLC: Window.tla on four instances, every reversed witness rejected, code traces checked against the
+#   model          TLC: Window.tla on nine instances, every reversed witness rejected, code traces checked against the
 #                  spec over several seeds, and a faulty model's trace rejected. Needs TLA2TOOLS_JAR and java.
 #   model_nightly  TLC: Window.tla on the three largest instances (the nightly workflow)
 
@@ -73,6 +73,14 @@ if(NEXUS_SERVER_PARTS)
     target_compile_options(watch_walk PRIVATE ${warnings})
 
     add_dependencies(model_checks trace_walk glide_walk overlay_walk lock_walk strip_walk watch_walk account_menu_walk)
+
+    # The walk checks that the strip's dashboards are the server's list after each sync_dashboards: shown failing on
+    # a model whose sync never removes one (trace_walk --faulty-sync-keep). It must exit with that check's line; a
+    # usage error, a crash or a pass does not match.
+    add_test(NAME trace_walk_sync_keep_refused COMMAND trace_walk 1 300 3 --boards-churn --faulty-sync-keep
+        sync-keep.tla WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    set_tests_properties(trace_walk_sync_keep_refused PROPERTIES LABELS unit TIMEOUT 30
+        PASS_REGULAR_EXPRESSION "the strip's dashboards are not the server's list")
 endif()
 
 add_test(NAME model_unit COMMAND model_test)
@@ -82,7 +90,8 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 add_test(NAME client_lock_unit COMMAND client_lock_test)
 set_tests_properties(client_lock_unit PROPERTIES LABELS unit TIMEOUT 30)
 
-# tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n AIS f] [FAULTY <fault>] [NOSPRINT] [CHURN]
+# tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n AIS f] [FAULTY <fault>] [BOARDS b] [CHURN]
+#          [BOARDCHURN]
 #          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [SEED s STEPS n ACCWALK]
 #          [WORKERS w] [NIGHTLY] [SHARD] [CAP s] [SPLIT P=A+B] [LABEL] [OVERLAY])
 # SPLIT P=A+B declares <name>_rest, every property of the cfg but P, and <name>_temporal_1 and _2, A and B in P's place,
@@ -126,10 +135,10 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK GLIDEWALK MENUWALK SUPWALK PASSWALK ACCWALK SECWALK
+    set(options SERVICETRACE PICKERTRACE PLUGINTRACE BOARDCHURN CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK GLIDEWALK MENUWALK SUPWALK PASSWALK ACCWALK SECWALK
         SIGNWALK RECONNECTWALK RELAYWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
     cmake_parse_arguments(T "${options}"
-        "CREDITMODE;PROPERTY;SEED;STEPS;AIS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
+        "CREDITMODE;PROPERTY;SEED;STEPS;AIS;BOARDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
     # place, each with every invariant (tlc.cmake, SPLIT); the spec defines A /\ B as P, so between them every property
     # of the cfg is checked. TEMPORALCFG optionally appends model configuration to just the temporal parts.
@@ -244,8 +253,11 @@ function(tlc_test name module cfg expect)
     if(T_FAULTY)
         list(APPEND defs -DFAULTY=${T_FAULTY})
     endif()
-    if(T_NOSPRINT)
-        list(APPEND defs -DNOSPRINT=ON)
+    if(DEFINED T_BOARDS)
+        list(APPEND defs -DBOARDS=${T_BOARDS})
+    endif()
+    if(T_BOARDCHURN)
+        list(APPEND defs -DBOARDCHURN=ON)
     endif()
     if(T_NODEADLOCK)
         list(APPEND defs -DNOCHECK_DEADLOCK=ON)
@@ -272,13 +284,13 @@ tlc_test(tlc_bus_delivery_peer_trace BusPeerFilterTrace BusPeerFilterTrace.cfg p
 
 # The spec, every property, no error. The instances with tens of thousands of states get eight workers: TLC's time on
 # them falls nearly in proportion (MCWindow3.cfg 28 s on two workers, 8 s on eight, on the studio at full speed).
-tlc_test(tlc_spec_sprint_terminals MCWindow MCWindowSprint.cfg pass WORKERS 8)
+tlc_test(tlc_spec_board_terminals MCWindow MCWindowBoard.cfg pass WORKERS 8)
 tlc_test(tlc_spec_no_ais MCWindow MCWindowEmpty.cfg pass)
-tlc_test(tlc_spec_no_sprint  MCWindow MCWindowNoSprint.cfg pass WORKERS 8)
-tlc_test(tlc_spec_three_behind_sprint MCWindow MCWindow3Sprint.cfg pass WORKERS 8)
-# Nightly: the three largest instances. With the selection history, every order of it a state of its own: the sprint tab,
+tlc_test(tlc_spec_no_board  MCWindow MCWindowNoBoard.cfg pass WORKERS 8)
+tlc_test(tlc_spec_three_behind_board MCWindow MCWindow3Board.cfg pass WORKERS 8)
+# Nightly: the three largest instances. With the selection history, every order of it a state of its own: one dashboard,
 # two AIs, two terminals and entries of one, 320,760 states (37 s on eight workers in a login session; its form
-# without entries, MCWindowSprint.cfg, 8,910, runs above); three AIs in all orders, 384,912 (27 s); entries and
+# without entries, MCWindowBoard.cfg, 8,910, runs above); three AIs in all orders, 384,912 (27 s); entries and
 # queues of two, 214,326 (12 s).
 # The per-commit job checks every property on the instances above, every witness and every trace. On the studio's CI
 # runners TLC runs about four times slower than in a login session (MCWindow3.cfg on eight workers, before the history:
@@ -331,11 +343,11 @@ tlc_test(tlc_witness_move_terminal_before_ai WMoveTerminalBeforeAI WMoveTerminal
 tlc_test(tlc_witness_move_ai_behind_terminal WMoveAIBehindTerminal WMoveAIBehindTerminal.cfg invariant
          PROPERTY ZonesOrdered)
 tlc_test(tlc_witness_move_cross_zone_moves WMoveCrossZoneMoves WMoveCrossZoneMoves.cfg action    PROPERTY RefusedChangesNothing)
-# The sprint tab: always first, never moved, never closed, never takes text.
-tlc_test(tlc_witness_move_before_sprint   WMoveBeforeSprint   WMoveBeforeSprint.cfg   invariant PROPERTY SprintFirst)
-tlc_test(tlc_witness_move_sprint          WMoveSprint         WMoveSprint.cfg         action    PROPERTY SprintNeverMoves)
-tlc_test(tlc_witness_close_sprint         WCloseSprint        WCloseSprint.cfg        action    PROPERTY SprintNeverCloses)
-tlc_test(tlc_witness_send_to_sprint       WSendToSprint       WSendToSprint.cfg       action    PROPERTY SprintTakesNoText)
+# Dashboards: first, moved only among themselves, never closed, never take text.
+tlc_test(tlc_witness_move_before_board    WMoveBeforeBoard    WMoveBeforeBoard.cfg    invariant PROPERTY ZonesOrdered)
+tlc_test(tlc_witness_move_board_out       WMoveBoardOut       WMoveBoardOut.cfg       action    PROPERTY MovePlaces)
+tlc_test(tlc_witness_close_board          WCloseBoard         WCloseBoard.cfg         action    PROPERTY BoardNeverCloses)
+tlc_test(tlc_witness_send_to_board        WSendToBoard        WSendToBoard.cfg        action    PROPERTY BoardTakesNoText)
 # The selection history: closing the active tab goes back to the tab selected before it.
 tlc_test(tlc_witness_close_old_rule       WCloseOldRule       WCloseOldRule.cfg       action    PROPERTY CloseActiveRule)
 tlc_test(tlc_witness_close_keeps_history  WCloseKeepsHistory  WCloseKeepsHistory.cfg  invariant PROPERTY HistoryOpen)
@@ -345,8 +357,8 @@ tlc_test(tlc_witness_select_appends_again WSelectAppendsAgain WSelectAppendsAgai
 tlc_test(tlc_witness_select_skips_history WSelectSkipsHistory WSelectSkipsHistory.cfg invariant PROPERTY HistoryEndsActive)
 
 # The AIs from the server's list (sync/client.h applyAIs): Window.tla with add_ai and remove_ai, behind
-# the sprint tab with one AI (39,465 states, 9 s on four workers in a login session), and from an empty strip,
-# no sprint tab and no AI (1,930 states); and their reversed witnesses.
+# one dashboard with one AI (39,465 states, 9 s on four workers in a login session), and from an empty strip,
+# no dashboard and no AI (1,930 states); and their reversed witnesses.
 tlc_test(tlc_spec_ais       MCWindow MCWindowAIs.cfg      pass WORKERS 8 SHARD)
 tlc_test(tlc_spec_ais_empty MCWindow MCWindowAIsEmpty.cfg pass)
 tlc_test(tlc_witness_add_ai_twice     WAddAITwice     WAddAITwice.cfg     invariant PROPERTY NamesOnce)
@@ -360,6 +372,19 @@ tlc_test(tlc_witness_remove_ai_keeps_history WRemoveAIKeepsHistory WRemoveAIKeep
 tlc_test(tlc_witness_close_leaves_history_empty WCloseLeavesHistoryEmpty WCloseLeavesHistoryEmpty.cfg invariant
          PROPERTY HistoryEndsActive)
 
+# The dashboards from the server's list (Model::sync_dashboards): Window.tla with add_board and remove_board, from one
+# dashboard and one AI, from two dashboards and no AI, and from an empty strip with the AIs coming and going too; and
+# their reversed witnesses.
+tlc_test(tlc_spec_boards       MCWindow MCWindowBoards.cfg    pass WORKERS 8)
+tlc_test(tlc_spec_boards_two   MCWindow MCWindowBoardsTwo.cfg pass WORKERS 8)
+tlc_test(tlc_spec_all_empty    MCWindow MCWindowAllEmpty.cfg  pass)
+tlc_test(tlc_witness_add_board_twice WAddBoardTwice WAddBoardTwice.cfg invariant PROPERTY BoardNamesOnce)
+tlc_test(tlc_witness_add_board_among_ais WAddBoardAmongAIs WAddBoardAmongAIs.cfg invariant PROPERTY ZonesOrdered)
+tlc_test(tlc_witness_remove_board_keeps_history WRemoveBoardKeepsHistory WRemoveBoardKeepsHistory.cfg action
+         PROPERTY RemoveForgets)
+tlc_test(tlc_witness_remove_board_active_wrong WRemoveBoardActiveWrong WRemoveBoardActiveWrong.cfg action
+         PROPERTY RemoveActiveRule)
+
 # Trace binding: the real model's random walks, each a behaviour of Window.tla. 1000 steps take every walk's queues past
 # four prompts (trace_walk prints the longest).
 foreach(seed 1 2 3 4 5)
@@ -368,13 +393,18 @@ endforeach()
 tlc_test(tlc_trace_two_tabs WindowTrace WindowTrace.cfg pass SEED 6 STEPS 1000 AIS 2)
 tlc_test(tlc_trace_one_tab  WindowTrace WindowTrace.cfg pass SEED 8 STEPS 1000 AIS 1)
 tlc_test(tlc_trace_no_tabs  WindowTrace WindowTrace.cfg pass SEED 7 STEPS 100 AIS 0)
-# Every walk above starts with the sprint tab, as the window does; this one is the model
-# without it.
-tlc_test(tlc_trace_no_sprint WindowTrace WindowTrace.cfg pass SEED 9 STEPS 1000 AIS 3 NOSPRINT)
+# Every walk above starts with one dashboard; this one with none, as the window's model starts, and this one with two
+# and an empty and a repeated name the constructor skips.
+tlc_test(tlc_trace_no_board WindowTrace WindowTrace.cfg pass SEED 9 STEPS 1000 AIS 3 BOARDS 0)
+tlc_test(tlc_trace_boards_list WindowTrace WindowTrace.cfg pass SEED 12 STEPS 1000 AIS 2 BOARDS 3)
 # The AIs coming and going as the server's list does: from the start's three, and from an empty strip, with
-# no sprint tab and no AI.
+# no dashboard and no AI.
 tlc_test(tlc_trace_ais_churn WindowTrace WindowTrace.cfg pass SEED 10 STEPS 1000 AIS 3 CHURN)
-tlc_test(tlc_trace_ais_fresh WindowTrace WindowTrace.cfg pass SEED 11 STEPS 1000 AIS 0 NOSPRINT CHURN)
+tlc_test(tlc_trace_ais_fresh WindowTrace WindowTrace.cfg pass SEED 11 STEPS 1000 AIS 0 BOARDS 0 CHURN)
+# The dashboards coming and going (add_dashboard, remove_dashboard and sync_dashboards): from two dashboards and three
+# AIs, and from an empty strip with the AIs coming and going too.
+tlc_test(tlc_trace_boards_churn WindowTrace WindowTrace.cfg pass SEED 13 STEPS 1000 AIS 3 BOARDS 2 BOARDCHURN)
+tlc_test(tlc_trace_all_fresh WindowTrace WindowTrace.cfg pass SEED 14 STEPS 1000 AIS 0 BOARDS 0 CHURN BOARDCHURN)
 
 # The binding can fail: a faulty model's trace must be rejected, with the fault in send, in queue and in move.
 tlc_test(tlc_trace_faulty_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
@@ -394,17 +424,22 @@ tlc_test(tlc_trace_faulty_send_dedup_rejected WindowTrace WindowTrace.cfg invari
 # And with close removing an AI's tab.
 tlc_test(tlc_trace_faulty_close_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 AIS 3 FAULTY close)
-# And with the sprint tab moved among the AIs, and closed.
-tlc_test(tlc_trace_faulty_sprint_move_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 300 AIS 3 FAULTY sprint-move)
-tlc_test(tlc_trace_faulty_sprint_close_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 300 AIS 3 FAULTY sprint-close)
+# And with a dashboard moved among the AIs, and closed.
+tlc_test(tlc_trace_faulty_board_move_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 300 AIS 3 FAULTY board-move)
+tlc_test(tlc_trace_faulty_board_close_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 300 AIS 3 FAULTY board-close)
 # And with closing the active tab ignoring the selection history.
 tlc_test(tlc_trace_faulty_close_fallback_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 AIS 3 FAULTY close-fallback)
 # And with remove_ai leaving the removed tab's id in the selection history.
 tlc_test(tlc_trace_faulty_remove_ai_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 AIS 3 CHURN FAULTY remove-ai)
+# And with add_dashboard putting the tab behind the AIs, and remove_dashboard leaving its id in the selection history.
+tlc_test(tlc_trace_faulty_add_board_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 300 AIS 3 BOARDCHURN FAULTY add-board)
+tlc_test(tlc_trace_faulty_remove_board_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 300 AIS 3 BOARDCHURN FAULTY remove-board)
 
 # The AI tabs from the server's state (src/sync/ai_strip.h): AIStrip.tla on two AIs (three nightly), its
 # reversed witnesses (one a window writing its kept drafts over the file other windows share), and the code's random

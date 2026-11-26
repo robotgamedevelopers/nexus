@@ -51,7 +51,9 @@ TabOrderStore fileTabOrderStore();
 // The store in a file at `path`, written atomically (Prax's prFileWrite: a file beside it, then a rename).
 TabOrderStore fileTabOrderStore(std::string path);
 
-// One atomic layout across tab kinds. AIs and the sprint board have intrinsic keys. Local instances receive
+// One atomic layout across tab kinds. AIs ("ai:<name>") and dashboards ("dashboard:<name>", the server's name for it,
+// sync/dashboards.h) have intrinsic keys; a layout saved when there was one dashboard keeps it as "sprint", which
+// restore reads as the first dashboard the layout does not keep by name, and the next save keeps by its name. Local instances receive
 // persistent keys on creation so two terminals in the same directory and two tabs of the same type stay distinct.
 struct LayoutTab {
     std::string key, group, detail;  // detail is a terminal's directory or an extension's registered type
@@ -63,8 +65,28 @@ struct SavedLayout {
     bool operator==(const SavedLayout&) const = default;
 };
 TabOrderStore fileLayoutStore();
+// Where a layout file this build refuses is kept (loadLayout): tab-layout.refused.json beside it.
+TabOrderStore fileRefusedLayoutStore();
 std::string formatLayout(const SavedLayout& layout);
-bool parseLayout(std::string_view text, SavedLayout* layout);
+// Reads the file's text into `layout`. False, with why (when given) saying what is wrong, for text that is not a layout
+// this build reads: not JSON, not version 1, a tab it does not know, a tab twice, or a selected tab not among the tabs.
+bool parseLayout(std::string_view text, SavedLayout* layout, std::string* why = nullptr);
+
+// The layout the window starts from (main.cpp, main_ios.cpp), and whether it may save its own.
+struct LayoutLoad {
+    SavedLayout layout;
+    bool have = false;      // a layout was read from the store
+    bool keep = true;       // the window saves its layout to the store as it changes
+    std::string warning;    // one line for stderr when the store's file is not used, or empty
+};
+
+// Reads the saved layout from `store`. No file: nothing, and the window saves. A file parseLayout refuses is never a reason
+// to stop saving for good: its text is copied whole to `aside` (fileRefusedLayoutStore, over any copy kept before), and the
+// window starts without it and saves its own over it, the warning naming both files and why. Only if that copy cannot
+// be written does the window leave the file in place and save no layout this run, so that nothing is lost; the warning
+// says so, and the next launch tries again. A file that cannot be read at all: the warning says why, and no layout is
+// saved this run.
+LayoutLoad loadLayout(const TabOrderStore& store, const TabOrderStore& aside);
 
 class TabLayout {
 public:
@@ -98,35 +120,36 @@ std::vector<AIInfo> loadTabOrder(const TabOrderStore& store, const std::vector<A
 // Saves the order of the model's AI tabs. Returns false, with one line in `error` naming the file and the cause.
 bool saveTabOrder(const TabOrderStore& store, const Model& model, std::string* error);
 
-// The selected tab, kept across launches beside the order: the sprint tab, an AI by name, or a terminal by its place
-// among the terminal tabs (which are reopened in their saved order, below).
+// The selected tab, kept across launches beside the order: a dashboard or an AI by name, or a terminal by its place
+// among the terminal tabs (which are reopened in their saved order, below); or the first tab.
 struct SavedTab {
-    TabKind kind = TabKind::Sprint;
-    std::string name;           // an AI's
+    TabKind kind = TabKind::Dashboard;
+    std::string name;           // an AI's, or a dashboard's; empty for the first dashboard (or the first tab)
     std::size_t terminal = 0;   // a terminal's place among the terminal tabs, from 1; 0 for a version 1 file's
                                 // "terminal", which named none
 };
 
-// The file's text for the model's active tab: a header line, then "sprint", "terminal <n>" (its place among the terminal
-// tabs, from 1) or "ai <name>". Pure.
+// The file's text for the model's active tab: a header line, then "dashboard <name>", "terminal <n>" (its place among
+// the terminal tabs, from 1), "ai <name>", or "first" for no tab or an extension's. Pure.
 std::string formatSelectedTab(const Model& model);
 
 // Reads the file's text into `saved`. Returns false, with `error` saying what is wrong, for text that is not a selected
-// tab file. Reads version 1 files too, whose "terminal" names no terminal. Pure.
+// tab file. Reads version 1 and 2 files too: their "sprint" is the first dashboard's, and version 1's "terminal" names
+// no terminal. Pure.
 bool parseSelectedTab(std::string_view text, SavedTab* saved, std::string* error);
 
-// The position of the saved tab in `model`: the AI of that name, wherever it stands, or the terminal at that place
-// among the terminal tabs. The sprint tab (position 0) if the sprint tab was saved, or the tab saved is not in the
-// model. Pure.
+// The position of the saved tab in `model`: the dashboard or AI of that name, wherever it stands, or the terminal at
+// that place among the terminal tabs. The first dashboard's (or 0 when there is none) if the first was saved, or the
+// tab saved is not in the model. Pure.
 std::size_t savedTabPosition(const Model& model, const SavedTab& saved);
 
 // The store in a file, selected-tab.txt beside tab-order.txt. `where` is empty if there is no home.
 TabOrderStore fileSelectedTabStore();
 
-// The tab the store saved: the sprint tab's SavedTab{} if nothing is saved, and on an unreadable or malformed file,
+// The tab the store saved: the first tab's SavedTab{} if nothing is saved, and on an unreadable or malformed file,
 // with `warning` one line naming the file, what was wrong and that deleting it resets the selection. A saved AI is
 // selected once the server's AIs have arrived (frame_host.h). When requested, loaded distinguishes a real saved
-// choice (including the sprint tab) from the default.
+// choice (including the first tab) from the default.
 SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning, bool* loaded = nullptr);
 
 // The position to select at launch: savedTabPosition of loadSavedTab.

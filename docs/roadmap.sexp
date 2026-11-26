@@ -145,7 +145,7 @@
      ("ui-rules-to-config" "The window's rules that are one person's setup move into the client config: today's fixed zones (sprint, then AIs, then terminals) become the default tab groups, in the default order dashboards, AIs, terminals (tab-groups)")
      ("server-config-json" "The server's key-value config and its drivers file become documented JSON in nexus-config, with a version, check, reload and history like accounts.json")
      ("config-remote-signin" "Pushing the config repository to a remote stays opt-in (built: `nexus-server config remote`); later, an in-app GitHub sign-in for the pushes, through the secret dialog, in place of the git credentials of the user nexus-server runs as" :later t)
-     ("sprint-tab-from-config" "The sprint tab shown only when a board is configured (AGENTS.md, Installing). Two requirements learned in a first try: nothing a person has vanishes on upgrade (a window that had the tab keeps it, and the step that keeps it runs in the real window, never only on a test board, and is marked done only once it has run); and any value discovered for the config, such as the board's address, is validated before it is written (an http:// or https:// address, one line, no control bytes), so nothing can add a line to the config" :later t)
+     ("sprint-tab-from-config" "Dashboard tabs from nexus-server's config: one per `dashboard <url> <name>` line, in its order and labelled with its name, none by default (AGENTS.md, Installing); every client shows the list the server sends (SessionsDiff.dashboards) and looks up no address itself. Each address is validated (an http:// or https:// address, one line, no control bytes) where it is read and again where it is shown. The saved layout and selection keep each dashboard by its name, and a layout saved with the one sprint tab reads as the first dashboard. Left: nothing a person has vanishes on upgrade (a server that served a board gets its `dashboard` line in the same deploy)" :later t)
      ("ai-rename" "Rename an AI as one change in ais.json: its sessions, the window's tab, the tab's place in the saved order and its draft go to the new name. Today a rename is a remove of the old name and an add of the new (docs/accounts.md)" :later t)
      ("config-history-pruning" "Question: does the config repository's history ever need pruning, and if so how, without rewriting what was pushed" :later t)
      )
@@ -289,7 +289,8 @@
   (:id "t-server-config-json" :type :task :title "Server key-value config and drivers file as documented JSON in nexus-config" :state :todo)
   (:id "t-config-remote-signin" :type :task :title "In-app GitHub sign-in for config pushes" :state :todo)
   (:id "t-config-history-pruning" :type :task :title "Config history pruning: whether and how" :state :todo)
-  (:id "t-sprint-tab-from-config" :type :task :title "The sprint tab only when a board is configured, with nothing lost on upgrade and every discovered value validated before it is written" :state :todo)
+  (:id "t-sprint-tab-from-config" :type :task :title "Dashboard tabs from nexus-server's config, none by default, every address validated, nothing lost on upgrade" :state :doing
+   :evidence ("tests/sync/sync_test.cpp: sessions_dashboards_appended" "tests/server/home_test.cpp: dashboard lines" "tests/window/test_frame_host.cpp: dashboards"))
   (:id "t-ai-rename" :type :task :title "Rename an AI as one change: sessions, tab, saved order and draft" :state :todo)
   (:id "t-tab-kinds-data" :type :task :title "Tab kinds as data, chosen per machine in the client config" :state :todo)
   (:id "t-tab-groups" :type :task :title "Tab groups (dashboards, AIs, terminals; later more) as client config, each with its own close, new-tab and drag rules" :state :todo)
