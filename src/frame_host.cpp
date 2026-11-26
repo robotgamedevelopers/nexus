@@ -73,7 +73,7 @@ void FrameHost::keepTerminals() {
     const std::size_t focus = model->tab_count() ? model->tab(model->active()).id : ~std::size_t{};
     if (layoutStore && groupPolicyReady && !strip.pending() &&
         (directoriesChanged || savedLayoutRevision != model->layout_revision() || savedLayoutFocus != focus)) {
-        layout.capture(*model, directories, rosterKnown);
+        layout.capture(*model, directories, serverKnown());
         std::string error;
         if (layoutStore->write(formatLayout(layout.saved()), &error)) {
             savedLayoutRevision = model->layout_revision();
@@ -101,7 +101,7 @@ void FrameHost::restoreLayout() {
         *group = it->second.group;
         *title = it->second.title;
         return true;
-    }, rosterKnown);
+    }, serverKnown());
     if (model->tab_count()) view->selectedId = model->tab(model->active()).id;
 }
 
@@ -113,6 +113,7 @@ std::string FrameHost::dashboardUrl(const std::string& name) const {
 void FrameHost::takeDashboards(const sync::Sessions& state) {
     const std::vector<sync::Dashboard>& list = state.dashboards();
     if (dashboardsTaken_ && list == *dashboardsTaken_) return;
+    const bool first = !dashboardsTaken_;
     dashboardsTaken_ = list;
     dashboardUrls_.clear();
     std::vector<std::string> refused;
@@ -123,7 +124,8 @@ void FrameHost::takeDashboards(const sync::Sessions& state) {
     }
     for (const std::string& why : refused)
         std::fprintf(stderr, "nexus: %s sent %s\n", host.c_str(), loggable(why).c_str());
-    if (model->sync_dashboards(names).empty()) return;
+    // The first list ends the layout's wait for a saved dashboard (serverKnown), so it restores even with no change.
+    if (model->sync_dashboards(names).empty() && !first) return;
     restoreLayout();
     // A tab the server's list selected (the strip was empty, or the one showing went) is no choice of the person's.
     if (view != nullptr && model->tab_count() != 0) view->selectedId = model->tab(model->active()).id;

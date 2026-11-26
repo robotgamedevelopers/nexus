@@ -260,6 +260,9 @@ private:
     void takeDashboards(const sync::Sessions& state);
     std::map<std::string, std::string> dashboardUrls_;   // the server's dashboards that have a tab: name to address
     std::optional<std::vector<sync::Dashboard>> dashboardsTaken_;   // the list the server last sent; none before
+    // Whether the server's AIs and dashboards have both arrived (takeAIs, takeDashboards), which come in one state:
+    // until then the saved layout waits for an AI's or a dashboard's tab it names (tab_order.h TabLayout).
+    bool serverKnown() const { return rosterKnown && dashboardsTaken_.has_value(); }
 };
 
 } // namespace nexus
