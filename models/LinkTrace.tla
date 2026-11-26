@@ -9,7 +9,7 @@
 (* reordering from a seeded generator, with the server's own steps (an     *)
 (* open entry growing and closing, a queued prompt taken, a restart), and  *)
 (* writes LinkTraceData.tla beside this module. It defines                 *)
-(*   TraceClients, TraceFriends, TraceStart, TraceMaxSessions,             *)
+(*   TraceClients, TraceAIs, TraceStart, TraceMaxSessions,             *)
 (*     TraceMaxActions, TraceW, TraceMaxGrows, TraceMaxRestarts: the       *)
 (*     instance, and                                                       *)
 (*   Trace: one record per step. Trace[1] is the start (op "init"); each   *)
@@ -22,7 +22,7 @@
 (*     as its state shows), the stops that reached each session's          *)
 (*     responder or were refused, how many open entries, grows and         *)
 (*     restarts it has made, how many states it has made, the state each   *)
-(*     window's receiver holds, and each window's session shown per friend *)
+(*     window's receiver holds, and each window's session shown per AI *)
 (*     tab, transcripts, queues, mirror and open entries.                  *)
 (*                                                                         *)
 (* Each step of this spec takes the Link action the record names. The      *)
@@ -36,7 +36,7 @@ EXTENDS Integers, Sequences, TLC, LinkTraceData
 VARIABLES acts, applied, done, ses, nextSid, minted, skipped, tr, q, op, stops, made, snaps, last, shown, view, vq,
           seen, live, l
 
-L == INSTANCE Link WITH Clients <- TraceClients, Friends <- TraceFriends, Start <- TraceStart,
+L == INSTANCE Link WITH Clients <- TraceClients, AIs <- TraceAIs, Start <- TraceStart,
                         MaxSessions <- TraceMaxSessions, MaxActions <- TraceMaxActions, W <- TraceW,
                         MaxGrows <- TraceMaxGrows, MaxRestarts <- TraceMaxRestarts,
                         Kinds <- {"Send", "Queue", "Stop", "Create", "Ensure"}

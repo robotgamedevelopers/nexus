@@ -81,14 +81,14 @@ jobs:
             run: '^tlc_supervisor_signin_temporal_1$'
           - shard: supervisor-signin-2
             run: '^tlc_supervisor_signin_temporal_2$'
-          - shard: supervisor-friend-1
-            run: '^tlc_supervisor_friend_temporal_1$'
-          - shard: supervisor-friend-2
-            run: '^tlc_supervisor_friend_temporal_2$'
+          - shard: supervisor-ai-1
+            run: '^tlc_supervisor_ai_temporal_1$'
+          - shard: supervisor-ai-2
+            run: '^tlc_supervisor_ai_temporal_2$'
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
             build: supervisor_walk
-            skip: '^tlc_supervisor_(switch_|place_|signin_|friend_)?temporal_[0-9]+$'
+            skip: '^tlc_supervisor_(switch_|place_|signin_|ai_)?temporal_[0-9]+$'
           - shard: link-ensure
             prebuilt: true
             run: '^tlc_link_ensure$'
@@ -203,12 +203,12 @@ jobs:
           - shard: tailscale-rest
             run: '^tlc_tailscale_'
             skip: '^tlc_tailscale_spec(_keys|_certs)?$'
-          # The window's friends from the server's list (MCWindowFriends, 39,465 states on four workers), alone: in the
+          # The window's AIs from the server's list (MCWindowAIs, 39,465 states on four workers), alone: in the
           # window shard it ran past its 60 s.
-          - shard: window-friends
-            run: '^tlc_spec_friends$'
-          # The friend strip's shared-file instance (MCFriendStripShared, 150,016 states) in its own shard on eight
-          # workers, then its single-window spec and its code's walks against FriendStripTrace.tla, and their faults.
+          - shard: window-ais
+            run: '^tlc_spec_ais$'
+          # The AI strip's shared-file instance (MCAIStripShared, 150,016 states) in its own shard on eight
+          # workers, then its single-window spec and its code's walks against AIStripTrace.tla, and their faults.
           - shard: strip-shared
             run: '^tlc_spec_strip_shared$'
           - shard: strip-rest
@@ -253,7 +253,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk service_process_functional
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass|bus_delivery)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_ais$|signin|reconnect|loop_pass|bus_delivery)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang
@@ -934,18 +934,18 @@ jobs:
           for fault in --faulty-aba --faulty-stale; do
             walk build/tests/model/watch_walk 1 1000 "$fault"
           done
-          for friends in 0 1 2 3; do
+          for ais in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
-              walk build/tests/model/trace_walk "$seed" 1000 "$friends"
+              walk build/tests/model/trace_walk "$seed" 1000 "$ais"
             done
-            walk build/tests/model/trace_walk 1 1000 "$friends" --no-sprint
+            walk build/tests/model/trace_walk 1 1000 "$ais" --no-sprint
           done
           for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             walk build/tests/model/trace_walk 1 1000 3 "$fault"
           done
-          walk build/tests/model/trace_walk 10 1000 3 --friends-churn
-          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn
-          walk build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend
+          walk build/tests/model/trace_walk 10 1000 3 --ais-churn
+          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --ais-churn
+          walk build/tests/model/trace_walk 1 300 3 --ais-churn --faulty-remove-ai
           for seed in 1 2 3; do
             walk build/tests/model/strip_walk "$seed" 400 2
           done
@@ -992,10 +992,10 @@ jobs:
             walk build/tests/server/supervisor_walk 1 1000 "$fault"
           done
           for seed in 13 14 15; do
-            walk build/tests/server/supervisor_walk "$seed" 600 --friends-churn
+            walk build/tests/server/supervisor_walk "$seed" 600 --ais-churn
           done
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-remove
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-unknown
           for seed in 1 2 3 4 5 6 7 8; do
             walk build/tests/server/pass_walk "$seed" 250
           done
@@ -1097,7 +1097,7 @@ jobs:
   # Claude executable the pinned SDK ships (so npm ci with the optional per-platform package here), on a fake token,
   # against a fake Messages API on 127.0.0.1, in the OS sandbox, trying every way an AI could read its login. Spends
   # nothing and reaches no outside service. The test's runs in three jobs (NEXUS_WALL_RUN): the whole
-  # wall, the wall without its hook, and together a friend limited to its directory with the hook and without it (two
+  # wall, the wall without its hook, and together an AI limited to its directory with the hook and without it (two
   # short runs in one job: the setup is the cost).
   claude-driver-wall-macos:
     strategy:
@@ -1582,19 +1582,19 @@ jobs:
           for fault in --faulty-aba --faulty-stale; do
             walk build/tests/model/watch_walk 1 1000 "$fault"
           done
-          for friends in 0 1 2 3; do
+          for ais in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
-              walk build/tests/model/trace_walk "$seed" 1000 "$friends"
+              walk build/tests/model/trace_walk "$seed" 1000 "$ais"
             done
-            walk build/tests/model/trace_walk 1 1000 "$friends" --no-sprint
+            walk build/tests/model/trace_walk 1 1000 "$ais" --no-sprint
           done
           for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             walk build/tests/model/trace_walk 1 1000 3 "$fault"
           done
-          # the friends coming and going, and the friend strip's walks and faults
-          walk build/tests/model/trace_walk 10 1000 3 --friends-churn
-          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn
-          walk build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend
+          # the AIs coming and going, and the AI strip's walks and faults
+          walk build/tests/model/trace_walk 10 1000 3 --ais-churn
+          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --ais-churn
+          walk build/tests/model/trace_walk 1 300 3 --ais-churn --faulty-remove-ai
           for seed in 1 2 3; do
             walk build/tests/model/strip_walk "$seed" 400 2
           done
@@ -1652,12 +1652,12 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             walk build/tests/server/supervisor_walk 1 1000 "$fault"
           done
-          # the friend taken out of friends.json and put back, and a start holding no friends list, and their faults
+          # the AI taken out of ais.json and put back, and a start holding no AIs list, and their faults
           for seed in 13 14 15; do
-            walk build/tests/server/supervisor_walk "$seed" 600 --friends-churn
+            walk build/tests/server/supervisor_walk "$seed" 600 --ais-churn
           done
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove
-          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-remove
+          walk build/tests/server/supervisor_walk 13 600 --ais-churn --faulty-unknown
           # placement's walks on real files (each in walk-files beside its trace) and their faults, at the seeds the
           # trace checks use (tests/server/CMakeLists.txt)
           for seed in 1 2 3; do

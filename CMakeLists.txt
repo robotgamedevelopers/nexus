@@ -210,7 +210,7 @@ add_library(nexus_model STATIC src/model.cpp src/overlay.cpp src/cursor.cpp)
 target_include_directories(nexus_model PUBLIC src)
 target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 
-# The accounts and friends nexus-server holds (src/accounts/registry.h): their rules, their JSON files' text (with
+# The accounts and AIs nexus-server holds (src/accounts/registry.h): their rules, their JSON files' text (with
 # Prax's JSON), and the accounts the server picks. No OS, no time.
 add_library(nexus_accounts STATIC src/accounts/registry.cpp)
 target_include_directories(nexus_accounts PUBLIC src)
@@ -222,7 +222,7 @@ target_link_libraries(nexus_accounts PUBLIC prax::json prax::core nexus_policy)
 # From state format 4 the bytes are schema's tables (nexus_wire, cmake/schema.cmake); before it the hand-written codecs.
 add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/formats.cpp src/sync/actions.cpp src/sync/sessions.cpp
     src/sync/legacy_codec.cpp src/sync/tables_codec.cpp src/sync/tables_actions.cpp
-    src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp src/sync/friend_strip.cpp src/sync/secrets.cpp
+    src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp src/sync/ai_strip.cpp src/sync/secrets.cpp
     src/sync/signin.cpp src/sync/redial.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
@@ -246,7 +246,7 @@ if(NEXUS_SERVER_PARTS)
     target_compile_options(nexus_durable PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store nexus_driver)
 
-    # The driver protocol (docs/driver-protocol.md): the lines nexus-server and a friend's driver process exchange,
+    # The driver protocol (docs/driver-protocol.md): the lines nexus-server and an AI's driver process exchange,
     # their encoding and decoding, and a reader that cuts a stream into them. No OS, no time, no processes.
     add_library(nexus_driver STATIC src/driver/protocol.cpp)
     target_include_directories(nexus_driver PUBLIC src)
@@ -261,7 +261,7 @@ if(NEXUS_SERVER_PARTS)
     target_compile_options(nexus_supervisor PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_supervisor PUBLIC nexus_sync nexus_driver nexus_config)
 
-    # The friends' driver processes in nexus-server's poll loop (src/server/drivers.h), over the supervisor. POSIX
+    # The AIs' driver processes in nexus-server's poll loop (src/server/drivers.h), over the supervisor. POSIX
     # (poll, process ids), like the rest of nexus-server.
     add_library(nexus_drivers STATIC src/server/drivers.cpp)
     target_include_directories(nexus_drivers PUBLIC src)
@@ -284,7 +284,7 @@ if(NEXUS_SERVER_PARTS)
     add_executable(nexus-signin-open src/server/signin_open.cpp)
     target_compile_options(nexus-signin-open PRIVATE ${NEXUS_WARNINGS})
 
-    # The accounts and friends' config repository (src/server/config_repo.h): the files, and git as a child process.
+    # The accounts and AIs' config repository (src/server/config_repo.h): the files, and git as a child process.
     add_library(nexus_config_repo STATIC src/server/config_repo.cpp)
     target_include_directories(nexus_config_repo PUBLIC src)
     target_compile_options(nexus_config_repo PRIVATE ${NEXUS_WARNINGS})
@@ -360,7 +360,7 @@ target_compile_options(nexus_terminal_watch PRIVATE ${NEXUS_WARNINGS})
 include(cmake/schema.cmake)
 
 if(NEXUS_WINDOW_LOGIC)
-    # The window's logic that runs without a window: the friend and machine lists' parsing (and the command that prints
+    # The window's logic that runs without a window: the AI and machine lists' parsing (and the command that prints
     # them), a terminal tab's label in ssh (remote.h), the saved tab order, the window's home and config (client_home.h),
     # and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
     add_library(nexus_window_logic STATIC src/command.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp
@@ -528,6 +528,10 @@ if(TARGET nexus_policy)
         "-DTOOL=${policy_tool}" "-DCHECK=$<TARGET_FILE:policy_stale_bundle_test>" "-DRULES=${PROJECT_SOURCE_DIR}/policy/rules"
         "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/policy-stale-bundle-applied" -P "${PROJECT_SOURCE_DIR}/tests/policy/stale_bundle_apply.cmake")
     set_tests_properties(policy_unit_stale_bundle policy_unit_stale_bundle_applied PROPERTIES LABELS unit TIMEOUT 30)
+    add_test(NAME policy_functional_old_names COMMAND ${CMAKE_COMMAND} "-DTOOL=${policy_tool}"
+        "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/policy-old-names" "-DRULES=${PROJECT_SOURCE_DIR}/policy/rules"
+        -P "${PROJECT_SOURCE_DIR}/tests/policy/old_names.cmake")
+    set_tests_properties(policy_functional_old_names PROPERTIES LABELS functional TIMEOUT 30)
 endif()
 add_subdirectory(tests/model)
 add_subdirectory(tests/sync)

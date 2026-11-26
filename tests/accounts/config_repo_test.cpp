@@ -108,7 +108,7 @@ std::string pushed(ConfigRepo& repo) {
 Registry sample() {
     Registry r;
     r.accounts = {{"work", "claude"}, {"cx", "codex"}};
-    r.friends = {{"ada", {"work", "cx"}, "work"}};
+    r.ais = {{"ada", {"work", "cx"}, "work"}};
     return r;
 }
 
@@ -140,9 +140,9 @@ int main(int argc, char** argv) {
     // A change kept: the files in the one layout, mode 0600, one commit with its message; the same again, no commit.
     CHECK(repo.keep(sample(), "account work set up (asked by the window w)", &why));
     CHECK(slurp(repo.accountsPath()) == accounts::accountsText(sample()));
-    CHECK(slurp(repo.friendsPath()) == accounts::friendsText(sample()));
+    CHECK(slurp(repo.aisPath()) == accounts::aisText(sample()));
     struct stat st{};
-    CHECK(::stat(repo.friendsPath().c_str(), &st) == 0 && (st.st_mode & 0777) == 0600);
+    CHECK(::stat(repo.aisPath().c_str(), &st) == 0 && (st.st_mode & 0777) == 0600);
     CHECK(history(repo).size() == 2 && history(repo)[0].find("account work set up (asked by the window w)") !=
           std::string::npos);
     CHECK(repo.keep(sample(), "nothing", &why));
@@ -152,8 +152,8 @@ int main(int argc, char** argv) {
 
     // A hand edit: pending, so a window's change is refused rather than written over it; a reload applies it.
     Registry edited = sample();
-    edited.friends[0].preferred = "cx";
-    spit(repo.friendsPath(), accounts::friendsText(edited));
+    edited.ais[0].preferred = "cx";
+    spit(repo.aisPath(), accounts::aisText(edited));
     CHECK(repo.pending(&why) && why.find("config reload") != std::string::npos);
     Registry other = sample();
     other.accounts.push_back({"home", "claude"});
@@ -168,26 +168,26 @@ int main(int argc, char** argv) {
     CHECK(history(repo).size() == 3 && has(history(repo), "the person's edit"));
 
     // An edit that does not read: every error with the file and line; the committed state is untouched.
-    spit(repo.friendsPath(), "{\n  \"version\": 1,\n  \"friends\": [\n    {\"name\": \"ada\" \"accounts\": []}\n  ]\n}\n");
+    spit(repo.aisPath(), "{\n  \"version\": 1,\n  \"ais\": [\n    {\"name\": \"ada\" \"accounts\": []}\n  ]\n}\n");
     errors.clear();
-    CHECK(!repo.working(&read, &errors) && has(errors, "friends.json:4:"));
+    CHECK(!repo.working(&read, &errors) && has(errors, "ais.json:4:"));
     // An edit that reads but does not agree: the problem says which file to change.
-    spit(repo.friendsPath(), "{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"accounts\": [\"gone\"]}]}\n");
+    spit(repo.aisPath(), "{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"accounts\": [\"gone\"]}]}\n");
     errors.clear();
     CHECK(!repo.working(&read, &errors) && has(errors, "\"gone\""));
     CHECK(repo.committed(&held, &report) && held == edited);
-    CHECK(runGit(dir, {"checkout", "--", "friends.json"}).status == 0);
+    CHECK(runGit(dir, {"checkout", "--", "ais.json"}).status == 0);
     CHECK(!repo.pending(&why));
 
     // An earlier version: read at its commit, brought back as a new commit; history never rewritten. Never over a
     // hand edit: a restore while one is pending is refused, and the edit is left as it is.
     const std::vector<std::string> before = history(repo);
     const std::string second = before[1].substr(0, before[1].find(' '));
-    spit(repo.friendsPath(), accounts::friendsText(sample()));
+    spit(repo.aisPath(), accounts::aisText(sample()));
     errors.clear();
     CHECK(!repo.restoring(second, &read, &errors) && has(errors, "no restore while hand edits are pending"));
-    CHECK(slurp(repo.friendsPath()) == accounts::friendsText(sample()));
-    CHECK(runGit(dir, {"checkout", "--", "friends.json"}).status == 0);
+    CHECK(slurp(repo.aisPath()) == accounts::aisText(sample()));
+    CHECK(runGit(dir, {"checkout", "--", "ais.json"}).status == 0);
     errors.clear();
     CHECK(repo.restoring(second, &read, &errors) && read == sample());
     errors.clear();
@@ -353,25 +353,25 @@ int main(int argc, char** argv) {
         CHECK(runGit(sdir, {"status", "--porcelain"}).out.empty());     // never in the repository's files
     }
 
-    // A version 1 friends file committed: its friends read unlimited, as they ran. A friend added by hand while the
-    // file is still version 1 never ran: it reads limited, while the committed friend stays as it was.
+    // A version 1 AIs file committed: its AIs read unlimited, as they ran. An AI added by hand while the
+    // file is still version 1 never ran: it reads limited, while the committed AI stays as it was.
     {
-        const std::string v1 = "{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"accounts\": [\"work\"]}]}\n";
-        spit(repo.friendsPath(), v1);
-        CHECK(runGit(dir, {"commit", "-q", "-am", "a version 1 friends file"}).status == 0);
+        const std::string v1 = "{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"accounts\": [\"work\"]}]}\n";
+        spit(repo.aisPath(), v1);
+        CHECK(runGit(dir, {"commit", "-q", "-am", "a version 1 AIs file"}).status == 0);
         report.clear();
-        CHECK(repo.committed(&held, &report, false) && held.friendNamed("ada") != nullptr &&
-              !held.friendNamed("ada")->limit);
-        spit(repo.friendsPath(), "{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"accounts\": [\"work\"]}, "
+        CHECK(repo.committed(&held, &report, false) && held.aiNamed("ada") != nullptr &&
+              !held.aiNamed("ada")->limit);
+        spit(repo.aisPath(), "{\"version\": 1, \"ais\": [{\"name\": \"ada\", \"accounts\": [\"work\"]}, "
                                  "{\"name\": \"bo\", \"accounts\": [\"work\"]}]}\n");
         errors.clear();
         CHECK(repo.working(&read, &errors));
-        CHECK(read.friendNamed("ada") != nullptr && !read.friendNamed("ada")->limit);
-        CHECK(read.friendNamed("bo") != nullptr && read.friendNamed("bo")->limit);
-        CHECK(runGit(dir, {"checkout", "--", "friends.json"}).status == 0);
+        CHECK(read.aiNamed("ada") != nullptr && !read.aiNamed("ada")->limit);
+        CHECK(read.aiNamed("bo") != nullptr && read.aiNamed("bo")->limit);
+        CHECK(runGit(dir, {"checkout", "--", "ais.json"}).status == 0);
     }
 
-    // A separate private config retains account metadata through commits, a fresh read, and a later friend edit.
+    // A separate private config retains account metadata through commits, a fresh read, and a later AI edit.
     {
         ConfigRepo labeled(work + "/labeled-config");
         Registry expected = sample();
@@ -380,7 +380,7 @@ int main(int argc, char** argv) {
         expected.accounts[0].signInOnUse = true;
         CHECK(labeled.open(&why) && labeled.keep(expected, "account options", &why));
         CHECK(labeled.committed(&held, &report) && held == expected);
-        held.friends[0].preferred = "cx";
+        held.ais[0].preferred = "cx";
         CHECK(labeled.keep(held, "switch preferred account", &why));
         Registry restored;
         CHECK(labeled.committed(&restored, &report) && restored == held);
@@ -403,6 +403,49 @@ int main(int argc, char** argv) {
     ConfigRepo inner(work + "/inner");
     std::vector<std::string> lines;
     CHECK(!inner.history(&lines, &why) && lines.empty());
+
+    // A repository from before ais.json: friends.json under its old .gitignore, its list under "friends". The first open
+    // moves it to ais.json in a commit of its own, the text as it was (a hand edit still pending); HEAD reads the same
+    // registry, the commit before reads under the old name, and the next committed() writes the list as "ais".
+    {
+        const std::string olddir = work + "/old-config";
+        std::filesystem::create_directories(olddir);
+        CHECK(runGit(olddir, {"init", "-q"}).status == 0);
+        std::string oldText = accounts::aisText(sample());
+        oldText.replace(oldText.find("\"ais\""), 5, "\"friends\"");
+        spit(olddir + "/.gitignore", "*\n!.gitignore\n!accounts.json\n!friends.json\n");
+        spit(olddir + "/accounts.json", accounts::accountsText(sample()));
+        spit(olddir + "/friends.json", oldText);
+        CHECK(runGit(olddir, {"add", "--", ".gitignore", "accounts.json", "friends.json"}).status == 0);
+        CHECK(runGit(olddir, {"commit", "-q", "-m", "a repository from before"}).status == 0);
+        ConfigRepo old(olddir);
+        const std::string first = history(old)[0].substr(0, history(old)[0].find(' '));
+        Registry edited = sample();
+        edited.ais[0].preferred = "cx";
+        std::string editedText = accounts::aisText(edited);
+        editedText.replace(editedText.find("\"ais\""), 5, "\"friends\"");
+        spit(olddir + "/friends.json", editedText);       // a hand edit not yet applied
+        CHECK(old.open(&why) && old.moved().find("moved to ais.json, committed") != std::string::npos);
+        CHECK(!std::filesystem::exists(olddir + "/friends.json") && slurp(old.aisPath()) == editedText);
+        CHECK(slurp(olddir + "/.gitignore").find("!ais.json") != std::string::npos);
+        CHECK(history(old).size() == 2 && has(history(old), "nexus-server moved friends.json to ais.json"));
+        CHECK(runGit(olddir, {"cat-file", "-e", "HEAD:ais.json"}).status == 0);
+        CHECK(runGit(olddir, {"cat-file", "-e", "HEAD:friends.json"}).status != 0);
+        CHECK(old.pending(&why));                          // the hand edit is still one
+        Registry got;
+        std::vector<std::string> errs;
+        CHECK(old.working(&got, &errs) && got == edited);
+        CHECK(old.at(first, &got, &errs) && got == sample());
+        CHECK(runGit(olddir, {"checkout", "--", "ais.json"}).status == 0);
+        std::vector<std::string> said;
+        CHECK(old.committed(&got, &said) && got == sample() && has(said, "upgraded accounts.json and ais.json"));
+        CHECK(slurp(old.aisPath()) == accounts::aisText(sample()));
+        CHECK(old.open(&why) && old.moved().empty() && history(old).size() == 3);
+        // Both names there: refused, nothing moved, the fix named.
+        spit(olddir + "/friends.json", oldText);
+        CHECK(!old.open(&why) && why.find("holds both friends.json") != std::string::npos);
+        std::filesystem::remove(olddir + "/friends.json");
+    }
 
     // What a driver tells its AI.
     const std::string brief = server::configBrief("/srv/.nexus/server");

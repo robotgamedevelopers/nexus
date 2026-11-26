@@ -248,7 +248,7 @@ void test('--resume resumes that session and reports it', async () => {
     ]);
 });
 
-void test('fresh and resumed harnesses receive their standing instructions and optional friend setup guide', async () => {
+void test('fresh and resumed harnesses receive their standing instructions and optional AI setup guide', async () => {
     for (const resume of [undefined, 'existing']) {
         for (const startupContext of ['', 'standing instructions']) {
             const host = new TestHost();
@@ -765,7 +765,7 @@ void test('parseArguments', () => {
     // The server's --limit cwd: the one limit there is.
     assert.deepEqual(parseArguments(['--account', 'a', '--cwd', '/w', '--limit', 'cwd']),
         { account: 'a', cwd: '/w', limit: 'cwd', settingSources: [] });
-    // The server's --keep-out, one per directory of friends.json's "limit_keeps_out": only with --limit cwd, each
+    // The server's --keep-out, one per directory of ais.json's "limit_keeps_out": only with --limit cwd, each
     // absolute and not the root.
     assert.deepEqual(parseArguments(['--account', 'a', '--cwd', '/w', '--limit', 'cwd', '--keep-out', '/data', '--keep-out', '/net']),
         { account: 'a', cwd: '/w', limit: 'cwd', settingSources: [], keepsOut: ['/data', '/net'] });

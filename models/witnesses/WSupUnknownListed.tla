@@ -1,6 +1,6 @@
 --------------------------- MODULE WSupUnknownListed ---------------------------
-\* Reversed witness: a server that starts holding no friends list reads every friend as in it, as Drivers::listed did
-\* before (true with no registry): a friend taken out of friends.json, with a prompt queued, has it sent after a restart
+\* Reversed witness: a server that starts holding no AIs list reads every AI as in it, as Drivers::listed did
+\* before (true with no registry): an AI taken out of ais.json, with a prompt queued, has it sent after a restart
 \* whose committed files do not read. NoSendUnknown must reject it.
 EXTENDS MCSupervisor
 

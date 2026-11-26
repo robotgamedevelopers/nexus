@@ -1,6 +1,6 @@
 # `nexus --state` draws from the state file alone (src/main.cpp): run against a fixture state with HOME an empty
 # directory of its own, it exits 0 and writes the PNG, makes no ~/.nexus (no clientHome, no makeClientHome, no error
-# log), reads no nova-config and no saved tab order, and its friend tab is the state's friend.
+# log), reads no nova-config and no saved tab order, and its AI tab is the state's AI.
 #
 #   cmake -DNEXUS=<nexus> -DSTATE=<file.state> -DWORK=<dir> -P state_screenshot.cmake
 

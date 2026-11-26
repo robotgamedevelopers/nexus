@@ -11,7 +11,7 @@ BrokenSelect(i) ==
     THEN /\ active' = i
          /\ history' = Recorded(history, At(i))
          /\ last' = Did("select", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, transcript, draft, queue, nextId>>
+         /\ UNCHANGED <<ais, order, transcript, draft, queue, nextId>>
     ELSE /\ last' = Did("select", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

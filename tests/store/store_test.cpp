@@ -512,17 +512,17 @@ Change enqueue(const std::string& prompt) {
     return c;
 }
 
-// What a session is: with `friend_name`, the harness "claude" and the given settings.
-Change info(const std::string& friend_name, const std::string& model = std::string()) {
+// What a session is: with `ai_name`, the harness "claude" and the given settings.
+Change info(const std::string& ai_name, const std::string& model = std::string()) {
     Change c;
     c.kind = Change::Kind::SetInfo;
-    c.info = Info{friend_name, "claude", "", model, ""};
+    c.info = Info{ai_name, "claude", "", model, ""};
     return c;
 }
 
 // The changes of a step, with the session's info first: the step that makes it.
-std::vector<Change> made(const std::string& friend_name, std::vector<Change> rest = {}) {
-    rest.insert(rest.begin(), info(friend_name));
+std::vector<Change> made(const std::string& ai_name, std::vector<Change> rest = {}) {
+    rest.insert(rest.begin(), info(ai_name));
     return rest;
 }
 
@@ -545,7 +545,7 @@ std::string texts(const Session* t) {
 }
 
 std::string about(const Info& i) {
-    return i.friend_name + "/" + i.harness + "/" + i.account + "/" + i.model + "/" + i.effort;
+    return i.ai_name + "/" + i.harness + "/" + i.account + "/" + i.model + "/" + i.effort;
 }
 
 // A whole-state digest, to compare a recovered store with the states a scenario passed through.
@@ -678,7 +678,7 @@ void test_ids() {
         }
         CHECK(o.s->journal().log_bytes() <= 150);
         CHECK(o.s->sessions().size() == 3 && o.s->next_session() == 4);
-        CHECK(o.s->session(1)->info.friend_name == "ada" && o.s->session(3)->info.friend_name == "ada");
+        CHECK(o.s->session(1)->info.ai_name == "ada" && o.s->session(3)->info.ai_name == "ada");
     }
     fs.crash(fs.plan_all(false));
     {
@@ -687,7 +687,7 @@ void test_ids() {
         CHECK(o.s->next_session() == 4);
         // an info to a held session replaces what it is, and makes no new session
         CHECK_OK(o.s->commit(3, made("cy")));
-        CHECK(o.s->session(3)->info.friend_name == "cy" && o.s->next_session() == 4);
+        CHECK(o.s->session(3)->info.ai_name == "cy" && o.s->next_session() == 4);
         CHECK_OK(o.s->commit(4, made("dee")));
         CHECK(o.s->next_session() == 5);
     }
@@ -695,7 +695,7 @@ void test_ids() {
     {
         Opened o = open_store(fs, small);
         CHECK_OK(o.st);
-        CHECK(o.s->next_session() == 5 && o.s->session(4)->info.friend_name == "dee");
+        CHECK(o.s->next_session() == 5 && o.s->session(4)->info.ai_name == "dee");
     }
     // snapshots this store never writes
     auto snapshot_with = [](std::uint64_t next, std::uint64_t id) {
@@ -850,7 +850,7 @@ void test_driver() {
     CHECK(c2.s->session(1)->driver == (Driver{21, 20, "s-20", {"w"}}));
 }
 
-// ---- the older formats, keyed by friend tab ----
+// ---- the older formats, keyed by AI tab ----
 
 void put_legacy_tab(Writer& w, const std::string& name, const std::vector<std::string>& entries,
                     const std::vector<std::string>& queue, bool driver) {
@@ -918,7 +918,7 @@ MemFs legacy_store(const Bytes& snapshot, const std::vector<Bytes>& records) {
     return fs;
 }
 
-// A friend-tab store opens as sessions: each tab a session with its friend and the legacy harness, transcript, queue
+// An AI-tab store opens as sessions: each tab a session with its AI and the legacy harness, transcript, queue
 // and driver intact; the snapshot's tabs get ids 1, 2, ... in name order, a tab a record names first the next id;
 // clients' counters kept. It is compacted into the sessions format at open, and reads the same from then on, with
 // nothing migrated again; the next id goes on from there.
@@ -981,8 +981,8 @@ void test_migrate() {
         CHECK_OK(o.st);
         // the first step of legacy_store made session 1 in this format; the tabs follow it
         CHECK(o.report.migrated == 2 && o.s->next_session() == 4);
-        CHECK(o.s->session(2)->info.friend_name == "zed" && texts(o.s->session(2)) == "[0:z][0:z2]|");
-        CHECK(o.s->session(3)->info.friend_name == "amy" && o.s->applied("w1") == 3);
+        CHECK(o.s->session(2)->info.ai_name == "zed" && texts(o.s->session(2)) == "[0:z][0:z2]|");
+        CHECK(o.s->session(3)->info.ai_name == "amy" && o.s->applied("w1") == 3);
     }
 
     // a snapshot of format 1 (before drivers): read, every session's driver at its start
@@ -1370,7 +1370,7 @@ void put_main_driver(Writer& w, std::uint64_t next, const std::string& session) 
 // The tails (a session's instance, a driver's summary flag and its session's directory) are appended inside formats 3
 // and 4's frames, so neither format's number changed. Old to new: main's stores, unframed (records of format 2, a
 // snapshot of format 3) and framed as main writes them (a record of format 3, a snapshot of format 4, without the
-// tails), open with each session on no instance (its friend's default), no summary owed and its session's directory
+// tails), open with each session on no instance (its AI's default), no summary owed and its session's directory
 // not known. New to old: this build's record is main's, each tail at its frame's end, which a reader from before skips
 // as it skips what any later frame adds. Both kept across a crash and a compaction.
 void test_instance() {

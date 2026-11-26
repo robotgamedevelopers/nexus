@@ -19,13 +19,13 @@ int modelLimitTrace(bool switchAccount, const std::string& path) {
     pause.nextTurn = 4;
     pause.continuationPrompt = "unfinished";
     pause.exhaustedAccounts = {"first"};
-    if (!store.commit(1, {sync::infoChange({"friend", "claude", "first", "fable", ""}),
+    if (!store.commit(1, {sync::infoChange({"ai", "claude", "first", "fable", ""}),
                           sync::SessionChange{nullptr, {}, pause}}, {}, 0, nullptr))
         return 1;
     sync::Hub hub(store);
     accounts::Registry roster;
     roster.accounts = {{"first", "claude"}, {"second", "claude"}};
-    roster.friends = {{"friend", {"first", "second"}, "first"}};
+    roster.ais = {{"ai", {"first", "second"}, "first"}};
     hub.useAccounts(roster, nullptr);
     hub.reportSignedIn("first", true);
     hub.reportSignedIn("second", true);
@@ -75,17 +75,17 @@ int creditHandoffTrace(const std::string& mode, const std::string& path) {
     accounts::Registry roster;
     roster.accounts = {{"a", "claude"}, {"api", "claude", accounts::Billing::Api},
                        {"b", "claude"}, {"out", "claude"}, {"c", "claude"}};
-    roster.friends = {{"friend", {"a", "api", "b", "out", "c"}, "a"}};
+    roster.ais = {{"ai", {"a", "api", "b", "out", "c"}, "a"}};
     hub.useAccounts(roster, nullptr);
     for (const auto* account : {"a", "api", "b", "c"})
         hub.reportSignedIn(account, true);
-    if (!hub.apply({1, sync::ActionKind::Create, 0, "friend", "", ""}))
+    if (!hub.apply({1, sync::ActionKind::Create, 0, "ai", "", ""}))
         return 1;
     const auto id = store.ids().front();
     if (mode == "pin" && !hub.apply({2, sync::ActionKind::SetAccount, id, "", "a", ""}))
         return 1;
     auto person = std::make_shared<sync::SessionEntry>(sync::SessionEntry{EntryKind::Person, "request"});
-    auto partial = std::make_shared<sync::SessionEntry>(sync::SessionEntry{EntryKind::Friend, "partial"});
+    auto partial = std::make_shared<sync::SessionEntry>(sync::SessionEntry{EntryKind::AI, "partial"});
     if (!hub.commit(id, {{person, {}}, {partial, {}}}))
         return 1;
     std::ofstream out(path);
@@ -102,7 +102,7 @@ int creditHandoffTrace(const std::string& mode, const std::string& path) {
         out << "[session |-> " << id << ", account |-> " << std::quoted(session.info.account)
             << ", pinned |-> " << (session.info.autoAccount ? "FALSE" : "TRUE") << ", eligible |-> {";
         bool first = true;
-        for (const auto& name : hub.accounts()->friendNamed("friend")->accounts) {
+        for (const auto& name : hub.accounts()->aiNamed("ai")->accounts) {
             if (hub.accounts()->account(name)->billing == accounts::Billing::Subscription && hub.signedIn().contains(name)) {
                 if (!first) out << ", ";
                 out << std::quoted(name);
@@ -112,9 +112,9 @@ int creditHandoffTrace(const std::string& mode, const std::string& path) {
         out << "}, stopped |-> " << (stopped ? "TRUE" : "FALSE") << ", content |-> <<";
         first = true;
         for (const auto& e : session.transcript) {
-            if (e->kind == EntryKind::Person || e->kind == EntryKind::Friend) {
+            if (e->kind == EntryKind::Person || e->kind == EntryKind::AI) {
                 if (!first) out << ", ";
-                out << "<<" << std::quoted(e->kind == EntryKind::Person ? "person" : "friend")
+                out << "<<" << std::quoted(e->kind == EntryKind::Person ? "person" : "ai")
                     << ", " << std::quoted(e->text) << ">>";
                 first = false;
             }

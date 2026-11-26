@@ -1,21 +1,21 @@
-// Drives the real nexus::sync::FriendStrip (src/sync/friend_strip.h) over a real Model with a seeded random walk and
-// writes the trace as a TLA+ module (FriendStripTraceData.tla) for models/FriendStripTrace.tla, under which TLC checks
-// that the trace is a behaviour of models/FriendStrip.tla.
+// Drives the real nexus::sync::AIStrip (src/sync/ai_strip.h) over a real Model with a seeded random walk and
+// writes the trace as a TLA+ module (AIStripTraceData.tla) for models/AIStripTrace.tla, under which TLC checks
+// that the trace is a behaviour of models/AIStrip.tla.
 //
-//   strip_walk <seed> <steps> <friends 2-3> [--faulty-forget | --faulty-wait] <out.tla>
+//   strip_walk <seed> <steps> <ais 2-3> [--faulty-forget | --faulty-wait] <out.tla>
 //
 // The walk is a pure function of its arguments: its random numbers come from the seed (splitmix64), and it reads no
-// clock and no file. Each step is one event: a state arrives with a list of friends, the server's own (exact) or an
+// clock and no file. Each step is one event: a state arrives with a list of AIs, the server's own (exact) or an
 // older server's sessions (which only add), good names and a bad one among them; the same state arrives again; the
 // person types a draft or chooses a tab; or the window quits and starts again, its kept drafts handed to the next
 // strip as main.cpp hands them from the file (tab_order.h), and the tab that showed saved as main.cpp saves it.
 //
 // --faulty-forget starts each new strip with no kept drafts, as a window that did not save them would; --faulty-wait
-// starts it with no saved friend, as a window that judged the saved tab at launch would. TLC must reject the traces of
+// starts it with no saved AI, as a window that judged the saved tab at launch would. TLC must reject the traces of
 // both; they are the negative checks that show the binding can fail.
 
 #include "model.h"
-#include "sync/friend_strip.h"
+#include "sync/ai_strip.h"
 #include "sync/sessions.h"
 
 #include <cstdint>
@@ -82,18 +82,18 @@ const std::vector<std::string> kAllNames = {"a", "b", "c"};
 const std::string kBad = "x y";
 const std::vector<std::string> kTexts = {"", "t", "u"};
 
-// The code's state, as FriendStripTrace.tla's Matches reads it.
-std::string codeOf(const Model& model, const FriendStrip& strip) {
+// The code's state, as AIStripTrace.tla's Matches reads it.
+std::string codeOf(const Model& model, const AIStrip& strip) {
     std::vector<std::string> names;
     std::vector<std::pair<std::string, std::string>> drafts;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
-        if (model.tab(i).kind == TabKind::Friend) {
+        if (model.tab(i).kind == TabKind::AI) {
             names.push_back(model.tab(i).name);
             drafts.emplace_back(model.tab(i).name, model.tab(i).draft);
         }
     }
     const nexus::Tab& active = model.tab(model.active());
-    const std::string selected = active.kind == TabKind::Friend ? active.name : std::string();
+    const std::string selected = active.kind == TabKind::AI ? active.name : std::string();
     std::ostringstream o;
     o << "[strip |-> " << seq(names) << ", drafts |-> " << function(drafts) << ", kept |-> " << function(strip.kept())
       << ", selected |-> " << str(selected) << ", pending |-> " << (strip.pending() ? "TRUE" : "FALSE") << "]";
@@ -101,7 +101,7 @@ std::string codeOf(const Model& model, const FriendStrip& strip) {
 }
 
 std::string record(const char* act, const std::vector<std::string>& list, bool exact, const std::string& name,
-        const std::string& text, const Model& model, const FriendStrip& strip) {
+        const std::string& text, const Model& model, const AIStrip& strip) {
     std::ostringstream o;
     o << "[act |-> " << str(act) << ", list |-> " << seq(list) << ", exact |-> " << (exact ? "TRUE" : "FALSE")
       << ", name |-> " << str(name) << ", text |-> " << str(text) << ", code |-> " << codeOf(model, strip) << "]";
@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
         }
     }
     if (args.size() != 4) {
-        std::fprintf(stderr, "usage: strip_walk <seed> <steps> <friends 2-3> [--faulty-forget | --faulty-wait] "
+        std::fprintf(stderr, "usage: strip_walk <seed> <steps> <ais 2-3> [--faulty-forget | --faulty-wait] "
             "<out.tla>\n");
         return 2;
     }
@@ -132,21 +132,21 @@ int main(int argc, char** argv) {
     const long steps = std::strtol(args[1], nullptr, 10);
     const std::size_t count = std::size_t(std::strtoul(args[2], nullptr, 10));
     if (steps < 1 || count < 2 || count > kAllNames.size()) {
-        std::fprintf(stderr, "strip_walk: steps must be at least 1, and friends 2 or 3\n");
+        std::fprintf(stderr, "strip_walk: steps must be at least 1, and AIs 2 or 3\n");
         return 2;
     }
     const std::vector<std::string> names(kAllNames.begin(), kAllNames.begin() + long(count));
-    // The saved order names the friends otherwise than the lists tend to, so that it shows.
+    // The saved order names the AIs otherwise than the lists tend to, so that it shows.
     const std::vector<std::string> order = count == 2 ? std::vector<std::string>{"b", "a"}
                                                       : std::vector<std::string>{"c", "a"};
     std::vector<std::string> pool = names;
     pool.push_back(kBad);
     Rng rng{seed};
 
-    // The start: a saved friend (or none), a strip with the sprint tab, nothing kept.
+    // The start: a saved AI (or none), a strip with the sprint tab, nothing kept.
     std::string saved = rng.below(2) == 0 ? std::string() : names[rng.below(names.size())];
-    auto model = std::make_unique<Model>(std::vector<nexus::FriendInfo>{}, true);
-    auto strip = std::make_unique<FriendStrip>(order, saved, KeptDrafts{});
+    auto model = std::make_unique<Model>(std::vector<nexus::AIInfo>{}, true);
+    auto strip = std::make_unique<AIStrip>(order, saved, KeptDrafts{});
     const std::string firstSaved = saved;
     std::vector<std::string> trace{record("start", {}, false, "", "", *model, *strip)};
     Sessions last;
@@ -168,16 +168,16 @@ int main(int argc, char** argv) {
             const bool exact = rng.below(3) != 0;
             Sessions state;
             if (exact) {
-                std::vector<ServerFriend> friends;
+                std::vector<ServerAI> ais;
                 for (const std::string& name : list) {
-                    friends.push_back(ServerFriend{name});
+                    ais.push_back(ServerAI{name});
                 }
-                state.setFriends(std::move(friends));
+                state.setAIs(std::move(ais));
             } else {
                 std::vector<SessionRef> sessions;
                 for (const std::string& name : list) {
                     SessionInfo info;
-                    info.friendName = name;
+                    info.aiName = name;
                     sessions.push_back(std::make_shared<const SessionView>(tailOf(nextId++, info, {}, {}, Tail{})));
                 }
                 state = Sessions(std::move(sessions));
@@ -195,16 +195,16 @@ int main(int argc, char** argv) {
             strip->take(*model, again);
             trace.push_back(record("same", {}, false, "", "", *model, *strip));
         } else if (roll < 15) {
-            std::vector<std::size_t> friends;
+            std::vector<std::size_t> ais;
             for (std::size_t i = 0; i < model->tab_count(); ++i) {
-                if (model->tab(i).kind == TabKind::Friend) {
-                    friends.push_back(i);
+                if (model->tab(i).kind == TabKind::AI) {
+                    ais.push_back(i);
                 }
             }
-            if (friends.empty()) {
+            if (ais.empty()) {
                 continue;
             }
-            const std::size_t i = friends[rng.below(friends.size())];
+            const std::size_t i = ais[rng.below(ais.size())];
             const std::string text = kTexts[rng.below(kTexts.size())];
             model->set_draft(i, text);
             trace.push_back(record("type", {}, false, model->tab(i).name, text, *model, *strip));
@@ -213,17 +213,17 @@ int main(int argc, char** argv) {
             model->select_tab(i);
             strip->personSelected();
             const nexus::Tab& tab = model->tab(i);
-            trace.push_back(record("select", {}, false, tab.kind == TabKind::Friend ? tab.name : std::string(), "",
+            trace.push_back(record("select", {}, false, tab.kind == TabKind::AI ? tab.name : std::string(), "",
                 *model, *strip));
         } else {
             // A quit and a start: the selection saved unless the saved tab still waited, the kept drafts read back.
             if (!strip->pending()) {
                 const nexus::Tab& active = model->tab(model->active());
-                saved = active.kind == TabKind::Friend ? active.name : std::string();
+                saved = active.kind == TabKind::AI ? active.name : std::string();
             }
             KeptDrafts kept = forget ? KeptDrafts{} : strip->kept();
-            model = std::make_unique<Model>(std::vector<nexus::FriendInfo>{}, true);
-            strip = std::make_unique<FriendStrip>(order, ignoreSaved ? std::string() : saved, std::move(kept));
+            model = std::make_unique<Model>(std::vector<nexus::AIInfo>{}, true);
+            strip = std::make_unique<AIStrip>(order, ignoreSaved ? std::string() : saved, std::move(kept));
             haveLast = false;
             ++restarts;
             trace.push_back(record("restart", {}, false, "", "", *model, *strip));
@@ -234,8 +234,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "strip_walk: cannot write %s\n", args[3]);
         return 2;
     }
-    out << "---- MODULE FriendStripTraceData ----\n";
-    out << "\\* Written by tests/model/strip_walk: seed " << seed << ", " << steps << " steps, " << count << " friends"
+    out << "---- MODULE AIStripTraceData ----\n";
+    out << "\\* Written by tests/model/strip_walk: seed " << seed << ", " << steps << " steps, " << count << " AIs"
         << (forget ? ", faulty-forget" : "") << (ignoreSaved ? ", faulty-wait" : "") << ".\n";
     out << "EXTENDS TLC\n";
     out << "TraceNames == {";

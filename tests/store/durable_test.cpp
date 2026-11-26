@@ -54,27 +54,27 @@ Action act(std::uint64_t num, ActionKind kind, SessionId session, std::string te
     return a;
 }
 
-Action ensure(std::uint64_t num, std::string friendName) {
+Action ensure(std::uint64_t num, std::string aiName) {
     Action a;
     a.num = num;
     a.kind = ActionKind::Ensure;
-    a.friendName = std::move(friendName);
+    a.aiName = std::move(aiName);
     return a;
 }
 
-Action create(std::uint64_t num, std::string friendName, SessionId from) {
-    Action a = ensure(num, std::move(friendName));
+Action create(std::uint64_t num, std::string aiName, SessionId from) {
+    Action a = ensure(num, std::move(aiName));
     a.kind = ActionKind::Create;
     a.session = from;
     return a;
 }
 
-// A session as text: its friend, the index of its first entry shown, each entry's kind and text, then the queue.
+// A session as text: its AI, the index of its first entry shown, each entry's kind and text, then the queue.
 std::string text(const Sessions& sessions, SessionId id) {
     const SessionView* v = sessions.find(id);
     if (v == nullptr)
         return "-";
-    std::string out = v->info.friendName + " " + std::to_string(v->first) + ":";
+    std::string out = v->info.aiName + " " + std::to_string(v->first) + ":";
     for (const EntryRef& e : v->entries)
         out += "[" + std::to_string(int(e->kind)) + e->text + "]";
     out += "|";
@@ -121,12 +121,12 @@ void test_restart() {
     CHECK(all(hub.state()) == before);
     CHECK(text(hub.state(), 1) == "ada 0:[0hello][1(received)][2An empty prompt was not sent.]|[later]");
     CHECK(ds.applied("w1") == 6 && ds.applied("w2") == 2 && ds.applied("w3") == 0);
-    // the ids go on from where they were: an ensure for a friend with a session makes none, a create the next id
+    // the ids go on from where they were: an ensure for an AI with a session makes none, a create the next id
     CHECK(ds.nextId() == 4);
     CHECK(hub.apply(ensure(3, "cy"), nullptr, "w2"));
     CHECK(ds.size() == 3);
     CHECK(hub.apply(create(4, "cy", 3), nullptr, "w2"));
-    CHECK(ds.size() == 4 && ds.find(4) != nullptr && ds.find(4)->info.friendName == "cy" && ds.nextId() == 5);
+    CHECK(ds.size() == 4 && ds.find(4) != nullptr && ds.find(4)->info.aiName == "cy" && ds.nextId() == 5);
 }
 
 // A window reconnecting after a restart sends again what it has no acknowledgement for, under the same numbers: the
@@ -369,7 +369,7 @@ EntryRef entry(EntryKind kind, const std::string& text) {
     return std::make_shared<const SessionEntry>(SessionEntry{kind, text, true});
 }
 
-// A queued prompt delivered at a turn's end, and the friend's text still growing, across a restart: the take is
+// A queued prompt delivered at a turn's end, and the AI's text still growing, across a restart: the take is
 // durable (the prompt left the queue once, and is in the transcript once); the open entry is not, and a closed entry
 // is kept once.
 void test_take() {
@@ -384,7 +384,7 @@ void test_take() {
         std::string why;
         CHECK(hub.commit(1, {takeQueued(), SessionChange{entry(EntryKind::Person, "one"), {}}}, &why));
         CHECK(hub.setOpen(1, "the reply so"));
-        CHECK(hub.commit(1, {SessionChange{entry(EntryKind::Friend, "the reply so far"), {}}}, &why));
+        CHECK(hub.commit(1, {SessionChange{entry(EntryKind::AI, "the reply so far"), {}}}, &why));
         CHECK(hub.setOpen(1, "and then"));
         // a take of more than the queue holds is refused whole
         CHECK(!hub.commit(1, {takeQueued(), takeQueued()}, &why));
@@ -399,13 +399,13 @@ void test_take() {
     CHECK(ds.applied("w1") == 3);
 }
 
-// A store an older server left, keyed by friend tab: opened through the DurableStore, each tab is a session the hub
-// shows, with its friend and the harness the server runs, transcripts and queues intact, counters kept; a resent
-// action is still skipped, and an ensure for a migrated friend makes nothing new.
+// A store an older server left, keyed by AI tab: opened through the DurableStore, each tab is a session the hub
+// shows, with its AI and the harness the server runs, transcripts and queues intact, counters kept; a resent
+// action is still skipped, and an ensure for a migrated AI makes nothing new.
 void test_migrate() {
     store::MemFs fs;
     {
-        // a fresh store, then its journal replaced by a friend-tab snapshot (format 2)
+        // a fresh store, then its journal replaced by an AI-tab snapshot (format 2)
         server::DurableStore ds;
         CHECK(openOn(fs, ds));
     }
@@ -575,7 +575,7 @@ void test_bus_history() {
         CHECK(hub.apply(ensure(2, "di"), nullptr, "w"));
         CHECK(store.commit(1, {{entry(EntryKind::Person, human), {}},
                                {entry(EntryKind::Bus, retired), {}},
-                               {entry(EntryKind::Friend, "friend reply"), {}},
+                               {entry(EntryKind::AI, "AI reply"), {}},
                                {entry(EntryKind::Bus, alsoAllowed), {}},
                                {entry(EntryKind::Bus, allowed), {}},
                                {entry(EntryKind::Notice, "notice"), {}}}, "nexus:bus:in:ada:123-0", 1, nullptr));
@@ -601,7 +601,7 @@ void test_bus_history() {
         const auto busKind = window.format() >= kTablesFormat ? EntryKind::Bus : EntryKind::Notice;
         CHECK(*ada->entries[0] == *entry(EntryKind::Person, human));
         CHECK(*ada->entries[1] == *entry(busKind, ""));
-        CHECK(*ada->entries[2] == *entry(EntryKind::Friend, "friend reply"));
+        CHECK(*ada->entries[2] == *entry(EntryKind::AI, "AI reply"));
         CHECK(*ada->entries[3] == *entry(busKind, grantedNow ? alsoAllowed : ""));
         CHECK(*ada->entries[4] == *entry(busKind, grantedNow ? allowed : ""));
         CHECK(*ada->entries[5] == *entry(EntryKind::Notice, "notice"));

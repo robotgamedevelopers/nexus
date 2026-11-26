@@ -1,4 +1,4 @@
-// Server-owned message-bus grants and friend identities from each fork's registry.
+// Server-owned message-bus grants and AI identities from each fork's registry.
 // Registry reads run off the serving loop and never reach a driver or client.
 #pragma once
 
@@ -16,7 +16,7 @@
 
 namespace nexus::server {
 
-enum class BusPeer { Pending, Friend, Other };
+enum class BusPeer { Pending, AI, Other };
 
 class BusGrants {
 public:
@@ -24,7 +24,7 @@ public:
     void refresh(const DriverTable& table, std::int64_t nowMs);
     const std::map<std::string, std::string>& addresses() const { return addresses_; }
     const std::string& problem() const { return problem_; }
-    // Each new delivery waits for its own profile's next successful registry query. Friends may have
+    // Each new delivery waits for its own profile's next successful registry query. AIs may have
     // been added or disabled since a previous delivery, including when a refresh is already in flight.
     BusPeer sender(const std::string& recipient, const std::string& id, const std::string& name);
     // Only for projecting history: keep each recipient's most recent complete roster during outages.
@@ -34,13 +34,13 @@ public:
 
 private:
     std::set<std::string> unsandboxed_;
-    struct Friend {
+    struct AI {
         std::string harness, address;
         bool noSandbox;
-        bool operator==(const Friend&) const = default;
+        bool operator==(const AI&) const = default;
     };
     using Program = std::vector<std::string>;
-    using Roster = std::map<std::string, Friend>; // enabled name to harness and optional endpoint
+    using Roster = std::map<std::string, AI>; // enabled name to harness and optional endpoint
     struct Delivery {
         std::string id, sender;
         std::uint64_t required = 0;

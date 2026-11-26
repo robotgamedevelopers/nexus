@@ -148,36 +148,36 @@ void drivers() {
         CHECK(r.cwd == std::string("/m/work/") + name);
         CHECK((r.command == std::vector<std::string>{"/b/fake", "--script", std::string("/m/scripts/") + name + ".script"}));
     }
-    CHECK(t.friends.at("Ida").harness == "claude");
-    CHECK(t.friends.at("Ada").harness != t.friends.at("Grace").harness);
+    CHECK(t.ais.at("Ida").harness == "claude");
+    CHECK(t.ais.at("Ada").harness != t.ais.at("Grace").harness);
 }
 
 void registry() {
     mock::Options o;
     o.ais = {"Ada", "Grace", "Linus"};
     accounts::Registry r = mock::registryFor(o, "/m/work");
-    CHECK(r.accounts.empty() && r.friends.size() == 3);
-    for (const accounts::Friend& f : r.friends) {
+    CHECK(r.accounts.empty() && r.ais.size() == 3);
+    for (const accounts::AI& f : r.ais) {
         CHECK(f.accounts.empty() && f.preferred.empty() && !f.limit);
         CHECK(f.instances.size() == 1 && f.instances[0].machine == mock::kMachine &&
             f.instances[0].dir == "/m/work/" + f.name);
     }
-    CHECK(r.friends[0].name == "Ada" && r.friends[2].name == "Linus");
+    CHECK(r.ais[0].name == "Ada" && r.ais[2].name == "Linus");
     // As the server reads them back.
     accounts::Registry back;
     CHECK(accounts::readAccounts(accounts::accountsText(r), "accounts.json", &back).ok);
-    CHECK(accounts::readFriends(accounts::friendsText(r), "friends.json", &back).ok);
+    CHECK(accounts::readAIs(accounts::aisText(r), "ais.json", &back).ok);
     CHECK(back == r);
 
     o.signIn = true;
     r = mock::registryFor(o, "/m/work");
     CHECK(r.accounts.size() == 1 && r.accounts[0].name == mock::kSignInAccount && r.accounts[0].provider == "claude" &&
         r.accounts[0].email.empty());
-    CHECK(r.friends.size() == 4 && r.friends.back().name == mock::kSignInName &&
-        r.friends.back().accounts == std::vector<std::string>{mock::kSignInAccount});
+    CHECK(r.ais.size() == 4 && r.ais.back().name == mock::kSignInName &&
+        r.ais.back().accounts == std::vector<std::string>{mock::kSignInAccount});
     accounts::Registry signIn;
     CHECK(accounts::readAccounts(accounts::accountsText(r), "accounts.json", &signIn).ok);
-    CHECK(accounts::readFriends(accounts::friendsText(r), "friends.json", &signIn).ok);
+    CHECK(accounts::readAIs(accounts::aisText(r), "ais.json", &signIn).ok);
     CHECK(signIn == r);
     o.ais.clear();
     o.signIn = false;

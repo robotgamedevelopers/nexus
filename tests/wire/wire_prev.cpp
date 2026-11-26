@@ -49,7 +49,7 @@ Bytes prevSessions() {
     SessionChange* s = SessionsDiffSessionsAdd(b.main, b.GetRoot()->sessions);
     s->id = 7;
     s->changed = true;
-    setText(b.main, s->info.friend_name, "rowan");
+    setText(b.main, s->info.ai_name, "rowan");
     setText(b.main, s->info.harness, "claude");
     setText(b.main, s->info.instance, "studio");
     s->activity = Activity::Busy;
@@ -116,7 +116,7 @@ Read prevReadSessions(const Bytes& bytes) {
     }
     out.sessions = static_cast<int>(d->sessions.size());
     if (d->sessions.size() >= 1) {
-        out.friendName = textOf(d->sessions[0].info.friend_name);
+        out.aiName = textOf(d->sessions[0].info.ai_name);
         out.instance = textOf(d->sessions[0].info.instance);
         for (const EntryChange& e : d->sessions[0].entries) {
             out.kinds.push_back(EnumName(e.kind));
@@ -151,7 +151,7 @@ ReadActions prevReadActions(const Bytes& bytes) {
     for (const Action& a : d->actions) {
         out.kinds.push_back(EnumName(a.kind));
         out.sessions.push_back(a.session);
-        out.friends.push_back(textOf(a.friend_name));
+        out.ais.push_back(textOf(a.ai_name));
         out.texts.push_back(textOf(a.text));
         out.requests.push_back(a.request);
         const TableBytesView secret = TableBytesAt(a.secret);

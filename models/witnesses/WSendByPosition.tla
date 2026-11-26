@@ -1,6 +1,6 @@
 -------------------------- MODULE WSendByPosition --------------------------
-\* Reversed witness: send and queue take the position as the friend, as if the
-\* tabs never moved, so after a move they address the friend whose tab stood
+\* Reversed witness: send and queue take the position as the AI, as if the
+\* tabs never moved, so after a move they address the AI whose tab stood
 \* there first. SendTouchesNoOtherTab must reject it.
 EXTENDS MCWindow
 
@@ -9,7 +9,7 @@ BrokenSend(i) ==
     THEN /\ transcript' = [transcript EXCEPT ![i] = Append(@, [kind |-> "Person", text |-> draft[i]])]
          /\ draft' = [draft EXCEPT ![i] = ""]
          /\ last' = Did("send", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active, queue>>
+         /\ UNCHANGED <<ais, order, active, queue>>
     ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
@@ -18,7 +18,7 @@ BrokenQueue(i) ==
     THEN /\ queue' = [queue EXCEPT ![i] = Append(@, draft[i])]
          /\ draft' = [draft EXCEPT ![i] = ""]
          /\ last' = Did("queue", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active, transcript>>
+         /\ UNCHANGED <<ais, order, active, transcript>>
     ELSE /\ last' = Did("queue", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

@@ -1,6 +1,6 @@
 // Unit tests of the window's pure logic: what it keeps across launches (src/tab_order.h) through in-memory stores, and
-// the nova-config command's form and problems (src/command.h). No OS, no clock, no window, no process. The friend tabs
-// from the server's list are sync/friend_strip.h's, tested in tests/sync, and here across a restart.
+// the nova-config command's form and problems (src/command.h). No OS, no clock, no window, no process. The AI tabs
+// from the server's list are sync/ai_strip.h's, tested in tests/sync, and here across a restart.
 
 #include <cstdio>
 #include <map>
@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "command.h"
-#include "sync/friend_strip.h"
+#include "sync/ai_strip.h"
 #include "tab_order.h"
 
 namespace {
@@ -94,30 +94,30 @@ void commandProblemsSayWhatToDo() {
 
 // The tab order (src/tab_order.h). ----------------------------------------------------------------------------------
 
-std::vector<FriendInfo> named(std::vector<std::string> names) {
-    std::vector<FriendInfo> out;
+std::vector<AIInfo> named(std::vector<std::string> names) {
+    std::vector<AIInfo> out;
     for (const std::string& n : names)
-        out.push_back(FriendInfo{n, "m-" + n});
+        out.push_back(AIInfo{n, "m-" + n});
     return out;
 }
 
-std::string namesOf(const std::vector<FriendInfo>& friends) {
+std::string namesOf(const std::vector<AIInfo>& ais) {
     std::string out;
-    for (const FriendInfo& f : friends)
+    for (const AIInfo& f : ais)
         out += (out.empty() ? "" : " ") + f.name;
     return out;
 }
 
 void savedOrderIsApplied() {
-    const std::vector<FriendInfo> loaded = named({"a", "b", "c", "d"});
+    const std::vector<AIInfo> loaded = named({"a", "b", "c", "d"});
     CHECK(namesOf(applyTabOrder(loaded, {})) == "a b c d");                       // nothing saved: loaded order
     CHECK(namesOf(applyTabOrder(loaded, {"c", "a", "d", "b"})) == "c a d b");
-    CHECK(namesOf(applyTabOrder(loaded, {"c", "a"})) == "c a b d");              // unsaved friends follow, in order
+    CHECK(namesOf(applyTabOrder(loaded, {"c", "a"})) == "c a b d");              // unsaved AIs follow, in order
     CHECK(namesOf(applyTabOrder(loaded, {"gone", "d", "old"})) == "d a b c");     // vanished names dropped
     CHECK(namesOf(applyTabOrder(loaded, {"b", "b", "a", "b"})) == "b a c d");     // a duplicate counts once
     CHECK(applyTabOrder({}, {"a"}).empty());
-    std::vector<FriendInfo> applied = applyTabOrder(loaded, {"d"});
-    CHECK(applied.size() == 4 && applied[0].model == "m-d");                      // each friend keeps its model
+    std::vector<AIInfo> applied = applyTabOrder(loaded, {"d"});
+    CHECK(applied.size() == 4 && applied[0].model == "m-d");                      // each AI keeps its model
 }
 
 void tabOrderTextRoundTrips() {
@@ -161,7 +161,7 @@ struct MemoryStore {
 };
 
 void storeSavesAndRestores() {
-    const std::vector<FriendInfo> loaded = named({"a", "b", "c"});
+    const std::vector<AIInfo> loaded = named({"a", "b", "c"});
     MemoryStore mem;
     std::string warning;
     CHECK(namesOf(loadTabOrder(mem.store(), loaded, &warning)) == "a b c" && warning.empty());   // nothing saved
@@ -169,20 +169,20 @@ void storeSavesAndRestores() {
     CHECK(model.move_tab(2, 0));
     std::string error;
     CHECK(saveTabOrder(mem.store(), model, &error) && error.empty());
-    // A relaunch: the store's friends in the saved order, the first friend's tab first among them.
+    // A relaunch: the store's AIs in the saved order, the first AI's tab first among them.
     Model again(loadTabOrder(mem.store(), loaded, &warning));
     CHECK(warning.empty());
     CHECK(again.tab_count() == 3 && again.tab(0).name == "c" && again.tab(1).name == "a" && again.tab(2).name == "b");
 }
 
 // Behind the sprint tab, as the app runs: the sprint tab is never saved, and stays first after a relaunch, so the first
-// saved friend is Command-2's tab.
+// saved AI is Command-2's tab.
 void sprintTabIsNeverSavedAndStaysFirst() {
-    const std::vector<FriendInfo> loaded = named({"a", "b", "c"});
+    const std::vector<AIInfo> loaded = named({"a", "b", "c"});
     MemoryStore mem;
     Model model(loaded, true);
     CHECK(model.move_tab(3, 1));
-    CHECK(friendTabNames(model) == (std::vector<std::string>{"c", "a", "b"}));
+    CHECK(aiTabNames(model) == (std::vector<std::string>{"c", "a", "b"}));
     std::string error;
     CHECK(saveTabOrder(mem.store(), model, &error));
     std::string warning;
@@ -195,11 +195,11 @@ void terminalTabsAreNeverSaved() {
     model.add_terminal();
     model.add_terminal();
     CHECK(model.move_tab(1, 0));
-    CHECK(friendTabNames(model) == (std::vector<std::string>{"b", "a"}));
+    CHECK(aiTabNames(model) == (std::vector<std::string>{"b", "a"}));
 }
 
 void badStoreUsesTheLoadedOrderAndSaysSo() {
-    const std::vector<FriendInfo> loaded = named({"a", "b"});
+    const std::vector<AIInfo> loaded = named({"a", "b"});
     MemoryStore mem;
     mem.saved = true;
     mem.text = "not a tab order\nb\n";
@@ -216,8 +216,8 @@ void badStoreUsesTheLoadedOrderAndSaysSo() {
     CHECK(has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
 }
 
-// The window reads the saved order's names and the saved tab before any friend has arrived from the server: neither
-// needs a model of friends. Nothing saved is no names and the first tab; a bad file is the same, with a warning.
+// The window reads the saved order's names and the saved tab before any AI has arrived from the server: neither
+// needs a model of AIs. Nothing saved is no names and the first tab; a bad file is the same, with a warning.
 void savedNamesAndTabLoadAlone() {
     MemoryStore order;
     std::string warning;
@@ -235,7 +235,7 @@ void savedNamesAndTabLoadAlone() {
     CHECK(saved.kind == TabKind::Sprint && warning.empty());
     CHECK(saveSelectedTab(selection.store(), model, &error));
     saved = loadSavedTab(selection.store(), &warning);
-    CHECK(saved.kind == TabKind::Friend && saved.name == "a" && warning.empty());
+    CHECK(saved.kind == TabKind::AI && saved.name == "a" && warning.empty());
     selection.text = "junk\n";
     saved = loadSavedTab(selection.store(), &warning);
     CHECK(saved.kind == TabKind::Sprint && has(warning, "deleting it resets the selection"));
@@ -248,7 +248,7 @@ void selectedTabTextRoundTrips() {
     CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.kind == TabKind::Sprint);
     model.select_tab(2);
     CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error));
-    CHECK(saved.kind == TabKind::Friend && saved.name == "zhi yǎ");
+    CHECK(saved.kind == TabKind::AI && saved.name == "zhi yǎ");
     model.add_terminal();
     CHECK(formatSelectedTab(model) == "nexus selected tab 2\nterminal 1\n");
     CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.kind == TabKind::Terminal &&
@@ -261,6 +261,9 @@ void selectedTabTextRoundTrips() {
     CHECK(parseSelectedTab("nexus selected tab 1\nterminal\n", &saved, &error) && saved.kind == TabKind::Terminal &&
         saved.terminal == 0);
     CHECK(parseSelectedTab("nexus selected tab 2\nterminal 12\n", &saved, &error) && saved.terminal == 12);
+    // Saved before the friend names became AI: read as the AI's tab.
+    CHECK(parseSelectedTab("nexus selected tab 2\nfriend ada\n", &saved, &error) && saved.kind == TabKind::AI &&
+        saved.name == "ada");
     for (const char* bad : {"terminal", "terminal ", "terminal 0", "terminal 01", "terminal -1", "terminal x",
             "terminal 1234567"}) {
         CHECK(!parseSelectedTab(std::string("nexus selected tab 2\n") + bad + "\n", &saved, &error));
@@ -268,18 +271,18 @@ void selectedTabTextRoundTrips() {
     }
     CHECK(!parseSelectedTab("nexus selected tab 1\nterminal 1\n", &saved, &error) && has(error, "terminal 1"));
     CHECK(!parseSelectedTab("nexus selected tab 3\nsprint\n", &saved, &error) && has(error, "first line"));
-    CHECK(!parseSelectedTab("friend alex\n", &saved, &error) && has(error, "first line"));
+    CHECK(!parseSelectedTab("AI alex\n", &saved, &error) && has(error, "first line"));
     CHECK(!parseSelectedTab("nexus selected tab 1\n", &saved, &error) && has(error, "no tab"));
     CHECK(!parseSelectedTab("nexus selected tab 1\nwindow\n", &saved, &error) && has(error, "window"));
-    CHECK(!parseSelectedTab("nexus selected tab 1\nfriend \n", &saved, &error) && has(error, "no name"));
-    CHECK(!parseSelectedTab(std::string("nexus selected tab 1\nfriend a\0b\n", 32), &saved, &error) &&
+    CHECK(!parseSelectedTab("nexus selected tab 1\nai \n", &saved, &error) && has(error, "no name"));
+    CHECK(!parseSelectedTab(std::string("nexus selected tab 1\nai a\0b\n", 32), &saved, &error) &&
         has(error, "NUL"));
 }
 
 // The owner's case: alex selected, then dragged to the end. A relaunch with the saved order puts alex last, and the
 // selection comes back to alex by name, not to the position alex stood at.
 void selectedTabComesBackByIdentity() {
-    const std::vector<FriendInfo> loaded = named({"alex", "emma", "rowan"});
+    const std::vector<AIInfo> loaded = named({"alex", "emma", "rowan"});
     MemoryStore order;
     MemoryStore selection;
     Model model(loaded, true);
@@ -291,16 +294,16 @@ void selectedTabComesBackByIdentity() {
     Model again(loadTabOrder(order.store(), loaded, &warning), true);
     CHECK(again.tab(3).name == "alex");
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 3 && warning.empty());
-    // The sprint tab saved, with alex last: the sprint tab, never the last friend.
+    // The sprint tab saved, with alex last: the sprint tab, never the last AI.
     CHECK(model.select_tab(0) && saveSelectedTab(selection.store(), model, &error));
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
-    // emma saved, then the friend list changes order: emma wherever she now stands.
+    // emma saved, then the AI list changes order: emma wherever she now stands.
     CHECK(model.select_tab(1) && model.tab(1).name == "emma" && saveSelectedTab(selection.store(), model, &error));
     Model reordered(named({"rowan", "alex", "emma"}), true);
     CHECK(loadSelectedTab(selection.store(), reordered, &warning) == 3);
 }
 
-// Nothing saved, a terminal saved that did not come back, a version 1 terminal (which names none), a friend no longer
+// Nothing saved, a terminal saved that did not come back, a version 1 terminal (which names none), an AI no longer
 // in the list, or a file that is not a selection: the sprint tab. Only the bad file warns.
 void selectedTabFallsBackToTheSprintTab() {
     MemoryStore selection;
@@ -317,7 +320,7 @@ void selectedTabFallsBackToTheSprintTab() {
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
     selection.text = "nexus selected tab 2\nterminal 2\n";
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
-    selection.text = "nexus selected tab 1\nfriend gone\n";
+    selection.text = "nexus selected tab 1\nai gone\n";
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
     selection.text = "a\n";
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 0);
@@ -374,7 +377,7 @@ void textScaleLoadsClampsAndWarns() {
     CHECK(has(error, "text scale") && has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
 }
 
-// The terminal tabs' directories, in the order the tabs stand, among friends and behind the sprint tab; a directory a
+// The terminal tabs' directories, in the order the tabs stand, among AIs and behind the sprint tab; a directory a
 // line cannot hold, or none, is the home directory.
 void terminalDirectoriesFollowTheStrip() {
     Model model(named({"a", "b"}), true);
@@ -402,7 +405,7 @@ void terminalsTextRoundTrips() {
         dirs == (std::vector<std::string>{"/x"}));
     CHECK(!parseTerminals("terminal /x\n", &dirs, &error) && has(error, "first line") && dirs.empty());
     CHECK(!parseTerminals("nexus terminals 2\n", &dirs, &error) && has(error, "first line"));
-    for (const char* bad : {"terminal ", "terminals /x", "/x", "friend a"}) {
+    for (const char* bad : {"terminal ", "terminals /x", "/x", "AI a"}) {
         CHECK(!parseTerminals(std::string("nexus terminals 1\nterminal /ok\n") + bad + "\n", &dirs, &error));
         CHECK(has(error, bad) && dirs.empty());
     }
@@ -434,8 +437,8 @@ void terminalsLoadAndFallBack() {
     CHECK(has(error, "terminals") && has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
 }
 
-// A relaunch as main.cpp runs it: the friends, the saved terminals added in order, then the saved selection. A selected
-// terminal comes back by its place among the terminals, wherever the friends now stand.
+// A relaunch as main.cpp runs it: the AIs, the saved terminals added in order, then the saved selection. A selected
+// terminal comes back by its place among the terminals, wherever the AIs now stand.
 void selectedTerminalComesBackByPlace() {
     MemoryStore terminals;
     MemoryStore selection;
@@ -494,8 +497,8 @@ struct MemoryKept {
 };
 
 // The kept drafts' file: any bytes of a draft come back as typed (newlines, a line that looks like a header, non-ASCII,
-// a draft line inside a draft), each under its server and friend; a file cut short, with a bad length, a bad server or
-// friend, or not of this kind reads as nothing, and says so.
+// a draft line inside a draft), each under its server and AI; a file cut short, with a bad length, a bad server or
+// AI, or not of this kind reads as nothing, and says so.
 void keptDraftsTextRoundTrips() {
     const KeptFile drafts{{{"studio", "ada"}, "two\nlines\n"}, {{"studio", "bo"}, "draft x y 9\nnexus kept drafts 2\n"},
         {{"me@mini", "cy"}, "zhi yǎ wén"}, {{"studio", "dee"}, std::string("a\0b", 3)}, {{"mini", "ada"}, "other"}};
@@ -510,7 +513,7 @@ void keptDraftsTextRoundTrips() {
     CHECK(!parseKeptDrafts("nexus kept drafts 2\ndraft s ada x\nhello\n", &read, &error) && has(error, "not a number"));
     CHECK(!parseKeptDrafts("nexus kept drafts 2\ndraft ada 5\nhello\n", &read, &error) && has(error, "<server>"));
     CHECK(!parseKeptDrafts("nexus kept drafts 2\ns ada 5\nhello\n", &read, &error) && has(error, "<server>"));
-    CHECK(!parseKeptDrafts("nexus kept drafts 2\ndraft s .ada 1\na\n", &read, &error) && has(error, "<friend>"));
+    CHECK(!parseKeptDrafts("nexus kept drafts 2\ndraft s .ada 1\na\n", &read, &error) && has(error, "<ai>"));
     CHECK(!parseKeptDrafts("nexus kept drafts 2\ndraft s ada 1\na\ndraft s ada 1\nb\n", &read, &error) &&
           has(error, "two drafts"));
     CHECK(parseKeptDrafts("nexus kept drafts 2\ndraft s ada 1\na\ndraft t ada 1\nb\n", &read, &error) &&
@@ -528,7 +531,7 @@ void keptServersAreOneWord() {
     CHECK(keptServer(std::string(255, 'h')));
 }
 
-// A change of the file: a put joins another window's draft for the same server and friend rather than replacing it;
+// A change of the file: a put joins another window's draft for the same server and AI rather than replacing it;
 // a take leaves only what was given back, and only while the file still holds exactly that; other servers' drafts are
 // never touched.
 void keptChangesMerge() {
@@ -576,23 +579,23 @@ void keptDraftsSaveAndLoad() {
           has(error, "/fake/kept-drafts.txt"));
 }
 
-// A removed friend's draft across a restart of the window: kept as the tab goes, saved, read back by the next launch
-// (main.cpp loadKeptDrafts into the strip), and given back when the server's list names the friend again.
+// A removed AI's draft across a restart of the window: kept as the tab goes, saved, read back by the next launch
+// (main.cpp loadKeptDrafts into the strip), and given back when the server's list names the AI again.
 void keptDraftsAcrossARestart() {
     const auto list = [](std::initializer_list<const char*> names) {
         sync::Sessions s;
-        std::vector<sync::ServerFriend> friends;
+        std::vector<sync::ServerAI> ais;
         for (const char* n : names) {
-            friends.push_back(sync::ServerFriend{n});
+            ais.push_back(sync::ServerAI{n});
         }
-        s.setFriends(std::move(friends));
+        s.setAIs(std::move(ais));
         return s;
     };
     MemoryKept mem;
     std::string error;
     {
         Model model({});
-        sync::FriendStrip strip;
+        sync::AIStrip strip;
         strip.take(model, list({"ada", "bo"}));
         CHECK(model.set_draft(1, "a prompt\nfor bo"));
         sync::StripTake t = strip.take(model, list({"ada"}));
@@ -604,12 +607,12 @@ void keptDraftsAcrossARestart() {
     // Another server's window finds nothing for its bo.
     {
         Model model({});
-        sync::FriendStrip strip({}, std::string(), loadKeptDrafts(mem.store(), "mini", &readable, &warning));
+        sync::AIStrip strip({}, std::string(), loadKeptDrafts(mem.store(), "mini", &readable, &warning));
         strip.take(model, list({"ada", "bo"}));
         CHECK(readable && model.tab(1).name == "bo" && model.tab(1).draft.empty());
     }
     Model model({});
-    sync::FriendStrip strip({}, std::string(), loadKeptDrafts(mem.store(), "studio", &readable, &warning));
+    sync::AIStrip strip({}, std::string(), loadKeptDrafts(mem.store(), "studio", &readable, &warning));
     CHECK(readable && warning.empty() && strip.kept().size() == 1);
     strip.take(model, list({"ada"}));
     CHECK(model.tab_count() == 1 && strip.kept().size() == 1);

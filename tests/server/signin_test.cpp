@@ -821,8 +821,8 @@ struct Events : sync::SecretEvents {
 
 struct Responder : sync::Responder {
     std::vector<std::string> logins;
-    sync::SessionInfo defaults(const std::string& friendName) const override {
-        return sync::SessionInfo{friendName, sync::kDefaultHarness, "", "", ""};
+    sync::SessionInfo defaults(const std::string& aiName) const override {
+        return sync::SessionInfo{aiName, sync::kDefaultHarness, "", "", ""};
     }
     std::vector<sync::SessionChange> send(sync::SessionId, const std::string&) override { return {}; }
     std::vector<sync::SessionChange> queue(sync::SessionId, const std::string&) override { return {}; }
@@ -838,7 +838,7 @@ struct Runner {
     std::vector<std::string> replayed;      // the queries, to check where they went and that they went once
 };
 
-// nexus-server as the tests need it: friend f's session 1 on a1; a1 and a2 (claude), a3 (a provider with no in-app
+// nexus-server as the tests need it: AI f's session 1 on a1; a1 and a2 (claude), a3 (a provider with no in-app
 // sign-in); a2 signed in by its file at the start (the probe); sign-in wired to the recorded runner.
 struct Server {
     server::DurableStore store;
@@ -854,12 +854,12 @@ struct Server {
         hub = std::make_unique<sync::Hub>(store, sync::Limits{}, &responder);
         sync::Action ensure;
         ensure.kind = sync::ActionKind::Ensure;
-        ensure.friendName = "f";
+        ensure.aiName = "f";
         hub->apply(ensure, &why);
         accounts::Registry r;
         r.accounts = {accounts::Account{"a1", "claude"}, accounts::Account{"a2", "claude"},
                       accounts::Account{"a3", "other"}};
-        r.friends = {accounts::Friend{"f", {"a1", "a2", "a3"}, "a1"}};
+        r.ais = {accounts::AI{"f", {"a1", "a2", "a3"}, "a1"}};
         hub->probeSignInWith([](const accounts::Account& a) { return a.name == "a2"; });
         CHECK(hub->useAccounts(r, nullptr).empty());
         hub->adoptDefaults();
@@ -927,7 +927,7 @@ void signOut() {
     error.clear();
     CHECK(logout() && s.store.applied("c1") == a.num);
     CHECK(removed == std::vector<std::string>{"a1"} && !s.hub->signedIn().count("a1") && s.hub->signedIn().count("a2"));
-    CHECK(s.hub->state().friends().front().accounts.front().needsSignIn);
+    CHECK(s.hub->state().ais().front().accounts.front().needsSignIn);
     CHECK(holds(s.transcript(1), "Signed out of a1"));
     sync::Action select;
     select.kind = sync::ActionKind::SetAccount;
@@ -952,14 +952,14 @@ void hub() {
         CHECK(o.size() == 1 && o[0].id == 1 && o[0].account == "a1" && o[0].host == "studio.local");
         CHECK(s.store.applied(sync::kSignInIdsClient) == 1 && s.runner.started.empty());
         CHECK(s.hub->state().requests().empty() && holds(s.transcript(1), "a1 needs signing in"));
-        // Session refreshes (the drivers setting activity at startup, a connecting window ensuring a friend's session)
+        // Session refreshes (the drivers setting activity at startup, a connecting window ensuring an AI's session)
         // keep the live offers intact in state() and stateFor().
         CHECK(s.hub->setActivity(1, sync::Activity::Down));
         {
             sync::Action ensureOther;
             ensureOther.num = ++s.num;
             ensureOther.kind = sync::ActionKind::Ensure;
-            ensureOther.friendName = "g";
+            ensureOther.aiName = "g";
             std::string why;
             CHECK(s.hub->apply(ensureOther, &why, "c1"));
         }
@@ -1103,13 +1103,13 @@ void hub_enrolled() {
     accounts::Account extra{"alternate", "codex"};
     extra.signInOnUse = true;
     registry.accounts.push_back(extra);
-    registry.friends.push_back(accounts::Friend{"reviewer", {extra.name}, extra.name});
+    registry.ais.push_back(accounts::AI{"reviewer", {extra.name}, extra.name});
     s.hub->useAccounts(registry, nullptr);
     CHECK(!s.hub->signIns().live(extra.name));
-    CHECK(s.hub->state().friends().back().accounts.front().needsSignIn);
+    CHECK(s.hub->state().ais().back().accounts.front().needsSignIn);
     sync::Action ensure;
     ensure.kind = sync::ActionKind::Ensure;
-    ensure.friendName = "reviewer";
+    ensure.aiName = "reviewer";
     std::string why;
     CHECK(s.hub->apply(ensure, &why));
     CHECK(!s.hub->signIns().live(extra.name));
@@ -1145,7 +1145,7 @@ void hub_enrolled() {
     s.hub->signInEnrolled(extra.name, extra.provider, again->first);
     CHECK(s.hub->signedIn().count(extra.name) == 1 && !s.hub->signIns().live(extra.name));
     CHECK(s.responder.logins == std::vector<std::string>{extra.name});
-    CHECK(!s.hub->state().friends().back().accounts.front().needsSignIn);
+    CHECK(!s.hub->state().ais().back().accounts.front().needsSignIn);
     // A configured Claude email requires a fresh provider grant on reload, even when the account already worked.
     auto& named = registry.accounts[1];
     named.email = "personal@example.test";

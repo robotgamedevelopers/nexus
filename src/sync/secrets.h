@@ -2,7 +2,7 @@
 // to its 0600 file on nexus-server, with no AI ever seeing it. models/Secrets.tla is the model; tests/sync/
 // secrets_walk.cpp binds this code to it.
 //
-// An asker (a friend's AI through its driver, or the server itself) asks for a secret for an account. The server mints
+// An asker (an AI through its driver, or the server itself) asks for a secret for an account. The server mints
 // a request id (durable: never reused across restarts) and puts the request in the state every window receives: its
 // id, its account, what is asked, who asks and why, never a value (Sessions::requests). A window that can take requests
 // shows a dialog for the oldest open one it has not answered (SecretPrompt). The person pastes the value once into one
@@ -95,7 +95,7 @@ struct SecretRequest {
     std::string account;
     std::string what;           // the file asked for, one of secretFiles(provider)
     SessionId asker = 0;        // the asker's session; 0: nexus itself
-    std::string askerName;      // the asker's friend, as the dialog names it; empty for nexus itself
+    std::string askerName;      // the asker's AI, as the dialog names it; empty for nexus itself
     std::string why;            // the asker's one-line reason, at most kSecretWhyBytes
     bool operator==(const SecretRequest&) const = default;
 };
@@ -104,7 +104,7 @@ struct SecretRequest {
 struct SecretAsker {
     SessionId session = 0;
     std::uint64_t ask = 0;
-    std::string name;           // the friend, for the dialog; empty for nexus itself
+    std::string name;           // the AI, for the dialog; empty for nexus itself
     bool operator==(const SecretAsker&) const = default;
 };
 
