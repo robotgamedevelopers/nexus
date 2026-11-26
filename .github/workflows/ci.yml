@@ -126,11 +126,13 @@ jobs:
         run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure --no-tests=error
       # The headless window (system fonts), real child processes and a real file, and the link end to end (nexus-server
       # over ssh to this machine, mosh's transport over real UDP): not unit tests.
-      # The frame budget and the server lock under contention run in the nightly.
+      # The frame budget and the server lock under contention run in the nightly. So does the paced injected hitch
+      # (window_frame_budget_injected_paced): it measures Release's budgets (a first frame within 4 ms), which a Debug
+      # build at -O0 misses on its own (10 to 138 ms of layout on PR #114), so it runs in the nightly's Release build.
       - name: Functional tests (every third one, from the shard's)
         if: matrix.check == 'functional'
         run: >-
-          ctest --test-dir build -L functional -E '^(window_frame_budget|server_lock_functional)$' -I '${{ matrix.shard }},,3'
+          ctest --test-dir build -L functional -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional)$' -I '${{ matrix.shard }},,3'
           -j "$TEST_JOBS" --output-on-failure --no-tests=error
 
   # On hosted Ubuntu per commit; the same job on macOS runs in the nightly (on the fleet Mac), as do the macOS token

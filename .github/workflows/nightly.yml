@@ -1098,5 +1098,12 @@ jobs:
       # The link's functional tests reach this machine over `ssh localhost` as the runner's login, which this Mac allows.
       - name: Functional tests
         run: >-
-          ctest --test-dir build -L functional -E '^(window_frame_budget|server_lock_functional)$'
+          ctest --test-dir build -L functional
+          -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional)$'
           -j "$TEST_JOBS" --output-on-failure --no-tests=error
+      # The paced injected hitch measures Release's frame budgets (tests/window/CMakeLists.txt, unchanged), so it runs
+      # here in the Release build rather than in ci.yml's Debug build; alone, so no other test shares the clock. A run
+      # that finds no such test fails (--no-tests=error).
+      - name: The paced injected hitch (Release's frame budgets)
+        run: >-
+          ctest --test-dir build -R '^window_frame_budget_injected_paced$' --output-on-failure --no-tests=error
