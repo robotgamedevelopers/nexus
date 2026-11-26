@@ -538,6 +538,12 @@ jobs:
         run: cmake --build build --parallel "$JOBS"
       - name: nexus-server is built
         run: test -x build/nexus-server
+      # The link's functional tests reach this machine over `ssh localhost` (tests/link/CMakeLists.txt); the runner's
+      # login has no ssh login of its own here, so the job starts an sshd of its own on 127.0.0.1 and the tests reach
+      # it through NEXUS_E2E_SSH (.github/ssh-localhost.sh). The protobuf libraries mosh links come with the distro
+      # (libprotobuf-dev, protobuf-compiler: present on captain's WSL2, checked 2026-11-26).
+      - name: ssh localhost, through this job's own sshd
+        run: bash .github/ssh-localhost.sh "$RUNNER_TEMP/ssh-localhost"
       - name: Functional tests
         run: bash .github/ctest.sh --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure
       - name: ccache hits in this job
@@ -664,10 +670,10 @@ jobs:
           flock "$HOME/.cache/nexus-ci/claude-wall.lock" npm run test:functional
           [ "$ssh_out" = ran ]
 
-  # The WSL2 terminal test (wsl2-terminal below), built with MSVC on a GitHub-hosted Windows runner as ci.yml's windows
-  # job builds it (.github/actions/windows-build, from cache-warm's cache when there is one; no limit here).
+  # The WSL2 terminal test (wsl2-terminal below), built with MSVC on a fleet Windows runner (captain's Windows side) as
+  # ci.yml's windows job builds it (.github/actions/windows-build, the runner's own build directory; no limit here).
   windows-wsl2-test:
-    runs-on: windows-2025
+    runs-on: [self-hosted, nexus-pr, Windows, X64]
     timeout-minutes: 60
     defaults:
       run:
@@ -676,10 +682,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Caches, configure and build
+      - name: Build directory, configure and build
         uses: ./.github/actions/windows-build
-        with:
-          require: "false"
       - name: Keep the WSL2 terminal test for wsl2-terminal
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -690,7 +694,7 @@ jobs:
 
   # A Windows terminal tab's shell for real (tests/window/test_wsl2_terminal.cpp, ctest wsl2_terminal): the probe through
   # wsl.exe, then the launch line on a Windows pseudoconsole through Prax's lib/process, as a terminal tab starts it; the
-  # shell's prompt, TERM, home directory, Escape and exit. windows-wsl2-test builds it with MSVC on a GitHub-hosted runner; it runs here, on captain's
+  # shell's prompt, TERM, home directory, Escape and exit. windows-wsl2-test builds it with MSVC on a fleet Windows runner; it runs here, on captain's
   # WSL2 runners, through WSL interop, which starts it on Windows as the user whose WSL2 distribution that is. It cannot
   # run in the windows job: those runners run as NETWORK SERVICE, which has no WSL2 distribution.
   wsl2-terminal:
@@ -1223,6 +1227,7 @@ jobs:
         uses: ./.github/actions/hosted-caches
         with:
           name: linux-release
+          require: "false"
           apt: libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev openssh-server
       - name: Configure and build
         uses: ./.github/actions/nexus-build
@@ -1253,10 +1258,10 @@ jobs:
           bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
           -E '^server_lock_functional$' -j "$TEST_JOBS" --output-on-failure
 
-  # Windows, as ci.yml's windows job builds it, on hosted Windows: the unit tests too slow for a pull request. The WSL2
+  # Windows, as ci.yml's windows job builds it, on a fleet Windows runner: the unit tests too slow for a pull request. The WSL2
   # terminal test needs a WSL2 distribution, which hosted Windows lacks: wsl2-terminal runs it on captain.
   windows-nightly:
-    runs-on: windows-2025
+    runs-on: [self-hosted, nexus-pr, Windows, X64]
     defaults:
       run:
         shell: pwsh
@@ -1438,6 +1443,7 @@ jobs:
         uses: ./.github/actions/hosted-caches
         with:
           name: linux-asan
+          require: "false"
           apt: ""
       - name: Configure and build the programs the parts run
         uses: ./.github/actions/nexus-build

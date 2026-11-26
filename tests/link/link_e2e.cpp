@@ -186,6 +186,10 @@ struct Server {
     link::Bootstrap bootstrap(const std::string& host) const {
         link::Bootstrap b;
         b.host = host;
+        // CI on a fleet Linux runner reaches this machine through an sshd of the job's own (.github/ssh-localhost.sh),
+        // whose ssh wrapper NEXUS_E2E_SSH names; elsewhere the link's own ssh, as the product runs it.
+        if (const char* ssh = std::getenv("NEXUS_E2E_SSH"); ssh != nullptr && *ssh != '\0')
+            b.ssh = ssh;
         // Its HOME is the test's own, under `dir`, so no run reads or writes the machine's ~/.nexus.
         b.command = {"/usr/bin/env", "HOME=" + dir + "/home", binary, "new", "--dir", dir};
         return b;

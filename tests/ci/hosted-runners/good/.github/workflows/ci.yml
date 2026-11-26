@@ -1,0 +1,12 @@
+# Planted (.github/hosted-runners-check.sh --selftest): every per-commit job on fleet labels; passes.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  build:
+    runs-on: [self-hosted, nexus-pr, Linux, X64]
+    steps: [{run: "true"}]
+  called:
+    uses: ./.github/workflows/called.yml

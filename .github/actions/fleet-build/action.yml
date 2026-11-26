@@ -1,0 +1,109 @@
+# A fleet macOS or Linux job's build directory and caches, kept on the runner's machine between jobs (ci.yml, ios.yml,
+# cache-warm.yml). Every job runs on the fleet's own runners (never GitHub-hosted: Glenn, 2026-10-18 and 2026-11-26), so
+# nothing is restored: the build directory of the last job on this runner is still there, and a build compiles only
+# what changed since.
+#
+# Where things live:
+#   the build directory  $RUNNER_WORKSPACE/fleet-build/<name>: beside the checkout ($GITHUB_WORKSPACE), never inside
+#                        it, so actions/checkout's clean leaves it; $RUNNER_WORKSPACE is this runner's own (each runner
+#                        has its own work directory), so two runners never share one. NEXUS_BUILD names it.
+#   cargo's target dir   $RUNNER_WORKSPACE/fleet-build/cargo-target-<name> (NEXUS_CARGO_TARGET_DIR, cmake/policy.cmake)
+#   ccache               one per machine (ccache locks its own files), with CCACHE_BASEDIR=$RUNNER_WORKSPACE: the
+#                        sources (../nexus) and the build directory sit at the same relative place on every runner, so a
+#                        runner whose build directory is new hits what its neighbours compiled
+#   Prax's downloads     per runner, under the machine's nexus-ci cache (PR_DOWNLOAD_DIR)
+#   Rust                 the pinned toolchain (1.98.1) in the machine's nexus-ci cache (RUSTUP_HOME, CARGO_HOME), never
+#                        the login's own ~/.rustup or ~/.cargo
+# The machine's nexus-ci cache is ~/.cache/nexus-ci on Linux and ~/Library/Caches/nexus-ci on macOS.
+#
+# File times. A checkout rewrites only the files that differ from what it had, so the build trusts their times; and in
+# case a checkout starts over (every file new), the sources a build of every target was made from are recorded in the
+# build directory (.github/source-times.sh record, the caller's `record` step), and a file whose content is exactly
+# what was recorded gets a fixed old time before the next build (apply). The record is removed before each build and
+# written only after a build of everything that succeeded: then every output reflects it. A build of part of the tree
+# (ci.yml's tier_pr_build) or one that failed or was cut off records nothing, since an output it did not rebuild may be
+# older than a source the record would call old.
+#
+# Nothing is installed here: what the build needs comes with the machine (nova-fleet runner-packages, sdk-toolchain),
+# and a missing tool fails at once by name.
+name: fleet-build
+description: The runner's own build directory and caches for a fleet macOS or Linux job
+inputs:
+  name:
+    description: the build directory's name (one per configuration), e.g. mac-debug
+    required: true
+  rust:
+    description: true when the build compiles Rust (the Starlark policy crate)
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: Build directory, caches and times
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+        RUST: ${{ inputs.rust }}
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then
+          echo "::error::fleet-build runs only on the fleet's own runners, not on $RUNNER_ENVIRONMENT ones"
+          exit 1
+        fi
+        if [ "$RUNNER_OS" = macOS ]; then
+          caches="$HOME/Library/Caches/nexus-ci"
+          cores=$(sysctl -n hw.ncpu)
+        else
+          caches="$HOME/.cache/nexus-ci"
+          cores=$(nproc)
+        fi
+        build="$RUNNER_WORKSPACE/fleet-build/$NAME"
+        case "$build" in "$GITHUB_WORKSPACE"/*) echo "::error::the build directory $build is inside the checkout"; exit 1 ;; esac
+        mkdir -p "$build" "$caches/ccache" "$caches/$RUNNER_NAME/prax-downloads" "$RUNNER_WORKSPACE/fleet-build/cargo-target-$NAME"
+        # The runner this directory belongs to, written once: a directory that names another runner is not this one's.
+        if [ -f "$build/.nexus-ci-runner" ] && [ "$(cat "$build/.nexus-ci-runner")" != "$RUNNER_NAME" ]; then
+          echo "::error::$build belongs to runner $(cat "$build/.nexus-ci-runner"), not $RUNNER_NAME"
+          exit 1
+        fi
+        echo "$RUNNER_NAME" > "$build/.nexus-ci-runner"
+        missing=()
+        for tool in cmake ninja ccache zstd git; do command -v "$tool" >/dev/null 2>&1 || missing+=("$tool"); done
+        if [ "$RUST" = true ] && ! command -v rustup >/dev/null 2>&1; then missing+=(rustup); fi
+        if [ ${#missing[@]} -gt 0 ]; then
+          echo "::error::$(hostname -s) lacks ${missing[*]} on the runner's PATH: the fleet installs them (nova-fleet runner-packages, sdk-toolchain)"
+          exit 1
+        fi
+        # Times by content, against what the last successful build here was made from; then that record goes until
+        # this build succeeds.
+        manifest="$build/.nexus-ci-sources"
+        if [ -f "$manifest" ]; then
+          bash .github/source-times.sh apply "$manifest"
+          rm -f "$manifest"
+        else
+          echo "no record of a finished build in $build: the build trusts the checkout's times"
+        fi
+        if [ "$RUST" = true ]; then
+          toolchain=1.98.1
+          export RUSTUP_HOME="$caches/rustup" CARGO_HOME="$caches/cargo"
+          if ! ls -d "$RUSTUP_HOME/toolchains/$toolchain-"*/bin/cargo >/dev/null 2>&1; then
+            rustup toolchain install "$toolchain" --profile minimal --no-self-update
+          fi
+          {
+            echo "RUSTUP_HOME=$RUSTUP_HOME"
+            echo "CARGO_HOME=$CARGO_HOME"
+            echo "RUSTUP_TOOLCHAIN=$toolchain"
+          } >> "$GITHUB_ENV"
+        fi
+        {
+          echo "NEXUS_BUILD=$build"
+          echo "NEXUS_CACHES=$caches"
+          echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+          echo "CCACHE_DIR=$caches/ccache"
+          echo "CCACHE_BASEDIR=$RUNNER_WORKSPACE"
+          echo "CCACHE_MAXSIZE=20G"
+          echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
+          echo "NEXUS_CARGO_TARGET_DIR=$RUNNER_WORKSPACE/fleet-build/cargo-target-$NAME"
+          echo "JOBS=$cores"
+          echo "CARGO_BUILD_JOBS=$cores"
+          echo "TEST_JOBS=$cores"
+        } >> "$GITHUB_ENV"
+        echo "$(hostname -s) ($RUNNER_NAME): $cores cores; build directory $build ($(du -sh "$build" | cut -f1))"
