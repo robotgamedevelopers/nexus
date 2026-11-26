@@ -746,7 +746,7 @@ jobs:
           "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"
 
   # The native window's link across the WSL2 boundary for real (tests/relay/wsl2_link.cpp, run by
-  # tests/relay/wsl2_link.sh): windows-wsl2-test builds the test with MSVC on a GitHub-hosted runner, and it runs here,
+  # tests/relay/wsl2_link.sh): windows-wsl2-test builds the test with MSVC on a fleet Windows runner, and it runs here,
   # on captain's WSL2 runners, through WSL interop, as the user whose WSL2 distribution that is. This job builds the
   # Linux side it reaches, inside WSL2 with clang and the runner's ccache: nexus-link-relay, nexus-server and the fake
   # driver. The test's port starts the relay through wsl.exe; the relay bootstraps a nexus-server with a home of its own

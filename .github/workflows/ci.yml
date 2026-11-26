@@ -325,8 +325,9 @@ jobs:
   # so a native Windows build leaves them out (CMakeLists.txt NEXUS_SERVER_PARTS, NEXUS_LINK), and the model checks'
   # walks with them, which TLC runs on Linux and macOS. What is built here: nexus.exe over Prax's Win32 backend of
   # lib/app, its window logic, its link to nexus-link-relay inside WSL2 (src/relay/relay_port.h), the libraries it
-  # links, their unit tests, and the two tests the nightly's wsl2-terminal and wsl2-link run across the WSL2 boundary on
-  # captain (they need a WSL2 distribution). The runner's own build directory, on D: (.github/actions/windows-build).
+  # links, and the unit tests among them that run per pull request (tier_pr_build); the two tests the nightly's
+  # wsl2-terminal and wsl2-link run across the WSL2 boundary are built by its windows-wsl2-test. The runner's own
+  # build directory, on D: (.github/actions/windows-build).
   windows:
     runs-on: [self-hosted, nexus-pr, Windows, X64]
     timeout-minutes: 2

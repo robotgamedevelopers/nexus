@@ -7,9 +7,10 @@
 # and D:\nexus-ci\cargo, shared by the machine's runners: rustup-init, from rustup's own site and checked against the
 # sha256 published beside it, is fetched once when the machine has no rustup. Nothing is restored from GitHub's cache.
 #
-# The build directory is configured once (where it has no CMakeCache.txt) and then only built: MSBuild rebuilds what is
-# newer than its outputs. The checkout rewrites only what changed, and, in case it starts over, the sources a successful
-# build of everything was made from are recorded in the build directory and a file still byte for byte the same gets a
+# The build directory is configured where it has no CMakeCache.txt, or one with other NEXUS_* options, and otherwise
+# only built: MSBuild rebuilds what is newer than its outputs. The checkout rewrites only what changed, and, in case it
+# starts over, the sources a successful build of everything was made from are recorded in the build directory and a
+# file still byte for byte the same gets a
 # fixed old time before the next build (.github/source-times.sh; Git's bash). The record is removed before each build
 # and written only after a build of every target that succeeded (cache-warm.yml, the nightly), never after ci.yml's
 # tier_pr_build. Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one
