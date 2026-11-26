@@ -8,18 +8,18 @@
 // The pieces are the ones nexus runs: each window's sync::Actions (its list, as mosh's sender holds it), the server's
 // sync::Applier per window and one sync::Hub over a MemoryStore with a Responder, the server's sync::Sessions as
 // mosh's sender per window holds them, and each window's received Sessions mirrored into a nexus::Model by a
-// sync::Mirror, which keeps which session each friend tab shows. The server starts holding one session, friend a's
-// (id 1); friend b has none until a window's ensure or create makes one. The Responder stands for the drivers
+// sync::Mirror, which keeps which session each AI tab shows. The server starts holding one session, AI a's
+// (id 1); AI b has none until a window's ensure or create makes one. The Responder stands for the drivers
 // (src/server/drivers.h): a send gives the prompt and a placeholder reply, a queue puts the prompt in the queue, and a
 // stop is counted. The steps it records:
 //   act      a window makes an action: a send, a queue or a stop naming one of the ids the hub may hold (held or not),
-//            a create for a friend (copying no session, or one of those ids), or an ensure for a friend
+//            a create for an AI (copying no session, or one of those ids), or an ensure for an AI
 //   deliver  a range of a window's actions reaches the server's Applier: the range mosh's receiver gives the server
 //            (get_remote_diff, as the server's link reads it), and at times a range mosh never gives on its own, to
 //            exercise the Applier's other paths: one already applied, and one past a gap
 //   receive  a window's receiver holds a newer state of the server's (or, after a repeat, the same): the window's
 //            mirror applies it
-//   grow     the friend's text in a session grows: the hub's open entry (Hub::setOpen), made or longer
+//   grow     the AI's text in a session grows: the hub's open entry (Hub::setOpen), made or longer
 //   close    the open entry's block ends: the closed entry committed to the store, and the open entry gone, as the
 //            drivers do (Drivers::run: the commit, then showOpen)
 //   take     a turn's end with no entry open: the queue's oldest prompt is delivered (takeQueued and the person's
@@ -34,7 +34,7 @@
 //   --faulty-mirror   each window mirrors with a new Mirror each time, which has forgotten what it showed
 //   --faulty-tail     the server's tail is one entry longer than the spec's
 //   --faulty-close    the server closes an entry without dropping the open one, so the text shows twice
-//   --faulty-ensure   the server takes an ensure as a create: the friend gets a session whether or not it has one
+//   --faulty-ensure   the server takes an ensure as a create: the AI gets a session whether or not it has one
 
 #include <cstdint>
 #include <cstdio>
@@ -62,7 +62,7 @@ using test::FakeSender;
 using test::Packet;
 using test::Rng;
 
-const std::vector<std::string> kFriends = {"a", "b"};
+const std::vector<std::string> kAIs = {"a", "b"};
 constexpr std::size_t kW = 3;
 constexpr SessionId kMaxSessions = 4;      // the hub's limit: the ids the spec has are 1..4
 
@@ -93,7 +93,7 @@ std::string tuple(const std::string& text) {
     return "<<" + text.substr(0, space) + ", " + text.substr(space + 1) + ">>";
 }
 
-// The friend's grown text: "g<g>:" and one dot a piece. Its open entry's g and length, as the spec writes them.
+// The AI's grown text: "g<g>:" and one dot a piece. Its open entry's g and length, as the spec writes them.
 std::string grownText(std::uint64_t g, std::size_t len) {
     return "g" + std::to_string(g) + ":" + std::string(len, '.');
 }
@@ -111,7 +111,7 @@ std::string cutText(std::uint64_t g) {
 std::string entry(EntryKind kind, const std::string& text) {
     switch (kind) {
         case EntryKind::Person: return "[k |-> \"P\", text |-> " + tuple(text) + "]";
-        case EntryKind::Friend:
+        case EntryKind::AI:
             if (text == kReceived) {
                 return "[k |-> \"F\", text |-> <<>>]";
             }
@@ -136,11 +136,11 @@ EntryRef stored(EntryKind kind, std::string text) {
 // queue's end (taken later, by the walk's take), a stop counted, for the session's record.
 class Recorder : public Responder {
 public:
-    SessionInfo defaults(const std::string& friendName) const override {
-        return SessionInfo{friendName, kDefaultHarness, {}, {}, {}};
+    SessionInfo defaults(const std::string& aiName) const override {
+        return SessionInfo{aiName, kDefaultHarness, {}, {}, {}};
     }
     std::vector<SessionChange> send(SessionId, const std::string& prompt) override {
-        return {SessionChange{stored(EntryKind::Person, prompt), {}}, SessionChange{stored(EntryKind::Friend,
+        return {SessionChange{stored(EntryKind::Person, prompt), {}}, SessionChange{stored(EntryKind::AI,
             kReceived), {}}};
     }
     std::vector<SessionChange> queue(SessionId, const std::string& prompt) override {
@@ -160,14 +160,14 @@ struct Window {
     FakeReceiver<Sessions> down;         // the server's state, as the window's receiver holds it
     std::uint64_t downNum = 0;
     std::vector<Action> made;            // every action it made
-    Model model{std::vector<FriendInfo>{{"a", "m"}, {"b", "m"}}};
+    Model model{std::vector<AIInfo>{{"a", "m"}, {"b", "m"}}};
     std::unique_ptr<Mirror> mirror = std::make_unique<Mirror>();
     std::size_t last = 1;                // the index (from 1) of the server's state it holds
     std::vector<Packet> upFlight, downFlight;
     std::vector<std::uint64_t> upAcks, downAcks;
 };
 
-// The friend's open entry in a session, as the walk made it: g 0 is none.
+// The AI's open entry in a session, as the walk made it: g 0 is none.
 struct Open {
     std::uint64_t g = 0;
     std::size_t len = 0;
@@ -187,10 +187,10 @@ struct Server {
     std::uint64_t made = 0, grows = 0, restarts = 0;
     Server(std::size_t windows, Limits l)
         : limits(l), hub(std::make_unique<Hub>(store, l, &responder)), up(windows), applier(windows), down(windows) {
-        // The store as the server finds it: friend a's session, from before (the spec's Start).
+        // The store as the server finds it: AI a's session, from before (the spec's Start).
         Action a;
         a.kind = ActionKind::Ensure;
-        a.friendName = "a";
+        a.aiName = "a";
         hub->apply(a);
         states.push_back(hub->state());
         for (FakeSender<Sessions>& d : down) {
@@ -213,13 +213,13 @@ public:
         a.kind = pick < 4 ? ActionKind::Stop : pick < 8 ? ActionKind::Queue : pick < 17 ? ActionKind::Send
                : pick < 18 ? ActionKind::Create : ActionKind::Ensure;
         if (a.kind == ActionKind::Create) {
-            a.friendName = kFriends[rng.below(kFriends.size())];
+            a.aiName = kAIs[rng.below(kAIs.size())];
             a.session = rng.chance(2) ? 0 : 1 + rng.below(kMaxSessions);
         } else if (a.kind == ActionKind::Ensure) {
-            a.friendName = kFriends[rng.below(kFriends.size())];
+            a.aiName = kAIs[rng.below(kAIs.size())];
         } else {
             // Mostly a session the window shows, at times any id.
-            const SessionId shown = w.mirror->session(w.model.tab(rng.below(kFriends.size())).id);
+            const SessionId shown = w.mirror->session(w.model.tab(rng.below(kAIs.size())).id);
             a.session = shown != 0 && !rng.chance(4) ? shown : 1 + rng.below(kMaxSessions);
             if (a.kind != ActionKind::Stop) {
                 a.text = textOf(c, w.made.size() + 1);
@@ -327,7 +327,7 @@ public:
         }
     }
 
-    // The friend's text grows in a session the server holds that has had a prompt (a friend replies to one).
+    // The AI's text grows in a session the server holds that has had a prompt (an AI replies to one).
     void grow(Rng& rng) {
         const SessionId id = 1 + rng.below(kMaxSessions);
         const StoredSession* s = server_.store.find(id);
@@ -357,7 +357,7 @@ public:
         if (o.g == 0) {
             return;
         }
-        if (!server_.hub->commit(id, {SessionChange{stored(EntryKind::Friend, grownText(o.g, o.len)), {}}})) {
+        if (!server_.hub->commit(id, {SessionChange{stored(EntryKind::AI, grownText(o.g, o.len)), {}}})) {
             std::fprintf(stderr, "link_walk: the store did not take the closed entry\n");
             std::exit(1);
         }
@@ -462,8 +462,8 @@ private:
     }
 
     static std::string target(const Action& a) {
-        return "[kind |-> " + str(kindName(a.kind)) + ", sid |-> " + std::to_string(a.session) + ", friend |-> " +
-            str(a.friendName) + "]";
+        return "[kind |-> " + str(kindName(a.kind)) + ", sid |-> " + std::to_string(a.session) + ", ai |-> " +
+            str(a.aiName) + "]";
     }
 
     // A change is a new state for every window's sender.
@@ -520,14 +520,14 @@ private:
         o << ">>";
     }
 
-    // Per window, a record per friend.
+    // Per window, a record per AI.
     template <typename F>
     void perTab(std::ostringstream& o, F each) const {
         o << "<<";
         for (std::size_t c = 0; c < windows_.size(); ++c) {
             o << (c ? ", " : "") << "[";
-            for (std::size_t t = 0; t < kFriends.size(); ++t) {
-                o << (t ? ", " : "") << kFriends[t] << " |-> ";
+            for (std::size_t t = 0; t < kAIs.size(); ++t) {
+                o << (t ? ", " : "") << kAIs[t] << " |-> ";
                 each(windows_[c], windows_[c].model.tab(t));
             }
             o << "]";
@@ -553,7 +553,7 @@ private:
         }
         o << ">>, ses |-> ";
         perId(o, [&](SessionId, const StoredSession* s) {
-            o << "[friend |-> " << str(s == nullptr ? std::string() : s->info.friendName) << "]";
+            o << "[ai |-> " << str(s == nullptr ? std::string() : s->info.aiName) << "]";
         });
         o << ", nextSid |-> " << server_.store.nextId() << ", tr |-> ";
         perId(o, [&](SessionId, const StoredSession* s) {
@@ -683,7 +683,7 @@ int walk(std::uint64_t seed, std::uint64_t steps, std::size_t windows, Fault fau
         << faults[static_cast<int>(fault)] << ".\n";
     out << "EXTENDS Integers\n";
     out << "TraceClients == 1.." << windows << "\n";
-    out << "TraceFriends == {\"a\", \"b\"}\n";
+    out << "TraceAIs == {\"a\", \"b\"}\n";
     out << "TraceStart == <<\"a\">>\n";
     out << "TraceMaxSessions == " << kMaxSessions << "\n";
     out << "TraceMaxActions == " << steps << "\n";

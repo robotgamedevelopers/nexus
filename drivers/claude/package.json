@@ -12,7 +12,7 @@
     "nexus-claude-driver": "dist/src/main.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').copyFileSync('../rpc/nexus_rpc/friend-setup.txt', 'dist/src/friend-setup.txt')\"",
+    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').copyFileSync('../rpc/nexus_rpc/ai-setup.txt', 'dist/src/ai-setup.txt')\"",
     "lint": "eslint --max-warnings 0 .",
     "test": "node --test --test-concurrency=4 'dist/test/unit/*.test.js'",
     "check": "npm run build && npm run lint && npm test",

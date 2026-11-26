@@ -5,7 +5,7 @@
 // `resume()` against a real `<work>/builds` and `<work>/handover` directory. Every step parks at Options::hook (and on
 // a busy lock retry) so the walk controls the interleaving, injects actor deaths (SIGKILL: unwinding closes the locked
 // directory descriptor so the OS releases the flock) and machine crashes (all actors killed, simulated server down),
-// and toggles open friend turns and drain deadlines on the simulated server. All read-only placed build folders under
+// and toggles open AI turns and drain deadlines on the simulated server. All read-only placed build folders under
 // `<work>` are made writable and removed unconditionally before exit.
 //
 // Usage: handover_walk <seed> <steps> [--fault <no-lock|no-sync|in-memory-only|overwrite-prev|no-rollback|stop-cuts|

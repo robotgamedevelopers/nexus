@@ -1,6 +1,6 @@
 -------------------------- MODULE WCloseDropsDraft --------------------------
-\* Reversed witness: closing a terminal's tab also clears every friend's
-\* draft. CloseKeepsFriends must reject it.
+\* Reversed witness: closing a terminal's tab also clears every AI's
+\* draft. CloseKeepsAIs must reject it.
 EXTENDS MCWindow
 
 BrokenClose(i) ==
@@ -10,7 +10,7 @@ BrokenClose(i) ==
          /\ active' = ClosedActive(active, i, order, Forget(history, At(i)))
          /\ draft' = [f \in Ids |-> ""]
          /\ last' = Did("close", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, transcript, queue, nextId>>
+         /\ UNCHANGED <<ais, transcript, queue, nextId>>
     ELSE /\ last' = Did("close", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

@@ -1,4 +1,4 @@
-"""Build a new conversation from the friend, driver defaults and optional source session."""
+"""Build a new conversation from the AI, driver defaults and optional source session."""
 
 def new_session(state, config = {}):
     defaults = state["defaults"]
@@ -7,12 +7,12 @@ def new_session(state, config = {}):
     if source != None:
         for field in ["account", "model", "effort"]:
             result[field] = source[field]
-        if source["friend"] == state["friend"]:
+        if source["ai"] == state["ai"]:
             result["instance"] = source["instance"]
     roster = state["roster"]
     if roster != None:
         if roster.get("can_auto_account", False):
-            if source != None and source["friend"] == state["friend"]:
+            if source != None and source["ai"] == state["ai"]:
                 result["auto_account"] = source.get("auto_account", False)
             else:
                 result["auto_account"] = config.get("auto_accounts", True)

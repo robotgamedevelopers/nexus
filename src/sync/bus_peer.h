@@ -1,5 +1,5 @@
-// nova-config accepts friend names through 128 bytes. A registered sender can live on another host
-// or harness, so the local Nexus friend/driver limit of 64 bytes does not apply to its source label.
+// nova-config accepts AI names through 128 bytes. A registered sender can live on another host
+// or harness, so the local Nexus ai/driver limit of 64 bytes does not apply to its source label.
 #pragma once
 
 #include <cstddef>

@@ -180,7 +180,7 @@ class NativeGrok(unittest.IsolatedAsyncioTestCase):
         )
         try:
             turn = Mock(harness="grok", cwd=str(room), resume=resume, model="grok", effort=None,
-                        instructions="Friend context fixture.", prompt="Reply to the fixture.")
+                        instructions="AI context fixture.", prompt="Reply to the fixture.")
             turn.session.side_effect = lambda session_id: session_id
             await asyncio.wait_for(acp(Rpc(proc), turn), 12)
             turn.credential.assert_called_once_with("SuperGrok")
@@ -204,7 +204,7 @@ class NativeGrok(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([auth for auth, _ in self.http.turns], [
             "Bearer first-test-token", "Bearer first-test-token", "Bearer second-test-token"])
         for _, request in self.http.turns:
-            self.assertIn("Friend context fixture.", json.dumps(request["input"]))
+            self.assertIn("AI context fixture.", json.dumps(request["input"]))
             for tool in request.get("tools", []):
                 self.assertIn(tool["type"], {"web_search", "x_search"}, tool)
 

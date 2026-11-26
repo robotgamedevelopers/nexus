@@ -1,7 +1,7 @@
 # The driver protocol, version 1
 
-nexus-server reaches each friend through a driver: a small program that sits between the server and one AI harness
-(Claude, Codex and others). The server starts one driver process per session (a conversation with a friend, which
+nexus-server reaches each AI through a driver: a small program that sits between the server and one AI harness
+(Claude, Codex and others). The server starts one driver process per session (a conversation with an AI, which
 the server identifies by an id of its own) and talks to it over the driver's standard input and output. This page
 is the whole contract a driver must keep. The reference code is `src/driver/protocol.h`;
 `tests/driver/fake_driver.cpp` is a driver that plays a script.
@@ -14,10 +14,10 @@ The server starts the driver with these arguments:
 |---|---|
 | `--cwd <dir>` | the directory the harness works in; always given |
 | `--resume <session id>` | resume this harness session (an id the driver reported in a `session` message); absent for a new session |
-| `--limit cwd` | the friend is limited to its directory (`docs/accounts.md`, "limit"): the AI reads and writes only in `--cwd` (and what its harness needs to run); absent for a friend not limited. A driver that supports it lists `"limit"` in its hello's `features`; the server never relies on an unknown argument being refused, and ends a driver that does not list it. A driver that lists it but cannot enforce it here refuses to start with an `error` (code `other`), never runs unlimited |
-| `--keep-out <dir>` | with `--limit cwd` only, once per directory of friends.json's `"limit_keeps_out"` (`docs/accounts.md`, "limit"): one more absolute directory the limited AI is kept out of, on top of the ones the driver always keeps out. It only adds. A driver refuses it without `--limit cwd`, and refuses a directory that is not absolute or is `/`; an older driver refuses the argument it does not know, so it never runs weaker |
+| `--limit cwd` | the AI is limited to its directory (`docs/accounts.md`, "limit"): the AI reads and writes only in `--cwd` (and what its harness needs to run); absent for an AI not limited. A driver that supports it lists `"limit"` in its hello's `features`; the server never relies on an unknown argument being refused, and ends a driver that does not list it. A driver that lists it but cannot enforce it here refuses to start with an `error` (code `other`), never runs unlimited |
+| `--keep-out <dir>` | with `--limit cwd` only, once per directory of ais.json's `"limit_keeps_out"` (`docs/accounts.md`, "limit"): one more absolute directory the limited AI is kept out of, on top of the ones the driver always keeps out. It only adds. A driver refuses it without `--limit cwd`, and refuses a directory that is not absolute or is `/`; an older driver refuses the argument it does not know, so it never runs weaker |
 
-When started through the [friend launcher](policy.md#friend-identity-at-startup), the driver also receives
+When started through the [AI launcher](policy.md#ai-identity-at-startup), the driver also receives
 `--startup-context-fd N`. It reads the UTF-8 standing instructions from this inherited descriptor, closes it,
 and supplies them to every harness creation, including resume and recovery from a missing session ID.
 A driver that cannot apply the context must refuse startup. The person's protocol messages retain their original text.
@@ -88,7 +88,7 @@ reply, is unknown, and the person decides whether to send it again.
 | `session` | `id` (required: 1 to 256 bytes of printable ASCII, no spaces, not starting with `-`) | the harness's session id: what the server passes as `--resume` when it starts the driver again |
 | `text` | `turn`, `delta` (string, required) | a piece of the turn's current text block, appended to it |
 | `text-end` | `turn` | the turn's current text block is complete |
-| `tool` | `turn`, `name` (non-empty string, required), `summary` (string, required) | the friend started using a tool; the summary says what it does, in one line |
+| `tool` | `turn`, `name` (non-empty string, required), `summary` (string, required) | the AI started using a tool; the summary says what it does, in one line |
 | `done` | `turn`, `outcome` (required: `"ok"`, `"stopped"` or `"error"`), `session_cost_usd` (finite number, zero or more, optional), `usage` (object, optional) | the turn has ended |
 | `error` | `cause` (non-empty string, required), `fix` (non-empty string, required: what a person does about it), `turn` (optional), `code` (string, optional) | something went wrong |
 | `ask-secret` | `ask` (whole number from 1, required: the driver's own number, unique within its process), `account` (non-empty string, required), `what` (non-empty string, required: a file the account's provider documents, as `"oauth-token"`), `why` (string, required: one line, no control characters, at most 200 bytes) | ask the person, in nexus's window, for a secret for the account (docs/secrets.md); written only after a `server` line naming `"secrets"`. The server answers with one `secret` line; an ask it cannot take (an account not set up, a file not documented, a `why` past its limit) is refused as a malformed line: no request is made and, as for any line the server refuses, the driver is ended. |

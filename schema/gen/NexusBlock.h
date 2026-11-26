@@ -40,7 +40,7 @@ namespace nexuswire {
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
 
-// table SessionInfo has NO block form: it is VARIABLE-LENGTH: SessionInfo.friend_name is a pointer, and a pointer in the by-value closure means no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
+// table SessionInfo has NO block form: it is VARIABLE-LENGTH: SessionInfo.ai_name is a pointer, and a pointer in the by-value closure means no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
 
@@ -56,7 +56,7 @@ namespace nexuswire {
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
 
-// table SessionChange has NO block form: it is VARIABLE-LENGTH: SessionInfo.friend_name is a pointer, and a pointer in the by-value closure means no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
+// table SessionChange has NO block form: it is VARIABLE-LENGTH: SessionInfo.ai_name is a pointer, and a pointer in the by-value closure means no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
 
@@ -68,7 +68,7 @@ namespace nexuswire {
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
 
-// table Friend has NO block form: it is VARIABLE-LENGTH: Friend.name is a pointer, and a pointer in the by-value closure means no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
+// table AI has NO block form: it is VARIABLE-LENGTH: AI.name is a pointer, and a pointer in the by-value closure means no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
 
@@ -80,7 +80,7 @@ namespace nexuswire {
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
 
-// table Action has NO block form: it is VARIABLE-LENGTH: Action.friend_name is a pointer, and a pointer in the by-value closure means no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
+// table Action has NO block form: it is VARIABLE-LENGTH: Action.ai_name is a pointer, and a pointer in the by-value closure means no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
 
@@ -108,7 +108,7 @@ namespace nexuswire {
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
 
-// table StoreSession has NO block form: it is VARIABLE-LENGTH: SessionInfo.friend_name is a pointer, and a pointer in the by-value closure means no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
+// table StoreSession has NO block form: it is VARIABLE-LENGTH: SessionInfo.ai_name is a pointer, and a pointer in the by-value closure means no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
 

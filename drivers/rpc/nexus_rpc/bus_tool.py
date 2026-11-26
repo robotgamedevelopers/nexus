@@ -1,4 +1,4 @@
-"""Host-side MCP tool for the registry-selected friend. The provider receives only the receipt."""
+"""Host-side MCP tool for the registry-selected AI. The provider receives only the receipt."""
 import json
 from pathlib import Path
 import re
@@ -16,14 +16,14 @@ SCHEMA = {"type": "object", "properties": {
 
 
 def validate(grant):
-    friend, _, endpoint = grant.partition("@")
-    if not re.fullmatch(NAME, friend) or not re.fullmatch(r"127\.0\.0\.1:[1-9][0-9]{0,4}", endpoint) or int(endpoint.split(":")[1]) > 65535:
+    ai, _, endpoint = grant.partition("@")
+    if not re.fullmatch(NAME, ai) or not re.fullmatch(r"127\.0\.0\.1:[1-9][0-9]{0,4}", endpoint) or int(endpoint.split(":")[1]) > 65535:
         raise ValueError("Invalid bus grant")
-    return friend, endpoint
+    return ai, endpoint
 
 
 def send(grant, args):
-    friend, endpoint = validate(grant)
+    ai, endpoint = validate(grant)
     if not isinstance(args, dict) or set(args) - SCHEMA["properties"].keys():
         raise ValueError("Invalid arguments")
     to, subject, body = (args.get(k) for k in ("to", "subject", "body"))
@@ -35,7 +35,7 @@ def send(grant, args):
     home = Path.home()
     bin_dir = home / ".local/bin"
     result = subprocess.run([bin_dir / "nova-secrets", "exec", "--only", "NOVA_BUS_PASSWORD", "--",
-        bin_dir / "nova-bus", "send", "--as", friend, "--to", to, *(["--re", reply] if reply else []), "--", subject, "-"],
+        bin_dir / "nova-bus", "send", "--as", ai, "--to", to, *(["--re", reply] if reply else []), "--", subject, "-"],
         input=body + "\n", text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=home, timeout=15,
         env={"HOME": str(home), "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin", "NOVA_BUS_USER": "bus", "NOVA_BUS_REDIS": endpoint},
         check=True)
@@ -50,7 +50,7 @@ def respond(grant, msg):
     if method == "ping":
         return {}
     if method == "tools/list":
-        return {"tools": [{"name": TOOL, "description": "Send a message or reply as yourself to a friend.", "inputSchema": SCHEMA}]}
+        return {"tools": [{"name": TOOL, "description": "Send a message or reply as yourself to an AI.", "inputSchema": SCHEMA}]}
     if method == "tools/call" and params.get("name") == TOOL:
         try:
             return {"content": [{"type": "text", "text": send(grant, params.get("arguments"))}]}

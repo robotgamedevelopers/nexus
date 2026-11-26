@@ -8,7 +8,7 @@ BrokenSelect(i) ==
     IF i \in Tabs
     THEN /\ active' = i
          /\ last' = Did("select", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, transcript, draft, queue, nextId, history>>
+         /\ UNCHANGED <<ais, order, transcript, draft, queue, nextId, history>>
     ELSE /\ last' = Did("select", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

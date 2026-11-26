@@ -51,7 +51,7 @@ Bytes nextSessions() {
     SessionChange* s = SessionsDiffSessionsAdd(b.main, b.GetRoot()->sessions);
     s->id = 7;
     s->changed = true;
-    setText(b.main, s->info.friend_name, "rowan");
+    setText(b.main, s->info.ai_name, "rowan");
     setText(b.main, s->info.harness, "claude");
     setText(b.main, s->info.instance, "studio");
     setText(b.main, s->info.title, "the long one");
@@ -64,7 +64,7 @@ Bytes nextSessions() {
     SessionChange* waiting = SessionsDiffSessionsAdd(b.main, b.GetRoot()->sessions);
     waiting->id = 8;
     waiting->changed = true;
-    setText(b.main, waiting->info.friend_name, "stella");
+    setText(b.main, waiting->info.ai_name, "stella");
     setText(b.main, waiting->info.harness, "claude");
     waiting->activity = Activity::Waiting;
     addEntry(b.main, *waiting, EntryKind::Person, "yo");
@@ -156,7 +156,7 @@ Read nextReadSessions(const Bytes& bytes) {
         return out;
     }
     const SessionChange& s = d->sessions[0];
-    out.friendName = textOf(s.info.friend_name);
+    out.aiName = textOf(s.info.ai_name);
     out.instance = textOf(s.info.instance);
     out.titlePresent = TableStringAt(s.info.title).data != nullptr;
     out.title = textOf(s.info.title);
@@ -249,7 +249,7 @@ ReadActions nextReadActions(const Bytes& bytes) {
     for (const Action& a : d->actions) {
         out.kinds.push_back(EnumName(a.kind));
         out.sessions.push_back(a.session);
-        out.friends.push_back(textOf(a.friend_name));
+        out.ais.push_back(textOf(a.ai_name));
         out.texts.push_back(textOf(a.text));
         out.requests.push_back(a.request);
         const TableBytesView secret = TableBytesAt(a.secret);

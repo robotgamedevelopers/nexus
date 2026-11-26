@@ -1,7 +1,7 @@
 // nexus-server's sessions on disk: the sync::SessionStore the server's Hub writes to, over the store
 // (src/store/store.h). Each commit is one record of the store's journal, synced before commit returns or, in a batch,
 // by the batch's flush, so the server acknowledges an action, and sends the state it made, only once it is durable. The sessions are kept in memory too,
-// as the shared entries the down state is made of (sync/sessions.h). A store in an older format (friend tabs) opens
+// as the shared entries the down state is made of (sync/sessions.h). A store in an older format (ai tabs) opens
 // as sessions, one per tab (store.h).
 
 #pragma once

@@ -12,7 +12,7 @@ BrokenClose(i) ==
          /\ history' = Forget(history, At(i))
          /\ active' = BrokenIndex(active, i, Forget(history, At(i)))
          /\ last' = Did("close", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, transcript, draft, queue, nextId>>
+         /\ UNCHANGED <<ais, transcript, draft, queue, nextId>>
     ELSE /\ last' = Did("close", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

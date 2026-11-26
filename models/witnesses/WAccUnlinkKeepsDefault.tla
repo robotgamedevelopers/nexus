@@ -1,5 +1,5 @@
 ------------------------------ MODULE WAccUnlinkKeepsDefault ------------------------------
-\* Reversed witness: unlinking the friend's default leaves it the default. DefaultLinked must reject it.
+\* Reversed witness: unlinking the AI's default leaves it the default. DefaultLinked must reject it.
 EXTENDS MCAccounts
 
 BrokenUnlink(f, a) ==

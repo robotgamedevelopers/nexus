@@ -1,7 +1,7 @@
 ----------------------------- MODULE WMoveSwaps -----------------------------
 \* Reversed witness: move swaps the tabs at `from` and `to` instead of
-\* shifting the tabs between, so on three tabs a friend between them jumps
-\* past another. Every tab is kept and the active friend follows; MovePlaces
+\* shifting the tabs between, so on three tabs an AI between them jumps
+\* past another. Every tab is kept and the active AI follows; MovePlaces
 \* must reject it.
 EXTENDS MCWindow
 
@@ -12,7 +12,7 @@ BrokenMove(from, to) ==
     THEN /\ order' = Swapped(order, from, to)
          /\ active' = (IF active = from THEN to ELSE IF active = to THEN from ELSE active)
          /\ last' = DidMove(from, to, TRUE)
-         /\ UNCHANGED <<friends, transcript, draft, queue>>
+         /\ UNCHANGED <<ais, transcript, draft, queue>>
     ELSE /\ last' = DidMove(from, to, FALSE)
          /\ UNCHANGED model
 

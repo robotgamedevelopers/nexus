@@ -94,13 +94,13 @@ LinkView viewOf(const link::ClientLink::Snapshot& s) {
         // Plain words first (the watch shows two lines); the link's own account after, for whoever reads on.
         v.why = "the phone could not reach nexus-server" + (s.problem.empty() ? std::string() : ". " + s.problem);
     }
-    v.aisKnown = s.sessions.friendsKnown();   // the sync wire's names until its rename lands
-    for (const sync::ServerFriend& f : s.sessions.friends())
+    v.aisKnown = s.sessions.aisKnown();
+    for (const sync::ServerAI& f : s.sessions.ais())
         v.ais.push_back(f.name);
     for (const sync::SessionRef& ref : s.sessions.sessions()) {
         LinkSession ls;
         ls.id = ref->id;
-        ls.aiName = ref->info.friendName;
+        ls.aiName = ref->info.aiName;
         ls.activity = ref->activity == sync::Activity::Idle ? LinkSession::Activity::Idle
             : ref->activity == sync::Activity::Down        ? LinkSession::Activity::Down
             : ref->activity == sync::Activity::Working     ? LinkSession::Activity::Working
@@ -109,7 +109,7 @@ LinkView viewOf(const link::ClientLink::Snapshot& s) {
         for (const sync::EntryRef& e : ref->entries) {
             LinkEntry le;
             le.kind = e->kind == EntryKind::Person ? LinkEntry::Kind::Person
-                : e->kind == EntryKind::Friend     ? LinkEntry::Kind::Ai
+                : e->kind == EntryKind::AI     ? LinkEntry::Kind::Ai
                 : e->kind == EntryKind::Tool       ? LinkEntry::Kind::Tool
                 : e->kind == EntryKind::Bus        ? LinkEntry::Kind::Bus
                                                    : LinkEntry::Kind::Notice;
@@ -119,16 +119,16 @@ LinkView viewOf(const link::ClientLink::Snapshot& s) {
         }
         v.sessions.push_back(std::move(ls));
     }
-    // Each AI's accounts (sync::ServerFriend::accounts), and the one its first session runs on: the session the relay
+    // Each AI's accounts (sync::ServerAI::accounts), and the one its first session runs on: the session the relay
     // sends its prompts and account switches to.
-    for (const sync::ServerFriend& f : s.sessions.friends()) {
+    for (const sync::ServerAI& f : s.sessions.ais()) {
         AiAccounts ai;
         ai.aiName = f.name;
         for (const sync::AccountChoice& a : f.accounts)
             ai.accounts.push_back(AccountOption{a.name, a.label, a.email, !a.needsSignIn});
         const sync::SessionView* first = nullptr;
         for (const sync::SessionRef& ref : s.sessions.sessions()) {
-            if (ref->info.friendName == f.name && (first == nullptr || ref->id < first->id))
+            if (ref->info.aiName == f.name && (first == nullptr || ref->id < first->id))
                 first = ref.get();
         }
         if (first != nullptr)
@@ -148,7 +148,7 @@ sync::Action actionOf(const LinkAction& a) {
         : a.kind == LinkAction::Kind::SetAccount  ? sync::ActionKind::SetAccount
                                                   : sync::ActionKind::Send;
     out.session = a.session;
-    out.friendName = a.kind == LinkAction::Kind::Ensure ? a.aiName : std::string();
+    out.aiName = a.kind == LinkAction::Kind::Ensure ? a.aiName : std::string();
     out.text = a.text;      // Send: the words; SetAccount: the account
     return out;
 }

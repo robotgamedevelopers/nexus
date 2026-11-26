@@ -10,8 +10,8 @@ export const sendName = 'nexus_bus_send';
 
 export function busSendTool(grant: string) {
     const parts = grant.split('@');
-    const [friend, endpoint] = parts;
-    if (parts.length !== 2 || !friend || !name.test(friend) || !endpoint ||
+    const [ai, endpoint] = parts;
+    if (parts.length !== 2 || !ai || !name.test(ai) || !endpoint ||
         !/^127\.0\.0\.1:[1-9]\d{0,4}$/u.test(endpoint) || Number(endpoint.split(':')[1]) > 65535)
         throw new Error('Invalid message bus send grant.');
     return tool(sendName, 'Send a message to a peer from your own registered bus name.',
@@ -21,7 +21,7 @@ export function busSendTool(grant: string) {
             const home = homedir();
             const result = await new Promise<string>((resolve, reject) => {
                 const child = spawn(join(home, '.local/bin/nova-secrets'), ['exec', '--only', 'NOVA_BUS_PASSWORD', '--',
-                    join(home, '.local/bin/nova-bus'), 'send', '--as', friend, '--to', to,
+                    join(home, '.local/bin/nova-bus'), 'send', '--as', ai, '--to', to,
                     ...(reply_to ? ['--re', reply_to] : []), '--', subject, '-'], {
                     cwd: home, env: {HOME: home, PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',
                         NOVA_BUS_USER: 'bus', NOVA_BUS_REDIS: endpoint}, timeout: 15000,
