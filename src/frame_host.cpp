@@ -150,7 +150,7 @@ void LinkSignIn::lost() {
 }
 
 const sync::SignInOffer* LinkSignIn::codeAsk() const {
-    if (opener.token().empty() || !activeTab) {
+    if (locked || opener.token().empty() || !activeTab) {
         return nullptr;
     }
     const auto [session, account] = activeTab();

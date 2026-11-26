@@ -112,7 +112,8 @@ public:
     void shown() { opener.shown(); }
     // The client lock locked the window (client_lock.h): the claim a show allowed is taken back, and no step runs (no
     // claim, no URL opened, no callback sent up) until it is unlocked; the owner's next show allows one again.
-    void lock() { locked = true; opener.hidden(); }
+    // A code half typed into the masked field is wiped, and none is asked for or sent while locked.
+    void lock() { locked = true; opener.hidden(); wipeCode(); }
     void unlock() { locked = false; }
     bool locked = false;
     // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open. None

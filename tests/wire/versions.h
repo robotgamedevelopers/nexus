@@ -90,8 +90,9 @@ Bytes prevHello();
 Read prevReadSessions(const Bytes& bytes);
 ReadActions prevReadActions(const Bytes& bytes);
 
-// Main as it shipped at 7999478, state format 5 before sign-in by a pasted code (tests/wire/main5/NexusMain.schema,
-// wire_main.cpp), which knows neither SignInOffer.code_wanted, Action.pastes_code nor the kind SignInCode.
+// Main as it shipped at f9d19e2 (its wire ids those of 7999478), state format 5 before sign-in by a pasted code
+// (tests/wire/main5/NexusMain.schema, wire_main.cpp), which knows neither SignInOffer.code_wanted, Action.pastes_code
+// nor the kind SignInCode.
 //   mainSessions   its server's diff, from an empty state: Antigravity flow 6 (account g1), held by window w1, its URL
 //                  its private loopback page
 //   mainClaim      its window's actions, from action 5: a claim of flow 6 by w1, account g1, session 2

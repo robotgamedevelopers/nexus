@@ -296,6 +296,22 @@ void pastedCodeAnywhere() {
     CHECK(lost.signIn.typedCode().bytes() == code);
     lost.signIn.lost();
     CHECK(lost.signIn.typedCode().empty() && lost.signIn.codeAsk() == nullptr);
+    // The window locked (client lock): what was typed is wiped, nothing asks or is sent until it is unlocked.
+    Fixture locked("studio.local", "ipad");
+    locked.signIn.activeTab = [&] { return tab; };
+    locked.signIn.opener.showAccount("antigravity-main");
+    locked.signIn.received(offering("tokWindowA1", google, "studio", "antigravity", true));
+    locked.signIn.step();
+    locked.signIn.typeCode(code);
+    CHECK(locked.signIn.typedCode().bytes() == code && locked.signIn.codeAsk() != nullptr);
+    const std::size_t before = locked.port.sent.size();
+    locked.signIn.lock();
+    CHECK(locked.signIn.typedCode().empty() && locked.signIn.codeAsk() == nullptr);
+    locked.signIn.typeCode(code);
+    locked.signIn.submitCode();
+    CHECK(locked.port.sent.size() == before && locked.signIn.typedCode().empty());
+    locked.signIn.unlock();
+    CHECK(locked.signIn.codeAsk() != nullptr && locked.signIn.typedCode().empty());
     // The desk never replays a callback for it.
     sync::SignInDesk desk;
     desk.need(1, "antigravity-main", "antigravity");
