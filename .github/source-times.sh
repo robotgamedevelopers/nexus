@@ -60,12 +60,12 @@ case "$mode" in
         stamp=${line%%$'\t'*}
         printf '%s' "${line#*$'\t'}" | tr '\t' '\0' | xargs -0 touch -h -t "$stamp"
       done
-    n=$(wc -l < "$changed" | tr -d ' ')
-    echo "$(( $(wc -l < "$plan") - n )) of $(wc -l < "$plan" | tr -d ' ') tracked files as this build directory last saw them; $n changed or new since, at $now:"
-    sed -n 1,50p "$changed"
     mkdir -p "$(dirname "$manifest")"
     cp "$plan" "$manifest.new"
     mv "$manifest.new" "$manifest"
+    n=$(wc -l < "$changed" | tr -d ' ')
+    echo "$(( $(wc -l < "$plan") - n )) of $(wc -l < "$plan" | tr -d ' ') tracked files as this build directory last saw them; $n changed or new since, at $now:"
+    sed -n 1,50p "$changed"
     ;;
   record)
     mkdir -p "$(dirname "$manifest")"
