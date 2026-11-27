@@ -83,6 +83,13 @@
 
 | feature | done |
 |---|:---:|
+| Audit remaining native appearance and input ownership; findings and completion gates in docs/configuration-audit.md | ✅ |
+| Route application pointer, keyboard and modal intents through Starlark and validated native operations; preserve native text editing, IME and terminal delivery | ❌ |
+| Give every exposed UI setting an identified consumer and behavioral qualification; fix scanner decay and prevent inert settings | ❌ |
+| Move remaining presentation defaults from native structs into the shipped profile and generate compatible fallback records from one source | ❌ |
+| Make public transcript grouping, compact work previews, details, warning widths and labels configurable while retaining mandatory native privacy redaction | ❌ |
+| Move application gesture thresholds and intent precedence into documented policy; test customized profiles through real client input | ❌ |
+| Stage and verify a binary and policy from one immutable commit; support compatible live previews and close them with warning-free matching packages | ❌ |
 | Fork-owned configuration and Starlark in the client and server. Both native hosts run editable rules with shared modules and preview/apply. The window and conversation applications now implement keyboard routing, panel composition, tab registration, message plans and session defaults (docs/policy.md, docs/plugins.md). Continue moving application behavior behind the native host primitives | ❌ |
 | Client config as data: ~/.nexus/client becomes documented, versioned, human-editable JSON in git, with the same verbs and apply report as the server's (docs/accounts.md); a person's AI changes it through the server, which relays the change to the client that asked and never stores, caches or syncs it: each machine's config is its own. Tab layout is client config too: a tab per AI or a tab per instance of an AI (the server sends every session's AI and instance names, and keeps no tabs of its own) | ❌ |
 | A client-config template on the server, kept up to date: any change to the template becomes a pending update that each client applies at its next connect; config stays local to each machine, with no live sync. Open question: how a machine's local edits survive an update (proposal: an update replaces only the fields the template change touched) | ❌ |
@@ -93,7 +100,7 @@
 | The sprint tab shown only when a board is configured (AGENTS.md, Installing). Two requirements learned in a first try: nothing a person has vanishes on upgrade (a window that had the tab keeps it, and the step that keeps it runs in the real window, never only on a test board, and is marked done only once it has run); and any value discovered for the config, such as the board's address, is validated before it is written (an http:// or https:// address, one line, no control bytes), so nothing can add a line to the config (later) | ❌ |
 | Rename an AI as one change in ais.json: its sessions, the window's tab, the tab's place in the saved order and its draft go to the new name. Today a rename is a remove of the old name and an add of the new (docs/accounts.md) (later) | ❌ |
 | Question: does the config repository's history ever need pruning, and if so how, without rewriting what was pushed (later) | ❌ |
-| complete | 0% |
+| complete | 5% |
 
 [Source data](roadmap.sexp)
 
