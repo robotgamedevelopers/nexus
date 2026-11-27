@@ -609,6 +609,7 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
         metricsValue.zoom_step < 0.01 || metricsValue.zoom_step > 1 || metricsValue.zoom_min < 0.1 ||
         metricsValue.zoom_min > 1 || metricsValue.zoom_max < 1 || metricsValue.zoom_max > 8 ||
         metricsValue.bubble_max_percent < 1 || metricsValue.bubble_max_percent > 100 ||
+        metricsValue.person_bubble_max_percent < 1 || metricsValue.person_bubble_max_percent > 100 ||
         metricsValue.action_width < 1 || metricsValue.action_width > 100 ||
         metricsValue.selection_opacity > 1 || metricsValue.transcript_selection_opacity > 1 ||
         metricsValue.scanner_spread < 0.01 || metricsValue.window_width < 100 || metricsValue.window_height < 100 ||

@@ -58,6 +58,7 @@ enum class Part : unsigned char {
     Centered,
     Entry,
     Bubble,
+    PersonBubble,
     PendingBubble,
     CaptionBubble,
     MessageCard,
@@ -243,11 +244,12 @@ struct BoxRecipe {
                 }
                 break;
             case Part::PendingBubble:
+            case Part::PersonBubble:
             case Part::Bubble:
                 box.position = PrLayoutPosition_Relative;
                 box.zIndexed = 1;
                 box.display = PrLayoutDisplay_Block;
-                box.maxWidth = prLayoutLengthPercent(look.ui.bubble_max_percent);
+                box.maxWidth = prLayoutLengthPercent(part == Part::Bubble ? look.ui.bubble_max_percent : look.ui.person_bubble_max_percent);
                 padding(box, look.ui.bubble_padding_y * k, look.ui.bubble_padding_x * k, look.ui.bubble_padding_y * k, look.ui.bubble_padding_x * k);
                 break;
             case Part::CaptionBubble:
@@ -361,12 +363,13 @@ struct DecorationRecipe {
                 }
                 break;
             case Part::PendingBubble:
+            case Part::PersonBubble:
             case Part::Bubble:
             case Part::CaptionBubble:
             case Part::Tools:
                 d.background = prColor16FromColor(rgb(look.transcriptStyle.fill));
                 radius(d, look.transcriptStyle.radius * k);
-                if (part == Part::Bubble && look.transcriptStyle.sentOutlineWidth > 0) {
+                if ((part == Part::Bubble || part == Part::PersonBubble) && look.transcriptStyle.sentOutlineWidth > 0) {
                     d.outlineStyle = PrDrawBorderStyle_Solid;
                     d.outlineColor = prColor16FromColor(rgb(look.transcriptStyle.sentOutlineInk));
                     d.outlineWidth = prLayoutUnitFromPx(look.transcriptStyle.sentOutlineWidth * k);
@@ -501,7 +504,7 @@ PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
         return pr::uiStyle(ui, look, BoxRecipe{p, s}, FlexRecipe{p, s}, StackLevel{2});
     if (p == Part::SelectorBackground)
         return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, StackLevel{-1});
-    if (p == Part::PendingBubble || p == Part::Bubble)
+    if (p == Part::PendingBubble || p == Part::Bubble || p == Part::PersonBubble)
         return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, StackLevel{1});
     return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, FlexRecipe{p, s});
 }
@@ -1508,7 +1511,8 @@ struct Builder {
             return float(items.count[i]) * look.ui.tool_pitch * s + (float(items.count[i] - 1) * look.transcriptStyle.toolGap + 2 * look.transcriptStyle.captionPaddingY) * s + gap;
         // Characters of the body face are about half its size wide.
         const float perChar = 0.5f * look.ui.body_size * s;
-        const float width = std::max(items.width * look.ui.bubble_max_percent / 100 - 2 * look.ui.bubble_padding_x * s, 1.0f);
+        const float maxPercent = kind == EntryKind::Person ? look.ui.person_bubble_max_percent : look.ui.bubble_max_percent;
+        const float width = std::max(items.width * maxPercent / 100 - 2 * look.ui.bubble_padding_x * s, 1.0f);
         const float pad = 2 * look.ui.bubble_padding_y * s;
         const float rows = float(items.lines[i]) + std::floor(float(items.chars[i]) * perChar / width);
         return rows * look.ui.line_pitch * s + pad + gap;
@@ -1811,7 +1815,7 @@ struct Builder {
             case EntryKind::Notice: {
                 PrLayoutNode entry = element(column, e.kind == EntryKind::Person ? Part::Entry : Part::ReplyRow, 0, key);
                 PrLayoutNode bubble = e.kind == EntryKind::AI ? assistantMessage(entry, tab) :
-                    e.kind == EntryKind::Person ? element(entry, Part::Bubble) : element(entry, Part::CaptionBubble);
+                    e.kind == EntryKind::Person ? element(entry, Part::PersonBubble) : element(entry, Part::CaptionBubble);
                 if (e.kind == EntryKind::Notice && e.accountEmailEnd) {
                     switchLabel(bubble, e);
                 } else if (e.kind == EntryKind::Notice) {
@@ -2089,11 +2093,11 @@ struct Builder {
         };
         for (const auto& text : tab.queue) {
             const auto compact = view.attachmentLabels.find({tab.id, text});
-            message(element(element(column, Part::Entry), Part::Bubble),
+            message(element(element(column, Part::Entry), Part::PersonBubble),
                 compact == view.attachmentLabels.end() ? text : compact->second, EntryKind::Person);
         }
         for (const auto& sendingBubble : view.outgoing)
-            if (sendingBubble.tab == tab.id) message(element(element(column, Part::Entry), Part::Bubble), sendingBubble.text, EntryKind::Person);
+            if (sendingBubble.tab == tab.id) message(element(element(column, Part::Entry), Part::PersonBubble), sendingBubble.text, EntryKind::Person);
         if (!tab.held.empty()) pendingBubble(tab.held);
     }
 
@@ -2307,6 +2311,7 @@ struct Builder {
             const auto bubble = element(row, Part::PendingBubble);
             auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, bubble));
             auto box = prLayoutBoxStyleRecord(tree, record.groups[PrLayoutGroup_Box]);
+            box.maxWidth = prLayoutLengthPercent(look.ui.bubble_max_percent);
             auto decoration = prLayoutDecorationStyleRecord(tree, record.groups[PrLayoutGroup_Decoration]);
             const auto orange = prColor16FromColor(promptPulse(true, 1.0));
             for (int side = 0; side < PrRectSide_Count; ++side) {

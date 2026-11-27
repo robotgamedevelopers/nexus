@@ -1428,6 +1428,32 @@ void longInlineCommandWrapsInTheReply() {
     }
 }
 
+void personBubblesWrapFromTheRight() {
+    for (const float viewport : {1000.0f, 1600.0f}) {
+        Harness h;
+        h.extent = h.view.extent = {viewport, 1400};
+        std::string text;
+        for (int i = 0; i < 30; ++i) text += "A message long enough to wrap across several lines. ";
+        h.model.append(0, {EntryKind::Person, text});
+        h.frame(); h.frame();
+        const auto entries = h.entries();
+        CHECK(entries.size() == 1);
+        if (entries.size() != 1) continue;
+        const auto row = h.bounds(entries.front());
+        const auto bubble = h.bounds(prLayoutNodeFirstChild(h.tree, entries.front()));
+        CHECK(near(bubble.right, row.right));
+        CHECK(std::abs((bubble.right - bubble.left) / (row.right - row.left) - 2.0f / 3.0f) < 0.01f);
+        CHECK(bubble.bottom - bubble.top > h.look.ui.line_pitch * 2);
+        h.model.set_draft(0, text);
+        h.model.hold_draft(0);
+        h.frame(); h.frame();
+        const auto heldRow = h.bounds(h.entries().back());
+        const auto held = h.bounds(prLayoutNodeFirstChild(h.tree, h.entries().back()));
+        CHECK(near(held.right, heldRow.right));
+        CHECK(std::abs((held.right - held.left) / (heldRow.right - heldRow.left) - 2.0f / 3.0f) < 0.01f);
+    }
+}
+
 void conversationBubblesAndSignInCard() {
     Harness h;
     const std::string live = "Streaming reply";
@@ -3453,6 +3479,7 @@ void idlePulseAndConfiguration(const char* active, const char* disabled) {
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--bubble-widths") { personBubblesWrapFromTheRight(); return failures ? 1 : 0; }
     if (argc == 2 && std::string(argv[1]) == "--notch") { notchAwareHeader(); return failures ? 1 : 0; }
     if (argc == 4 && std::string(argv[1]) == "--ui-config") { idlePulseAndConfiguration(argv[2], argv[3]); return failures ? 1 : 0; }
     if (argc == 2 && std::string(argv[1]) == "--goal") { activeGoalBubble(); return failures ? 1 : 0; }
@@ -3974,6 +4001,7 @@ int main(int argc, char** argv) {
     copyMarkdownConversation();
     markdownListsAndLinks();
     longInlineCommandWrapsInTheReply();
+    personBubblesWrapFromTheRight();
     conversationBubblesAndSignInCard();
     signInCardInTheShippedMenu();
     overlayKeepsAllButTheBackgroundOpaque();
