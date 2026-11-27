@@ -102,9 +102,10 @@
    :rows (
      ("screen-observation" "Let an AI see a display or window the human chooses with Screen Recording permission" :later t)
      ("desktop-input" "Let an AI click and type in other apps with separate Accessibility permission and a human stop control" :later t)
+     ("point-release-024" "Finish v0.2.4: verify the remaining platform gates, deploy the matching client and policy, merge the release PR, then publish the source archive and checksums")
      ("work-preview-details" "Compact work groups: keep only the latest three unwrapped lines; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup")
-     ("ai-paragraph-selection" "AI-only selection: double-click a whole paragraph, then Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text")
-     ("quoted-ai-paste" "Paste copied AI selections as a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble")
+     ("ai-paragraph-selection" "AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text")
+     ("quoted-ai-paste" "Enter from a focused AI-output selection, or paste a copied AI selection, inserts a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble")
      ("scanner-afterglow" "Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering")
      ("output-panel-outline" "Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color")
      ("native-markdown-tables" "Render Markdown tables with native Prax table layout, aligned columns, readable headers and preserved inline formatting and links")
@@ -131,6 +132,7 @@
      ("screen-observation" "done" "t-screen-observation")
      ("desktop-input" "done" "t-desktop-input")
      ("terminal-tabs" "done" "t-terminal-tabs")
+     ("point-release-024" "done" "t-point-release-024")
      ("work-preview-details" "done" "t-work-preview-details")
      ("ai-paragraph-selection" "done" "t-ai-paragraph-selection")
      ("quoted-ai-paste" "done" "t-quoted-ai-paste")
@@ -319,12 +321,14 @@
   (:id "t-ui-defaults-source" :type :task :title "Move remaining presentation defaults from native structs into the shipped profile and generate compatible fallback records from one source" :state :todo)
   (:id "t-transcript-presentation-policy" :type :task :title "Make public transcript grouping, compact work previews, details, warning widths and labels configurable while retaining mandatory native privacy redaction" :state :todo)
   (:id "t-input-policy-tuning" :type :task :title "Move application gesture thresholds and intent precedence into documented policy; test customized profiles through real client input" :state :todo)
+  (:id "t-point-release-024" :type :task :title "Finish and publish Nexus v0.2.4" :state :doing
+   :note "Release PR #149. Native window, goal-layout and policy-match checks passed on the fleet Mac; Windows and Linux passed for the frozen product code. Remaining Apple CI results, final client installation, merge, tag and publication must be verified before claiming release completion. The source-only roadmap changes do not implement the deferred UI behavior.")
   (:id "t-work-preview-details" :type :task :title "Compact work groups: keep only the latest three unwrapped lines; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup" :state :todo
    :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Keep desktop previews left-aligned at two-thirds width, whole-character truncation and no chevron. Preserve private-event filtering, scrolling and modal precedence. Qualify implementation traces and negative witnesses before delivery.")
-  (:id "t-ai-paragraph-selection" :type :task :title "AI-only selection: double-click a whole paragraph, then Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text" :state :todo
-   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Keep selection stable across virtualized history and streaming. Copy faithful Markdown for paragraphs, lists, headings, quotes, code and tables. Exercise keyboard, pointer and clipboard paths together.")
-  (:id "t-quoted-ai-paste" :type :task :title "Paste copied AI selections as a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble" :state :todo
-   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Retain literal double-quote delimiters in the submitted text, with Markdown-aware visual treatment. Preserve formatting, caret placement, editing and both Enter-Enter and Command-Enter submission.")
+  (:id "t-ai-paragraph-selection" :type :task :title "AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Selecting AI text gives the output window keyboard focus, not the prompt. Enter inserts that selection into the prompt as a quote and moves focus there without sending. Escape clears the output selection and returns focus to the prompt without quoting or hiding Nexus. Clicking the prompt also clears the output selection and focuses the prompt. Preserve the existing draft. Keep selection stable across virtualized history and streaming. Copy faithful Markdown for paragraphs, lists, headings, quotes, code and tables. Exercise keyboard, pointer and clipboard paths together.")
+  (:id "t-quoted-ai-paste" :type :task :title "Enter from a focused AI-output selection, or paste a copied AI selection, inserts a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Retain literal double-quote delimiters in the submitted text, with Markdown-aware visual treatment. After transferring the quote, focus the prompt and place the caret after the two newlines, ready for a response. The transfer itself never sends the message. Preserve formatting, editing and the prompt-focused Enter-Enter and Command-Enter submission behavior.")
   (:id "t-scanner-afterglow" :type :task :title "Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering" :state :todo
    :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Compare different decay settings at the same timestamps; preserve reduced-motion handling and independence from the prompt cursor pulse.")
   (:id "t-output-panel-outline" :type :task :title "Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color" :state :todo
