@@ -155,7 +155,7 @@ struct TranscriptItems {
 // docs/accounts.md "Switching accounts"). The menu's gesture is fed the pointer by routeAccountMenu before the tab strip
 // sees it; the menu draws below the tab's highlight and changes nothing about the tab.
 struct AccountMenuView {
-    enum class Dialog : std::uint8_t { None, Account, Login, Logout };
+    enum class Dialog : std::uint8_t { None, Account, Login, Logout, BrowserLogout };
     AccountMenuGesture gesture;
     std::size_t tab = ~std::size_t(0);          // the Tab::id the menu drops from, while it is open
     std::vector<AccountMenuRow> rows;           // the rows it opened with
@@ -166,6 +166,7 @@ struct AccountMenuView {
     std::vector<PrLayoutNode> rowNodes;         // its rows
     std::vector<PrLayoutNode> rowTexts;         // each row's text
     Dialog dialog = Dialog::None;               // the dialog that shows
+    std::size_t loginHighlighted = 0;           // keyboard selection in the centered sign-in card
     bool dialogShown = false;                   // a dialog showed last round
     std::size_t dialogTab = ~std::size_t(0);    // the Tab::id it was opened on
     std::vector<AccountMenuRow> dialogRows;     // its rows
@@ -184,9 +185,12 @@ struct View {
     // The active AI's menu rows (its signed-in accounts and the sign-in row); none while it has no accounts, the link is
     // down, or a switch is on its way.
     std::function<std::optional<std::vector<AccountMenuRow>>()> accountMenuRows;
-    std::function<std::vector<AccountMenuRow>()> accountLoginRows;  // the active AI's accounts that need signing in
+    std::function<std::vector<AccountMenuRow>()> accountLoginRows;  // all linked accounts, including saved logins
     std::function<void(const std::string&)> switchAccount;          // the active AI's session goes to this account
-    std::function<void(const std::string&)> loginAccount;           // sign this account in; switch once it is
+    std::function<void(const std::string&)> loginAccount;           // sign out, select, then enroll this account
+    std::function<void()> browserLogoutConfirmed;
+    std::function<void()> cancelLoginPreparation;
+    std::function<void()> openBrowserLogout;
     // /logout: the active AI's current account, its email, and where the AI goes after (empty: the sign-in prompt).
     std::function<bool(std::string&, std::string&, std::string&)> logoutTarget;
     std::function<bool()> logout;                                   // signs out and moves the AI, as the dialog says

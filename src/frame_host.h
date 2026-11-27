@@ -30,6 +30,7 @@
 
 #include "hitch.h"
 #include "link_port.h"
+#include "login_preparation.h"
 #include "model.h"
 #include "sync/actions.h"
 #include "sync/client.h"
@@ -87,6 +88,7 @@ public:
     bool loopback = false;              // established by the transport, independent of names in server offers
     std::optional<std::string> activeAccount; // roster-aware windows claim only on explicit input
     std::function<void(const std::string& url)> openUrl;    // empty: nothing is opened (the frame test)
+    std::function<void()> wake;         // post an app wake when the browser callback arrives, even while hidden
     // Where the gate comes from: a test seam; empty: a SignInGate.
     std::function<std::unique_ptr<SignInGate>(const sync::SignInTarget&)> openGate;
     std::string problem;                // the last gate's failure, for the view's problem line; cleared when shown
@@ -215,6 +217,8 @@ struct FrameHost {
     // secret requests and the status line. Never waits. main.cpp calls it before the first frame too, while a --tab
     // waits for the server's AIs.
     void pollLink();
+    // Process link state and sign-in without drawing a frame, including while the overlay is hidden.
+    void pollBackground();
 
 private:
     // Actions the link lost before the server acknowledged them (LinkState::cut): a message among them goes back to its
@@ -241,8 +245,19 @@ private:
     LimitOffer currentLimit() const;
     std::optional<std::pair<sync::SessionId, std::string>> signInSelection_;
     std::map<std::string, std::uint64_t> pendingClaims_; // until the offer changes or this link ends
-    // /login: the session and the account signing in while the session stays on its own; it switches once signed in.
+    // /login after preparation: the selected session/account waiting for verified enrollment.
     std::optional<std::pair<sync::SessionId, std::string>> pendingLogin_;
+    std::uint64_t pendingLoginAction_ = 0;
+    struct LoginPreparationState {
+        sync::SessionId session;
+        std::string previous, target;
+        LoginPreparation machine;
+        std::uint64_t action = 0, noticeFrom = 0;
+        bool signedOut = false;
+    };
+    std::optional<LoginPreparationState> loginPreparation_;
+    void prepareLogin(bool browserConfirmed = false);
+    void enrollSelected(const std::string& account);
     std::string logoutNext_;    // /logout: the account the AI moves to after, chosen as the dialog opened
     const sync::ServerAI* rosterOf(sync::SessionId session) const;
     std::optional<std::string> signInTarget() const;

@@ -63,11 +63,11 @@ inline std::vector<AccountMenuRow> accountMenuRows(const sync::ServerAI& roster,
     return rows;
 }
 
-// The /login dialog's rows: the AI's linked accounts that need signing in, in the server's order.
+// The /login card shows every linked account in server order, including saved logins that can be switched to.
 inline std::vector<AccountMenuRow> accountLoginRows(const sync::ServerAI& roster) {
     std::vector<AccountMenuRow> rows;
     for (const auto& a : roster.accounts) {
-        if (pickable(a) && a.needsSignIn) rows.push_back({a.name, accountShownAs(a), false, false});
+        if (pickable(a)) rows.push_back({a.name, accountShownAs(a), false, false});
     }
     return rows;
 }

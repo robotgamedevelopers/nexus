@@ -691,15 +691,18 @@ struct Builder {
             view.choiceValue.clear();
             updateApplication();
             promptKey(active, "Enter");
+        } else if (action.starts_with("login:") && view.accounts.dialog == AccountMenuView::Dialog::Login) {
+            view.accounts.dialog = AccountMenuView::Dialog::None;
+            if (view.loginAccount) view.loginAccount(action.substr(6));
         } else if (view.accountAction) {
             view.accountAction(action);
         }
     }
 
-    void accountSelector(PrLayoutNode parent, const std::vector<AccountItem>& items) {
+    void accountSelector(PrLayoutNode parent, const std::vector<AccountItem>& items, bool modal = false) {
         if (items.empty()) return;
-        const auto layer = element(parent, Part::SelectorLayer);
-        if (view.windowApp.surface.showTabs) {
+        const auto layer = modal ? parent : element(parent, Part::SelectorLayer);
+        if (!modal && view.windowApp.surface.showTabs) {
             // Balance the strip above the panels while keeping its hit area free.
             auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, layer));
             auto& group = record.groups[PrLayoutGroup_Box];
@@ -708,7 +711,18 @@ struct Builder {
             group = prLayoutBoxStyleIntern(tree, &box);
             prLayoutTreeFrameSetStyle(tree, layer, prLayoutStyleIntern(tree, &record));
         }
-        const auto card = element(layer, Part::SelectorCard);
+        const auto card = modal ? parent : element(layer, Part::SelectorCard);
+        if (modal) {
+            auto record = prLayoutStyleRecord(tree, style(ui, look, Part::SelectorCard));
+            auto& group = record.groups[PrLayoutGroup_Box];
+            auto box = prLayoutBoxStyleRecord(tree, group);
+            // A modal owns a separate viewport: resolve the card's percentage against the window, not itself.
+            const float width = std::min(look.messageCard.selectorWidthEm * kBodySize * k(),
+                view.extent.x / (1 + 2 * look.messageCard.sideExtension / 100));
+            box.width = box.maxWidth = px(width);
+            group = prLayoutBoxStyleIntern(tree, &box);
+            prLayoutTreeFrameSetStyle(tree, card, prLayoutStyleIntern(tree, &record));
+        }
         view.accountMenu = card;
         element(card, Part::SelectorBackground);
         const float lineHeight = kit->theme.types[PrKitTextRole_Body].lineHeight;
@@ -751,7 +765,7 @@ struct Builder {
                 ink.color = prColor16FromColor(rgb(look.messageCard.selectedInk));
                 colors = prLayoutColorStyleIntern(tree, &ink);
                 prLayoutTreeFrameSetStyle(tree, email, prLayoutStyleIntern(tree, &emailStyle));
-                if ((view.accountPicker || !view.choiceKind.empty()) && view.lastHighlightedAccount != item.action) {
+                if ((modal || view.accountPicker || !view.choiceKind.empty()) && view.lastHighlightedAccount != item.action) {
                     prUiSetFocus(ui, row);
                     view.lastHighlightedAccount = item.action;
                 }
@@ -779,6 +793,7 @@ struct Builder {
     }
 
     void accountPanel(PrLayoutNode parent) {
+        if (view.accounts.dialog == AccountMenuView::Dialog::Login) return;
         const auto& selected = view.windowApp.signInAccount;
         if (view.windowApp.surface.items && !asking) {
             accountSelector(parent, *view.windowApp.surface.items);
@@ -2314,6 +2329,9 @@ struct Builder {
 
     // Both the window root and the detached account menu surface use these same policy bindings.
     void captureShortcuts(PrLayoutNode keys) {
+        // A modal owns its keys. The signed-out page underneath also binds arrows, Enter and Escape;
+        // capturing those first would move its hidden picker instead of the visible sign-in card.
+        if (view.accounts.dialog != AccountMenuView::Dialog::None) return;
         std::vector<Shortcut> pressed;
         for (const auto& binding : view.windowApp.shortcuts) {
             if ((!view.secrets || !view.secrets->showing()) && prUiKeyCaptured(ui, keys, binding.key, binding.modifiers))
@@ -2483,8 +2501,7 @@ struct Builder {
     }
 
     // The /account, /login and /logout dialogs (openAccountDialog): Prax's dialog, over the AI's page. /account lists the
-    // signed-in accounts, the current one checked, and "Sign in to another account…"; /login the accounts that need
-    // signing in; /logout asks to confirm, naming the email. Closing one changes nothing.
+    // signed-in accounts, the current one checked, and "Sign in to another account…"; /login all linked accounts; /logout asks to confirm, naming the email. Closing one changes nothing.
     void accountDialog(PrLayoutNode window) {
         auto& menu = view.accounts;
         using Dialog = AccountMenuView::Dialog;
@@ -2503,11 +2520,13 @@ struct Builder {
             prKitSetOpen(kit, window, true);
             menu.dialogShown = true;
         }
-        const char* title = menu.dialog == Dialog::Account ? "Account" : menu.dialog == Dialog::Login ? "Sign in" : "Sign out";
+        const char* title = menu.dialog == Dialog::Account ? "Account" : menu.dialog == Dialog::Login ? "Sign in" : menu.dialog == Dialog::BrowserLogout ? "Sign out in your browser" : "Sign out";
         PrKitDialog dialog{};
         dialog.key = prHashString(sv(std::string("account-dialog/") + title), 0);
         dialog.title = sv(std::string_view(title));
-        const PrLayoutNode body = prKitDialog(kit, window, dialog, typedDialogStyle());
+        const PrLayoutNode body = menu.dialog == Dialog::Login ?
+            prKitModal(kit, window, {.key = dialog.key}, typedDialogStyle().modal) :
+            prKitDialog(kit, window, dialog, typedDialogStyle());
         if (body == kPrLayoutNodeNone) {
             if (!fresh) menu.dialog = Dialog::None;
             menu.dialogShown = false;
@@ -2516,6 +2535,24 @@ struct Builder {
         auto about = textStyle(PrKitTextRole_Body, PrKitTone_Primary);
         about.wrap = PrKitWrap_Wrap;
         const std::string name(model.tab(model.active()).displayName());
+        if (menu.dialog == Dialog::BrowserLogout) {
+            label(body, "Sign out of Claude in the browser page that opened. Then return here to continue with the selected account.", about);
+            label(body, "If the browser already shows a sign-in page, continue. Nexus waits for your confirmation.",
+                  textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted));
+            const auto reopen = prKitButton(kit, body, {.key = prHashString(sv("browser-logout-open"), 0),
+                .text = sv("Open Claude")}, {});
+            const auto cancel = prKitButton(kit, body, {.key = prHashString(sv("browser-logout-cancel"), 0),
+                .text = sv("Cancel")}, {});
+            const auto confirm = prKitButton(kit, body, {.key = prHashString(sv("browser-logout-confirm"), 0),
+                .text = sv("I’ve signed out — Continue")}, {.variant = PrKitButtonVariant_Primary});
+            if (prKitActivated(kit, reopen) && view.openBrowserLogout) view.openBrowserLogout();
+            if (prKitActivated(kit, cancel)) {
+                menu.dialog = Dialog::None;
+                if (view.cancelLoginPreparation) view.cancelLoginPreparation();
+            }
+            if (prKitActivated(kit, confirm) && view.browserLogoutConfirmed) view.browserLogoutConfirmed();
+            return;
+        }
         if (menu.dialog == Dialog::Logout) {
             label(body, "Sign " + name + " out of " + menu.logoutShown + "? This deletes its saved login.", about);
             label(body, menu.logoutNext.empty() ? name + " will ask you to sign in." :
@@ -2532,10 +2569,26 @@ struct Builder {
             }
             return;
         }
+        if (menu.dialog == Dialog::Login) {
+            const auto count = menu.dialogRows.size();
+            if (count) {
+                menu.loginHighlighted = std::min(menu.loginHighlighted, count - 1);
+                if (prUiKeyPressed(ui, body, PrAppKey_Up, 0))
+                    menu.loginHighlighted = (menu.loginHighlighted + count - 1) % count;
+                if (prUiKeyPressed(ui, body, PrAppKey_Down, 0))
+                    menu.loginHighlighted = (menu.loginHighlighted + 1) % count;
+            }
+            std::vector<AccountItem> items{{view.windowApp.signInHeading, "", false}};
+            if (!count) items.push_back({"No accounts are linked to this AI.", "", false});
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto& row = menu.dialogRows[i];
+                items.push_back({row.text, "login:" + row.account, i == menu.loginHighlighted});
+            }
+            accountSelector(body, items, true);
+            return;
+        }
         if (menu.dialogRows.empty()) {
-            label(body, menu.dialog == Dialog::Login ?
-                "Every account linked to " + name + " is signed in. To add another, ask your AI to add one (docs/accounts.md)." :
-                name + " has no signed-in account.", about);
+            label(body, name + " has no signed-in account.", about);
             return;
         }
         const auto list = prKitMenu(kit, body, {}, {});
@@ -2557,12 +2610,9 @@ struct Builder {
             if (prKitActivated(kit, item)) chosen = row;
         }
         if (!chosen) return;
-        const auto kind = menu.dialog;
         menu.dialog = Dialog::None;
         if (chosen->signIn) {
             openAccountDialog(view, Dialog::Login);
-        } else if (kind == Dialog::Login) {
-            if (view.loginAccount) view.loginAccount(chosen->account);
         } else if (!chosen->current && view.switchAccount) {
             if (view.playChirp) view.playChirp(view.windowApp.surface.confirmChirp);
             view.switchAccount(chosen->account);
@@ -2653,7 +2703,8 @@ struct Builder {
         if (!dialog) view.energyAccount.clear();
         view.dialogVisible = dialog;
         view.displayedLimit = view.windowApp.limitOffer;
-        if (!view.accountPicker) view.lastHighlightedAccount.clear();
+        if (!view.accountPicker && view.accounts.dialog != AccountMenuView::Dialog::Login)
+            view.lastHighlightedAccount.clear();
         secretDialog(window);
         serverDialog(window);
     }
@@ -3284,6 +3335,8 @@ bool openAccountDialog(View& view, AccountMenuView::Dialog dialog) {
     }
     view.problem.clear();
     menu.dialog = dialog;
+    menu.loginHighlighted = 0;
+    view.lastHighlightedAccount.clear();
     menu.dialogTab = tab.id;
     return true;
 }

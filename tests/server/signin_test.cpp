@@ -445,7 +445,7 @@ void gate() {
     }
     // The one: taken, answered plainly, its query handed over.
     CHECK(g.take(get("/callback?" + kCallback), &q, &response) == sync::CallbackGate::Verdict::Take);
-    CHECK(q.bytes() == kCallback && holds(response, "200 OK") && holds(response, "signed in, you can close this tab"));
+    CHECK(q.bytes() == kCallback && holds(response, "200 OK") && holds(response, "Sign-in response received. Return to Nexus."));
     CHECK(!leaks(response) && g.taken());
     // After the one, every request is refused, the same one too.
     sync::SecretValue again;

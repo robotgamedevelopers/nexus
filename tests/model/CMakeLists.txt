@@ -64,6 +64,11 @@ if(NEXUS_SERVER_PARTS)
     target_compile_options(strip_walk PRIVATE ${warnings})
 
     # The account menu's gesture (src/account_menu.h), for AccountMenuTrace.tla.
+    add_executable(login_preparation_trace login_preparation_trace.cpp)
+    target_include_directories(login_preparation_trace PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(login_preparation_trace PRIVATE ${warnings})
+    add_dependencies(model_checks login_preparation_trace)
+
     add_executable(account_menu_walk account_menu_walk.cpp)
     target_link_libraries(account_menu_walk PRIVATE nexus_sync)
     target_compile_options(account_menu_walk PRIVATE ${warnings})
@@ -126,7 +131,7 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK GLIDEWALK MENUWALK SUPWALK PASSWALK ACCWALK SECWALK
+    set(options LOGINPREPTRACE SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK GLIDEWALK MENUWALK SUPWALK PASSWALK ACCWALK SECWALK
         SIGNWALK RECONNECTWALK RELAYWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
     cmake_parse_arguments(T "${options}"
         "CREDITMODE;PROPERTY;SEED;STEPS;AIS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
@@ -191,7 +196,9 @@ function(tlc_test name module cfg expect)
     elseif(T_BUSDELIVERYTRACE)
         list(APPEND defs -DBUSDELIVERYWALK=$<TARGET_FILE:bus_delivery_trace>)
     endif()
-    if(T_SERVICETRACE)
+    if(T_LOGINPREPTRACE)
+        list(APPEND defs -DLOGINPREPWALK=$<TARGET_FILE:login_preparation_trace>)
+    elseif(T_SERVICETRACE)
         list(APPEND defs -DSERVICEWALK=$<TARGET_FILE:service_process_functional>)
     elseif(T_PICKERTRACE)
         list(APPEND defs -DPICKERWALK=$<TARGET_FILE:account_picker_trace>)
@@ -688,3 +695,12 @@ tlc_test(tlc_managed_service_overlap_rejected ManagedService witnesses/WManagedS
 tlc_test(tlc_managed_service_early_rejected ManagedService witnesses/WManagedServiceEarly.cfg action PROPERTY OnlyWhenDue)
 tlc_test(tlc_managed_service_lost_schedule_rejected ManagedService witnesses/WManagedServiceForget.cfg invariant PROPERTY OneRunPerInterval)
 tlc_test(tlc_managed_service_trace ManagedServiceTrace ManagedServiceTrace.cfg pass SERVICETRACE)
+
+# The code trace includes delayed replies, confirmation and loss. Planted host mistakes must fail Matches.
+tlc_test(tlc_login_preparation_spec LoginPreparation LoginPreparation.cfg pass)
+tlc_test(tlc_login_preparation_no_browser LoginPreparation LoginPreparationNoBrowser.cfg pass)
+tlc_test(tlc_login_preparation_trace LoginPreparationTrace LoginPreparationTrace.cfg pass LOGINPREPTRACE)
+foreach(fault ack browser)
+    tlc_test(tlc_login_preparation_${fault} LoginPreparationTrace LoginPreparationTrace.cfg invariant
+             PROPERTY Matches LOGINPREPTRACE FAULTY ${fault})
+endforeach()

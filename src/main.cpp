@@ -17,10 +17,8 @@
 // platform.h makes it cover the whole screen, menu bar included, which Prax does not. --windowed gives a normal
 // opaque window, where Escape does nothing. --print-window-config prints what the overlay asks of Prax and exits.
 //
-// The live window is locked (client_lock.h): until the device's owner passes the system's authentication (Touch ID or the
-// password, Windows Hello) it draws the lock screen alone and takes no input, and it locks again at sleep, a screen
-// lock, a session switch and the idle timeout. The system is asked when the window shows locked. --locked draws the
-// screenshot's lock screen.
+// The live window uses the signed-in OS session: no additional Nexus unlock prompt or idle relock.
+// --locked retains the lock-screen screenshot fixture; it never changes live access.
 //
 // Command-T opens a terminal tab (terminals.h) running the login shell in the home directory; --demo-terminal makes the
 // screenshot show one after a command has printed. The terminal tabs open at quit come back at launch, in their order,
@@ -194,9 +192,7 @@ struct App {
     FrameHost host;
     HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
         HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
-    // The client lock (client_lock.h): the live window is locked from launch until the device's owner authenticates, and
-    // again after sleep, a screen lock, a session switch or the idle timeout; while locked the view draws the lock screen
-    // alone (View::lockScreen). Null in a screenshot, which draws what it is given, unless --locked.
+    // Only the explicit --locked screenshot fixture owns a lock. A live client uses the signed-in OS session.
     std::unique_ptr<WindowLock> lock;
     // Answers and events from other threads, taken at the next wake of `app` (from start()). Shared with what posts
     // them, so that an answer the system gives after the window has gone lands in the inbox, not in a freed App.
@@ -254,7 +250,7 @@ void carryOut(App& a, OverlayAct act) {
         return;
     PrAppWindow* window = prStudioWindowAppWindow(a.window);
     PrApp* app = prStudioWindowApp(a.window);
-    // The idle check first: a show after the timeout shows the lock screen, and claims no sign-in.
+    // Check idle before any reveal or sign-in claim. macOS authenticates while the overlay stays hidden.
     if (a.lock && act != OverlayAct::Hide) a.lock->tick(lockNow());
 #ifdef __APPLE__
     if ((act == OverlayAct::Hide) == bool(prAppWindowIsVisible(window))) prioritizeOverlayTransition();
@@ -269,6 +265,10 @@ void carryOut(App& a, OverlayAct act) {
         prAppWindowSetVisible(window, false);
         return;
     }
+#if NEXUS_MACOS
+    // LocalAuthentication presents its own UI. Keep the overlay hidden until the current attempt succeeds.
+    if (a.lock && !a.lock->requestReveal(lockNow())) return;
+#endif
     PrSurface surface{};
     if (prAppWindowSurface(window, &surface) != PrStatus_Ok || !coverScreen(surface))
         std::fprintf(stderr, "nexus: the overlay could not be given the whole screen (no native view, window or "
@@ -686,7 +686,6 @@ void shutdown(void* context, PrStudioApp*) {
 void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
     App& a = appOf(context);
     HitchScope scope(&a.hitch, Phase::Input);
-    if (e->kind == PrAppEventKind_Wake) a.host.finishUpload();
     if (e->kind == PrAppEventKind_PowerChanged) {
         const auto power = prAppPower(prStudioAppApp(studio));
         a.view.savingPower = power.lowPower || power.source == PrAppPowerSource_Battery;
@@ -703,6 +702,7 @@ void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
         else if (e->kind == PrAppEventKind_Timer && e->tag == kLockTickTag)
             a.lock->tick(lockNow());
     }
+    if (e->kind == PrAppEventKind_Wake) a.host.pollBackground();
     if (!a.overlay) {
         // A normal window has no hotkey; the policy's idle timeout is all it reads.
         if (a.lock && e->kind == PrAppEventKind_Timer && e->tag == kPolicyCheckTag) {
@@ -792,11 +792,12 @@ void trace(void* context, const PrStudioWindowFrameTimes* t) {
                 // without taking the keyboard or asking; Return or a click asks.
                 prAppWindowSetOpacity(window, 1);
             } else {
-                prAppWindowFocus(window);
+                // The completed frame must be visible before AppKit is asked to give the panel the keyboard.
                 prAppWindowSetOpacity(window, 1);
+                prAppWindowFocus(window);
                 a.audio.play(a.view.windowApp.surface.openChirp);
                 prAppTimerSet(prStudioWindowApp(a.window), kKeyCheckTag, kKeyCheckSeconds, 0);
-                // Shown locked: the system is asked now, over the lock screen (after a refusal, on Return or a click).
+                // Platforms that authenticate over a visible window ask here. macOS is already unlocked.
                 if (a.lock) a.lock->shown();
             }
         } else {
@@ -1011,11 +1012,10 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (lockedShot && shot == nullptr) {
-        std::fprintf(stderr, "nexus: --locked draws a screenshot of the lock screen; a live window is always locked\n");
+        std::fprintf(stderr, "nexus: --locked is only supported with --screenshot\n");
         return 2;
     }
-    // A screenshot draws a state file or the demo, never the person's own window: that would be the window without the
-    // lock (the sprint board, the AIs' tabs, the terminals).
+    // Screenshot fixtures draw a state file or the demo, never the person's live window.
     if (shot != nullptr && state == nullptr && !demo && !demoTerminal) {
         std::fprintf(stderr, "nexus: --screenshot draws a state file (--state) or the demo (--demo, --demo-terminal) "
             "only, never the live window\n");
@@ -1232,16 +1232,11 @@ int main(int argc, char** argv) {
         a.view.restoreTabLayout();
         if (haveLayout && !tabGiven) tab = model.active() + 1;
     }
-    // The client lock (client_lock.h): every live window starts locked, whatever else it was given, and is asked for its
-    // owner when it first shows (launch itself shows nothing: AGENTS.md). Its idle timeout is the client policy's
-    // (window_app.h lockIdleSeconds). A screenshot draws the lock screen with --locked, and is otherwise not locked: it
-    // draws from a state file or the demo, and takes no input.
-    if (live || lockedShot) {
-        std::string why;
-        const double idle = live ? lockIdleSeconds(*a.view.application, why) : kLockIdleMinutesDefault * 60;
-        if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
-        // A screenshot is never asked (it takes no input): its authenticator names the method only.
-        a.lock = std::make_unique<WindowLock>(idle, systemLockAuthenticator(), lockHooks(a, !windowed && live));
+    // Device authentication belongs to the OS session. Keep the historical lock-screen fixture available for
+    // screenshot tests, without constructing a lock, authenticator, idle timer or event watcher in a live client.
+    if (lockedShot) {
+        a.lock = std::make_unique<WindowLock>(kLockIdleMinutesDefault * 60, systemLockAuthenticator(),
+                                            lockHooks(a, false));
     }
     // The window opens on the tab --tab names; without it, on the tab selected when nexus last quit, found by who it is
     // or, for a terminal, by its place among the terminals (tab_order.h), or the sprint tab. A saved AI's tab is
@@ -1355,6 +1350,7 @@ int main(int argc, char** argv) {
                 prAppWake(app);
         };
         a.host.uploadWake = options.wake;
+        a.host.signIn.wake = options.wake;
 #if NEXUS_LINK
         a.link = std::make_unique<link::ClientPort>(std::move(options));
 #else

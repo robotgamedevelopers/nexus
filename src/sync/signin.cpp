@@ -740,7 +740,7 @@ CallbackGate::Verdict CallbackGate::take(std::string_view bytes, SecretValue* qu
     }
     taken_ = true;
     *query = SecretValue(rawQuery);
-    *response = answer(code ? "signed in, you can close this tab\n" :
+    *response = answer(code ? "Sign-in response received. Return to Nexus.\n" :
                               "sign-in was not finished, you can close this tab\n");
     return Verdict::Take;
 }

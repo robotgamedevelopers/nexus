@@ -32,6 +32,13 @@ void WindowLock::ask() {
     if (hooks_.frame) hooks_.frame();
 }
 
+bool WindowLock::requestReveal(double now) {
+    tick(now);
+    if (drawsContent()) return true;
+    ask();
+    return false;
+}
+
 void WindowLock::shown() {
     if (lock_.state() == LockState::Locked && asksOnShow(lock_.reason())) ask();
 }

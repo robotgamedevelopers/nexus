@@ -32,6 +32,7 @@
 // Each case also checks that the runner's log lines hold no byte of the URL's state, the code or the token, and that
 // the program saw none of the test's own API key variables (the fake exits 3 if it did).
 
+#include <atomic>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -290,16 +291,19 @@ void forwarded(const std::string& family) {
     sync::SignInTarget t;
     CHECK(startAndUrl(r, &t));
     CHECK(t.port != listener);
-    SignInGate gate(t);
+    std::atomic<int> wakes{0};
+    SignInGate gate(t, [&] { ++wakes; });
     sync::SecretValue query;
     // A stray request and a wrong state: each "not found", and nothing taken.
     CHECK(browserGet(t.port, "/favicon.ico").rfind("HTTP/1.1 404", 0) == 0);
     CHECK(browserGet(t.port, callback("fakeWrongStateXq", std::string("code=") + fake_claude::kCode))
               .rfind("HTTP/1.1 404", 0) == 0);
     CHECK(!gate.take(&query));
+    CHECK(wakes == 0);
     const std::string answer = browserGet(t.port, callback(t.state, std::string("code=") + fake_claude::kCode));
     CHECK(answer.rfind("HTTP/1.1 200", 0) == 0);
-    CHECK(answer.find("signed in, you can close this tab") != std::string::npos);
+    CHECK(wakes == 1); // the hidden app can service the callback without a render tick
+    CHECK(answer.find("Sign-in response received. Return to Nexus.") != std::string::npos);
     CHECK(answer.find(fake_claude::kCode) == std::string::npos);
     const std::uint64_t until = nowMs() + 5000;
     bool took = false;
@@ -486,7 +490,8 @@ void caseGateInUse() {
     t.port = ntohs(a.sin_port);
     t.path = "/callback";
     t.state = fake_claude::kState;
-    SignInGate gate(t);
+    std::atomic<int> wakes{0};
+    SignInGate gate(t, [&] { ++wakes; });
     std::string why;
     const std::uint64_t until = nowMs() + 5000;
     bool failed = false;
@@ -495,6 +500,7 @@ void caseGateInUse() {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     CHECK(failed);
+    CHECK(wakes == 1);
     CHECK(why.find("cannot be received on this machine") != std::string::npos);
     sync::SecretValue query;
     CHECK(!gate.take(&query));
