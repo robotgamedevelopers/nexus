@@ -94,7 +94,7 @@ endif()
 function(nexus_ios_targets)
     # The window's logic that starts no process: its home and config (client_home.h) and the preferences it keeps
     # (tab_order.h). The same sources as the desktop's nexus_window_logic, less command.cpp, remote.cpp and sprint.cpp.
-    add_library(nexus_ios_logic STATIC src/tab_order.cpp src/client_home.cpp src/server_choice.cpp)
+    add_library(nexus_ios_logic STATIC src/tab_order.cpp src/client_home.cpp src/server_choice.cpp src/frame_trace.cpp)
     target_include_directories(nexus_ios_logic PUBLIC src)
     target_compile_options(nexus_ios_logic PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_ios_logic PUBLIC nexus_config nexus_model nexus_accounts prax::json prax::core_cpp)
@@ -102,7 +102,7 @@ function(nexus_ios_targets)
     # The window's tree: the same sources as the desktop's nexus_view.
     add_library(nexus_ios_view STATIC src/view.cpp src/chat_markdown.cpp src/chat_selection.cpp src/window_app.cpp
         src/native_tabs.cpp src/font_prefetch.cpp)
-    target_include_directories(nexus_ios_view PUBLIC src)
+    target_include_directories(nexus_ios_view PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_compile_options(nexus_ios_view PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_ios_view PUBLIC nexus_policy nexus_ios_logic nexus_sync nexus_hitch
         prax::markdown prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app

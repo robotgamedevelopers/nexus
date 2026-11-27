@@ -110,6 +110,7 @@ public:
     bool show(PrLayoutNode parent, PrVec2 extent, std::string* problem) override;
     void hidden() override;
     void setTextScale(float k) override;
+    void setScrollStyle(const UiScroll& style) override;
     // Loads the board again if the page shows another document, or is on its way to one.
     void home() override;
     void prepare(PrVec2 extent) override;
@@ -230,6 +231,7 @@ private:
     std::string offeredUrl_;                // what it said, protected by mutex_
     PrVec2 extent_{};                       // the pane's, px
     float zoom_ = 1;
+    UiScroll scrollStyle_;
     PrDomAgent* waiting_ = nullptr;         // the agent the page's thread waits on, to wake it
     Shown out_;
 

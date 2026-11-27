@@ -21,7 +21,6 @@ namespace {
 
 // The monospaced family the terminals are set in, as Prax's terminal app sets them (terminal_app.cpp kMono): the
 // system's fixed-pitch font.
-const PrFontFamily kMono{.name = {}, .generic = PrFontGeneric_Monospace};
 
 // How often the start thread reads each shell's foreground process, and the frame thread each terminal's directory.
 constexpr std::chrono::milliseconds kWatchEvery{250};
@@ -194,7 +193,8 @@ PraxTerminals::Started PraxTerminals::start(const Start& s) {
         home = prFileUserDirectory(PrFileUserDirectory_Home);
     }
     PrTerminalDesc desc{};
-    desc.font = font(s.scale);
+    const PrFontFamily family{.name = view(s.fontFamily), .generic = PrFontGeneric_Monospace};
+    desc.font = font(s.scale, family);
     desc.app = app_;
     desc.launcher = launcher_;
     desc.program = view(launch.program);
@@ -438,10 +438,10 @@ PrTerminal* PraxTerminals::find(std::size_t id) {
     return it != terminals_.end() ? it->second : nullptr;
 }
 
-PrTextFontDesc PraxTerminals::font(float scale) const {
+PrTextFontDesc PraxTerminals::font(float scale, const PrFontFamily& family) const {
     PrFontStyle s = prFontStyleDefault();
     s.size = style::kTerminalSize * scale;
-    return PrTextFontDesc{.set = fonts_, .families = &kMono, .familyCount = 1, .style = s, .locale = {}};
+    return PrTextFontDesc{.set = fonts_, .families = &family, .familyCount = 1, .style = s, .locale = {}};
 }
 
 bool PraxTerminals::open(std::size_t id) {
@@ -530,6 +530,7 @@ void PraxTerminals::startPending(PrVec2 extent) {
             pending.extent = extent;
             pending.palette = kit_->theme.palette;
             pending.scale = scale_;
+            pending.fontFamily = fontFamily_;
             pending.ratio = prLayoutTreeTargetPixelRatio(kit_->tree);
             starts_.push_back(std::move(pending));
         }
@@ -546,7 +547,8 @@ void PraxTerminals::show(std::size_t id, PrLayoutNode parent) {
     }
     if (scales_[id] != scale_) {
         scales_[id] = scale_;
-        PrTextFontDesc f = font(scale_);
+        const PrFontFamily family{.name = view(fontFamily_), .generic = PrFontGeneric_Monospace};
+        PrTextFontDesc f = font(scale_, family);
         prTerminalSetFont(terminal, &f);
     }
     if (!prTerminalHasFocus(terminal)) {
@@ -602,6 +604,12 @@ std::string PraxTerminals::title(std::size_t id) {
 }
 
 // The font of the terminal that shows changes now; each other one's when it next shows (show).
+void PraxTerminals::setFontFamily(const std::string& family) {
+    if (fontFamily_ == family) return;
+    fontFamily_ = family;
+    scales_.clear();
+}
+
 void PraxTerminals::setTextScale(float k) {
     scale_ = k;
 }

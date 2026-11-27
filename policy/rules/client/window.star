@@ -2,6 +2,27 @@ load("client/accounts.star", account_window = "describe")
 """The window application. The platform draws the panels and captures the declared keys."""
 
 # Curves are [fraction of cycle, level] pairs. The native renderer interpolates them.
+def _clock(state, config):
+    clock = state.get("ui", {}).get("clock")
+    settings = config.get("clock", {})
+    if not clock or not settings.get("visible", True):
+        return ""
+    weekdays = settings.get("weekdays", ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"])
+    months = settings.get("months", ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])
+    hour = clock["hour"]
+    values = {
+        "weekday": weekdays[clock["weekday"]], "day": str(clock["day"]),
+        "month": months[clock["month"] - 1], "year": str(clock["year"]),
+        "hour12": str(hour % 12 or 12), "hour24": ("0" if hour < 10 else "") + str(hour),
+        "minute": ("0" if clock["minute"] < 10 else "") + str(clock["minute"]),
+        "second": ("0" if clock["second"] < 10 else "") + str(clock["second"]),
+        "ampm": settings.get("am", "AM") if hour < 12 else settings.get("pm", "PM"),
+    }
+    text = settings.get("format", "{weekday} {day} {month} {hour12}:{minute} {ampm}")
+    for key, value in values.items():
+        text = text.replace("{" + key + "}", value)
+    return text
+
 def _prompt_style(config):
     style = dict(config.get("prompt_style", {}))
     if "caret_curve" not in style:
@@ -32,6 +53,7 @@ _COMMAND_HELP = {
     "/clear": "Clear the conversation and its context. When signed out, clear the local conversation.",
     "/goal": "Show the active goal for this session.",
     "/goal <text>": "Send the text now, then repeat every five minutes across any harness. Replaces the previous goal.",
+    "/goal clear": "Stop future goal repetitions and remove its orange bubble (same as /goal off).",
     "/goal off": "Stop future goal repetitions and remove its orange bubble. Command–Delete does this too.",
     "/compact": "Compact the current conversation context.",
     "/account": "Choose this AI's account: its signed-in accounts, and signing in to another.",
@@ -218,6 +240,16 @@ def handle(event, state, config):
         window = {
             "sign_in_heading": "Please sign in to " + display if display else "Please sign in",
             "sounds": config.get("sounds", {}),
+            "ui_style": config.get("ui_style", {}),
+            "ui_colors": config.get("ui_colors", {}),
+            "ui_palette": config.get("ui_palette", {}),
+            "ui_text": config.get("ui_text", {}),
+            "ui_keys": config.get("ui_keys", {}),
+            "ui_flags": config.get("ui_flags", {}),
+            "ui_fonts": config.get("ui_fonts", {}),
+            "ui_scroll": config.get("ui_scroll", {}),
+            "clock_text": _clock(state, config),
+
             "message_card": config.get("message_card", {"fill":"#303030", "ink":"#ffffff", "email_ink":"#477fba", "text_size":34, "radius":20}),
             "transcript_style": _transcript_style(config),
             "centered_account_menu": config.get("centered_account_menu", False),
@@ -319,10 +351,13 @@ def handle(event, state, config):
         return window
     if event == "prompt_key":
         if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() == "/help":
+            ui_keys = config.get("ui_keys", {})
+            submit = ui_keys.get("submit", "Enter") or "(disabled)"
+            queue = ui_keys.get("queue", "Command+Enter") or "(disabled)"
             commands = dict(_COMMAND_HELP)
             commands.update(config.get("command_help", {}))
             shortcuts = [
-                "Keyboard actions (Command means ⌘ on macOS/iPad, Alt on Windows/Linux)",
+                "**Keyboard actions** (Command means ⌘ on macOS/iPad, Alt on Windows/Linux)",
                 config.get("overlay_hotkey", {"modifiers": "Command"}).get("modifiers", "Command") + "+" + config.get("overlay_hotkey", {"code": "Backquote"}).get("code", "Backquote") + " (~ key by default)   Show or hide the overlay; bring it forward when another app has focus.",
                 "Command+1 … Command+9, Command+0   Select tabs 1–10.",
                 "Command+T / Command+W   Open a terminal / close a closable tab.",
@@ -331,7 +366,7 @@ def handle(event, state, config):
                 "Command+Escape   Stop the current AI turn. Use /goal off to stop future goal reminders.",
                 "Escape   Close the current picker/dialog first; otherwise hide the overlay. Terminals receive Escape.",
                 "Shift+Enter   Insert a newline in the prompt.",
-                "Enter / Command+Enter   Return to the newest messages when holding or sending from history.",
+                submit + " / " + queue + "   Return to the newest messages when holding or sending from history.",
                 "ArrowUp / ArrowDown, Enter   Move through a picker, then confirm; Escape cancels.",
                 "Tab   Complete /model and /effort choices in the prompt.",
                 "⌘/Control+A / C / X / V   Select all / copy / cut / paste in the prompt. Nexus also accepts its Command+V paste shortcut.",
@@ -343,10 +378,10 @@ def handle(event, state, config):
                 "Terminal tabs   Ordinary typing and terminal control keys go to the terminal; Nexus shortcuts remain available.",
             ]
             if config.get("hold_on_enter", False):
-                shortcuts += ["Enter   Hold the current message. Enter on an empty prompt sends held messages.",
-                              "Command+Enter   Send held messages and the current draft immediately."]
+                shortcuts += [submit + "   Hold the current message. The same key on an empty prompt sends held messages.",
+                              queue + "   Send held messages and the current draft immediately."]
             else:
-                shortcuts += ["Enter   Send the current prompt.", "Command+Enter   Queue the current prompt."]
+                shortcuts += [submit + "   Send the current prompt.", queue + "   Queue the current prompt."]
             references = [
                 ("tab_navigation", {"Command+ArrowLeft": -1, "Command+ArrowRight": 1}, "Select previous / next tab"),
                 ("tab_reorder", {"Command+Shift+ArrowLeft": -1, "Command+Shift+ArrowRight": 1}, "Move the current tab left / right"),
@@ -367,8 +402,8 @@ def handle(event, state, config):
                     if plugin.get(key):
                         shortcuts += [plugin[key] + "   " + description + " " + plugin.get("title", plugin["id"]) + "."]
             return [{"op": "draft", "text": ""}] + [{"op": "notice", "text": line} for line in shortcuts] + [
-                {"op": "notice", "text": "Slash commands (run directly, without holding)"}
-            ] + [{"op": "notice", "text": cmd + "  " + description} for cmd, description in commands.items()]
+                {"op": "notice", "text": "**Slash commands** (run directly, without holding)"}
+            ] + [{"op": "notice", "text": "`" + cmd + "`  " + description} for cmd, description in commands.items()]
         if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() in ["/quiet", "/quiet off", "/loud"]:
             return [{"op": "quiet" if state["text"].strip() == "/quiet" else "loud"}]
         if state["key"] == "Enter" and state.get("signed_out") and state["text"].strip() == "/clear":

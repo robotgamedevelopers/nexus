@@ -196,6 +196,7 @@ struct Harness {
     FakeBoard board;
     View view;
     PrAppDisplay display = prAppDisplayDefault();
+    PrAppUserPreferences preferences{};
     double time = 1000;
     PrVec2 extent{1000, 780};
     int hides = 0;      // hide requests reaching the host seam (View::hide), which the overlay connects to hideOverlay
@@ -247,7 +248,7 @@ struct Harness {
             .extent = extent,
             .maxRounds = rounds,
             .display = display,
-            .preferences = {},
+            .preferences = preferences,
         };
         // Under a surface that fills the viewport, as Prax's studio window builds the app's round (studio_window.cpp
         // build), so that the window is not the tree's root, as in the app.
@@ -1245,9 +1246,9 @@ void switchNoticeBubble() {
     h.frame();
     h.frame();
     const TranscriptStyle& shipped = h.look.transcriptStyle;
-    const auto bubble = checkTextPaint(h, prefix, shipped.statusInk, h.look.tabs.fill);
-    CHECK(bubble == checkTextPaint(h, email, shipped.switchEmailInk, h.look.tabs.fill));
-    CHECK(bubble == checkTextPaint(h, suffix, shipped.statusInk, h.look.tabs.fill));
+    const auto bubble = checkTextPaint(h, prefix, shipped.statusInk, shipped.fill);
+    CHECK(bubble == checkTextPaint(h, email, shipped.switchEmailInk, shipped.fill));
+    CHECK(bubble == checkTextPaint(h, suffix, shipped.statusInk, shipped.fill));
     const auto prefixBounds = h.bounds(h.findText(h.window(), prefix));
     const auto emailBounds = h.bounds(h.findText(h.window(), email));
     const auto suffixBounds = h.bounds(h.findText(h.window(), suffix));
@@ -1372,7 +1373,7 @@ void markdownListsAndLinks() {
     CHECK(pointer(PrAppEventKind_PointerMove, {at.x - 12, at.y}));
     CHECK(pointer(PrAppEventKind_PointerUp, at));
     CHECK(opened.size() == 1);
-    checkTextPaint(h, "web link", h.look.tabs.selectedFill, h.look.tabs.fill);
+    checkTextPaint(h, "web link", h.look.tabs.selectedFill, *h.look.transcriptStyle.panelFill);
 }
 
 void longInlineCommandWrapsInTheReply() {
@@ -1441,20 +1442,19 @@ void conversationBubblesAndSignInCard() {
     if (entries.size() != 4) return;
     const auto bubble = [&](std::size_t i) { return prLayoutNodeFirstChild(h.tree, entries[i]); };
     CHECK(colorMatches(fillOf(h, bubble(0)), h.look.transcriptStyle.fill));
-    CHECK(colorMatches(fillOf(h, h.view.conversation), h.look.tabs.fill));
+    CHECK(colorMatches(fillOf(h, h.view.conversation), *h.look.transcriptStyle.panelFill));
     CHECK(fillOf(h, bubble(1)).a == 0 && fillOf(h, bubble(3)).a == 0);
     CHECK(h.bounds(bubble(0)).left > h.bounds(bubble(1)).left);
     CHECK(near(h.bounds(bubble(1)).left, h.bounds(bubble(3)).left));
     // A stored, closed Notice uses the same model entry after hydration. Live status and chat keep distinct colors.
     const TranscriptStyle& shipped = h.look.transcriptStyle;
     checkTextPaint(h, "Hello", shipped.ink, shipped.fill);
-    checkTextPaint(h, "A reply.", shipped.ink, h.look.tabs.fill);
-    checkTextPaint(h, "Usage limit reached.", shipped.noticeInk, h.look.tabs.fill);
-    checkTextPaint(h, live, shipped.ink, h.look.tabs.fill);
+    checkTextPaint(h, "A reply.", shipped.ink, *shipped.panelFill);
+    checkTextPaint(h, "Usage limit reached.", shipped.noticeInk, shipped.fill);
+    checkTextPaint(h, live, shipped.ink, *shipped.panelFill);
     // The shipped transcript_style (policy/rules/config.json) is what the window draws with.
     CHECK(shipped.ink == 0xffffff && shipped.personInk == 0xffffff && shipped.fill == 0x252525);
-    CHECK(shipped.noticeInk == 0xd8d8d8 && shipped.statusInk == 0xd8d8d8 && shipped.busInk == 0x86c5ff);
-    CHECK(shipped.ink != shipped.noticeInk);
+    CHECK(shipped.noticeInk == 0xffffff && shipped.statusInk == 0xd8d8d8 && shipped.busInk == 0x86c5ff);
 
 }
 
@@ -1531,16 +1531,16 @@ void overlayKeepsAllButTheBackgroundOpaque() {
     CHECK(h.active().transcript.size() == 1 && h.active().held == "held");
     h.time = 1008; // crest of the 2.8-second unsent-text pulse
     h.frame();
-    // The shipped overlay_opacity (policy/rules/config.json): 70%.
+    // The shipped overlay_opacity (policy/rules/config.json): 90%.
     // The window, the surface's one child: in the shipped profile the transcript stands in its conversation panel
     // (transcript_style panel_fill), which draws no background of its own over the window's.
     PrLayoutNode window = h.window();
     CHECK(prLayoutNodeParent(h.tree, prLayoutNodeParent(h.tree, h.view.transcript)) == window);
     CHECK(fillOf(h, prLayoutNodeParent(h.tree, h.view.transcript)).a == 0);
-    CHECK(near(fillOf(h, window).a * 100, 70.0f));
+    CHECK(near(fillOf(h, window).a * 100, 90.0f));
     CHECK(prColorFromColor16(prLayoutTreeCanvasColor(h.tree)).a == 0);
     CHECK(fillOf(h, prLayoutNodeParent(h.tree, window)).a == 0);
-    CHECK(near(h.kit->theme.palette.bg0.a * 100, 70.0f));
+    CHECK(near(h.kit->theme.palette.bg0.a * 100, 90.0f));
     CHECK(near(h.kit->theme.palette.bg1.a * 100, style::kOverlayStripFill * 100));
     CHECK(fillOf(h, h.view.promptBox).a == 1);
     for (int side = 0; side < PrRectSide_Count; ++side)
@@ -1722,12 +1722,14 @@ void toolLinesAreOneCompactLine() {
     CHECK(shipped.commandInk && *shipped.commandInk == 0xdc7334);
     CHECK(!h.hasText(h.window(), "Bash: ls src"));
     checkTextPaint(h, "$ ls src", 0xdc7334, shipped.fill);
-    checkTextPaint(h, std::string(400, 'x'), h.look.tabs.selectedFill, shipped.fill);
-    checkTextPaint(h, "Let me look.", shipped.ink, h.look.tabs.fill);
+    checkTextPaint(h, std::string(400, 'x'), shipped.toolInks.at("Read"), shipped.fill);
+    checkTextPaint(h, "Let me look.", shipped.ink, *shipped.panelFill);
     std::vector<PrLayoutNode> lines;
     for (PrLayoutNode n = prLayoutNodeFirstChild(h.tree, e[1]); n != kPrLayoutNodeNone;
             n = prLayoutNodeNextSibling(h.tree, n)) {
-        lines.push_back(n);
+        const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, n));
+        if (prLayoutBoxStyleRecord(h.tree, record.groups[PrLayoutGroup_Box]).position != PrLayoutPosition_Absolute)
+            lines.push_back(n);
     }
     CHECK(lines.size() == 2);
     PrRect column = h.bounds(prLayoutNodeFirstChild(h.tree, h.view.transcript));
@@ -3204,7 +3206,7 @@ void checkTranscriptStyleValidation(nexus::policy::Host& host) {
     nexus::WindowApplication stock;
     stock.update(stockHost, "ai", "", true, false, 0, 1, "validate-style");
     const nexus::TranscriptStyle shipped = stock.transcriptStyle;
-    CHECK(shipped.ink == 0xffffff && shipped.noticeInk == 0xd8d8d8 && shipped.fill == 0x252525);
+    CHECK(shipped.ink == 0xffffff && shipped.noticeInk == 0xffffff && shipped.fill == 0x252525);
     CHECK(shipped.toolPrompts.count("Bash") == 1);
     for (std::size_t i = 0; i < 14; ++i) {
         window.update(host, "ai", "", true, false, i, 14, "validate-style");
@@ -3239,7 +3241,19 @@ void cleanNoticePresentation() {
     CHECK(h.hasText(h.window(), "Hello") && h.hasText(h.window(), "Ready."));
     CHECK(h.hasText(h.window(), failure));
     CHECK(h.active().transcript.size() == routine.size() + 3);
-    checkTextPaint(h, failure, 0xd8d8d8, h.look.tabs.fill);
+    checkTextPaint(h, failure, 0xffffff, h.look.transcriptStyle.fill);
+    h.model.append(0, {EntryKind::Notice, "**Model:** `model-a`"});
+    h.model.append(0, {EntryKind::Person, "Next request"});
+    h.model.append(0, {EntryKind::Tool, "Edit: /tmp/example.cpp"});
+    h.model.append(0, {EntryKind::Tool, "Bash: build"});
+    h.frame(); h.frame();
+    const auto infoBubble = checkTextPaint(h, "Model:", 0xffffff, h.look.transcriptStyle.fill);
+    const auto personBubble = checkTextPaint(h, "Next request", 0xffffff, h.look.transcriptStyle.fill);
+    checkTextPaint(h, "model-a", 0xffffff, h.look.transcriptStyle.codeFill);
+    CHECK(h.bounds(infoBubble).left < h.bounds(personBubble).left);
+    CHECK(h.bounds(infoBubble).right - h.bounds(infoBubble).left < h.extent.x / 2);
+    checkTextPaint(h, "Edit: /tmp/example.cpp", 0xaa79dd, h.look.transcriptStyle.fill);
+    checkTextPaint(h, "$ build", 0xdc7334, h.look.transcriptStyle.fill);
     h.type("/help"); h.enter(); h.frame();
     CHECK(h.view.helpTab == h.active().id && h.view.helpText.find("/goal <text>") != std::string::npos);
 }
@@ -3247,6 +3261,7 @@ void cleanNoticePresentation() {
 void activeGoalBubble() {
     Harness h({AIInfo{"test", "m1"}}, true);
     h.display.headroom = h.display.potentialHeadroom = 4;
+    h.view.savingPower = true; // The laptop is idle on battery for every pulse check below.
     std::string goal = "Keep improving the client.";
     int cancels = 0;
     h.view.goal = [&](std::size_t) { return goal; };
@@ -3283,6 +3298,10 @@ void activeGoalBubble() {
     h.time = 0.8 - 1.0 / 60; h.frame(); const auto high = borderColor();
     CHECK(low.r < 1 && high.r > 1 && high.r > high.g && high.g > high.b);
     CHECK(std::abs(high.r - fillOf(h, prLayoutNodeNextSibling(h.tree, h.view.prompt)).r) < 0.01);
+    h.time = 90 - 1.0 / 60; h.frame(); const auto laterLow = borderColor();
+    h.time = 90.8 - 1.0 / 60; h.frame(); const auto laterHigh = borderColor();
+    CHECK(std::abs(laterLow.r - low.r) < 0.01 && std::abs(laterHigh.r - high.r) < 0.01);
+    CHECK(h.view.energyAnimating && windowWantsFrame(h.view));
     const auto top = h.bounds(findBubble()).top;
     for (int n = 0; n < 30; ++n) h.model.append(0, {EntryKind::AI, "Another reply."});
     h.frame();
@@ -3314,7 +3333,128 @@ void promptReturnsToLatest() {
     }
 }
 
+void notchAwareHeader() {
+    Harness h(aisNamed(18), true, true);
+    h.view.calendar = {5, 27, 11, 2026, 10, 45, 0, true};
+    h.view.headerNotch = {440, 0, 560, 38};
+    h.frame(); h.frame();
+    CHECK(h.view.headerTabs != kPrLayoutNodeNone);
+    auto lane = h.bounds(h.view.headerTabs);
+    CHECK(near(lane.left, 0) && near(lane.right, 428));
+    auto clock = h.findText(h.window(), "Fri 27 Nov 10:45 AM");
+    CHECK(clock != kPrLayoutNodeNone);
+    CHECK(h.bounds(clock).left >= 572 && h.bounds(clock).right <= h.extent.x);
+    const auto header = prLayoutNodeParent(h.tree, h.view.headerTabs);
+    CHECK(colorMatches(fillOf(h, header), 0x000000));
+    CHECK(near(fillOf(h, header).a, 1));
+    // Selecting a tab beyond the lane scrolls it into view, preserving order and selection.
+    h.model.select_tab(h.model.tab_count() - 1);
+    h.frame(); h.frame();
+    lane = h.bounds(h.view.headerTabs);
+    CHECK(h.bounds(h.view.tabNodes.back()).left >= lane.left - 1);
+    CHECK(h.bounds(h.view.tabNodes.back()).right <= lane.right + 1);
+    h.model.select_tab(0); h.frame(); h.frame();
+    CHECK(h.bounds(h.view.tabNodes.front()).left >= lane.left - 1);
+    CHECK(h.bounds(h.view.tabNodes.front()).right <= lane.right + 1);
+    // Narrow view: use the full width below the obstruction, keeping the divider and content below it.
+    h.model.select_tab(1);
+    h.extent = h.view.extent = {600, 780};
+    h.view.headerNotch = {240, 0, 360, 38};
+    h.frame(); h.frame();
+    CHECK(h.bounds(h.view.headerTabs).top >= 38);
+    clock = h.findText(h.window(), "Fri 27 Nov 10:45 AM");
+    CHECK(h.bounds(clock).top >= 38);
+    CHECK(h.bounds(clock).right <= h.extent.x);
+    CHECK(h.bounds(h.view.transcript).top > h.bounds(clock).bottom);
+    h.model.select_tab(0); h.frame(); h.frame();
+    CHECK(near(h.board.extent.y, h.extent.y - h.view.headerHeight));
+    // Moving to an unobscured monitor restores the full-width header.
+    h.view.headerNotch = {};
+    h.extent = h.view.extent = {1000, 780};
+    h.frame(); h.frame();
+    CHECK(h.view.headerTabs == kPrLayoutNodeNone);
+    CHECK(h.bounds(h.view.tabNodes.front()).top < 38);
+}
+
+void idlePulseAndConfiguration(const char* active, const char* disabled) {
+    Harness h({AIInfo{"test", "m1"}}, true);
+    CHECK(h.look.transcriptStyle.glyphPeak == 1);
+    h.view.calendar = {5, 27, 11, 2026, 10, 45, 0, true};
+    h.frame(); h.frame();
+    const auto clock = h.findText(h.window(), "Fri 27 Nov 10:45 AM");
+    CHECK(clock != kPrLayoutNodeNone);
+    if (clock) {
+        CHECK(h.bounds(clock).left > h.extent.x / 2);
+        CHECK(h.bounds(clock).bottom < h.bounds(h.view.transcript).top);
+    }
+    h.view.calendar.hour = 0; h.frame(); h.frame();
+    CHECK(h.hasText(h.window(), "Fri 27 Nov 12:45 AM"));
+    h.view.calendar.hour = 12; h.frame(); h.frame();
+    CHECK(h.hasText(h.window(), "Fri 27 Nov 12:45 PM"));
+    h.view.savingPower = true;
+    h.view.lastInput = -100;
+    h.type("held pulse"); h.enter();
+    const auto ink = [&] {
+        const auto leaf = h.findText(h.window(), "held pulse");
+        CHECK(leaf != kPrLayoutNodeNone);
+        const auto node = prLayoutNodeParent(h.tree, leaf);
+        const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, node));
+        return prColorFromColor16(prLayoutColorStyleRecord(h.tree, record.groups[PrLayoutGroup_Color]).color).r;
+    };
+    h.time = 28 - 1.0 / 60; h.frame(); const auto bright = ink();
+    h.time = 29.4 - 1.0 / 60; h.frame(); const auto dim = ink();
+    CHECK(bright > dim && h.view.energyAnimating);
+    h.time = 280 - 1.0 / 60; h.frame(); CHECK(std::abs(ink() - bright) < 0.01);
+    h.time = 281.4 - 1.0 / 60; h.frame(); CHECK(std::abs(ink() - dim) < 0.01);
+    h.preferences.reducedMotion = true;
+    h.frame(); const auto steady = ink();
+    h.time += 1.4; h.frame(); CHECK(std::abs(ink() - steady) < 0.01 && !h.view.energyAnimating);
+    h.preferences.reducedMotion = false;
+    const std::string live = std::string(active) + ".live";
+    std::filesystem::copy_file(active, live, std::filesystem::copy_options::overwrite_existing);
+    h.view.application->watch(live);
+    // Watching normally begins before the first frame. Advance the context when attaching it to this live rig.
+    h.view.calendar.minute = 46;
+    const auto wait = [&](bool enabled) {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        do {
+            h.frame();
+            if (h.look.ui.body_size == 30 && h.look.transcriptStyle.idleAnimations == enabled) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        } while (std::chrono::steady_clock::now() < until);
+        h.frame(); h.frame();
+        CHECK(h.look.ui.body_size == 30 && h.look.transcriptStyle.idleAnimations == enabled);
+    };
+    wait(true);
+    CHECK(h.look.colors.background == 0x102030 && h.look.transcriptStyle.panelFill == 0x304050);
+    auto canvas = fillOf(h, h.window()); canvas.a = 1;
+    CHECK(colorMatches(canvas, 0x102030));
+    CHECK(colorMatches(fillOf(h, h.view.conversation), 0x304050));
+    CHECK(near(fillOf(h, h.window()).a, 0.9f));
+    CHECK(near(h.kit->theme.types[PrKitTextRole_Body].size, 30));
+    CHECK(h.look.ui.bubble_padding_x == 12 && h.look.ui.entry_gap == 22);
+    CHECK(h.look.words.server_title == "Choose a host" && h.look.transcriptStyle.goalLabel == "Persistent task");
+    CHECK(h.look.transcriptStyle.goalOutlineWidth == 6 && !h.look.transcriptStyle.toolChevron);
+    CHECK(h.look.transcriptStyle.toolInks.at("Edit") == 0x9876ab);
+    h.model.pop_held(h.model.active()); h.type("custom send key");
+    h.key('S', PrAppKeyCode_KeyS, style::kCommand); h.frame();
+    CHECK(h.active().draft.empty() && h.active().held == "custom send key");
+    // Restore the text measured above, then reload just the animation switch.
+    h.model.pop_held(h.model.active());
+    h.model.restore_held(h.model.active(), "held pulse");
+    std::filesystem::copy_file(disabled, live, std::filesystem::copy_options::overwrite_existing);
+    wait(false);
+    CHECK(!h.hasText(h.window(), "Fri 27 Nov 12:46 PM"));
+    h.view.headerNotch = {440, 0, 560, 38}; h.frame(); h.frame();
+    CHECK(!h.view.windowApp.surface.flags.notch_aware && h.view.headerTabs == kPrLayoutNodeNone);
+    h.time = 28; h.frame(); const auto off = ink();
+    h.time = 29.4; h.frame(); CHECK(std::abs(ink() - off) < 0.01 && !h.view.energyAnimating);
+    CHECK(uiFormat("{account} / {value}", {{"account", "{value}"}, {"value", "safe"}}) == "{value} / safe");
+}
+
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--notch") { notchAwareHeader(); return failures ? 1 : 0; }
+    if (argc == 4 && std::string(argv[1]) == "--ui-config") { idlePulseAndConfiguration(argv[2], argv[3]); return failures ? 1 : 0; }
     if (argc == 2 && std::string(argv[1]) == "--goal") { activeGoalBubble(); return failures ? 1 : 0; }
     if (argc == 2 && std::string(argv[1]) == "--clean-notices") { cleanNoticePresentation(); return failures ? 1 : 0; }
     if (argc == 2 && std::string(argv[1]) == "--prompt-follow") { promptReturnsToLatest(); return failures ? 1 : 0; }
@@ -3525,7 +3665,7 @@ int main(int argc, char** argv) {
         CHECK(h.view.helpText.find("⌘↑ / ⌘↓") != std::string::npos);
         CHECK(h.view.helpText.find("⌘+ / ⌘−") != std::string::npos);
         CHECK(h.view.helpText.find("/login") != std::string::npos);
-        CHECK(h.hasText(h.view.transcript, h.view.helpText));
+        CHECK(h.hasText(h.view.transcript, "Keyboard actions") && h.hasText(h.view.transcript, "/goal <text>"));
         h.model.append(h.model.active(), {EntryKind::Notice, "local history"});
         h.model.set_draft(h.model.active(), "/clear");
         h.frame();
@@ -3762,7 +3902,7 @@ int main(int argc, char** argv) {
             waitForStyle(true);
             CHECK(styled.hasText(styled.window(), "Fixture notice") && !styled.hasText(styled.window(), "Bash: git status"));
             checkTextPaint(styled, "$ git status", 0xdc7334, 0x102030);
-            checkTextPaint(styled, "Fixture notice", 0xffa0a0, 0x182134);
+            checkTextPaint(styled, "Fixture notice", 0xffa0a0, 0x102030);
             CHECK(styled.active().transcript.size() == 4 && styled.entries().size() == 5);
             styled.view.promptOpen = false;
             styled.view.status = "Fixture transport status";

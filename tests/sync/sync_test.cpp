@@ -960,10 +960,10 @@ void conversation_commands() {
     withSessions(hub, {"ada", "bea"});
     const auto send = [&](const char* command) { return hub.apply(act(ActionKind::Send, 1, command)); };
     CHECK(send("/model"));
-    CHECK(store.find(1)->transcript.back()->text.find("m0 (current)") != std::string::npos);
+    CHECK(store.find(1)->transcript.back()->text.find("` m0 ` **(current)**") != std::string::npos);
     CHECK(send("/model m1 low") && store.find(1)->info.model != "m1");
     CHECK(send("/model m1 high") && store.find(1)->info.model == "m1" && store.find(1)->info.effort == "high");
-    CHECK(send("/info") && store.find(1)->transcript.back()->text.find("AI: ada") != std::string::npos);
+    CHECK(send("/info") && store.find(1)->transcript.back()->text.find("**AI:** ada") != std::string::npos);
     CHECK(store.find(1)->transcript.back()->text.find("Pronouns:") == std::string::npos);
     CHECK(send("/model m1") && store.find(1)->info.model == "m1");
     CHECK(send("/effort high") && store.find(1)->info.effort == "high");

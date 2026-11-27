@@ -75,7 +75,7 @@ Glenn, 2026-11-25: "I am changing the settings for users to have when they start
 Each rule here has a test or a model behind it. A change that breaks one is a regression, not a redesign. Only the owner changes a rule, and the change is recorded here in the same pull request.
 
 Launch and the overlay
-- nexus is an overlay: a borderless panel above other apps, on every Space and beside fullscreen apps. Its dark background defaults to 60% opacity, configurable by client policy. It covers the whole screen including the menu bar, and runs as an Accessory app with no Dock icon. `--windowed` gives an ordinary opaque window instead, in which Escape does nothing.
+- nexus is an overlay: a borderless panel above other apps, on every Space and beside fullscreen apps. Its dark background defaults to 90% opacity, configurable by client policy. It covers the whole screen including the menu bar, and runs as an Accessory app with no Dock icon. `--windowed` gives an ordinary opaque window instead, in which Escape does nothing.
 - One live client owns each user’s client home. Command-Q hides the macOS overlay and keeps its server connection active.
 - A normal app launch reads the server host from client config, including after macOS relaunches the app for a permission change. Dashboard keeps connection and roster diagnostics out of the overlay.
 - The macOS client starts at GUI login in overlay mode. Keep example plugins, their services, groups and bindings in isolated test fixtures.
@@ -282,7 +282,7 @@ Tabs
 ## Session goals and help (2026-11-27)
 
 - `/goal <text>` sends immediately and repeats every five minutes in this session, for every harness. `/goal` reports
-  it; `/goal off` and Command–Delete stop future reminders. Command–Delete also clears the composer and held message.
+  it; `/goal clear`, `/goal off` and Command–Delete stop future reminders. Command–Delete also clears the composer and held message.
 - The server persists and schedules goals, including on headless Linux and while the client is disconnected. Missed
   intervals never cause catch-up bursts, and an identical waiting goal is not duplicated. New sessions inherit no goal.
 - The active goal is pinned below the held message and above the prompt, with a thick solid orange outline using the
@@ -291,6 +291,24 @@ Tabs
   reference in the same change. Contracts and qualification: `docs/goals.md`, `models/SessionGoal.tla`.
 - Keep the conversation clean: hide routine sign-in and account-switch history in the shipped client profile,
   including old sign-in timeouts and harness-account reset notices. Keep the durable history, actionable failures
-  and requested command responses. Remaining notices use neutral text, not red (owner, 2026-11-27).
+  and requested command responses. Visible app responses are compact left-aligned dark conversation bubbles with
+  white text and Markdown formatting, including `/model`, `/info` and `/help` (owner, 2026-11-27).
 - Enter or Command–Enter on a prepared message returns the transcript immediately to its newest content, including
   when Enter holds the message. Shift–Enter inserts a newline without changing the transcript position.
+- File operations are purple with the same perceptual lightness as shell-command orange. Tool colors, work chevrons,
+  goal presentation and idle animation behavior live in the shipped profile; pulsing continues on battery by default.
+
+- The outer canvas is `#202020` at 90% opacity; the AI output panel is opaque `#272728`. Prompt and message fills
+  remain independently configurable. The local clock sits at the top right above the strip divider, formatted
+  `Fri 27 Nov 10:45 AM`. Typography, colors, strings, interaction tuning, window options and the clock are fork-owned
+  in Starlark/config; see `docs/ui-configuration.md`. Native code validates and renders these values.
+
+- New AI reply text has no HDR flash by default (`transcript_style.glyph_peak = 1`). Keep cursor/goal pulses separate.
+- Capture frame performance continuously, before a person reports a stutter: numeric timings only, bounded on disk,
+  written off the UI thread. `ui_flags.performance_recording` controls it. The foreground macOS UI uses the highest
+  standard interactive QoS and a foreground task role; `ui_flags.foreground_priority` controls that boost. Background
+  build/test work must yield to interaction (low CPU and I/O priority), including on battery.
+
+- The header above the divider is opaque black. When the window overlaps a display notch, tabs and the clock use
+  the safe areas on either side; overflowing tabs scroll and keyboard selection reveals them. A narrow view or large
+  text moves the header below the notch. Detection and spacing follow the display and fork-owned UI configuration.

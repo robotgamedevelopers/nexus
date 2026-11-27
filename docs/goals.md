@@ -2,7 +2,7 @@
 
 `/goal <text>` sends the literal text immediately and repeats it every five minutes in this session, through whichever
 harness the session uses. Setting another goal replaces the old one and restarts the interval. `/goal` shows its status;
-`/goal off` stops future repetitions. Command–Delete also stops the goal while clearing the composer and held message.
+`/goal clear` or `/goal off` stops future repetitions. Command–Delete also stops the goal while clearing the composer and held message.
 A turn already submitted is not recalled; Command–Escape stops current work.
 
 The server owns and persists the goal and its next deadline. It continues while the client is hidden or disconnected,

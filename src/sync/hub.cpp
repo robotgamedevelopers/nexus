@@ -492,9 +492,8 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
                         info.goalNextMs = 0;
                         changes.push_back(infoChange(std::move(info)));
                     }
-                    changes.push_back({entry(EntryKind::Notice, plan.text ? "Goal stopped." : session.info.goal.empty() ?
-                        "No active goal. Use /goal <text> to send now and repeat every five minutes." :
-                        "Active goal (every five minutes): " + session.info.goal), {}});
+                    changes.push_back({entry(EntryKind::Notice, policy::noticeText(application_, bundlePath_(),
+                        plan.text ? "goal_stopped" : "goal_status", {{"goal", session.info.goal}})), {}});
                     const bool ok = commit(changes);
                     if (ok) refresh(action.session);
                     return ok;
@@ -738,8 +737,11 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client,
             changes.push_back(SessionChange{switchNotice(info.account), {}});
         }
     }
-    if (announce && refused.empty())
-        changes.push_back({entry(EntryKind::Notice, std::string(settingName(action.kind)) + " set to " + action.text + (effort ? " with " + *effort + " effort" : "") + "."), {}});
+    if (announce && refused.empty()) {
+        const auto setting = action.kind == ActionKind::SetModel ? "model" : action.kind == ActionKind::SetEffort ? "effort" : "account";
+        changes.push_back({entry(EntryKind::Notice, policy::noticeText(application_, bundlePath_(), "setting",
+            {{"setting", setting}, {"value", action.text}, {"effort", effort ? *effort : ""}})), {}});
+    }
     std::string failed;
     if ((!changes.empty() || !client.empty()) &&
             !store_.commit(changes.empty() ? 0 : action.session, changes, client, action.num, &failed)) {

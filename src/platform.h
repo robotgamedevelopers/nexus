@@ -16,6 +16,7 @@
 
 #include "build_parts.h"
 #include "pr/surface.h"
+#include "pr/geom.h"
 
 namespace nexus {
 
@@ -35,8 +36,11 @@ void showLaunchError(const std::string& text);
 // kind, the view has no window, or there is no screen. On iOS and iPadOS a scene's window is the system's to size and
 // always fills the scene: true for a UIKit surface with a view in a window, else false.
 #if NEXUS_MACOS
-void prioritizeOverlayTransition();
-void trackForegroundPriority(const PrSurface& surface, const std::function<void()>& hide);
+void prioritizeOverlayTransition(bool enabled);
+void trackForegroundPriority(const PrSurface& surface, const std::function<void()>& hide, bool enabled);
+void updateForegroundPriority(const PrSurface& surface, bool enabled);
+// Display obstruction intersecting this view, in top-left logical view coordinates; empty on an unobscured display.
+PrRect displayNotch(const PrSurface& surface);
 #endif
 
 bool coverScreen(const PrSurface& surface);

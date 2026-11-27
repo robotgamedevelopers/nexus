@@ -288,9 +288,13 @@ accepts 0–64 logical points before keyboard zoom. All fields are optional. Set
 to `false` to hide those transcript entries in the client. Their history stays available when you enable them
 again. `hidden_notice_fragments` hides only notices containing one of its case-sensitive strings (at most 32
 nonempty strings of at most 256 bytes). It never hides user messages, AI replies or tools. The shipped profile hides
-routine authentication and account-switch history, including expired sign-in attempts, and uses neutral notice text.
+routine authentication and account-switch history, including expired sign-in attempts. Visible app responses use
+left-aligned dark bubbles with white text and the shared Markdown renderer, including `/help`, `/info` and setting confirmations.
 Other failures and command responses remain visible; `/help` remains available. Setting the list to `[]` restores the
 hidden history. In `transcript_style`, `"tool_prompts": {"Bash": "$ "}` displays Bash activity as a selectable monospace command. Each key matches the tool name exactly. An empty map preserves the original tool labels. Apply the client policy to see the changes in a running window.
+
+`tool_inks` maps exact tool names to `#RRGGBB` colors, overriding `command_ink` for those tools. The shipped profile
+uses dark purple (`#aa79dd`) for Edit, MultiEdit, Write, apply_patch and ApplyPatch; shell commands remain orange.
 
 The Starlark `window` result accepts these color settings, also available in the client JSON profile:
 
@@ -518,7 +522,9 @@ disables the sweep and collapse. Both the overlay and opaque windows request HDR
 
 Sent bubbles have no outline by default. To add one, set `transcript_style.sent_outline_width` and `transcript_style.sent_outline_ink`. Pending bubbles use a dashed selection-color outline. Set `transcript_style.pending_dash_seconds` to the time for one dash and gap to travel (default 2 seconds, 0 for stationary). Reduced Motion holds the dashes and text still. The unsent text gently dims and brightens over `pending_text_seconds` (2.8 by default). Set `pending_text_pulse` to zero to disable it. The default is 0.10. Set `sounds.discard` to tune the click when Command-Delete clears the composer. Set `transcript_style.pending_outline_width` from 0 to 8 points before text scaling (default 3). `sounds.startup` plays once the overlay hotkey registers. Set `synth` to true for a layered tone that swells and fades. `sounds.step` is the quiet tick when the selected menu row changes. `sounds.hold` plays on staging (silent by default), and `sounds.send` plays when a new outgoing message appears in the live server transcript.
 
-Read tool calls display the path alone. `transcript_style.read_path_ink` sets its color and defaults to the link or selection color.
+Read tool calls display the path alone through `transcript_style.tool_prompts.Read = ""`. File tools, including Read,
+Edit and Write, use the purple entries in `transcript_style.tool_inks`; this map takes precedence over the legacy
+`read_path_ink` fallback.
 
 For a single active cell, `transcript_style.scanner_pulse_floor` sets the dimmest part of the pulse (0–1, default 0.12).
 
@@ -535,7 +541,7 @@ Set `prompt_style.caret_gap` to the trailing space in points between typed text 
 
 The window policy can return a `sounds` object with `tab` and `confirm` cues. Each has `from_hz`, `to_hz`, `duration_ms`, and `gain` (0–1). Omit a cue or set its gain to zero to silence it.
 
-`prompt_style.text_peak` sets steady HDR brightness for the entire draft, capped by display headroom. The keyboard profile uses `prompt_style.bold` for the editor and `transcript_style.person_bold` for the person's messages. In `transcript_style`, `person_flash_peak` and `person_flash_seconds` set the initial brightness and fade of a submitted message. `glyph_peak`, `glyph_seconds`, and `glyph_stagger` control the short-lived glow of newly streamed reply text. Peak brightness is a linear-light multiplier capped by the display's available HDR headroom. A peak of 1 disables the corresponding effect. Reduced Motion disables both.
+`prompt_style.text_peak` sets steady HDR brightness for the entire draft, capped by display headroom. The keyboard profile uses `prompt_style.bold` for the editor and `transcript_style.person_bold` for the person's messages. In `transcript_style`, `person_flash_peak` and `person_flash_seconds` set the initial brightness and fade of a submitted message. `glyph_peak`, `glyph_seconds`, and `glyph_stagger` control an optional short-lived glow of newly streamed reply text. The shipped `glyph_peak` is 1, so new AI text has no HDR flash. Peak brightness is a linear-light multiplier capped by the display's available HDR headroom. A peak of 1 disables the corresponding effect. Reduced Motion disables both.
 
 The client profile's `clear_draft_keys` binds the `clear_composer` action, which clears the active AI's draft and all its locally staged bubbles in one press. The defaults cover Command with either the Mac Delete key (Backspace) or forward Delete.
 
@@ -548,3 +554,15 @@ The optional `sounds` entries `open`, `close`, `dialog`, `confirm`, `cancel`, an
 Copying selected transcript text clears its highlight and plays `sounds.copy`. All cues pass through the client audio player, where `/quiet` mutes them globally.
 
 In an AI chat, `transcript_scroll_keys` maps key chords to `top`, `bottom`, `page_up` or `page_down`. Control-Up and Control-Down snap to the oldest and newest displayed output. Page Up and Page Down move one viewport. The prompt retains focus.
+
+
+### Complete UI profile
+
+See [UI configuration](ui-configuration.md) for the typography, layout, control palette, fonts, captions, keys,
+scroll tuning, local clock and platform window options. These values are returned by `app.window`. Native fallback
+values for the `ui_*` groups are generated from the shipped JSON at build time, so changing a fork's defaults does
+not require maintaining a second list in C++.
+
+The server also handles `app.notice`: input `{kind, ...named_fields}` produces a JSON string for command acknowledgements.
+The shipped `client/window.star` formats `/help`; `server/conversation.star` formats `/info`, model/effort lists,
+setting acknowledgements and goal status as Markdown. Native state changes and validation remain authoritative.

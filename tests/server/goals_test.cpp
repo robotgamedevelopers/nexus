@@ -87,6 +87,10 @@ void checks() {
         CHECK(f.hub->serveGoals() && f.sends() == 5); // literal text, never reparsed as a Nexus command
         CHECK(f.command("/goal off") && f.info().goal.empty() && f.info().goalNextMs == 0);
         f.now += sync::Hub::kGoalIntervalMs; CHECK(!f.hub->serveGoals() && f.sends() == 5);
+        CHECK(f.command("/goal second goal") && f.sends() == 6);
+        CHECK(f.command("/goal clear") && f.info().goal.empty() && f.info().goalNextMs == 0);
+        f.restart(); f.now += sync::Hub::kGoalIntervalMs;
+        CHECK(!f.hub->serveGoals() && f.sends() == 6);
     }
     Fixture f;
     CHECK(f.command("/goal original"));

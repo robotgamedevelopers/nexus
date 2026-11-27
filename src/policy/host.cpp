@@ -195,6 +195,29 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
     return true;
 }
 
+std::string noticeText(Host& host, const std::string& path, const std::string& kind,
+        const std::map<std::string, std::string>& fields) {
+    std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);
+    prJsonWriterBeginObject(w.get());
+    prJsonWriterKey(w.get(), pr("kind"));
+    prJsonWriterString(w.get(), pr(kind));
+    for (const auto& [key, value] : fields) {
+        prJsonWriterKey(w.get(), pr(key));
+        prJsonWriterString(w.get(), pr(value));
+    }
+    prJsonWriterEndObject(w.get());
+    const auto context = prJsonWriterText(w.get());
+    std::string why;
+    const auto answer = host.decide(path, "app.notice", std::string(context.data, context.size), why);
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    if (!why.empty()) return "Notice policy: " + why;
+    if (!prJsonParse(doc.get(), pr(answer), nullptr) || prJsonKind(doc.get(), 0) != PrJsonKind_String)
+        return "Notice policy must return text. Check the app.notice handler in server/conversation.star.";
+    const auto text = prJsonString(doc.get(), 0);
+    if (text.size > 32768) return "Notice policy returned more than 32 KiB. Shorten the app.notice reply.";
+    return std::string(text.data, text.size);
+}
+
 int textZoom(Host& host, const std::string& path, int current, int delta, int low, int high) {
     const auto context = "{\"current\":" + std::to_string(current) + ",\"delta\":" + std::to_string(delta) +
         ",\"min\":" + std::to_string(low) + ",\"max\":" + std::to_string(high) + "}";

@@ -87,6 +87,7 @@ public:
     // The title the program set, as Prax tells it (prTerminalTitle), whatever the label; empty for no such terminal.
     std::string programTitle(std::size_t id);
     void setTextScale(float k) override;
+    void setFontFamily(const std::string& family) override;
 
     void closeAll();
     // Reads each terminal's foreground process and title, once a frame at the frame's `time` in seconds, for its label.
@@ -126,6 +127,7 @@ private:
         PrVec2 extent{};
         float ratio = 1;
         PrKitPalette palette{};
+        std::string fontFamily{};
     };
     // A shell the start thread started (`terminal` null: it could not), with its process id (-1: not found), and the
     // line its tab shows if no shell can run here at all (problem).
@@ -139,7 +141,7 @@ private:
 
     PrTerminal* find(std::size_t id);
     bool applyBackground(PrTerminal* terminal) const;
-    PrTextFontDesc font(float scale) const;
+    PrTextFontDesc font(float scale, const PrFontFamily& family) const;
     void attach(const Started& s);
     void take();                                // the frame thread takes the terminals started since
     void run();                                 // the start thread
@@ -151,6 +153,7 @@ private:
     PrApp* app_;
     PrAppWindow* window_;
     float scale_ = 1;
+    std::string fontFamily_;
     PrProcessLauncher* launcher_ = nullptr;     // used on the start thread only
 
     // The frame thread's.

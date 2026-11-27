@@ -31,12 +31,17 @@
 #include "hitch.h"
 #include "model.h"
 #include "window_app.h"
+#include "window_clock.h"
 #include "native_tabs.h"
 
 namespace nexus {
 
 // How the window's own records are drawn. Its address owns the window's records (pr/ui_records.h).
 struct Look {
+    UiMetrics ui;
+    UiColors colors;
+    UiText words;
+    UiFonts fonts;
     bool overlay = false;           // the window background and tab strip are see-through (style::kOverlayOpacity)
     int textSteps = 0;              // the text scale it is drawn at, in steps from 1 (style::textScale)
     TabStyle tabs{};
@@ -50,7 +55,7 @@ struct Look {
 // text scale `steps` steps from 1.
 PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps = 0, float opacity = style::kOverlayOpacity,
                        const MessageCardStyle& card = {}, const TranscriptStyle& transcript = {}, const TabStyle& tabs = {},
-                       const PromptStyle& prompt = {});
+                       const PromptStyle& prompt = {}, const UiMetrics& ui = {}, const UiColors& colors = {}, const UiFonts& families = {});
 
 // The shells of the terminal tabs, by Tab::id. Our own seam (Prax's terminal cannot run without a process), so that the
 // tab logic runs in tests without one; terminals.h is the one over Prax's terminal (pr/terminal.h).
@@ -72,6 +77,7 @@ struct Terminals {
     }
     // Its tab's label, or empty: the title its shell set, or while ssh runs in it the machine it reaches (remote.h).
     virtual std::string title(std::size_t id) = 0;
+    virtual void setFontFamily(const std::string&) {}
     virtual void setTextScale(float k) = 0;     // every terminal's font, at the text scale k
 };
 
@@ -83,6 +89,7 @@ struct Board {
     // nothing, writes to `problem` one line that says what is happening or what failed and what to do, and returns false.
     virtual bool show(PrLayoutNode parent, PrVec2 extent, std::string* problem) = 0;
     virtual void hidden() = 0;                  // the sprint tab does not show this round
+    virtual void setScrollStyle(const UiScroll&) {}
     virtual void setTextScale(float k) = 0;     // the page's zoom, at the text scale k
     // The sprint tab was chosen, by its Command key or a click on its tab, whether or not it showed already: a page
     // that has left the board goes back to it.
@@ -174,6 +181,8 @@ struct AccountMenuView {
 };
 
 struct View {
+    WindowCalendar calendar;
+    std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> clockFont{nullptr, prTextFontRelease};
     std::function<void(const Chirp&)> playChirp;
     // Plays a cue through playChirp, and none while locked (lockScreen): no sound says what an AI did.
     void chirp(const Chirp& cue) const {
@@ -232,6 +241,11 @@ struct View {
     Terminals* terminals = nullptr;             // the terminal tabs' shells; unset, Command-T adds none
     Board* board = nullptr;                     // the sprint tab's page; unset, the tab says it has none
     PrVec2 extent{};                            // the window's extent in px, which the host sets before each frame
+    PrRect headerNotch{};                       // host-measured display obstruction in logical view coordinates
+    PrLayoutNode headerTabs = kPrLayoutNodeNone;
+    float headerHeight = 0;
+    uint64_t revealedHeaderTab = 0;
+    float revealedHeaderWidth = 0;
     std::shared_ptr<policy::Host> application = std::make_shared<policy::Host>("client");
     WindowApplication windowApp;
     NativeTabs nativeTabs;

@@ -332,6 +332,15 @@ void PraxBoard::hidden() {
     pressInPage_ = false;
 }
 
+void PraxBoard::setScrollStyle(const UiScroll& style) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (scrollStyle_ == style) return;
+    scrollStyle_ = style;
+    ++posted_;
+    if (waiting_ != nullptr) prDomAgentWake(waiting_);
+    wake_.notify_all();
+}
+
 void PraxBoard::setTextScale(float k) {
     if (k <= 0 || k == windowZoom_) {
         return;
@@ -544,6 +553,7 @@ void PraxBoard::run() {
 
         pageExtent_ = extent_;
         pageZoom_ = zoom_;
+        scroller_.tuning = scrollStyle_;
         lock.unlock();
         step(inbox);
         publish();
