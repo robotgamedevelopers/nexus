@@ -102,6 +102,7 @@
    :rows (
      ("screen-observation" "Let an AI see a display or window the human chooses with Screen Recording permission" :later t)
      ("desktop-input" "Let an AI click and type in other apps with separate Accessibility permission and a human stop control" :later t)
+     ("terminal-hdr-cursor" "Prax cursor-rendering hook: match the prompt HDR pulse while preserving shell and editor cursor behavior")
      ("terminal-tabs" "Terminal tabs: a shell per tab, after the AIs; added with Cmd-T, closed with Cmd-W")
      ("sprint-tab" "Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; the page opaque, as nova-sprint serves it")
      ("upload" "The plus button uploads a picked file to the server, into the selected AI's incoming/ directory; an image is also posted to the chat (needs layers 2 and 3)" :later t)
@@ -122,6 +123,7 @@
      ("screen-observation" "done" "t-screen-observation")
      ("desktop-input" "done" "t-desktop-input")
      ("terminal-tabs" "done" "t-terminal-tabs")
+     ("terminal-hdr-cursor" "done" "t-terminal-hdr-cursor")
      ("sprint-tab" "done" "t-sprint-tab")
      ("upload" "done" "t-upload")
      ("upload-store" "done" "t-upload-store")

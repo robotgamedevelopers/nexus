@@ -57,6 +57,7 @@
 |---|:---:|
 | Let an AI see a display or window the human chooses with Screen Recording permission (later) | ❌ |
 | Let an AI click and type in other apps with separate Accessibility permission and a human stop control (later) | ❌ |
+| Prax cursor-rendering hook: match the prompt HDR pulse while preserving shell and editor cursor behavior | ❌ |
 | Terminal tabs: a shell per tab, after the AIs; added with Cmd-T, closed with Cmd-W | ✅ |
 | Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; the page opaque, as nova-sprint serves it | ❌ |
 | The plus button uploads a picked file to the server, into the selected AI's incoming/ directory; an image is also posted to the chat (needs layers 2 and 3) (later) | ❌ |
@@ -71,7 +72,7 @@
 | Windows depth: close the trace binding gaps (ten of seventeen review plants escaped the trace): constrain ranWell by the relay's run time (RelayLife.tla:171); model the tells as a sequence with a no-repeat invariant; unit tests for the acked_+1 re-cut, acked going down, and ended() after stop(); widen the CI seeds | ❌ |
 | Windows depth: a watchdog for a hung relay; keep the NEXUS_WSL_RELAY test hook out of shipping builds; show a notice when history requests are dropped; show a bubble for a message sent when nextAction()==0 (frame_host.cpp:779-783) | ❌ |
 | Linux desktop window: waits on Prax's Wayland backend (asked of Patrick); until then the Linux build is the server only | ❌ |
-| complete | 18% |
+| complete | 17% |
 
 [Source data](roadmap.sexp)
 
