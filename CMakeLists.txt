@@ -19,7 +19,7 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CXX_COMPILER AND NOT DE
     endif()
 endif()
 
-project(nexus VERSION 0.2.3 LANGUAGES C CXX)
+project(nexus VERSION 0.2.4 LANGUAGES C CXX)
 # Apple Watch builds the watch app alone, without Prax or the desktop's parts (cmake/watchos.cmake, docs/watch.md).
 if(CMAKE_SYSTEM_NAME STREQUAL "watchOS")
     include(cmake/watchos.cmake)
