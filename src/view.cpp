@@ -333,6 +333,8 @@ struct DecorationRecipe {
                 break;
             case Part::Transcript:
             case Part::TranscriptAtEnd:
+                if (look.flags.opaque_history_backdrop)
+                    d.background = prColor16FromColor(rgb(look.colors.background));
                 // The lower edge stays in place while the top of the conversation scrolls with history.
                 if (look.transcriptStyle.conversationPanel) {
                     for (const auto corner : {PrRectCorner_BottomLeft, PrRectCorner_BottomRight})
@@ -3363,8 +3365,11 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps, float opacity,
 bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     Look& look = *view.look;
     const auto& surface = view.windowApp.surface;
-    if (view.board) view.board->setScrollStyle(surface.scroll);
-    const bool uiChanged = look.ui != surface.ui || look.colors != surface.colors || look.words != surface.words || look.fonts != surface.fonts;
+    if (view.board) {
+        view.board->setScrollStyle(surface.scroll);
+        view.board->setBackgroundUpdates(surface.flags.dashboard_background_updates);
+    }
+    const bool uiChanged = look.ui != surface.ui || look.colors != surface.colors || look.words != surface.words || look.fonts != surface.fonts || look.flags != surface.flags;
     const bool scaleChanged = look.textSteps != view.askedTextSteps || look.ui != surface.ui;
     const bool opacityChanged = look.overlay && look.overlayOpacity != view.windowApp.overlayOpacity;
     // The prompt as the policy gives it, at the share of its width this screen takes (View::columnScale).
@@ -3385,6 +3390,7 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
         look.words = surface.words;
         if (look.fonts != surface.fonts) view.clockFont.reset();
         look.fonts = surface.fonts;
+        look.flags = surface.flags;
         if (look.transcriptStyle.showNotices != askedTranscript.showNotices ||
             look.transcriptStyle.hiddenNoticeFragments != askedTranscript.hiddenNoticeFragments ||
             look.transcriptStyle.showTools != askedTranscript.showTools ||

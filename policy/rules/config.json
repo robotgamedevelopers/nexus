@@ -17,9 +17,7 @@
   },
   "account_picker_shortcuts": {
     "ArrowDown": "next",
-    "ArrowUp": "previous",
-    "Command+ArrowDown": "next",
-    "Command+ArrowUp": "previous"
+    "ArrowUp": "previous"
   },
   "auto_accounts": true,
   "centered_account_menu": true,
@@ -283,6 +281,7 @@
     "pending_dash_gap": 2,
     "scanner_dim_gain": 0.09,
     "scanner_spread": 0.55,
+    "scanner_decay_seconds": 0.22,
     "account_chevron_scale": 0.7,
     "account_anchor_extra_height": 4,
     "dialog_margin": 60,
@@ -299,7 +298,7 @@
     "selection_pulse_amplitude": 0.25,
     "window_width": 1000,
     "window_height": 780,
-    "clock_size": 21,
+    "clock_size": 28,
     "clock_margin_right": 22.4,
     "clock_margin_left": 16,
     "notch_margin": 12,
@@ -393,6 +392,8 @@
     "overlay_accessory": true,
     "hide_on_blur": true,
     "protect_overlay_focus": true,
+    "dashboard_background_updates": true,
+    "opaque_history_backdrop": true,
     "mobile_top_dialogs": true,
     "mobile_tap_ends_editing": true,
     "mobile_full_width_replies": true,

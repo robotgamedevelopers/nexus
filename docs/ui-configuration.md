@@ -180,7 +180,7 @@ canonical, and `docs/policy.md` documents the existing style groups.
 | `selection_pulse_amplitude` | `0.25` |
 | `window_width` | `1000` |
 | `window_height` | `780` |
-| `clock_size` | `21` |
+| `clock_size` | `28` |
 | `clock_margin_right` | `22.4` |
 | `clock_margin_left` | `16` |
 | `notch_margin` | `12` |
@@ -241,6 +241,8 @@ canonical, and `docs/policy.md` documents the existing style groups.
 | `overlay_accessory` | `true` |
 | `hide_on_blur` | `true` |
 | `protect_overlay_focus` | `true` |
+| `dashboard_background_updates` | `true` |
+| `opaque_history_backdrop` | `true` |
 | `mobile_top_dialogs` | `true` |
 | `mobile_tap_ends_editing` | `true` |
 | `mobile_full_width_replies` | `true` |
@@ -338,3 +340,14 @@ uses `LockSetForegroundWindow` while foreground; explicit Alt switching and clic
 Protection never opens a hidden overlay. Turn it off to restore the previous immediate hide-on-blur behavior.
 Linux currently builds the server and window libraries, but has no runnable graphical client backend in this checkout;
 iOS focus belongs to UIKit. No focus-lock capability is claimed for those platforms.
+
+Dashboard stays up to date on its worker while another tab is selected and while the overlay is hidden, including
+on battery. Selecting it or showing the overlay renders the latest locally available page before revealing it;
+neither action reloads the document or waits for a network reply. Pending requests leave the last received data
+usable, and new replies paint when they arrive. `dashboard_background_updates: false` suspends hidden page tasks.
+The dashboard page owns its polling cadence; no additional poll is triggered by selection. Hidden updates do not
+request window frames. Security lock screens retain their protected reveal.
+`opaque_history_backdrop` covers the complete history scroll viewport, including its top inset, so the underlying
+window's title-bar buttons do not show through. The outer margins retain the configured overlay transparency.
+The clock uses 28-point regular text, matching the tab size. Command–Up/Down scroll history to its top/bottom;
+plain Up/Down continue to navigate the account selector. Both are documented in `/help`.

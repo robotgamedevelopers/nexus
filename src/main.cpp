@@ -820,7 +820,8 @@ void trace(void* context, const PrStudioWindowFrameTimes* t) {
         auto* window = prStudioWindowAppWindow(a.window);
         if (a.revealFrameReady && t->extent.x > 0 && t->extent.y > 0) {
             // Studio submitted the updated frame. Complete it before exposing the surface.
-            prGpuDeviceWaitIdle(prStudioAppDevice(prStudioWindowStudioApp(a.window)));
+            if (a.view.lockScreen)
+                prGpuDeviceWaitIdle(prStudioAppDevice(prStudioWindowStudioApp(a.window)));
             a.preparingReveal = false;
             if (!a.overlay) {
                 // A normal window veiled by a relock (veil): the lock screen's frame is drawn, so it shows again,

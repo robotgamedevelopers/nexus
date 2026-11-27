@@ -245,7 +245,7 @@ Sessions
 - Command-M opens a pop-up selector of the harness's models and Command-E one of its effort levels. Up/Down move, Enter picks, Escape closes it. Nothing shows the model or effort otherwise.
 
 Tabs
-- Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. Command-Up/Down on an AI tab navigate its account menu.
+- Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. Command-Up/Down on an AI tab jump to the top/bottom of history; plain Up/Down navigate its account menu.
 
 ## Tests
 
@@ -312,3 +312,9 @@ Tabs
 - The header above the divider is opaque black. When the window overlaps a display notch, tabs and the clock use
   the safe areas on either side; overflowing tabs scroll and keyboard selection reveals them. A narrow view or large
   text moves the header below the notch. Detection and spacing follow the display and fork-owned UI configuration.
+
+- Dashboard polling and local rendering continue on its worker while another tab is selected or the overlay is
+  hidden. Tab selection and overlay reveal prepare the latest local frame, never reload or wait for a network
+  response. `ui_flags.dashboard_background_updates` permits a fork to suspend hidden polling.
+- The history viewport has an opaque backing so another application's title-bar controls cannot bleed through.
+  Its outer canvas margins retain configured transparency; the clock matches regular-weight tab text size.

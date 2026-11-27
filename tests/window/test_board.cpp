@@ -155,6 +155,8 @@ struct Server {
     std::string build = "b1";
     int pages = 0;                  // requests for the page
     int polls = 0;                  // requests for /api/sprint
+    bool holdPolls = false;
+    std::vector<PrFetchInterceptRequest*> held;
     int cards = 0;                  // requests for a card's page, /cards/...
     std::string body;               // the last answer's body, kept while the fetch copies it
 
@@ -172,6 +174,7 @@ struct Server {
             s.body = s.page;
         } else if (has(url, "/api/sprint")) {
             ++s.polls;
+            if (s.holdPolls) { s.held.push_back(request); return; }
             type.value = PrStringView{"application/json", 16};
             s.body = R"({"landed": 1234567, "cents": "12345678901", "build": ")" + s.build + "\"}";
         } else if (has(url, "/cards/")) {
@@ -254,6 +257,10 @@ struct Harness {
     }
 
     ~Harness() {
+        board->onPage([&](PrHtmlPage*) {
+            for (auto* request : server.held) prFetchInterceptRequestFail(request, PrNetError_Refused);
+            server.held.clear();
+        });
         delete board;
         prKitDestroy(kit);
         prUiDestroy(ui);
@@ -397,51 +404,59 @@ void loadsPollsAndFormats() {
     CHECK(h.server.polls > polls);
 }
 
-// Another tab, or the overlay hidden: no task runs, so no poll goes out however long it waits; shown again, the poll
-// that waited runs in the first frames.
-void offScreenRunsNothingAndCatchesUp() {
+// Background polling continues both behind an AI tab and while the overlay is hidden.
+void backgroundUpdatesAndOptOut() {
     Harness h;
     h.frames(10);
     CHECK(h.board->settled());
     CHECK(h.model.select_tab(1));
     h.frame();
     int polls = h.server.polls;
-    h.frames(100);      // 5 s
-    CHECK(h.server.polls == polls);
-    CHECK(h.model.select_tab(0));
-    h.frames(3);
-    CHECK(h.server.polls > polls);
-
+    h.frames(100);
+    CHECK(h.server.polls > polls && h.server.pages == 1);
     h.visible = false;
     h.frame();
     polls = h.server.polls;
     h.frames(100);
+    CHECK(h.server.polls > polls && h.server.pages == 1);
+    h.board->setBackgroundUpdates(false);
+    h.frame();
+    polls = h.server.polls;
+    h.frames(100);
     CHECK(h.server.polls == polls);
-    h.visible = true;
+    h.board->setBackgroundUpdates(true);
     h.frames(3);
     CHECK(h.server.polls > polls);
 }
 
-// A cleared sprint replaces a populated chart while the AI page remains selected.
-void preparationWaitsForTheNewChart() {
+// A slow network request never delays a tab switch or overlay reveal. Local DOM changes still paint.
+void preparationRendersWithoutNetwork() {
     Harness h;
     h.frames(10);
     CHECK(h.board->settled());
     h.model.select_tab(1);
     h.frame();
-    h.server.page = R"(<body><span id="landed">0</span><svg id="pie"></svg>
-        <script>setTimeout(function () {
-            document.querySelector("#pie").appendChild(document.createElementNS("http://www.w3.org/2000/svg","circle"));
-        }, 500);</script></body>)";
+    h.board->onPage([&](PrHtmlPage*) { h.server.holdPolls = true; });
+    h.frames(30);
+    CHECK(!h.server.held.empty() && !h.board->settled());
+    h.dom([&](PrDomDocument* d) {
+        prDomNodeSetTextContent(prDomElementAsNode(Harness::byId(d, "n")), PrStringView{"latest local data", 17});
+    });
+    const int pages = h.server.pages;
+    const int polls = h.server.polls;
     h.board->prepare(h.extent);
     h.view.pendingBoardId = h.model.tab(0).id;
-    h.frames(4);
-    CHECK(h.server.pages == 2 && h.model.active() == 1 && !h.board->prepared());
-    h.frames(20);
+    h.frames(3);
     CHECK(h.board->prepared() && h.model.active() == 0);
-    h.dom([&](PrDomDocument* d) {
-        CHECK(prDomNodeFirstElementChild(prDomElementAsNode(Harness::byId(d, "pie"))) != nullptr);
-    });
+    CHECK(h.server.pages == pages && h.server.polls == polls);
+    CHECK(has(h.text(), "latest local data"));
+    h.visible = false;
+    h.frame();
+    h.board->prepare({});
+    const auto reveal = h.board->postedStep();
+    h.board->wait();
+    CHECK(h.board->readyToReveal(reveal));
+    CHECK(!h.board->settled() && h.server.pages == pages);
 }
 
 // A new build reloads the page, and nexus's script runs again in the new document: the clock and the digits are still
@@ -805,14 +820,12 @@ void largeDashboardRefresh(bool reuse) {
         h.model.select_tab(1); h.frame();
         h.board->prepare(h.extent);
         h.view.pendingBoardId = h.model.tab(0).id;
-        // The board is shown once its page is prepared, which waits on the page's fetch from the server's thread: that
-        // is real time, which frame() does not wait for, so five frames were not always enough (PR #127's macOS Debug
-        // run: active() was still 1). Up to 200 frames (10 s on the test's clock) for the switch.
+        // Selection only waits for the worker to prepare the local frame. No new fetch or document load.
         for (int f = 0; f < 200 && h.model.active() != 0; ++f)
             h.frame();
         CHECK(h.model.active() == 0);
     }
-    CHECK(h.server.pages == (reuse ? 1 : 6) && h.server.polls == 6);
+    CHECK(h.server.pages == 1 && h.server.polls == 1);
     std::printf("250 streams, five returns (%s): %.0f ms\n", reuse ? "reuse" : "reload",
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
 }
@@ -873,7 +886,7 @@ void dashboardReaderState() {
         h.board->prepare(h.extent);
         h.view.pendingBoardId = h.model.tab(0).id;
         h.frames(10);
-        CHECK(h.server.pages == 1 && h.server.polls > 0 && h.model.active() == 0);
+        CHECK(h.server.pages == 1 && h.server.polls == 0 && h.model.active() == 0);
         CHECK(h.scrollTop() == 550);
     }
     {
@@ -894,8 +907,8 @@ int main() {
     activeAndTransferredCellsAnimate();
     dashboardReaderState();
     loadsPollsAndFormats();
-    offScreenRunsNothingAndCatchesUp();
-    preparationWaitsForTheNewChart();
+    backgroundUpdatesAndOptOut();
+    preparationRendersWithoutNetwork();
     aNewBuildReloadsWithThePrelude();
     anUnreachableBoardSaysWhyAndRecovers();
     aFailedLookupIsTheLine();

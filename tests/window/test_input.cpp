@@ -945,6 +945,10 @@ void draftAndScrollStayWithTheirAI() {
     CHECK(position().offset.y.raw == position().range.top.raw);
     h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown, PrAppModifierFlag_Control);
     CHECK(position().offset.y.raw == position().range.bottom.raw);
+    h.key(PrAppKey_Up, PrAppKeyCode_ArrowUp, style::kCommand);
+    CHECK(position().offset.y.raw == position().range.top.raw);
+    h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown, style::kCommand);
+    CHECK(position().offset.y.raw == position().range.bottom.raw);
     CHECK(h.model.tab(0).draft == "for f2");
 }
 
@@ -2317,9 +2321,9 @@ void accountPickerIsAnExplicitChoice() {
         return p.tab == tabId && p.session == 17 && p.current == current && p.highlighted < p.options.size() &&
                p.options[p.highlighted].name == wanted;
     };
-    // An opening chord (Command-Down) opens the menu on the account in use, centred over the window and anchored to no
+    // An opening chord (Down) opens the menu on the account in use, centred over the window and anchored to no
     // tab; it sends nothing and keeps the draft.
-    arrow(true, style::kCommand);
+    arrow(true, 0);
     CHECK(preview("b", "b"));
     CHECK(link.sent.empty() && signIns == 0 && h.active().id == tabId && h.active().draft == "keep my draft");
     CHECK(h.view.accountAnchor == kPrLayoutNodeNone && h.view.accountMenu != kPrLayoutNodeNone);
@@ -2329,12 +2333,12 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(menu.top >= h.bounds(h.tabs()[h.model.active()]).bottom);
     CHECK(h.view.accountRows.size() == 3);
     for (const char* label : {"Personal", "Work", "Archive"}) CHECK(h.hasText(h.view.accountMenu, label));
-    // Open, the arrows alone and with Command move the highlight, and only that.
+    // Open, the plain arrows move the highlight, and only that.
     arrow(true, 0);
     CHECK(preview("c", "b"));
     arrow(false, 0);
     CHECK(preview("b", "b"));
-    arrow(false, style::kCommand);
+    arrow(false, 0);
     CHECK(preview("a", "b") && link.sent.empty());
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     h.frame();
@@ -2362,7 +2366,7 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(link.sent.size() == 3 && link.sent[2].kind == sync::ActionKind::SignInClaim && link.sent[2].account == "c" &&
           link.sent[2].session == 17);
     CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.view.accountRows.size() == 3);
-    arrow(false, style::kCommand);
+    arrow(false, 0);
     CHECK(preview("b", "c"));
     h.commandDigit(3);
     h.frame();
@@ -2370,7 +2374,7 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(link.sent.size() == 3);
     h.commandDigit(2);
     CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.active().draft == "keep my draft");
-    arrow(true, style::kCommand);
+    arrow(true, 0);
     CHECK(preview("a", "c"));
     CHECK(h.view.accountRows.size() == 3);
     if (h.view.accountRows.size() != 3) return;
@@ -2390,7 +2394,7 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(h.view.accountMenu == kPrLayoutNodeNone && link.sent.size() == 6);
     // The shipped menu lists the linked accounts only: automatic choice is the server's (auto_accounts), never a row.
     publish("a", true, true);
-    arrow(false, style::kCommand);
+    arrow(false, 0);
     CHECK(preview("a", "a") && h.view.accountRows.size() == 3);
     for (const auto row : h.view.accountRows) CHECK(!h.hasText(row, "auto"));
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);

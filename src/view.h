@@ -42,6 +42,7 @@ struct Look {
     UiColors colors;
     UiText words;
     UiFonts fonts;
+    UiFlags flags;
     bool overlay = false;           // the window background and tab strip are see-through (style::kOverlayOpacity)
     int textSteps = 0;              // the text scale it is drawn at, in steps from 1 (style::textScale)
     TabStyle tabs{};
@@ -90,6 +91,7 @@ struct Board {
     virtual bool show(PrLayoutNode parent, PrVec2 extent, std::string* problem) = 0;
     virtual void hidden() = 0;                  // the sprint tab does not show this round
     virtual void setScrollStyle(const UiScroll&) {}
+    virtual void setBackgroundUpdates(bool) {}
     virtual void setTextScale(float k) = 0;     // the page's zoom, at the text scale k
     // The sprint tab was chosen, by its Command key or a click on its tab, whether or not it showed already: a page
     // that has left the board goes back to it.

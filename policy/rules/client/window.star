@@ -151,7 +151,7 @@ def handle(event, state, config):
         if state["tab"] == "ai":
             for chord, command in config.get("account_shortcuts", {}).items():
                 shortcuts = _bind(shortcuts, chord, ["account_command", command])
-            default_picker = {} if "account_shortcuts" in config else {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"}
+            default_picker = {} if "account_shortcuts" in config else {"ArrowUp": "previous", "ArrowDown": "next"}
             for chord, command in config.get("account_picker_shortcuts", default_picker).items():
                 if config.get("centered_account_menu", False) and not state.get("account_picker_open") and not state.get("needs_sign_in") and command in ["previous", "next"]:
                     command = "open"
@@ -327,8 +327,9 @@ def handle(event, state, config):
                     else:
                         continue
                     window["shortcuts"] = _bind(window["shortcuts"], "Tab", ["replace_draft", command + next_value])
-        if state["tab"] == "ai" and state["prompt_open"] and not window.get("account_items"):
+        if state["tab"] == "ai" and state["prompt_open"]:
             for chord, direction in config.get("transcript_scroll_keys", {
+                    "Command+ArrowUp": "top", "Command+ArrowDown": "bottom",
                     "Control+ArrowUp": "top", "Control+ArrowDown": "bottom",
                     "PageUp": "page_up", "PageDown": "page_down"}).items():
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["scroll_transcript", direction])
@@ -386,8 +387,8 @@ def handle(event, state, config):
             references = [
                 ("tab_navigation", {"Command+ArrowLeft": -1, "Command+ArrowRight": 1}, "Select previous / next tab"),
                 ("tab_reorder", {"Command+Shift+ArrowLeft": -1, "Command+Shift+ArrowRight": 1}, "Move the current tab left / right"),
-                ("account_picker_shortcuts", {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"}, "Open / navigate the account picker (⌘↑ / ⌘↓ on Mac)"),
-                ("transcript_scroll_keys", {"Control+ArrowUp": "top", "Control+ArrowDown": "bottom", "PageUp": "page_up", "PageDown": "page_down"}, "Scroll the transcript"),
+                ("account_picker_shortcuts", {"ArrowUp": "previous", "ArrowDown": "next"}, "Open / navigate the account picker (plain ↑ / ↓)"),
+                ("transcript_scroll_keys", {"Command+ArrowUp": "top", "Command+ArrowDown": "bottom", "Control+ArrowUp": "top", "Control+ArrowDown": "bottom", "PageUp": "page_up", "PageDown": "page_down"}, "Scroll the transcript"),
                 ("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}, "Navigate / confirm / close the open account picker"),
                 ("clear_draft_keys", ["Command+Backspace", "Command+Delete"], "Clear the draft and held message, and stop the active goal"),
                 ("limit_choice_keys", {"account": "Command+Shift+A", "model": "Command+Shift+O"}, "Choose another account / model when a usage-limit choice is shown"),

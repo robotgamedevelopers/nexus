@@ -190,7 +190,7 @@ void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
     std::vector<std::string> opens;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        const bool tick = onScreen || onScreen_ || (refreshStep_ && !out_.settled && !out_.failed);
+        const bool tick = onScreen || onScreen_ || done_ < refreshStep_ || (backgroundUpdates_ && desc_.now);
         time_ = seconds;
         display_ = display;
         onScreen_ = onScreen;
@@ -341,6 +341,15 @@ void PraxBoard::setScrollStyle(const UiScroll& style) {
     wake_.notify_all();
 }
 
+void PraxBoard::setBackgroundUpdates(bool enabled) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (backgroundUpdates_ == enabled) return;
+    backgroundUpdates_ = enabled;
+    ++posted_;
+    if (waiting_) prDomAgentWake(waiting_);
+    wake_.notify_one();
+}
+
 void PraxBoard::setTextScale(float k) {
     if (k <= 0 || k == windowZoom_) {
         return;
@@ -363,7 +372,7 @@ void PraxBoard::prepare(PrVec2 extent) {
         if (extent.x > 0 && extent.y > 0) extent_ = extent;
         refreshStep_ = posted_ + 1;
     }
-    post(Message{Message::Kind::Refresh, {}, {}, {}});
+    post(Message{Message::Kind::Prepare, {}, {}, {}});
 }
 
 void PraxBoard::cancelPreparation() {
@@ -374,7 +383,7 @@ void PraxBoard::cancelPreparation() {
 
 bool PraxBoard::prepared() {
     std::lock_guard<std::mutex> lock(mutex_);
-    return done_ >= refreshStep_ && (out_.settled || out_.failed || !lookupError_.empty());
+    return done_ >= refreshStep_;
 }
 
 void PraxBoard::home() {
@@ -425,7 +434,7 @@ std::uint64_t PraxBoard::postedStep() {
 
 bool PraxBoard::readyToReveal(std::uint64_t step) {
     std::lock_guard<std::mutex> lock(mutex_);
-    return done_ >= step && (out_.settled || out_.failed || !lookupError_.empty());
+    return done_ >= step;
 }
 
 bool PraxBoard::settled() {
@@ -529,7 +538,7 @@ void PraxBoard::run() {
             break;
         }
         if (inbox_.empty() && taken_ == posted_) {
-            if (agent_ != nullptr && (onScreen_ || (refreshStep_ && (done_ < refreshStep_ || (!out_.settled && !out_.failed))) || prewarming_)) {
+            if (agent_ != nullptr && (backgroundUpdates_ || onScreen_ || done_ < refreshStep_ || prewarming_)) {
                 // Until a task can run, a message comes, the layout thread finishes, or the window wakes it.
                 waiting_ = agent_;
                 lock.unlock();
@@ -549,7 +558,7 @@ void PraxBoard::run() {
         taken_ = taken;
         frameTime_ = time_;
         pageDisplay_ = display_;
-        visible_ = onScreen_ || (refreshStep_ && (done_ < refreshStep_ || (!out_.settled && !out_.failed))) || prewarming_;
+        visible_ = backgroundUpdates_ || onScreen_ || done_ < refreshStep_ || prewarming_;
 
         pageExtent_ = extent_;
         pageZoom_ = zoom_;
@@ -588,18 +597,9 @@ void PraxBoard::step(std::vector<Message>& inbox) {
                     scroller_.release(frameTime_);
                 }
                 break;
-            case Message::Kind::Refresh:
-                if (page_) {
-                    endScroll();
-                    // A live Sprint board refreshes its existing rows before reveal. Other pages reload.
-                    PrDomEventInit init = prDomEventInitDefault();
-                    init.cancelable = true;
-                    auto* event = prDomEventCreate(sv("nexus-dashboard-refresh"), &init);
-                    bool reload = true;
-                    prDomEventTargetDispatchEvent(prHtmlWindowAsEventTarget(prHtmlPageWindow(page_)), event, &reload);
-                    prDomEventRelease(event);
-                    if (reload) navigate();
-                }
+            case Message::Kind::Prepare:
+                // Render the latest local DOM at the requested extent. Polling is independent of selection.
+                endScroll();
                 break;
             case Message::Kind::Home:
                 if (page_ != nullptr && !pageUrl_.empty() && !home_.empty()) {
@@ -681,9 +681,12 @@ void PraxBoard::publish() {
         }
     }
     bool changed = false;
+    bool notifyWindow = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (settled && out_.recorded != recorded_) {
+        notifyWindow = onScreen_ || refreshStep_ != 0 || !opens_.empty();
+        // A poll in flight must not withhold a completed local paint.
+        if (recorded_ && !dirty_ && out_.recorded != recorded_) {
             prDrawListRelease(out_.recorded);
             out_.recorded = recorded_;
             if (recorded_ != nullptr) {
@@ -709,7 +712,7 @@ void PraxBoard::publish() {
         }
         opens_.clear();
     }
-    if (changed && app_ != nullptr) {
+    if (changed && notifyWindow && app_ != nullptr) {
         prAppWake(app_);   // a frame shows it (pr/studio_app.h)
     }
 }
