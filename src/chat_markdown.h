@@ -26,7 +26,10 @@ struct ChatParagraph {
     std::string marker;
     size_t depth = 0, ancestorColumns = 0, markerColumns = 0;
     std::vector<std::vector<ChatCell>> tableRows;
+    bool quoted = false;
 };
+std::string markdownSource(const ChatParagraph& paragraph);
+
 using ChatMarkdown = std::vector<ChatParagraph>;
 
 // Cache only recently displayed source. Queued messages and growing replies can change between frames.

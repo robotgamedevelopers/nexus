@@ -21,11 +21,19 @@ template<class F> void textNodes(PrLayoutTree* tree, PrLayoutNode root, const F&
 class ChatSelection {
 public:
     void begin(PrLayoutTree* tree, size_t tab);
-    void paragraph(PrLayoutNode root, PrColor16 ink);
+    void paragraph(PrLayoutNode root, PrColor16 ink, bool ai = false, std::string markdown = {});
+    bool selectAI(PrVec2 point);
+    bool extendAI(int direction);
+    bool aiSelected() const { return !selectedAI_.empty(); }
+    PrLayoutNode aiTip() const { return aiTip_; }
     void link(PrLayoutNode leaf, const std::string& url);
     bool event(const PrAppEvent& event, PrLayoutNode viewport, const std::function<bool(const std::string&)>& copy,
                const std::function<void(const std::string&)>& open = {});
 private:
+    struct AIBlock { PrLayoutNode root; std::string markdown; };
+    std::vector<AIBlock> aiBlocks_, previousAI_, selectedAI_;
+    PrLayoutNode aiAnchor_ = kPrLayoutNodeNone, aiTip_ = kPrLayoutNodeNone;
+    void rebuildAI();
     struct Link { PrLayoutNode leaf; std::string url; };
     std::vector<Link> links_;
     std::string pressedLink_;

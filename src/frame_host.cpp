@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "pr/hash.h"
+#include "pr/layout_query.h"
 #include "pr/ui_records.h"
 
 #include "platform.h"
@@ -1469,17 +1470,41 @@ bool FrameHost::event(const PrAppEvent& e) {
     // A modal owns all input, including mouse presses over transcript text underneath it.
     // Let Prax route it before the transcript selection, composer, board or terminal can consume anything.
     if (view->accounts.dialog != AccountMenuView::Dialog::None) return false;
+    if (!view->workDetails.empty()) {
+        if (e.kind == PrAppEventKind_KeyDown && e.keyboard.key == PrAppKey_Escape) return false;
+        return view->selection.event(e, view->workDetailsNode, view->copy, view->openLink);
+    }
     watchTap(e);
     // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
     // reaches the sprint tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {
         return false;
     }
+    if (ui && (e.kind == PrAppEventKind_PointerDown || e.kind == PrAppEventKind_PointerUp ||
+               e.kind == PrAppEventKind_PointerMove)) {
+        for (const auto node : view->workNodes) {
+            const auto r = prLayoutRectToPx(prLayoutNodeBounds(prUiTree(ui), node, PrLayoutCoordinates_Viewport));
+            const auto p = e.pointer.position;
+            if (p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom) return false;
+        }
+    }
     // The account menu under the active AI's tab takes its press, and every pointer event of that gesture.
     if (routeAccountMenu(*view, ui, e)) return true;
     if (!view->accountPicker && view->choiceKind.empty() &&
             (!view->windowApp.surface.items || view->windowApp.surface.items->empty())) {
-        const bool output = view->selection.event(e, view->transcript, view->copy, view->openLink);
+        if (e.kind == PrAppEventKind_PointerDown && e.pointer.clicks == 2 && view->application) {
+            std::string why;
+            if (policy::inputAction(*view->application, "transcript", "double_click", why) == "select_ai_paragraph" &&
+                view->selection.selectAI(e.pointer.position)) { prUiRequestFrame(ui); return true; }
+            if (!why.empty()) view->problem = why;
+        }
+        const bool selectedAI = view->selection.aiSelected();
+        const auto copy = [&](const std::string& text) {
+            if (!view->copy || !view->copy(text)) return false;
+            view->copiedAI = selectedAI ? text : std::string();
+            return true;
+        };
+        const bool output = view->selection.event(e, view->transcript, copy, view->openLink);
         if (routePromptPointer(*view, ui, e) || output) return true;
     }
     if (e.kind == PrAppEventKind_KeyDown || e.kind == PrAppEventKind_KeyUp) {
@@ -1503,6 +1528,21 @@ bool FrameHost::event(const PrAppEvent& e) {
     if (ui == nullptr || (e.kind != PrAppEventKind_Text && e.kind != PrAppEventKind_Paste) ||
             view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt) {
         return false;
+    }
+    if (e.kind == PrAppEventKind_Paste && !view->copiedAI.empty() &&
+        std::string_view(e.input.text.data, e.input.text.size) == view->copiedAI && view->application) {
+        std::string why;
+        if (policy::inputAction(*view->application, "prompt", "paste_ai_quote", why) == "quote_ai_paste") {
+            const std::string quoted = view->look->words.ai_quote_open + view->copiedAI + view->look->words.ai_quote_close;
+            if (quoted.size() > promptRoom(*view, ui)) {
+                view->problem = "This quote does not fit in the prompt. Select a shorter passage or shorten the draft.";
+                return true;
+            }
+            auto paste = e; paste.input.text = {quoted.data(), quoted.size()};
+            prUiPushEvent(ui, kPrUiViewportMain, &paste);
+            return true;
+        }
+        if (!why.empty()) view->problem = why;
     }
     // Text that fits the room left (the selection it replaces counted) goes on as it came.
     if (e.kind == PrAppEventKind_Paste && e.input.text.size >= pastePreviewBytes) {

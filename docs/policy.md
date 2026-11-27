@@ -568,3 +568,7 @@ The shipped `client/window.star` formats `/help`; `server/conversation.star` for
 setting acknowledgements and goal status as Markdown. Native state changes and validation remain authoritative.
 
 The client window operation `["select_prompt", "start"|"end"]` extends the focused AI prompt selection to the corresponding document edge, retaining its anchor. It does nothing outside a focused AI prompt or during input-method composition.
+
+### Semantic client input
+
+`app.input` receives `target` and `intent` strings, never credential contents. The shipped client Starlark module consults `input_actions`: `work.activate` returns `open_work`, `work.dismiss` returns `close_work`, `transcript.double_click` returns `select_ai_paragraph`, and `prompt.paste_ai_quote` returns `quote_ai_paste`. A fork can return `none` to disable an action. Other action strings are refused with a cause. Both keyboard and pointer work-bubble activation use this decision. Native Prax handles hit testing, composition, text editing and modal focus. The `["select_output", "previous"|"next"]` window operation extends an active AI paragraph selection; its bindings come from `output_selection_shortcuts`.

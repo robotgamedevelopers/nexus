@@ -46,7 +46,7 @@
     "border": "#3a3a3a",
     "caret_aspect": 0.618034,
     "caret_bottom_hold": 0.1,
-    "caret_fall_ratio": 0.5,
+    "caret_fall_ratio": 2,
     "caret_gap": 2,
     "caret_height": 28,
     "caret_hold": 0.1,
@@ -54,7 +54,7 @@
     "caret_offset_y": 2,
     "caret_peak": 3,
     "caret_radius": 3.36,
-    "caret_seconds": 1.5,
+    "caret_seconds": 1.8,
     "fill": "#272728",
     "ink": "#f3f3f3",
     "radius": 20.16,
@@ -228,12 +228,16 @@
     "caption_padding_x": 14.98,
     "caption_padding_y": 8.4,
     "tool_gap": 8.4,
-    "tool_chevron": true,
+    "tool_chevron": false,
     "tool_chevron_size": 16,
     "tool_chevron_gap": 8,
     "tool_chevron_ink": "#d8d8d8"
   },
   "ui_style": {
+    "work_preview_lines": 3,
+    "work_detail_width_percent": 80,
+    "work_detail_height_percent": 80,
+    "output_border_width": 1,
     "body_size": 28,
     "label_size": 24,
     "meta_size": 21,
@@ -282,7 +286,7 @@
     "pending_dash_gap": 2,
     "scanner_dim_gain": 0.09,
     "scanner_spread": 0.55,
-    "scanner_decay_seconds": 0.22,
+    "scanner_decay_seconds": 0.55,
     "account_chevron_scale": 0.7,
     "account_anchor_extra_height": 4,
     "dialog_margin": 60,
@@ -326,6 +330,9 @@
     "cursor_lost_hue": 0
   },
   "ui_colors": {
+    "quote_fill": "#303845",
+    "quote_ink": "#c7d8ed",
+    "output_border": "#282a2e",
     "background": "#0c0f13",
     "control_hover": "#303030",
     "control_divider": "#373737",
@@ -335,6 +342,9 @@
     "clock_ink": "#f3f3f3"
   },
   "ui_text": {
+    "ai_quote_open": "\"",
+    "ai_quote_close": "\"\n\n",
+    "work_details_title": "Work details",
     "sign_in_action": "Sign in to {account}",
     "sign_in_hint": "Press Enter or click to sign in.",
     "dashboard_title": "Dashboard",
@@ -389,6 +399,7 @@
     "next": "ArrowDown"
   },
   "ui_flags": {
+    "highlight_ai_quotes": true,
     "overlay_blur": false,
     "overlay_accessory": true,
     "hide_on_blur": true,

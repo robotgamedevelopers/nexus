@@ -26,6 +26,7 @@ struct Writer {
             newParagraph = false;
             auto& paragraph = paragraphs.back();
             paragraph.depth = lists.size();
+            paragraph.quoted = quote > 0;
             paragraph.marker.swap(marker);
             if (quote) paragraph.runs.push_back({"│ ", PrKitTextRole_Body, {}});
 
@@ -121,6 +122,23 @@ struct Writer {
 };
 
 } // namespace
+
+std::string markdownSource(const ChatParagraph& paragraph) {
+    std::string text = paragraph.marker;
+    for (const auto& run : paragraph.runs) {
+        std::string shown = run.text;
+        if (run.inlineCode) {
+            size_t width = 1;
+            while (shown.find(std::string(width, '`')) != std::string::npos) ++width;
+            const auto ticks = std::string(width, '`');
+            shown = ticks + " " + shown + " " + ticks;
+        } else if (run.role == PrKitTextRole_Strong) shown = "**" + shown + "**";
+        else if (run.role == PrKitTextRole_BodyItalic) shown = "*" + shown + "*";
+        if (!run.href.empty()) shown = "[" + shown + "](" + run.href + ")";
+        text += shown;
+    }
+    return text;
+}
 
 const ChatMarkdown& ChatMarkdownCache::get(std::string_view source, bool preserveBreaks) {
     const auto found = std::find_if(messages_.begin(), messages_.end(),

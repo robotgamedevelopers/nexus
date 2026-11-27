@@ -156,7 +156,7 @@ struct TranscriptItems {
     std::vector<std::uint32_t> chars;           // its bytes of text
     std::vector<std::uint32_t> count;           // its entries (more than one for a run of tool lines)
     std::vector<float> height;                  // px with the gap after it, as last laid out; 0 until it is
-    std::vector<bool> expanded;                 // work groups start closed and retain their view state while scrolling
+    std::vector<std::vector<uint32_t>> tools;   // visible work indices, so the latest preview costs only three lines
     std::vector<std::pair<std::uint32_t, PrLayoutNode>> declared;  // the items the last round declared, and nodes
     PrLayoutNode column = kPrLayoutNodeNone;    // the transcript's column, as the last round built it
     float width = 0;                            // the column's width at the last layout, px
@@ -234,6 +234,11 @@ struct View {
     double lastInput = -100;
     std::function<void(bool)> setQuiet;
     ChatMarkdownCache markdown;
+    std::string copiedAI;
+    std::vector<std::string> workDetails;
+    std::vector<PrLayoutNode> workNodes;
+    bool workDetailsShown = false;
+    PrLayoutNode workDetailsNode = kPrLayoutNodeNone;
     struct TableFrame {
         std::vector<std::string> headings;
         std::vector<PrKitTableColumn> columns;

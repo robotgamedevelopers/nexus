@@ -14,7 +14,7 @@
 
 namespace nexus {
 
-enum class WindowCommand { ScrollTranscript, ClearComposer, ReplaceDraft, SelectPrompt, SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit, AccountMenu };
+enum class WindowCommand { ScrollTranscript, ClearComposer, ReplaceDraft, SelectOutput, SelectPrompt, SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit, AccountMenu };
 struct Shortcut {
     PrAppKey key;
     PrAppModifierFlags modifiers;

@@ -322,8 +322,11 @@ Tabs
 
 - The prompt keeps `#272728`; the output panel uses the sampled `#15171b`. Retain their separate configuration fields.
 
-- Work groups start collapsed; the chevron expands/collapses them. Combine visually adjacent work across hidden notices. Phone and tablet bubbles use full width; desktop bubbles wrap at two-thirds width.
+- Work groups show at most the latest three lines, without a chevron. Clicking opens full wrapped details in an 80%-width/height dialog; Escape dismisses it. Combine visually adjacent work across hidden notices. Phone and tablet bubbles use full width; desktop bubbles wrap at two-thirds width.
 
 - Warning and notice bubbles are left-aligned and at most two-thirds of the column on desktop/laptop, using the same reply-width setting as AI text; mobile uses full width.
 
 - Work bubbles clip long lines without wrapping at two-thirds of the column from the left on desktop/laptop. Their text is bright scanner blue `#86c5ff` with no HDR gain.
+
+- AI-output double-click selects a paragraph; Shift–Up/Down expands by AI text blocks, skipping human and work entries. Copy/paste to the prompt preserves Markdown inside literal double quotes followed by two newlines; the quote is visually distinct in the prompt, held message and sent bubble. Semantic input choices go through Starlark.
+- Work previews end at complete characters with an ellipsis. The scanner has a slower configured trailing decay. The cursor uses a fast rise, hold and slower fall on its own cadence.

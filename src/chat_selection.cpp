@@ -11,15 +11,18 @@ namespace nexus {
 
 void ChatSelection::begin(PrLayoutTree* tree, size_t tab) {
     if (tab_ != tab || tree_ != tree) {
-        ranges_.clear(); text_.clear(); dragging_ = false;
+        ranges_.clear(); text_.clear(); dragging_ = false; selectedAI_.clear();
     }
     tree_ = tree;
     tab_ = tab;
     paragraphs_.clear();
+    previousAI_ = std::move(aiBlocks_);
+    aiBlocks_.clear();
     links_.clear();
 }
 
-void ChatSelection::paragraph(PrLayoutNode root, PrColor16 ink) {
+void ChatSelection::paragraph(PrLayoutNode root, PrColor16 ink, bool ai, std::string markdown) {
+    if (ai) aiBlocks_.push_back({root, std::move(markdown)});
     paragraphs_.push_back(root);
     if (ranges_.empty()) return;
     textNodes(tree_, root, [&](PrLayoutNode node) {
@@ -31,6 +34,46 @@ void ChatSelection::paragraph(PrLayoutNode root, PrColor16 ink) {
         h.start = it->first; h.end = it->last; h.background = ink;
         prLayoutTreeFrameSetHighlights(tree_, node, &h, 1);
     });
+}
+
+bool ChatSelection::selectAI(PrVec2 point) {
+    for (const auto& block : aiBlocks_) {
+        const auto r = prLayoutRectToPx(prLayoutNodeBounds(tree_, block.root, PrLayoutCoordinates_Viewport));
+        if (point.x < r.left || point.x >= r.right || point.y < r.top || point.y >= r.bottom) continue;
+        selectedAI_ = {block}; aiAnchor_ = aiTip_ = block.root;
+        dragging_ = false; pressedLink_.clear(); rebuildAI(); return true;
+    }
+    return false;
+}
+
+bool ChatSelection::extendAI(int direction) {
+    if (selectedAI_.empty()) return false;
+    const auto& blocks = aiBlocks_.empty() ? previousAI_ : aiBlocks_;
+    const auto current = std::find_if(blocks.begin(), blocks.end(), [&](const auto& b) { return b.root == aiTip_; });
+    if (current == blocks.end() || (direction < 0 && current == blocks.begin()) ||
+        (direction > 0 && current + 1 == blocks.end())) return false;
+    const auto& next = *(current + (direction < 0 ? -1 : 1));
+    const auto found = std::find_if(selectedAI_.begin(), selectedAI_.end(), [&](const auto& b) { return b.root == next.root; });
+    if (found != selectedAI_.end()) {
+        const auto anchor = std::find_if(selectedAI_.begin(), selectedAI_.end(), [&](const auto& b) { return b.root == aiAnchor_; });
+        const auto low = std::min(anchor, found), high = std::max(anchor, found);
+        selectedAI_ = std::vector<AIBlock>(low, high + 1);
+    } else if (direction < 0) selectedAI_.insert(selectedAI_.begin(), next);
+    else selectedAI_.push_back(next);
+    aiTip_ = next.root; rebuildAI(); return true;
+}
+
+void ChatSelection::rebuildAI() {
+    ranges_.clear(); text_.clear();
+    for (const auto& block : selectedAI_) {
+        if (!text_.empty()) text_ += "\n\n";
+        text_ += block.markdown;
+        if (!prLayoutNodeIsValid(tree_, block.root)) continue;
+        textNodes(tree_, block.root, [&](PrLayoutNode node) {
+            const auto s = prLayoutNodeText(tree_, node);
+            ranges_.push_back({node, 0, static_cast<uint32_t>(s.size), std::string(s.data, s.size)});
+        });
+    }
 }
 
 void ChatSelection::select(PrLayoutTextPosition end) {
@@ -93,6 +136,7 @@ bool ChatSelection::event(const PrAppEvent& e, PrLayoutNode viewport, const std:
             ranges_.clear();
             text_.clear();
             dragging_ = false;
+            selectedAI_.clear();
         }
         return true;
     }
@@ -104,7 +148,7 @@ bool ChatSelection::event(const PrAppEvent& e, PrLayoutNode viewport, const std:
     if (e.kind == PrAppEventKind_PointerCancel) { dragging_ = false; return false; }
     const bool down = e.kind == PrAppEventKind_PointerDown && e.pointer.button == 0;
     if (!down && !(dragging_ && (e.kind == PrAppEventKind_PointerMove || e.kind == PrAppEventKind_PointerUp))) return false;
-    if (down) { dragging_ = false; ranges_.clear(); text_.clear(); }
+    if (down) { dragging_ = false; ranges_.clear(); text_.clear(); selectedAI_.clear(); }
     const auto pos = e.pointer.position;
     if (down) {
         if (!prLayoutNodeIsValid(tree_, viewport)) return false;

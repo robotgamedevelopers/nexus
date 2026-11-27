@@ -343,6 +343,10 @@ struct DecorationRecipe {
                 break;
             case Part::Conversation:
                 d.background = prColor16FromColor(rgb(look.transcriptStyle.panelFill.value_or(look.tabs.fill)));
+                d.outlineStyle = PrDrawBorderStyle_Solid;
+                d.outlineColor = prColor16FromColor(rgb(look.colors.output_border));
+                d.outlineWidth = px(look.ui.output_border_width * k);
+                d.outlineOffset = px(-look.ui.output_border_width * k);
                 radius(d, look.transcriptStyle.radius * k);
                 break;
             case Part::TabDivider:
@@ -1470,6 +1474,7 @@ struct Builder {
                 items.lines.back() += 1;
                 items.chars.back() += uint32_t(e.text.size());
                 items.count.back() = uint32_t(i) - items.first.back() + 1;
+                items.tools.back().push_back(uint32_t(i));
                 items.height.back() = 0;    // it grew: laid out again before its height is known
                 continue;
             }
@@ -1478,7 +1483,8 @@ struct Builder {
             items.chars.push_back(uint32_t(e.text.size()));
             items.count.push_back(1);
             items.height.push_back(0);
-            items.expanded.push_back(false);
+            items.tools.emplace_back();
+            if (e.kind == EntryKind::Tool) items.tools.back().push_back(uint32_t(i));
         }
         items.entries = entries.size();
         return items;
@@ -1514,7 +1520,7 @@ struct Builder {
         const float gap = look.ui.entry_gap * s;
         const EntryKind kind = tab.transcript[items.first[i]].kind;
         if (kind == EntryKind::Tool) {
-            const auto lines = look.transcriptStyle.toolChevron && !items.expanded[i] ? 1u : items.lines[i];
+            const auto lines = std::min(items.tools[i].size(), size_t(std::clamp(look.ui.work_preview_lines, 1.f, 20.f)));
             return float(lines) * look.ui.tool_pitch * s + (float(lines - 1) * look.transcriptStyle.toolGap + 2 * look.transcriptStyle.captionPaddingY) * s + gap;
         }
         // Characters of the body face are about half its size wide.
@@ -1714,8 +1720,31 @@ struct Builder {
         }
     }
 
+    size_t quoteEnd(std::string_view source) const {
+        const auto& open = look.words.ai_quote_open;
+        const auto& close = look.words.ai_quote_close;
+        if (!look.flags.highlight_ai_quotes || open.empty() || close.empty() || !source.starts_with(open)) return 0;
+        const auto end = source.find(close, open.size());
+        return end == source.npos ? 0 : end + close.size();
+    }
+
     void message(PrLayoutNode parent, std::string_view source, EntryKind speaker, double gain = 1,
             const View::GlyphTrail* trail = nullptr) {
+        std::string quotePresentation;
+        if (speaker == EntryKind::Person) {
+            if (const auto end = quoteEnd(source)) {
+                const auto start = look.words.ai_quote_open.size();
+                const auto passage = source.substr(start, end - start - look.words.ai_quote_close.size());
+                quotePresentation = "> ";
+                for (const char c : passage) {
+                    quotePresentation += c;
+                    if (c == '\n') quotePresentation += "> ";
+                }
+                quotePresentation += "\n\n";
+                quotePresentation += source.substr(end);
+                source = quotePresentation;
+            }
+        }
         const auto& style = look.transcriptStyle;
         const auto tone = speaker == EntryKind::Person ? kPersonTone : speaker == EntryKind::Notice ? kNoticeTone : kChatTone;
         std::optional<unsigned> sourceInk;
@@ -1734,7 +1763,8 @@ struct Builder {
             if (gain != 1 || sourceInk) ink(node, sourceInk.value_or(style.personInk), false, gain);
             return node;
         };
-        const auto select = [&](PrLayoutNode p) { view.selection.paragraph(p, prColor16FromColor(faded(rgb(look.prompt.selection), look.ui.transcript_selection_opacity))); };
+        std::string selectionSource(source);
+        const auto select = [&](PrLayoutNode p) { view.selection.paragraph(p, prColor16FromColor(faded(rgb(look.prompt.selection), look.ui.transcript_selection_opacity)), speaker == EntryKind::AI, selectionSource); };
         if (!look.transcriptStyle.markdown) {
             select(plainLabel(label(parent, source, body)));
             return;
@@ -1749,6 +1779,7 @@ struct Builder {
         PrLayoutNode list = kPrLayoutNodeNone;
         size_t sourceOffset = 0;
         for (const auto& paragraph : paragraphs) {
+            selectionSource = markdownSource(paragraph);
             if (!paragraph.tableRows.empty()) {
                 list = kPrLayoutNodeNone;
                 markdownTable(column, paragraph);
@@ -1756,6 +1787,18 @@ struct Builder {
             }
             const auto em = kit->theme.types[PrKitTextRole_Body].size;
             auto row = column;
+            if (paragraph.quoted) {
+                PrKitBoxStyle quoted{};
+                quoted.padding = prKitEdgesAll(look.transcriptStyle.codePadding * k());
+                row = prKitBox(kit, column, {}, quoted);
+                auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, row));
+                auto& group = record.groups[PrLayoutGroup_Decoration];
+                auto decoration = prLayoutDecorationStyleRecord(tree, group);
+                decoration.background = prColor16FromColor(rgb(look.colors.quote_fill));
+                radius(decoration, look.transcriptStyle.codeRadius * k());
+                group = prLayoutDecorationStyleIntern(tree, &decoration);
+                prLayoutTreeFrameSetStyle(tree, row, prLayoutStyleIntern(tree, &record));
+            }
             if (paragraph.depth) {
                 PrKitBoxStyle layout{.direction = PrKitDirection_Row, .align = PrKitAlign_Start};
                 layout.padding.left = em * (look.ui.list_column_em * paragraph.ancestorColumns +
@@ -1772,9 +1815,9 @@ struct Builder {
                 list = kPrLayoutNodeNone;
             }
             const auto text = prKitText(kit, row, {}, body);
-            const auto plain = sourceInk.value_or(tone == kPersonTone ? style.personInk : style.ink);
+            const auto plain = paragraph.quoted ? look.colors.quote_ink : sourceInk.value_or(tone == kPersonTone ? style.personInk : style.ink);
             for (const auto& run : paragraph.runs) {
-                auto runStyle = textStyle(static_cast<PrKitTextRole>(bold && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role), tone);
+                auto runStyle = textStyle(static_cast<PrKitTextRole>(bold && !paragraph.quoted && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role), tone);
                 // Keep Markdown in the paragraph's line flow. The kit's default monospace role is nonwrapping.
                 runStyle.wrap = PrKitWrap_Wrap;
                 const auto span = prKitText(kit, text, {}, runStyle);
@@ -1923,32 +1966,24 @@ struct Builder {
             case EntryKind::Tool:
                 break;
         }
-        PrLayoutNode tools = element(column, Part::Tools, 0, key);
-        if (look.transcriptStyle.toolChevron) {
-            const auto& settings = look.transcriptStyle;
-            const auto chevron = prKitButton(kit, tools,
-                {.key = prHashString(sv("tool-chevron"), 0),
-                 .icon = items.expanded[i] ? PrStudioIconKind_ChevronDown : PrStudioIconKind_ChevronRight},
-                {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Sm});
-            if (prKitActivated(kit, chevron)) {
-                items.expanded[i] = !items.expanded[i];
-                items.height[i] = 0;
-            }
-            ink(chevron, settings.toolChevronInk);
-            auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, chevron));
-            auto box = prLayoutBoxStyleRecord(tree, record.groups[PrLayoutGroup_Box]);
-            box.position = PrLayoutPosition_Absolute;
-            box.width = box.height = px(settings.toolChevronSize * k());
-            box.inset[PrRectSide_Left] = px(settings.captionPaddingX * k());
-            box.inset[PrRectSide_Top] = px(settings.captionPaddingY * k());
-            record.groups[PrLayoutGroup_Box] = prLayoutBoxStyleIntern(tree, &box);
-            prLayoutTreeFrameSetStyle(tree, chevron, prLayoutStyleIntern(tree, &record));
+        const auto tools = prKitButton(kit, column, {.key = key}, {.variant = PrKitButtonVariant_Ghost});
+        prLayoutTreeFrameSetStyle(tree, tools, style(ui, look, Part::Tools));
+        view.workNodes.push_back(tools);
+        prUiSetCursor(ui, tools, PrAppCursor_Hand);
+        std::string inputError;
+        if (prKitActivated(kit, tools) && view.application &&
+            policy::inputAction(*view.application, "work", "activate", inputError) == "open_work") {
+            view.workDetails.clear();
+            for (const auto index : items.tools[i]) view.workDetails.push_back(tab.transcript[index].text);
+            view.workDetailsShown = false;
         }
         PrKitTextStyle line = textStyle(PrKitTextRole_Mono, kStatusTone);
         line.wrap = PrKitWrap_Clip;
-        for (std::uint32_t t = 0; t < items.count[i]; ++t) {
-            const auto& entry = tab.transcript[items.first[i] + t];
-            if (!visibleTool(entry)) continue;
+        if (!inputError.empty()) view.problem = inputError;
+        const auto& visible = items.tools[i];
+        const auto shownCount = std::min(visible.size(), size_t(std::clamp(look.ui.work_preview_lines, 1.f, 20.f)));
+        for (size_t t = visible.size() - shownCount; t < visible.size(); ++t) {
+            const auto& entry = tab.transcript[visible[t]];
             const std::string_view summary = entry.text;
             const auto separator = summary.find(": ");
             const auto& prompts = look.transcriptStyle.toolPrompts;
@@ -1958,14 +1993,17 @@ struct Builder {
             const bool readPath = tool == "Read" && separator != summary.npos;
             auto shown = summary;
             if (customPrompt) shown.remove_prefix(separator + 2);
-            const auto node = label(tools, customPrompt ? prompt->second + std::string(shown) : std::string(shown), line);
+            const auto full = customPrompt ? prompt->second + std::string(shown) : std::string(shown);
+            const float room = std::max(0.f, items.width * look.transcriptStyle.replyWidth / 100 -
+                2 * look.transcriptStyle.captionPaddingX * k() - 2);
+            const auto preview = ellipsize(full, room, [&](std::string_view text) { return menuTextWidth(text, PrKitTextRole_Mono); });
+            const auto node = label(tools, preview, line);
             const auto& style = look.transcriptStyle;
             const auto toolInk = style.toolInks.find(tool);
             ink(node, toolInk != style.toolInks.end() ? toolInk->second :
                 readPath ? style.readPathInk.value_or(style.linkInk.value_or(look.tabs.selectedFill)) :
                 style.commandInk.value_or(customPrompt ? style.ink : style.statusInk));
-            view.selection.paragraph(node, prColor16FromColor(faded(rgb(look.prompt.selection), look.ui.transcript_selection_opacity)));
-            if (look.transcriptStyle.toolChevron && !items.expanded[i]) break;
+
         }
         return tools;
     }
@@ -2129,9 +2167,20 @@ struct Builder {
             const double activity = busy ? 1.0 : (reduced ? 0.0 : std::clamp(1.0 - elapsed / settings.scannerFade, 0.0, 1.0));
             for (unsigned i = 0; i < lamps; ++i) {
                 const double distance = (i - head) / look.ui.scanner_spread; // Gaussian width in lamp spacings
-                const double light = lamps == 1
+                double light = lamps == 1
                     ? (reduced ? 1.0 : std::lerp(double(settings.scannerPulseFloor), 1.0, sweep))
                     : std::exp(-0.5 * distance * distance);
+                if (!reduced && lamps > 1 && look.ui.scanner_decay_seconds > 0) {
+                    const double decay = look.ui.scanner_decay_seconds;
+                    for (unsigned sample = 1; sample <= 32; ++sample) {
+                        const double age = 4 * decay * sample / 32;
+                        if (age > (busy ? view.time : view.scannerChanged) - view.scannerStarted) break;
+                        const double previous = cycle - age / settings.scannerSeconds;
+                        const double pastHead = (lamps - 1) * sampleMotion(settings.scannerCurve, previous - std::floor(previous));
+                        const double gap = (i - pastHead) / look.ui.scanner_spread;
+                        light = std::max(light, std::exp(-0.5 * gap * gap - age / decay));
+                    }
+                }
                 const auto steps = static_cast<int16_t>(look.textSteps);
                 const auto record = pr::uiStyle(ui, look, BoxRecipe{Part::ScannerSegment, steps},
                     ScannerLight{uint8_t(std::lround(light * 255)), steps, uint16_t(std::lround(gain * 64)), uint8_t(std::lround(activity * 255))});
@@ -2502,6 +2551,22 @@ struct Builder {
         }
         if (value != kPrLayoutNodeNone)
             ink(value, look.prompt.ink, false, std::clamp(prUiDisplay(ui).headroom, 1.f, look.prompt.textPeak));
+        if (const auto end = quoteEnd(model.tab(active).draft)) {
+            size_t offset = 0;
+            textNodes(tree, edit, [&](PrLayoutNode leaf) {
+                const auto raw = prLayoutNodeText(tree, leaf);
+                if (offset < end) {
+                    const auto count = prLayoutNodeHighlights(tree, leaf, nullptr, 0);
+                    std::vector<PrLayoutHighlight> highlights(count + 1);
+                    highlights[0].end = static_cast<uint32_t>(std::min(raw.size, end - offset));
+                    highlights[0].background = prColor16FromColor(rgb(look.colors.quote_fill));
+                    highlights[0].color = prColor16FromColor(rgb(look.colors.quote_ink));
+                    if (count) prLayoutNodeHighlights(tree, leaf, highlights.data() + 1, count);
+                    prLayoutTreeFrameSetHighlights(tree, leaf, highlights.data(), static_cast<uint32_t>(highlights.size()));
+                }
+                offset += raw.size;
+            });
+        }
         promptCaret(box, edit);
         // The line about cut text stands for the draft as the cut left it, and goes once that draft changes.
         if (!view.cut.empty() && view.cutTab == model.tab(active).id) {
@@ -2590,7 +2655,7 @@ struct Builder {
     void captureShortcuts(PrLayoutNode keys) {
         // A modal owns its keys. The signed-out page underneath also binds arrows, Enter and Escape;
         // capturing those first would move its hidden picker instead of the visible sign-in card.
-        if (view.accounts.dialog != AccountMenuView::Dialog::None) return;
+        if (view.accounts.dialog != AccountMenuView::Dialog::None || !view.workDetails.empty()) return;
         std::vector<Shortcut> pressed;
         for (const auto& binding : view.windowApp.shortcuts) {
             if ((!view.secrets || !view.secrets->showing()) && prUiKeyCaptured(ui, keys, binding.key, binding.modifiers))
@@ -2880,6 +2945,7 @@ struct Builder {
 
     void build(PrLayoutNode parent) {
         view.tableFrames.clear();
+        view.workNodes.clear();
         if (view.lockScreen) {
             lockScreen(parent);
             return;
@@ -2907,7 +2973,7 @@ struct Builder {
         // Alt and Prax's terminal claims every Alt chord for its shell (terminal.cpp claimKeys), which keeps Alt as
         // Meta for every other key. Inside the overlay nexus takes its keys (AGENTS.md).
         updateApplication();
-        pickerInput = view.accountPicker.has_value() || !view.choiceKind.empty();
+        pickerInput = !view.workDetails.empty() || view.accountPicker.has_value() || !view.choiceKind.empty();
         captureShortcuts(keys);
         pickerInput = pickerInput || view.accountPicker.has_value() || !view.choiceKind.empty();
         serviceTerminals();
@@ -2958,7 +3024,7 @@ struct Builder {
         page(window, composing);
         accountDropMenu(window);
         accountDialog(window);
-        const bool dialog = view.accountMenu != kPrLayoutNodeNone || asking != nullptr;
+        const bool dialog = view.accountMenu != kPrLayoutNodeNone || asking != nullptr || !view.workDetails.empty();
         if (dialog && !view.dialogVisible) view.chirp(view.windowApp.surface.dialogChirp);
         if (!dialog) view.energyAccount.clear();
         view.dialogVisible = dialog;
@@ -2967,6 +3033,60 @@ struct Builder {
             view.lastHighlightedAccount.clear();
         secretDialog(window);
         serverDialog(window);
+        workDialog(window);
+    }
+
+    void workDialog(PrLayoutNode window) {
+        if (view.workDetails.empty() || asking) { view.workDetailsNode = kPrLayoutNodeNone; return; }
+        if (!view.workDetailsShown) {
+            prKitSetOpen(kit, window, true);
+            view.workDetailsShown = true;
+        }
+        const auto body = prKitDialog(kit, window,
+            {.key = prHashString(sv("work-details"), 0), .title = sv(look.words.work_details_title)},
+            {.width = view.extent.x * std::clamp(look.ui.work_detail_width_percent, 20.f, 95.f) / 100});
+        if (!body) {
+            std::string why;
+            if (view.application && policy::inputAction(*view.application, "work", "dismiss", why) != "close_work") {
+                if (!why.empty()) view.problem = why;
+                prKitSetOpen(kit, window, true);
+                prUiRequestFrame(ui);
+                return;
+            }
+            view.workDetails.clear();
+            view.workDetailsShown = false;
+            view.workDetailsNode = kPrLayoutNodeNone;
+            return;
+        }
+        const auto card = prLayoutNodeParent(tree, body);
+        PrKitPlace size{};
+        size.height = prKitPx(view.extent.y * std::clamp(look.ui.work_detail_height_percent, 20.f, 95.f) / 100);
+        prKitPlace(kit, card, size);
+        PrKitPlace bodyPlace{};
+        bodyPlace.flex = PrKitFlex_Fill;
+        bodyPlace.minHeight = prKitPx(0);
+        prKitPlace(kit, body, bodyPlace);
+        PrKitBoxStyle scrolling{};
+        scrolling.overflow = PrKitOverflow_Scroll;
+        scrolling.place.flex = PrKitFlex_Fill;
+        scrolling.place.minHeight = prKitPx(0);
+        scrolling.gap = look.transcriptStyle.toolGap * k();
+        const auto content = prKitBox(kit, body, {}, scrolling);
+        view.workDetailsNode = content;
+        prUiSetFlags(ui, content, PrUiFlag_Focusable | PrUiFlag_Scrollable);
+        prKitModalAutofocus(kit, content);
+        view.selection.begin(tree, SIZE_MAX - 1);
+        auto style = textStyle(PrKitTextRole_Mono, kStatusTone);
+        style.wrap = PrKitWrap_Wrap;
+        style.preserve = true;
+        for (const auto& text : view.workDetails) {
+            const auto node = label(content, text, style);
+            const auto tool = std::string_view(text).substr(0, text.find(": "));
+            const auto found = look.transcriptStyle.toolInks.find(tool);
+            ink(node, found != look.transcriptStyle.toolInks.end() ? found->second :
+                look.transcriptStyle.commandInk.value_or(look.transcriptStyle.statusInk));
+            view.selection.paragraph(node, prColor16FromColor(faded(rgb(look.prompt.selection), look.ui.transcript_selection_opacity)));
+        }
     }
 
     // The server dialog (server_choice.h), on iOS where nothing names the server: Prax's dialog, titled Server, saying
@@ -3062,6 +3182,8 @@ struct Builder {
         prJsonWriterBool(w, active && view.goal && !view.goal(active->id).empty());
         prJsonWriterKey(w, sv("help_visible"));
         prJsonWriterBool(w, active && view.helpTab == active->id);
+        prJsonWriterKey(w, sv("ai_selection"));
+        prJsonWriterBool(w, view.selection.aiSelected());
         field("draft", active ? active->draft : std::string_view{});
         prJsonWriterKey(w, sv("logout"));
         prJsonWriterBool(w, active && active->draft == "/logout");
@@ -3159,6 +3281,9 @@ struct Builder {
                     model.set_draft(model.active(), key.type);
                     view.prompted = ~std::size_t(0);
                 }
+                break;
+            case WindowCommand::SelectOutput:
+                if (view.selection.extendAI(key.type == "previous" ? -1 : 1)) prUiReveal(ui, view.selection.aiTip());
                 break;
             case WindowCommand::SelectPrompt: {
                 if (!model.tab_count() || model.tab(model.active()).kind != TabKind::AI ||

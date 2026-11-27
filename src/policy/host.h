@@ -31,6 +31,8 @@ private:
     std::string initError_;
 };
 
+std::string inputAction(Host& host, const std::string& target, const std::string& intent, std::string& why);
+
 // A plan is validated in full before the caller executes its first command.
 bool messagePlan(Host& host, const std::string& path, bool client, const char* intent,
     const MessageState& state, MessagePlan& out, std::string& why);

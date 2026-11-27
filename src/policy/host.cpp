@@ -82,6 +82,26 @@ std::string packagedBundle(const char* side, std::string& why) {
     return bundle;
 }
 
+std::string inputAction(Host& host, const std::string& target, const std::string& intent, std::string& why) {
+    std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> writer(prJsonWriterCreate(), prJsonWriterDestroy);
+    prJsonWriterBeginObject(writer.get());
+    prJsonWriterKey(writer.get(), pr("target")); prJsonWriterString(writer.get(), pr(target));
+    prJsonWriterKey(writer.get(), pr("intent")); prJsonWriterString(writer.get(), pr(intent));
+    prJsonWriterEndObject(writer.get());
+    const auto bytes = prJsonWriterText(writer.get());
+    const auto answer = host.decide({}, "app.input", std::string(bytes.data, bytes.size), why);
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    if (!why.empty()) return {};
+    if (!prJsonParse(doc.get(), pr(answer), nullptr) || prJsonKind(doc.get(), 0) != PrJsonKind_String) {
+        why = "app.input must return a supported input action string"; return {};
+    }
+    const auto value = prJsonString(doc.get(), 0);
+    const std::string action(value.data, value.size);
+    if (action != "none" && action != "open_work" && action != "close_work" && action != "select_ai_paragraph" &&
+        action != "quote_ai_paste") { why = "app.input returned an unsupported native operation"; return {}; }
+    return action;
+}
+
 bool messagePlan(Host& host, const std::string& path, bool client, const char* intent,
     const MessageState& state, MessagePlan& out, std::string& why) {
     std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);

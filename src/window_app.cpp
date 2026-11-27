@@ -83,6 +83,11 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
         return prJsonCount(d, row) == 3 && (out.type == "top" || out.type == "bottom" ||
                out.type == "page_up" || out.type == "page_down");
     }
+    if (op == "select_output") {
+        out.command = WindowCommand::SelectOutput;
+        out.type = stringAt(d, prJsonElement(d, row, 2));
+        return prJsonCount(d, row) == 3 && (out.type == "previous" || out.type == "next");
+    }
     if (op == "select_prompt") {
         out.command = WindowCommand::SelectPrompt;
         out.type = stringAt(d, prJsonElement(d, row, 2));

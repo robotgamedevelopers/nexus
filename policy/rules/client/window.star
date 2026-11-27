@@ -134,6 +134,11 @@ def _panels(state):
     return panels
 
 def handle(event, state, config):
+    if event == "input":
+        actions = config.get("input_actions", {
+            "work.activate": "open_work", "work.dismiss": "close_work",
+            "transcript.double_click": "select_ai_paragraph", "prompt.paste_ai_quote": "quote_ai_paste"})
+        return actions.get(state["target"] + "." + state["intent"], "none")
     if event == "overlay":
         return config.get("overlay_hotkey", {"modifiers": "Command", "code": "Backquote"})
     if event == "lock":
@@ -148,6 +153,9 @@ def handle(event, state, config):
                 shortcuts = _bind(shortcuts, chord, ["select_tab", target])
             for chord, direction in config.get("tab_reorder", {"Command+Shift+PageUp": -1, "Command+Shift+PageDown": 1}).items():
                 shortcuts = _bind(shortcuts, chord, ["move_tab", direction])
+        if state.get("ui", {}).get("ai_selection"):
+            for chord, direction in config.get("output_selection_shortcuts", {"Shift+ArrowUp": "previous", "Shift+ArrowDown": "next"}).items():
+                shortcuts = _bind(shortcuts, chord, ["select_output", direction])
         if state["tab"] == "ai":
             for chord, edge in config.get("prompt_selection_shortcuts", {"Command+Shift+ArrowLeft": "start", "Command+Shift+ArrowRight": "end"}).items():
                 shortcuts = _bind(shortcuts, chord, ["select_prompt", edge])
@@ -370,7 +378,9 @@ def handle(event, state, config):
                 "Command+Escape   Stop the current AI turn. Use /goal off to stop future goal reminders.",
                 "Escape   Close the current picker/dialog first; otherwise hide the overlay. Terminals receive Escape.",
                 "Shift+Enter   Insert a newline in the prompt.",
-                "Work chevron   Click to expand or collapse adjacent work entries; Enter or Space toggles the focused chevron.",
+                "Double-click AI text   Select its whole paragraph. Shift+Up/Down extends by AI blocks, skipping human text and work.",
+                "Copy an AI block selection, then paste into the prompt   Insert a distinct quoted passage followed by a blank line for your response.",
+                "Work bubble   Click (or Enter/Space when focused) to read the full wrapped work text; Escape closes the view. The preview shows the latest three lines.",
                 submit + " / " + queue + "   Return to the newest messages when holding or sending from history.",
                 "ArrowUp / ArrowDown, Enter   Move through a picker, then confirm; Escape cancels.",
                 "Tab   Complete /model and /effort choices in the prompt.",
