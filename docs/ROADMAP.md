@@ -58,7 +58,7 @@
 | Let an AI see a display or window the human chooses with Screen Recording permission (later) | ❌ |
 | Let an AI click and type in other apps with separate Accessibility permission and a human stop control (later) | ❌ |
 | Finish v0.2.5: verify the remaining platform gates, deploy the matching client and policy, merge the release PR, then publish the source archive and checksums | ❌ |
-| Compact work groups: keep only the latest three unwrapped lines; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup | ❌ |
+| Compact work groups: keep only the latest three unwrapped lines, cut at the last whole character with no ellipsis; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup | ❌ |
 | AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text | ❌ |
 | Enter from a focused AI-output selection, or paste a copied AI selection, inserts a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble | ❌ |
 | Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering | ❌ |
