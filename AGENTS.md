@@ -298,7 +298,7 @@ Tabs
 - File operations are purple with the same perceptual lightness as shell-command orange. Tool colors, work chevrons,
   goal presentation and idle animation behavior live in the shipped profile; pulsing continues on battery by default.
 
-- The outer canvas is `#0c0f13` at 100% opacity; the AI output panel is opaque `#272728`. Prompt and message fills
+- The outer canvas is `#0c0f13` at 100% opacity; the AI output panel is opaque `#15171b`. Prompt and message fills
   remain independently configurable. The local clock sits at the top right above the strip divider, formatted
   `Fri 27 Nov 10:45 AM`. Typography, colors, strings, interaction tuning, window options and the clock are fork-owned
   in Starlark/config; see `docs/ui-configuration.md`. Native code validates and renders these values.
@@ -320,4 +320,4 @@ Tabs
 
 - Command–Shift–Left/Right extends the prompt selection to the start/end of the whole prompt, including multiple lines. The fork owns these bindings through `prompt_selection_shortcuts`; tab reordering uses Command–Shift–PageUp/PageDown.
 
-- The prompt and output panel share the shipped background color `#272728`; retain their separate configuration fields.
+- The prompt keeps `#272728`; the output panel uses the sampled `#15171b`. Retain their separate configuration fields.
