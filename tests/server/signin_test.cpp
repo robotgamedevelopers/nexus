@@ -700,9 +700,17 @@ void codecs() {
     signOut.session = 17;
     signOut.account = "logout-profile";
     up.add(signOut);
+    sync::Action cancel;
+    cancel.num = 5;
+    cancel.kind = sync::ActionKind::SignInCancel;
+    cancel.request = 4;
+    cancel.text = "w1";
+    up.add(cancel);
     const std::vector<sync::Action> got = sync::Actions::parse(up.init_diff(), sync::kSignInFormat);
-    CHECK(got.size() == 4 && got[3].kind == sync::ActionKind::SignOut && got[3].session == 17 &&
+    CHECK(got.size() == 5 && got[3].kind == sync::ActionKind::SignOut && got[3].session == 17 &&
           got[3].account == "logout-profile");
+    CHECK(got[4].kind == sync::ActionKind::SignInCancel && got[4].request == 4 && got[4].text == "w1");
+    CHECK(!holds(sync::describe(got[4]), "w1"));
     CHECK(got[0].kind == sync::ActionKind::SignInClaim && got[0].request == 4 &&
           got[0].text == "w1");
     CHECK(got[1].kind == sync::ActionKind::SignInOpened && got[2].kind == sync::ActionKind::SignInCallback &&
@@ -716,16 +724,17 @@ void codecs() {
         older.add(cb);
         older.add(claim);
         older.add(signOut);
+        older.add(cancel);
         const std::string wire = older.init_diff();
         CHECK(!leaks(wire) && !holds(wire, "w1") && !holds(wire, "logout-profile"));
         const std::vector<sync::Action> back = sync::Actions::parse(wire, format);
-        CHECK(back.size() == 3 && back[2].kind == sync::ActionKind::Stop && back[2].session == 0 && back[0].kind == sync::ActionKind::Stop && back[0].session == 0 &&
+        CHECK(back.size() == 4 && back[3].kind == sync::ActionKind::Stop && back[3].text.empty() && back[3].request == 0 && back[2].kind == sync::ActionKind::Stop && back[2].session == 0 && back[0].kind == sync::ActionKind::Stop && back[0].session == 0 &&
               back[1].kind == sync::ActionKind::Stop && back[1].session == 0 && back[0].secret.empty() &&
               back[1].text.empty());
     }
     // A server reading a link of 4 takes none of them even if they come: unknown, nothing of them kept.
     const std::vector<sync::Action> asFour = sync::Actions::parse(up.init_diff(), sync::kTablesFormat);
-    CHECK(asFour.size() == 4);
+    CHECK(asFour.size() == 5);
     for (const sync::Action& a : asFour) {
         CHECK(a.kind == sync::ActionKind::Unknown && a.text.empty() && a.request == 0 && a.secret.empty());
     }
@@ -740,7 +749,7 @@ void codecs() {
     sync::Sessions four = s;
     four.setFormat(sync::kTablesFormat);
     CHECK(four.init_diff() == before);
-    s.setOffers({sync::SignInOffer{1, "a1", "claude", "w1", "studio", secret(kUrl)},
+    s.setOffers({sync::SignInOffer{1, "a1", "claude", "w1", "studio", secret(kUrl), true},
                  sync::SignInOffer{2, "a2", "claude", "", "studio", {}}});
     const std::string after = s.init_diff();
     CHECK(after != before && holds(after, kState));     // the URL rides in the holder's state alone
@@ -748,7 +757,7 @@ void codecs() {
     back.setFormat(sync::kSignInFormat);
     back.apply_string(after);
     CHECK(back == s && back.offers().size() == 2 && back.offers()[0].url.bytes() == kUrl &&
-          back.offers()[1].opener.empty() && back.requests().size() == 1);
+          back.offers()[0].cancelSupported && !back.offers()[1].cancelSupported && back.offers()[1].opener.empty() && back.requests().size() == 1);
     for (const std::uint32_t format : {std::uint32_t(2), sync::kSecretsFormat, sync::kTablesFormat}) {
         sync::Sessions toOld = s;
         toOld.setFormat(format);
@@ -942,7 +951,37 @@ void signOut() {
     CHECK(!logout() && holds(why, "provider") && removed.size() == 2);
 }
 
+void cancelEnrollment() {
+    store::MemFs fs;
+    Keeper k;
+    Server s(fs, k);
+    CHECK(s.hub->state().offers().front().cancelSupported);
+    CHECK(s.act(sync::ActionKind::SignInClaim, 1, "w1"));
+    CHECK(s.act(sync::ActionKind::SignInCancel, 1, "w2"));
+    CHECK(s.act(sync::ActionKind::SignInCancel, 99, "w1"));
+    CHECK(s.runner.stopped.empty());
+    CHECK(s.act(sync::ActionKind::SignInCancel, 1, "w1"));
+    CHECK(s.runner.stopped == std::vector<std::string>{"a1"});
+    CHECK(s.hub->signIns().stateOf(1) == sync::SignInState::Cancelling);
+    CHECK(s.hub->stateFor("w1").offers().front().opener == "w1");
+    CHECK(s.hub->state().offers().front().url.empty());
+    CHECK(s.act(sync::ActionKind::SignInCancel, 1, "w1"));
+    CHECK(s.runner.stopped.size() == 1);
+    s.hub->signInExited("a1", 1, "stopped");
+    CHECK(s.hub->signIns().stateOf(1) == sync::SignInState::Cancelled);
+    const auto id = s.hub->state().offers().front().id;
+    CHECK(id != 1);
+    CHECK(s.act(sync::ActionKind::SignInClaim, id, "w1"));
+    s.hub->signInUrl("a1", id, secret(kUrl));
+    CHECK(s.act(sync::ActionKind::SignInOpened, id, "w1"));
+    CHECK(s.act(sync::ActionKind::SignInCallback, id, "w1", kCallback));
+    CHECK(s.act(sync::ActionKind::SignInCancel, id, "w1"));
+    CHECK(s.runner.stopped.size() == 1);
+    CHECK(s.hub->signIns().stateOf(id) == sync::SignInState::CallbackForwarded);
+}
+
 void hub() {
+    cancelEnrollment();
     store::MemFs fs;
     Keeper k;
     {

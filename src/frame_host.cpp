@@ -213,6 +213,20 @@ void LinkSignIn::choose(const std::string& account) {
         gate_.reset();
         gateFlow_ = 0;
     }
+    for (const auto& offer : opener.view()) {
+        if (offer.cancelSupported && offer.account != account && offer.opener == opener.token()) {
+            sync::Action cancel;
+            cancel.kind = sync::ActionKind::SignInCancel;
+            cancel.request = offer.id;
+            cancel.text = opener.token();
+            port->send(std::move(cancel));
+            if (offer.id == opener.gate()) {
+                gate_.reset();
+                gateFlow_ = 0;
+                opener.gateClosed();
+            }
+        }
+    }
     sync::Action action;
     action.request = opener.cancelFor(account, &action.secret);
     if (action.request) {
@@ -682,7 +696,7 @@ void FrameHost::startLogin(const std::string& account) {
             view->problem = "Finish this account's sign-in in the other Nexus window first.";
             return;
         }
-        if (offer && !offer->opener.empty() && offer->id != signIn.opener.gate()) {
+        if (offer && !offer->opener.empty() && offer->id != signIn.opener.gate() && !offer->cancelSupported) {
             view->problem = "A sign-in is still starting or finishing. Wait for its result, then retry /login.";
             return;
         }

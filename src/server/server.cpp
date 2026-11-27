@@ -1337,7 +1337,8 @@ PassOrder::Outcome Server::apply(std::string* why) {
             }
             // An opened or a callback counts only from the link that claimed by its token: no other window speaks
             // for a flow (the state never shows one window's token to another, sync/signin.h kSignInHeldBy).
-            if ((a.kind == sync::ActionKind::SignInOpened || a.kind == sync::ActionKind::SignInCallback) &&
+            if ((a.kind == sync::ActionKind::SignInOpened || a.kind == sync::ActionKind::SignInCallback ||
+                    a.kind == sync::ActionKind::SignInCancel) &&
                     a.text != s.signIn) {
                 sync::Action named = a;
                 named.text = s.signIn;

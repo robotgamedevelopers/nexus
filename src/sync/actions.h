@@ -61,10 +61,11 @@ enum class ActionKind : std::uint8_t {
     SignInCallback = 19,// the window's gate took flow `request`'s callback: its query (`secret`), from `text`'s window
     SignOut = 20,       // Claude logout, only when session still selects the exact named account
     ResolveLimit = 21, // accept a paused turn's offered target (aiName) for account, request and choice kind (text)
+    SignInCancel = 22, // stop exactly one owned enrollment before its accepted callback is being verified
 };
 
 // The last kind this build knows.
-constexpr ActionKind kLastActionKind = ActionKind::ResolveLimit;
+constexpr ActionKind kLastActionKind = ActionKind::SignInCancel;
 
 struct Action {
     std::uint64_t num = 0;  // its place in the list, from 1, never reused

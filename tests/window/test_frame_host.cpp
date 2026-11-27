@@ -378,7 +378,7 @@ void enterDuringAccountSwitchWaitsForServerState() {
     CHECK(w.link.sent.size() == 4 && w.link.sent.back().kind == sync::ActionKind::Send);
 }
 
-void remoteLoginSwitchAndRetry() {
+void remoteLoginSwitchAndRetry(bool cancelSupported) {
     Window w("chat");
     auto session = std::make_shared<sync::SessionView>();
     session->id = 37;
@@ -395,6 +395,7 @@ void remoteLoginSwitchAndRetry() {
         w.host.pollBackground();
     };
     sync::SignInOffer first;
+    first.cancelSupported = cancelSupported;
     first.id = 1; first.account = "first"; first.provider = "claude"; first.host = "studio";
     first.opener = w.host.signIn.opener.token();
     first.url = sync::SecretValue("https://claude.com/cai/oauth/authorize?client_id=test"
@@ -414,9 +415,19 @@ void remoteLoginSwitchAndRetry() {
     w.view.loginAccount("second");
     w.host.pollBackground();
     CHECK(pages.size() == 1 && !w.host.signIn.opener.gate());
-    CHECK(w.link.sent.back().kind == sync::ActionKind::SignInCallback);
-    CHECK(sync::queryValue(w.link.sent.back().secret.bytes(), "error") == "access_denied");
-    CHECK(sync::queryValue(w.link.sent.back().secret.bytes(), "state") == "fakeFirst&+%");
+    if (cancelSupported) {
+        CHECK(w.link.sent.back().kind == sync::ActionKind::SignInCancel);
+        CHECK(w.link.sent.back().request == first.id && w.link.sent.back().secret.empty());
+        const auto count = w.link.sent.size();
+        offers.front().url.clear();
+        publish(); // Cancellation was accepted, but its child still owns the account.
+        CHECK(w.link.sent.size() == count);
+        CHECK(pages.size() == 1);
+    } else {
+        CHECK(w.link.sent.back().kind == sync::ActionKind::SignInCallback);
+        CHECK(sync::queryValue(w.link.sent.back().secret.bytes(), "error") == "access_denied");
+        CHECK(sync::queryValue(w.link.sent.back().secret.bytes(), "state") == "fakeFirst&+%");
+    }
     // The server finishes cancellation before it is asked to sign the old account out.
     offers.clear(); publish();
     CHECK(w.link.sent.back().kind == sync::ActionKind::SignOut);
@@ -572,7 +583,8 @@ int main() {
     automaticAccountIsASelectionMode();
     accountPickerRechecksTheServerRoster();
     explicitSignInKeepsTheDraft();
-    remoteLoginSwitchAndRetry();
+    remoteLoginSwitchAndRetry(false);
+    remoteLoginSwitchAndRetry(true);
     enterDuringAccountSwitchWaitsForServerState();
     logoutUsesTheConfirmedAccountAndReturnsToSignIn();
     savedStateShowsTheSelectedEmailWithoutStartingSignIn();
