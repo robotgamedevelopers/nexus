@@ -1769,9 +1769,9 @@ void toolLinesAreOneCompactLine() {
     const TranscriptStyle& shipped = h.look.transcriptStyle;
     // The shipped tool_prompts and command_ink: a Bash line reads as a shell command, in the command ink.
     CHECK(shipped.toolPrompts.count("Bash") == 1 && shipped.toolPrompts.at("Bash") == "$ ");
-    CHECK(shipped.commandInk && *shipped.commandInk == 0xdc7334);
+    CHECK(shipped.commandInk && *shipped.commandInk == 0x283f55);
     CHECK(!h.hasText(h.window(), "Bash: ls src"));
-    checkTextPaint(h, "$ ls src", 0xdc7334, shipped.fill);
+    checkTextPaint(h, "$ ls src", 0x283f55, shipped.fill);
     checkTextPaint(h, std::string(400, 'x'), shipped.toolInks.at("Read"), shipped.fill);
     checkTextPaint(h, "Let me look.", shipped.ink, *shipped.panelFill);
     std::vector<PrLayoutNode> lines;
@@ -3302,8 +3302,8 @@ void cleanNoticePresentation() {
     checkTextPaint(h, "model-a", 0xffffff, h.look.transcriptStyle.codeFill);
     CHECK(h.bounds(infoBubble).left < h.bounds(personBubble).left);
     CHECK(h.bounds(infoBubble).right - h.bounds(infoBubble).left < h.extent.x / 2);
-    checkTextPaint(h, "Edit: /tmp/example.cpp", 0xaa79dd, h.look.transcriptStyle.fill);
-    checkTextPaint(h, "$ build", 0xdc7334, h.look.transcriptStyle.fill);
+    checkTextPaint(h, "Edit: /tmp/example.cpp", 0x283f55, h.look.transcriptStyle.fill);
+    checkTextPaint(h, "$ build", 0x283f55, h.look.transcriptStyle.fill);
     h.type("/help"); h.enter(); h.frame();
     CHECK(h.view.helpTab == h.active().id && h.view.helpText.find("/goal <text>") != std::string::npos);
 }

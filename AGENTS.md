@@ -295,7 +295,7 @@ Tabs
   white text and Markdown formatting, including `/model`, `/info` and `/help` (owner, 2026-11-27).
 - Enter or Command–Enter on a prepared message returns the transcript immediately to its newest content, including
   when Enter holds the message. Shift–Enter inserts a newline without changing the transcript position.
-- File operations are purple with the same perceptual lightness as shell-command orange. Tool colors, work chevrons,
+- Work-operation text uses the scanner's unlit blue, with separate shell and per-tool color settings. Tool colors, work chevrons,
   goal presentation and idle animation behavior live in the shipped profile; pulsing continues on battery by default.
 
 - The outer canvas is `#0c0f13` at 100% opacity; the AI output panel is opaque `#15171b`. Prompt and message fills
