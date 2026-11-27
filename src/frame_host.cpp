@@ -169,10 +169,7 @@ bool onThisMachine(const sync::SignInOffer& offer, const void* context) {
 
 } // namespace
 
-void LinkSignIn::step() {
-    if (port == nullptr || locked) {
-        return;
-    }
+void LinkSignIn::pollGate() {
     // The gate's flow left the state (it ended, or another window took it), or the link was lost: the gate closes.
     if (gate_ != nullptr && opener.gate() != gateFlow_) {
         gate_.reset();
@@ -197,6 +194,53 @@ void LinkSignIn::step() {
             opener.gateClosed();
         }
     }
+}
+
+void LinkSignIn::choose(const std::string& account) {
+    if (!port || locked) return;
+    pollGate(); // A callback already received belongs to its account; never replace it with a denial.
+    if (gate_ && std::any_of(opener.view().begin(), opener.view().end(), [&](const auto& o) {
+            return o.id == gateFlow_ && o.account != account;
+        })) {
+        sync::Action received;
+        if (gate_->stopAndTake(&received.secret)) {
+            received.kind = sync::ActionKind::SignInCallback;
+            received.request = gateFlow_;
+            received.text = opener.token();
+            port->send(std::move(received));
+            opener.gateClosed();
+        }
+        gate_.reset();
+        gateFlow_ = 0;
+    }
+    sync::Action action;
+    action.request = opener.cancelFor(account, &action.secret);
+    if (action.request) {
+        action.kind = sync::ActionKind::SignInCallback;
+        action.text = opener.token();
+        port->send(std::move(action));
+        gate_.reset();
+        gateFlow_ = 0;
+    }
+    activeAccount = account;
+}
+
+std::string LinkSignIn::reopen(const sync::SignInOffer& offer) {
+    if (locked) return "Unlock Nexus to sign in.";
+    if (offer.opener != opener.token()) return "This sign-in is open in another nexus window.";
+    if (offer.url.empty() || !opener.opened().contains(offer.id)) return "Opening the sign-in page…";
+    sync::SignInTarget target;
+    if (!sync::parseSignInUrl(offer.provider, offer.url.bytes(), &target))
+        return "The sign-in address failed validation.";
+    if (!onThisMachine(offer, this) && opener.gate() != offer.id)
+        return "The sign-in callback is no longer waiting. Retry when this attempt ends.";
+    if (openUrl) openUrl(offer.url.bytes());
+    return {};
+}
+
+void LinkSignIn::step() {
+    if (port == nullptr || locked) return;
+    pollGate();
     sync::SignInOpener::Step next = opener.next(onThisMachine, this, activeAccount ? &*activeAccount : nullptr);
     if (next.kind == sync::SignInOpener::Step::Kind::Claim) {
         sync::Action action;
@@ -478,25 +522,11 @@ bool FrameHost::activateSignIn() {
             view->problem = "This sign-in is open in another nexus window.";
             return true;
         }
-        if (offer->url.empty() || !signIn.opener.opened().contains(offer->id)) {
-            view->problem = "Opening the sign-in page…";
-            return true;
-        }
-        sync::SignInTarget target;
-        if (!sync::parseSignInUrl(offer->provider, offer->url.bytes(), &target)) {
-            view->problem = "The sign-in address failed validation.";
-            return true;
-        }
-        if (!onThisMachine(*offer, &signIn) && signIn.opener.gate() != offer->id) {
-            view->problem = "The sign-in callback is no longer waiting. Retry when this attempt ends.";
-            return true;
-        }
-        if (signIn.openUrl) {
-            signIn.openUrl(offer->url.bytes());
-            view->problem.clear();
-        }
+        signIn.choose(choice->name);
+        view->problem = signIn.reopen(*offer);
         return true;
     }
+    signIn.choose(choice->name);
     if (pendingClaims_.contains(choice->name)) {
         view->problem = "Waiting for the server to open sign-in…";
         return true;
@@ -637,12 +667,19 @@ void FrameHost::startLogin(const std::string& account) {
         view->problem = "Open Nexus on the server machine to sign in to " + accountShownAs(*it) + ".";
         return;
     }
+    const auto* offer = offerFor(account);
+    if (offer && !offer->opener.empty() && offer->opener != signIn.opener.token()) {
+        view->problem = "This sign-in is open in another nexus window.";
+        return;
+    }
     pendingLogin_ = std::make_pair(session, account);
-    signIn.activeAccount = account;
+    signIn.choose(account);
     view->problem = "Signing in to " + accountShownAs(*it) + "\xE2\x80\xA6 " +
         std::string(model->tab(model->active()).displayName()) + " stays on its account until then.";
-    const auto* offer = offerFor(account);
-    if (offer && offer->opener == signIn.opener.token()) return;    // this window holds the flow: its page opens
+    if (offer && offer->opener == signIn.opener.token()) {
+        view->problem = signIn.reopen(*offer);
+        return;
+    }
     if (pendingClaims_.contains(account)) return;
     pendingClaims_.emplace(account, 0);
     claimAccount(session, account);

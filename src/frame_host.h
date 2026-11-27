@@ -104,9 +104,14 @@ public:
     // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open. None
     // while locked.
     void step();
+    // Deliberate sign-in input: finish a received callback first, otherwise decline a different account's page.
+    void choose(const std::string& account);
+    // Reopen an owned page on explicit retry. A page not opened yet is handled by step().
+    std::string reopen(const sync::SignInOffer& offer);
     bool gateOpen() const { return gate_ != nullptr; }
 
 private:
+    void pollGate();
     std::unique_ptr<SignInGate> gate_;
     std::uint64_t gateFlow_ = 0;
 };

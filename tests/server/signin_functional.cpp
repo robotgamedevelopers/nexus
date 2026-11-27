@@ -759,6 +759,25 @@ void caseEnrollmentFailure() {
     enrollment("muse", "cancel");
 }
 
+void caseGateCancel() {
+    for (bool delivered : {false, true}) {
+        sync::SignInTarget target{freePort(), "/callback", "fakeCancelState", "localhost"};
+        SignInGate gate(target);
+        CHECK(browserGet(target.port, "/favicon.ico").rfind("HTTP/1.1 404", 0) == 0);
+        if (delivered) {
+            CHECK(browserGet(target.port, callback(target.state, "code=fakeCompletedCode"))
+                      .rfind("HTTP/1.1 200", 0) == 0);
+        }
+        sync::SecretValue query;
+        CHECK(gate.stopAndTake(&query) == delivered);
+        if (delivered) CHECK(sync::queryValue(query.bytes(), "code") == "fakeCompletedCode");
+        CHECK(!gate.stopAndTake(&query));
+        const auto late = browserGet(target.port, callback(target.state, "code=fakeLateCode"), 300);
+        CHECK(late.empty() || late.rfind("HTTP/1.1 410", 0) == 0);
+        CHECK(!gate.take(&query));
+    }
+}
+
 struct Case {
     const char* name;
     void (*run)();
@@ -770,7 +789,7 @@ const Case kCases[] = {
     {"unguarded", caseUnguarded},      {"gate_in_use", caseGateInUse},  {"late", caseLate},
     {"gate_v6_in_use", caseGateV6InUse}, {"crashed", caseCrashed}, {"forwarded_v6", caseForwardedV6},
     {"account_spelling", caseAccountSpelling}, {"enrollment", caseEnrollment},    {"enrollment_failure", caseEnrollmentFailure},
-    {"quick_exit", caseQuickExit},     {"group", caseGroup},
+    {"quick_exit", caseQuickExit},     {"group", caseGroup}, {"gate_cancel", caseGateCancel},
 };
 
 } // namespace

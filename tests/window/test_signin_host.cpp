@@ -138,6 +138,34 @@ void refusesALookalike() {
     CHECK(f.signIn.problem.empty() && f.opened.empty());    // once
 }
 
+void deliberateSwitchOnly() {
+    Fixture f("studio", "laptop");
+    f.signIn.received(offering("tokWindowA1", kUrl, "studio"));
+    f.signIn.step();
+    const auto sent = f.port.sent.size();
+    f.signIn.choose("claude-main");
+    CHECK(f.signIn.opener.gate() == 3 && f.port.sent.size() == sent);
+    f.signIn.lock();
+    f.signIn.choose("another");
+    CHECK(f.signIn.opener.gate() == 3 && f.port.sent.size() == sent);
+    f.signIn.unlock();
+    f.signIn.choose("another");
+    CHECK(!f.signIn.opener.gate() && f.port.sent.size() == sent + 1);
+    const auto& cancel = f.port.sent.back();
+    CHECK(cancel.kind == sync::ActionKind::SignInCallback && cancel.request == 3);
+    sync::SignInDesk desk;
+    desk.need(3, "claude-main", "claude");
+    desk.claim(3, "tokWindowA1", 0);
+    desk.url("claude-main", 3, sync::SecretValue(kUrl));
+    desk.opened(3, "tokWindowA1");
+    CHECK(desk.callback(3, cancel.text, cancel.secret).replays.size() == 1);
+    CHECK(desk.callback(3, cancel.text, cancel.secret).replays.empty());
+    desk.exited("claude-main", 3, "declined");
+    CHECK(desk.stateOf(3) == sync::SignInState::Cancelled);
+    f.signIn.choose("third");
+    CHECK(f.port.sent.size() == sent + 1);
+}
+
 void privateSignInPages() {
     const std::string nonce(64, 'a');
     const std::string path = "/nexus-signin/" + nonce;
@@ -234,6 +262,7 @@ int main() {
     lostForgetsTheView();
     refusesALookalike();
     privateSignInPages();
+    deliberateSwitchOnly();
     if (failures != 0) {
         std::fprintf(stderr, "signin host: %d check(s) failed\n", failures);
         return 1;

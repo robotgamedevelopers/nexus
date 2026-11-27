@@ -93,6 +93,7 @@ Step(r) ==
       [] r.op = "claim"      -> S!Claim(r.c)
       [] r.op = "open"       -> S!Open(r.c) /\ r.i \in opened'[r.c] \ opened[r.c]
       [] r.op = "redirect"   -> S!Redirect(r.c, r.i, r.ok)
+      [] r.op = "cancel"     -> S!Cancel(r.c, r.i)
       [] r.op = "stray"      -> S!Stray(r.c)
       [] r.op = "disconnect" -> S!Disconnect(r.c)
       [] r.op = "connect"    -> S!Connect(r.c)

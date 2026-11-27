@@ -229,6 +229,13 @@ The sign-in card names the selected account and shows its configured email. Ente
 Nexus keeps the account's login in its private server directory. The browser URL, callback code and credential
 stay outside the conversation, logs and fork configuration.
 
+When a remote client explicitly starts signing in to a different account, it declines the previous account's
+unfinished browser callback and releases its listener. It sends the existing state-matched denial callback;
+the server handles it as a cancelled login. A callback already received is forwarded first and is never replaced
+by a denial. Choosing the same account again reopens its waiting page, including after the browser was closed.
+Merely changing tabs or hiding the overlay does not cancel sign-in. `SignIn.tla`'s `Cancel` action and the
+implementation trace cover the handoff; `frame_host_unit` covers switching accounts and reopening the browser.
+
 ### Verified Claude sign-in
 
 When a Claude account has an `email`, the server starts its trusted `nexus-claude-auth` helper for that account.

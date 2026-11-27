@@ -262,6 +262,9 @@ public:
     // The flow the gate is bound for (0: none): it closes when that flow leaves the state or the link is lost.
     std::uint64_t gate() const { return gate_; }
     void gateClosed() { gate_ = 0; }
+    // Explicitly starting another account declines this window's unfinished callback, just as declining in the
+    // browser does. Returns its flow and a state-matched denial to relay; never cancels the selected account.
+    std::uint64_t cancelFor(const std::string& account, SecretValue* query);
     const std::vector<SignInOffer>& view() const { return view_; }
     const std::set<std::uint64_t>& claimed() const { return claimed_; }
     const std::set<std::uint64_t>& opened() const { return opened_; }

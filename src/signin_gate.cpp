@@ -280,15 +280,19 @@ void serveGate(const std::shared_ptr<SignInGate::Shared>& shared, sync::SignInTa
                 if (v == sync::CallbackGate::Verdict::More) {
                     continue;
                 }
+                if (v == sync::CallbackGate::Verdict::Take) {
+                    std::lock_guard<std::mutex> lock(shared->mutex);
+                    if (shared->stop.load()) {
+                        response = "HTTP/1.1 410 Gone\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    } else {
+                        shared->query = std::move(query);
+                        shared->taken = true;
+                    }
+                    done = true;
+                }
                 answer(c.fd, response);
                 slots.release(c.slot);
                 drop(c);
-                if (v == sync::CallbackGate::Verdict::Take) {
-                    std::lock_guard<std::mutex> lock(shared->mutex);
-                    shared->query = std::move(query);
-                    shared->taken = true;
-                    done = true;
-                }
             }
         }
         std::erase_if(connections, [](const Connection& c) { return c.fd == kNoSocket; });
@@ -363,6 +367,15 @@ bool SignInGate::failed(std::string* why) {
         *why = shared_->why;
     }
     return shared_->failed;
+}
+
+bool SignInGate::stopAndTake(sync::SecretValue* query) {
+    std::lock_guard<std::mutex> lock(shared_->mutex);
+    shared_->stop.store(true);
+    if (!shared_->taken) return false;
+    shared_->taken = false;
+    *query = std::move(shared_->query);
+    return true;
 }
 
 } // namespace nexus

@@ -626,6 +626,26 @@ void SignInOpener::lost() {
     armed_ = false;
 }
 
+std::uint64_t SignInOpener::cancelFor(const std::string& account, SecretValue* query) {
+    for (const auto& offer : view_) {
+        if (!gate_ || offer.id != gate_ || offer.account == account || offer.opener != token_) continue;
+        SignInTarget target;
+        if (!parseSignInUrl(offer.provider, offer.url.bytes(), &target) || target.state.empty()) return 0;
+        std::string denial = "error=access_denied&state=";
+        constexpr char hex[] = "0123456789ABCDEF";
+        for (const unsigned char c : target.state) {
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                c == '-' || c == '_' || c == '.' || c == '~') denial += static_cast<char>(c);
+            else { denial += '%'; denial += hex[c >> 4]; denial += hex[c & 15]; }
+        }
+        *query = SecretValue(denial);
+        const auto id = gate_;
+        gateClosed();
+        return id;
+    }
+    return 0;
+}
+
 SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const void*), const void* context,
                                          const std::string* activeAccount) {
     Step step;

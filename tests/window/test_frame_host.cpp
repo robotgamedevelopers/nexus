@@ -378,6 +378,54 @@ void enterDuringAccountSwitchWaitsForServerState() {
     CHECK(w.link.sent.size() == 4 && w.link.sent.back().kind == sync::ActionKind::Send);
 }
 
+void remoteLoginSwitchAndRetry() {
+    Window w("chat");
+    auto session = std::make_shared<sync::SessionView>();
+    session->id = 37;
+    session->info = {"chat", "claude", "first", "", ""};
+    w.link.state.phase = sync::LinkPhase::Connected;
+    w.link.state.sessions = sync::Sessions({session});
+    w.link.state.sessions.setAIs({{"chat", {{"first", "First", true}, {"second", "Second", true}}}});
+    sync::SignInOffer first;
+    first.id = 1; first.account = "first"; first.provider = "claude"; first.host = "studio";
+    first.opener = w.host.signIn.opener.token();
+    first.url = sync::SecretValue("https://claude.com/cai/oauth/authorize?client_id=test"
+        "&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback&state=fakeFirst%26%2B%25");
+    auto second = first;
+    second.id = 2; second.account = "second";
+    second.url = sync::SecretValue("https://claude.com/cai/oauth/authorize?client_id=test"
+        "&redirect_uri=http%3A%2F%2Flocalhost%3A54546%2Fcallback&state=fakeSecond");
+    w.link.state.sessions.setOffers({first, second});
+    w.host.signIn.local = "laptop";
+    w.host.signIn.openGate = [](const sync::SignInTarget&) { return std::unique_ptr<SignInGate>(); };
+    std::vector<std::string> pages;
+    w.host.signIn.openUrl = [&](const std::string& url) { pages.push_back(url); };
+    w.link.changed = true;
+    w.host.pollLink();
+    w.host.signIn.step();
+    CHECK(pages.size() == 1 && w.host.signIn.opener.gate() == first.id);
+    w.model.set_draft(w.model.active(), "keep my draft");
+    w.link.sent.clear();
+    // Closing the browser has no callback. Explicitly choosing another account must release its gate.
+    w.view.loginAccount("second");
+    w.host.signIn.step();
+    CHECK(pages.size() == 2 && pages.back() == second.url.bytes());
+    CHECK(w.host.signIn.opener.gate() == second.id);
+    CHECK(!w.link.sent.empty() && w.link.sent.front().kind == sync::ActionKind::SignInCallback);
+    if (!w.link.sent.empty() && w.link.sent.front().kind == sync::ActionKind::SignInCallback) {
+        const auto& cancel = w.link.sent.front();
+        CHECK(cancel.request == first.id && cancel.text == first.opener);
+        CHECK(sync::queryValue(cancel.secret.bytes(), "error") == "access_denied");
+        CHECK(sync::queryValue(cancel.secret.bytes(), "state") == "fakeFirst&+%");
+    }
+    const auto actions = w.link.sent.size();
+    w.view.loginAccount("second");
+    CHECK(pages.size() == 3 && pages.back() == second.url.bytes());
+    CHECK(w.link.sent.size() == actions); // Retry opens the same page, without another claim or cancellation.
+    w.host.signIn.step();
+    CHECK(pages.size() == 3 && w.model.tab(w.model.active()).draft == "keep my draft");
+}
+
 void explicitSignInKeepsTheDraft() {
     Window w("chat");
     auto session = std::make_shared<sync::SessionView>();
@@ -513,6 +561,7 @@ int main() {
     automaticAccountIsASelectionMode();
     accountPickerRechecksTheServerRoster();
     explicitSignInKeepsTheDraft();
+    remoteLoginSwitchAndRetry();
     enterDuringAccountSwitchWaitsForServerState();
     logoutUsesTheConfirmedAccountAndReturnsToSignIn();
     savedStateShowsTheSelectedEmailWithoutStartingSignIn();

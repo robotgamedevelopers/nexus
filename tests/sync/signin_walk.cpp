@@ -655,6 +655,21 @@ int main(int argc, char** argv) {
                 w.send(c, std::move(action), "opened", true, true);
             }
             fields = "c |-> " + q(c.name) + ", i |-> " + std::to_string(s.id);
+        } else if (choice < 445) {
+            if (!c.conn || !c.remote || !c.gate) continue;
+            sync::Action action;
+            const auto id = c.opener.cancelFor(a, &action.secret);
+            if (!id) continue;
+            const bool match = sync::queryValue(action.secret.bytes(), "state") == stateOf(id);
+            const bool denied = sync::queryValue(action.secret.bytes(), "error") == "access_denied";
+            if (!match || !denied) fail("account switch did not decline its own callback");
+            c.browser.erase(id);
+            Walk::settleGate(c);
+            action.kind = sync::ActionKind::SignInCallback;
+            action.request = id;
+            w.send(c, std::move(action), "callback", match, false);
+            op = "cancel";
+            fields = "c |-> " + q(c.name) + ", i |-> " + std::to_string(id);
         } else if (choice < 500) {
             if (c.browser.empty()) {
                 continue;

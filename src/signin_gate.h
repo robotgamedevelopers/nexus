@@ -40,6 +40,8 @@ public:
 
     // The callback's query, once the gate took it: true the one time, the query moved out. Never waits.
     bool take(sync::SecretValue* query);
+    // Stop accepting callbacks and take any already accepted one in the same critical section.
+    bool stopAndTake(sync::SecretValue* query);
     // True, with why, when the gate could not listen (the port is in use, say) or stopped on an error. Never waits.
     bool failed(std::string* why);
 
