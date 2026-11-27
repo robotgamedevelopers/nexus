@@ -1156,14 +1156,13 @@ void promptSegmentTracksInsertionAndUsesHeadroom() {
         h.frame();
         return fillOf(h, cell()).r;
     };
-    // The shipped caret (prompt_style): a 1.5 s cycle, 0.1 s held at the top, 0.2 s at the bottom, falling in half the
-    // time it rises.
-    const double rise = (1.5 - 0.1 - 0.2) / 1.5;
+    // The shipped caret rises quickly, holds, then falls twice as slowly on its own 1.8 s cycle.
+    const double rise = (1.8 - 0.1 - 0.1) / 3;
     const float floor = redAt(0);
-    CHECK(floor < 1 && redAt(1.301) == floor && redAt(1.401) == floor && redAt(1.499) == floor);
+    CHECK(floor < 1 && redAt(1.701) == floor && redAt(1.751) == floor && redAt(1.799) == floor);
     const float crest = redAt(rise);
     CHECK(crest > 1 && redAt(rise + 0.095) == crest);
-    CHECK(std::abs(redAt(rise / 2) - redAt(rise + 0.1 + rise / 4)) < 0.01);
+    CHECK(std::abs(redAt(rise / 2) - redAt(rise + 0.1 + rise)) < 0.01);
     prUiTextEditSetSelection(h.ui, h.view.prompt, {0, 2});
     h.frame();
     CHECK(cell() == kPrLayoutNodeNone);
@@ -1479,16 +1478,34 @@ void personBubblesWrapFromTheRight() {
 }
 
 void workLinesClipAtReplyWidth() {
-    Harness h;
-    h.model.append(0, {EntryKind::Tool, "Bash: " + std::string(600, 'x')});
-    h.frame(); h.frame();
-    const auto group = h.entries().front();
-    const auto column = h.bounds(h.view.items[h.active().id].column);
-    const auto bubble = h.bounds(group);
-    CHECK(near(bubble.left, column.left));
-    CHECK(std::abs((bubble.right - bubble.left) / (column.right - column.left) - 2.f / 3.f) < .01f);
-    const auto text = h.findText(h.window(), "$ " + std::string(600, 'x'));
-    CHECK(text && h.height(text) <= h.look.ui.tool_pitch + 1);
+    for (const float viewport : {650.f, 1000.f, 1600.f}) {
+        Harness h;
+        h.extent = h.view.extent = {viewport, 1400};
+        std::string command;
+        for (int i = 0; i < 100; ++i) command += "café 世界 ";
+        h.model.append(0, {EntryKind::Tool, "Bash: " + command});
+        h.frame(); h.frame(); h.frame();
+        const auto group = h.entries().front();
+        const auto column = h.bounds(h.view.items[h.active().id].column);
+        const auto bubble = h.bounds(group);
+        const float inset = h.look.ui.bubble_padding_x * h.look.ui.scale(h.look.textSteps);
+        CHECK(near(bubble.left, column.left + inset));
+        CHECK((bubble.right - bubble.left) <= (column.right - column.left - 2 * inset) * 2.f / 3.f + 1);
+        auto leaf = prLayoutNodeFirstChild(h.tree, group);
+        while (leaf && prLayoutNodeKind(h.tree, leaf) != PrLayoutNodeKind_Text)
+            leaf = prLayoutNodeFirstChild(h.tree, leaf);
+        CHECK(leaf);
+        if (!leaf) continue;
+        const auto raw = prLayoutNodeText(h.tree, leaf);
+        const std::string preview(raw.data, raw.size);
+        CHECK(preview.ends_with("…"));
+        CHECK(("$ " + command).starts_with(preview.substr(0, preview.size() - 3)));
+        const auto text = h.bounds(leaf);
+        const float padding = h.look.transcriptStyle.captionPaddingX * h.look.ui.scale(h.look.textSteps);
+        CHECK(text.right <= bubble.right - padding + 1);
+        CHECK(h.height(leaf) <= h.look.ui.tool_pitch + 1);
+        CHECK(h.active().transcript.front().text == "Bash: " + command);
+    }
 }
 
 void warningsUseReplyWidthFromTheLeft() {
@@ -1612,16 +1629,16 @@ void overlayKeepsAllButTheBackgroundOpaque() {
     CHECK(h.active().transcript.size() == 1 && h.active().held == "held");
     h.time = 1008; // crest of the 2.8-second unsent-text pulse
     h.frame();
-    // The shipped overlay_opacity (policy/rules/config.json): 90%.
+    // The shipped overlay_opacity (policy/rules/config.json): fully opaque.
     // The window, the surface's one child: in the shipped profile the transcript stands in its conversation panel
     // (transcript_style panel_fill), which draws no background of its own over the window's.
     PrLayoutNode window = h.window();
     CHECK(prLayoutNodeParent(h.tree, prLayoutNodeParent(h.tree, h.view.transcript)) == window);
     CHECK(fillOf(h, prLayoutNodeParent(h.tree, h.view.transcript)).a == 0);
-    CHECK(near(fillOf(h, window).a * 100, 90.0f));
+    CHECK(near(fillOf(h, window).a * 100, 100.0f));
     CHECK(prColorFromColor16(prLayoutTreeCanvasColor(h.tree)).a == 0);
     CHECK(fillOf(h, prLayoutNodeParent(h.tree, window)).a == 0);
-    CHECK(near(h.kit->theme.palette.bg0.a * 100, 90.0f));
+    CHECK(near(h.kit->theme.palette.bg0.a * 100, 100.0f));
     CHECK(near(h.kit->theme.palette.bg1.a * 100, style::kOverlayStripFill * 100));
     CHECK(fillOf(h, h.view.promptBox).a == 1);
     for (int side = 0; side < PrRectSide_Count; ++side)

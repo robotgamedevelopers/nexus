@@ -1873,7 +1873,14 @@ struct Builder {
             const bool readPath = tool == "Read" && separator != summary.npos;
             auto shown = summary;
             if (customPrompt) shown.remove_prefix(separator + 2);
-            const auto node = label(tools, customPrompt ? prompt->second + std::string(shown) : std::string(shown), line);
+            const auto full = customPrompt ? prompt->second + std::string(shown) : std::string(shown);
+            const float panelPadding = look.transcriptStyle.conversationPanel ? 2 * look.ui.bubble_padding_x * k() : 0;
+            const float chevron = look.transcriptStyle.toolChevron ?
+                (look.transcriptStyle.toolChevronSize + look.transcriptStyle.toolChevronGap) * k() : 0;
+            const float room = std::max(0.f, (items.width - panelPadding) * look.transcriptStyle.replyWidth / 100 -
+                2 * look.transcriptStyle.captionPaddingX * k() - chevron - 2);
+            const auto preview = ellipsize(full, room, [&](std::string_view text) { return menuTextWidth(text, PrKitTextRole_Mono); });
+            const auto node = label(tools, preview, line);
             const auto& style = look.transcriptStyle;
             const auto toolInk = style.toolInks.find(tool);
             ink(node, toolInk != style.toolInks.end() ? toolInk->second :
