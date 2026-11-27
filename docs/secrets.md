@@ -323,8 +323,10 @@ The state machine is `models/SignIn.tla`, bound to the code by `tests/sync/signi
    name is the window's own), Claude Code's own listener takes the browser's redirect, and the window binds nothing.
    On another machine, the window first binds a gate on 127.0.0.1 (and ::1 where it can) at the redirect's port, on a
    thread of its own. The gate takes exactly one GET on the redirect's path whose `state` matches the URL's and that
-   carries a `code` or an `error`; it answers that one with a plain page ("signed in, you can close this tab"), sends
-   its query up in one action, keeps nothing, and closes. Any other request is answered "not found" and changes
+   carries a `code` or an `error`; it answers that one with a plain page ("Sign-in response received. Return to Nexus."), sends
+   its query up in one action, keeps nothing, and closes. Receiving a callback wakes the app; it forwards the
+   response and applies the server’s result even when the overlay is hidden behind the browser. The page confirms
+   receipt only: the server still has to verify and save the login. Any other request is answered "not found" and changes
    nothing. The gate compares the state in constant time, refuses a query with a control byte (CR, LF or any other
    byte outside 0x21 to 0x7e), holds at most 8 connections at once and drops each one 10 s after it opened (both
    guesses, not measurements). Where [::1] exists but its port is taken by another program, the gate fails with one

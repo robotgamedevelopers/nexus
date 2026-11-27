@@ -686,7 +686,6 @@ void shutdown(void* context, PrStudioApp*) {
 void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
     App& a = appOf(context);
     HitchScope scope(&a.hitch, Phase::Input);
-    if (e->kind == PrAppEventKind_Wake) a.host.finishUpload();
     if (e->kind == PrAppEventKind_PowerChanged) {
         const auto power = prAppPower(prStudioAppApp(studio));
         a.view.savingPower = power.lowPower || power.source == PrAppPowerSource_Battery;
@@ -703,6 +702,7 @@ void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
         else if (e->kind == PrAppEventKind_Timer && e->tag == kLockTickTag)
             a.lock->tick(lockNow());
     }
+    if (e->kind == PrAppEventKind_Wake) a.host.pollBackground();
     if (!a.overlay) {
         // A normal window has no hotkey; the policy's idle timeout is all it reads.
         if (a.lock && e->kind == PrAppEventKind_Timer && e->tag == kPolicyCheckTag) {
@@ -1350,6 +1350,7 @@ int main(int argc, char** argv) {
                 prAppWake(app);
         };
         a.host.uploadWake = options.wake;
+        a.host.signIn.wake = options.wake;
 #if NEXUS_LINK
         a.link = std::make_unique<link::ClientPort>(std::move(options));
 #else

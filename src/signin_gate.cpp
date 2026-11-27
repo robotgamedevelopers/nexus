@@ -171,6 +171,7 @@ struct SignInGate::Shared {
     bool failed = false;
     std::string why;
     std::atomic<bool> stop{false};
+    std::function<void()> wake; // guarded by mutex; cleared before the owning window can be destroyed
 };
 
 namespace {
@@ -180,6 +181,7 @@ void serveGate(const std::shared_ptr<SignInGate::Shared>& shared, sync::SignInTa
         std::lock_guard<std::mutex> lock(shared->mutex);
         shared->failed = true;
         shared->why = why;
+        if (shared->wake) shared->wake();
     };
     if (!startSockets()) {
         fail("the sockets could not be started");
@@ -287,6 +289,7 @@ void serveGate(const std::shared_ptr<SignInGate::Shared>& shared, sync::SignInTa
                     } else {
                         shared->query = std::move(query);
                         shared->taken = true;
+                        if (shared->wake) shared->wake();
                     }
                     done = true;
                 }
@@ -339,7 +342,8 @@ std::string newClaimToken() {
     return token;
 }
 
-SignInGate::SignInGate(sync::SignInTarget target) : shared_(std::make_shared<Shared>()) {
+SignInGate::SignInGate(sync::SignInTarget target, std::function<void()> wake) : shared_(std::make_shared<Shared>()) {
+    shared_->wake = std::move(wake);
     // Detached: the thread holds the shared state, and ends within kPollMs of being asked to, so no frame waits on it.
     std::thread([shared = shared_, t = std::move(target)]() mutable { serveGate(shared, std::move(t)); }).detach();
 }
@@ -347,6 +351,7 @@ SignInGate::SignInGate(sync::SignInTarget target) : shared_(std::make_shared<Sha
 SignInGate::~SignInGate() {
     shared_->stop.store(true);
     std::lock_guard<std::mutex> lock(shared_->mutex);
+    shared_->wake = {};
     shared_->query.clear();
 }
 

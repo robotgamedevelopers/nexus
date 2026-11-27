@@ -254,7 +254,7 @@ void LinkSignIn::step() {
         problem = next.account + "'s sign-in address failed validation. Restart sign-in on the server.";
     } else if (next.kind == sync::SignInOpener::Step::Kind::Open) {
         if (next.gate) {
-            gate_ = openGate ? openGate(next.target) : std::make_unique<SignInGate>(next.target);
+            gate_ = openGate ? openGate(next.target) : std::make_unique<SignInGate>(next.target, wake);
             gateFlow_ = next.id;
         }
         // Handed to the window's UrlOpener (main.cpp), which opens it off the frame thread: this returns at once.
@@ -1067,6 +1067,23 @@ void FrameHost::showState(const sync::Sessions& state, bool lost) {
     wire();
 }
 
+void FrameHost::pollBackground() {
+    if (!view || !model) return;
+    pollLink();
+    if (signIn.activeAccount) {
+        const auto target = signInTarget();
+        if (!target) signIn.activeAccount->clear();
+        else if (*signIn.activeAccount != *target) *signIn.activeAccount = *target;
+    }
+    if (view->lockScreen && !signIn.locked) signIn.lock();
+    else if (!view->lockScreen) signIn.unlock();
+    signIn.step();
+    if (!signIn.problem.empty()) {
+        view->problem = std::move(signIn.problem);
+        signIn.problem.clear();
+    }
+}
+
 void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAppDisplay& display) {
     // Studio defaults to separate desktop windows for dialogs. An overlay must keep them in its own window:
     // a native child takes the keyboard, which correctly triggers the overlay's hide-on-focus-loss rule.
@@ -1103,19 +1120,7 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
     view->time = time;
     {
         HitchScope scope(hitch, Phase::SyncApply);
-        pollLink();
-        if (signIn.activeAccount) {
-            const auto target = signInTarget();
-            if (!target) signIn.activeAccount->clear();
-            else if (*signIn.activeAccount != *target) *signIn.activeAccount = *target;
-        }
-        if (view->lockScreen && !signIn.locked) signIn.lock();
-        else if (!view->lockScreen) signIn.unlock();
-        signIn.step();
-        if (!signIn.problem.empty()) {
-            view->problem = std::move(signIn.problem);
-            signIn.problem.clear();
-        }
+        pollBackground();
     }
     {
         HitchScope scope(hitch, Phase::Layout);

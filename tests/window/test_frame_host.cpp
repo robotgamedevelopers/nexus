@@ -401,14 +401,13 @@ void remoteLoginSwitchAndRetry() {
     std::vector<std::string> pages;
     w.host.signIn.openUrl = [&](const std::string& url) { pages.push_back(url); };
     w.link.changed = true;
-    w.host.pollLink();
-    w.host.signIn.step();
+    w.host.pollBackground();
     CHECK(pages.size() == 1 && w.host.signIn.opener.gate() == first.id);
     w.model.set_draft(w.model.active(), "keep my draft");
     w.link.sent.clear();
     // Closing the browser has no callback. Explicitly choosing another account must release its gate.
     w.view.loginAccount("second");
-    w.host.signIn.step();
+    w.host.pollBackground();
     CHECK(pages.size() == 2 && pages.back() == second.url.bytes());
     CHECK(w.host.signIn.opener.gate() == second.id);
     CHECK(!w.link.sent.empty() && w.link.sent.front().kind == sync::ActionKind::SignInCallback);
@@ -422,8 +421,18 @@ void remoteLoginSwitchAndRetry() {
     w.view.loginAccount("second");
     CHECK(pages.size() == 3 && pages.back() == second.url.bytes());
     CHECK(w.link.sent.size() == actions); // Retry opens the same page, without another claim or cancellation.
-    w.host.signIn.step();
+    w.host.pollBackground();
     CHECK(pages.size() == 3 && w.model.tab(w.model.active()).draft == "keep my draft");
+    // The server finishes while Safari has focus: service the wake without any UI or frame build.
+    auto signedIn = std::make_shared<sync::SessionView>(*session);
+    signedIn->info.account = "second";
+    w.link.state.sessions = sync::Sessions({signedIn});
+    w.link.state.sessions.setAIs({{"chat", {{"first", "First", true}, {"second", "Second", false}}}});
+    w.link.changed = true;
+    w.host.pollBackground();
+    CHECK(w.view.signInAccount().name.empty() && w.view.problem.empty());
+    CHECK(!w.host.signIn.opener.gate());
+    CHECK(w.model.tab(w.model.active()).draft == "keep my draft");
 }
 
 void explicitSignInKeepsTheDraft() {
