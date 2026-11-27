@@ -1211,7 +1211,7 @@ struct Builder {
             lane.direction = PrKitDirection_Row;
             lane.overflow = PrKitOverflow_Scroll;
             lane.place.minWidth = prKitPx(0);
-            lane.place.flex = lanes ? PrKitFlex_Fixed : PrKitFlex_Fill;
+            lane.place.flex = static_cast<PrKitFlex>(lanes ? PrKitFlex_Fixed : PrKitFlex_Fill);
             if (lanes) lane.place.width = prKitPx(leftWidth);
             tabsParent = prKitBox(kit, row, {.key = prHashString(sv("header-tabs"), 0)}, lane);
             view.headerTabs = tabsParent;
