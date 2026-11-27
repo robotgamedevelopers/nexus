@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,10 @@ private:
 // A plan is validated in full before the caller executes its first command.
 bool messagePlan(Host& host, const std::string& path, bool client, const char* intent,
     const MessageState& state, MessagePlan& out, std::string& why);
+
+// Human-facing application replies are formatted by the fork, never by the transport.
+std::string noticeText(Host& host, const std::string& path, const std::string& kind,
+    const std::map<std::string, std::string>& fields);
 
 int textZoom(Host& host, const std::string& path, int current, int delta, int low, int high);
 // Returns an empty string when the bundle disables the fallback or returns an invalid model.
