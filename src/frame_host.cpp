@@ -1068,6 +1068,10 @@ void FrameHost::showState(const sync::Sessions& state, bool lost) {
 }
 
 void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAppDisplay& display) {
+    // Studio defaults to separate desktop windows for dialogs. An overlay must keep them in its own window:
+    // a native child takes the keyboard, which correctly triggers the overlay's hide-on-focus-loss rule.
+    // Prax still owns modal focus, Escape, and input routing; the client lock covers the whole surface.
+    if (view && view->look && view->look->overlay) prUiSetHost(kit->ui, nullptr);
     ++pasteFrame_;
     // Another tab chosen: its prompt takes the focus, as a switch does (View::promptDismissed).
     if (view->promptDismissed && (model->tab_count() == 0 || model->tab(model->active()).id != tapTab_))

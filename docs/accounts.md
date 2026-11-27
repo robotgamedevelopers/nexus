@@ -220,6 +220,7 @@ An AI can keep several accounts signed in at once and move between them without 
   label look exactly the same throughout.
 - **`/account`** opens the same list as a dialog. Its last row runs `/login`.
 - **`/login`** opens the original centered sign-in card, using the policy’s `message_card` appearance.
+  In overlay mode the card stays inside the overlay window, so it never steals native keyboard focus and hides Nexus.
   Up/Down selects an address, Enter signs in, and Escape closes the card. It signs in another of the AI's linked accounts without signing out first. The AI stays on its
   current account while the sign-in runs; a cancelled or failed sign-in leaves everything as it was. When the
   sign-in completes, the AI switches to the new account at once.

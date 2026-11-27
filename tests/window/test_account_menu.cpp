@@ -568,6 +568,37 @@ void loginCardUsesTheOriginalLayout() {
     }
 }
 
+// Studio installs a native portal host on desktop. Overlay dialogs must remain in the main window so opening
+// /login cannot hand keyboard focus to a child window and trigger the overlay's focus-loss dismissal.
+void overlayKeepsDialogsInsideItsWindow() {
+    const PrUiHost native{.window = [](void*, PrUiViewport) -> PrAppWindow* { return nullptr; }};
+    Window normal;
+    prUiSetHost(normal.ui, &native);
+    normal.command("/login");
+    normal.frame();
+    CHECK(prUiViewports(normal.ui, nullptr, 0) == 1);
+
+    Window overlay;
+    overlay.look.overlay = true;
+    prUiSetHost(overlay.ui, &native);
+    overlay.command("/login");
+    overlay.frame();
+    CHECK(overlay.view.accounts.dialog == AccountMenuView::Dialog::Login);
+    CHECK(overlay.view.accountMenu != kPrLayoutNodeNone);
+    CHECK(prUiViewports(overlay.ui, nullptr, 0) == 0);
+    overlay.send(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Escape, PrAppKeyCode_Escape));
+    overlay.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Escape, PrAppKeyCode_Escape));
+    overlay.frame();
+    CHECK(overlay.view.accounts.dialog == AccountMenuView::Dialog::None);
+    CHECK(overlay.switches().empty());
+    CHECK(prUiFocus(overlay.ui) == overlay.view.prompt);
+    overlay.command("/login");
+    overlay.frame();
+    overlay.enter();
+    CHECK((overlay.switches() == std::vector<std::string>{"7:a3"}));
+    CHECK(prUiViewports(overlay.ui, nullptr, 0) == 0);
+}
+
 // /login of a3: one claim names a3 (token, no request) while rowan's session stays on a1, with no SetAccount first; the
 // server signs a3 in and moves the session, and the window sends nothing more. Plants: SetAccount before the claim; a
 // second claim or a SetAccount after the sign-in.
@@ -681,6 +712,7 @@ int main() {
     accountCommandOpensTheSelector();
     signInRowRunsLogin();
     loginCardUsesTheOriginalLayout();
+    overlayKeepsDialogsInsideItsWindow();
     loginSignsInThenSwitches();
     cancelledLoginChangesNothing();
     logoutConfirmsThenMoves();
