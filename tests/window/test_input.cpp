@@ -1478,6 +1478,19 @@ void personBubblesWrapFromTheRight() {
     }
 }
 
+void workLinesClipAtReplyWidth() {
+    Harness h;
+    h.model.append(0, {EntryKind::Tool, "Bash: " + std::string(600, 'x')});
+    h.frame(); h.frame();
+    const auto group = h.entries().front();
+    const auto column = h.bounds(h.view.items[h.active().id].column);
+    const auto bubble = h.bounds(group);
+    CHECK(near(bubble.left, column.left));
+    CHECK(std::abs((bubble.right - bubble.left) / (column.right - column.left) - 2.f / 3.f) < .01f);
+    const auto text = h.findText(h.window(), "$ " + std::string(600, 'x'));
+    CHECK(text && h.height(text) <= h.look.ui.tool_pitch + 1);
+}
+
 void warningsUseReplyWidthFromTheLeft() {
     Harness h;
     const std::string warning = "WARNING: " + std::string(30, 'x') + " ";
@@ -1787,9 +1800,9 @@ void toolLinesAreOneCompactLine() {
     const TranscriptStyle& shipped = h.look.transcriptStyle;
     // The shipped tool_prompts and command_ink: a Bash line reads as a shell command, in the command ink.
     CHECK(shipped.toolPrompts.count("Bash") == 1 && shipped.toolPrompts.at("Bash") == "$ ");
-    CHECK(shipped.commandInk && *shipped.commandInk == 0x283f55);
+    CHECK(shipped.commandInk && *shipped.commandInk == 0x86c5ff);
     CHECK(!h.hasText(h.window(), "Bash: ls src"));
-    checkTextPaint(h, "$ ls src", 0x283f55, shipped.fill);
+    checkTextPaint(h, "$ ls src", 0x86c5ff, shipped.fill);
     checkTextPaint(h, std::string(400, 'x'), shipped.toolInks.at("Read"), shipped.fill);
     checkTextPaint(h, "Let me look.", shipped.ink, *shipped.panelFill);
     std::vector<PrLayoutNode> lines;
@@ -3320,8 +3333,8 @@ void cleanNoticePresentation() {
     checkTextPaint(h, "model-a", 0xffffff, h.look.transcriptStyle.codeFill);
     CHECK(h.bounds(infoBubble).left < h.bounds(personBubble).left);
     CHECK(h.bounds(infoBubble).right - h.bounds(infoBubble).left < h.extent.x / 2);
-    checkTextPaint(h, "Edit: /tmp/example.cpp", 0x283f55, h.look.transcriptStyle.fill);
-    checkTextPaint(h, "$ build", 0x283f55, h.look.transcriptStyle.fill);
+    checkTextPaint(h, "Edit: /tmp/example.cpp", 0x86c5ff, h.look.transcriptStyle.fill);
+    checkTextPaint(h, "$ build", 0x86c5ff, h.look.transcriptStyle.fill);
     h.type("/help"); h.enter(); h.frame();
     CHECK(h.view.helpTab == h.active().id && h.view.helpText.find("/goal <text>") != std::string::npos);
 }
@@ -4045,6 +4058,7 @@ int main(int argc, char** argv) {
     markdownListsAndLinks();
     longInlineCommandWrapsInTheReply();
     personBubblesWrapFromTheRight();
+    workLinesClipAtReplyWidth();
     warningsUseReplyWidthFromTheLeft();
     conversationBubblesAndSignInCard();
     signInCardInTheShippedMenu();

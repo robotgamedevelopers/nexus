@@ -286,7 +286,7 @@ struct BoxRecipe {
             case Part::Tools:
                 box.position = PrLayoutPosition_Relative;
                 box.display = PrLayoutDisplay_Flex;
-                box.maxWidth = prLayoutLengthPercent(look.ui.bubble_max_percent);
+                box.maxWidth = prLayoutLengthPercent(look.transcriptStyle.replyWidth);
                 padding(box, look.transcriptStyle.captionPaddingY * k, look.transcriptStyle.captionPaddingX * k,
                     look.transcriptStyle.captionPaddingY * k, look.transcriptStyle.captionPaddingX * k);
                 if (look.transcriptStyle.toolChevron)

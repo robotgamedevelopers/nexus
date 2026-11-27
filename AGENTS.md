@@ -295,7 +295,7 @@ Tabs
   white text and Markdown formatting, including `/model`, `/info` and `/help` (owner, 2026-11-27).
 - Enter or Command–Enter on a prepared message returns the transcript immediately to its newest content, including
   when Enter holds the message. Shift–Enter inserts a newline without changing the transcript position.
-- Work-operation text uses the scanner's unlit blue, with separate shell and per-tool color settings. Tool colors, work chevrons,
+- Work-operation text uses the scanner's bright blue without HDR, with separate shell and per-tool color settings. Tool colors, work chevrons,
   goal presentation and idle animation behavior live in the shipped profile; pulsing continues on battery by default.
 
 - The outer canvas is `#0c0f13` at 100% opacity; the AI output panel is opaque `#15171b`. Prompt and message fills
@@ -323,3 +323,5 @@ Tabs
 - The prompt keeps `#272728`; the output panel uses the sampled `#15171b`. Retain their separate configuration fields.
 
 - Warning and notice bubbles are left-aligned and at most two-thirds of the column on desktop/laptop, using the same reply-width setting as AI text; mobile uses full width.
+
+- Work bubbles clip long lines without wrapping at two-thirds of the column from the left on desktop/laptop. Their text is bright scanner blue `#86c5ff` with no HDR gain.

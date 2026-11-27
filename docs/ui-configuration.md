@@ -356,4 +356,4 @@ plain Up/Down continue to navigate the account selector. Both are documented in 
 
 The shipped outer canvas below the opaque black header is `#0c0f13` at 100% opacity. `opaque_history_backdrop` is disabled so history margins use that same transparency. The prompt fill is `#272728`; the conversation-panel fill is `#15171b`. They remain independently configurable.
 
-Shell-command and per-tool text colors default independently to `#283f55`, the scanner's unlit blue (`#86c5ff` at a linear-light gain of `0.09`).
+Shell-command and per-tool text colors default independently to `#86c5ff`, the scanner's bright blue without HDR gain.
