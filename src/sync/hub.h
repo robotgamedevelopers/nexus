@@ -270,6 +270,10 @@ public:
     // false when refused, or when the store did not take the step (failed() then says whether it can take any more).
     bool apply(const Action& action, std::string* why = nullptr, const std::string& client = std::string());
 
+    static constexpr std::uint64_t kGoalIntervalMs = 5 * 60 * 1000;
+    void goalsWith(std::function<std::uint64_t()> clock) { goalClock_ = std::move(clock); }
+    bool serveGoals(); // due reminders, without reinterpreting their text as application commands
+
     // Admit this bus envelope once into the recipient's first session on its default instance. Its transcript
     // entry, pending turn and receipt commit together. The caller acknowledges the bus only after the batch flush.
     bool receiveBus(const std::string& recipient, const std::string& id, const std::string& sender,
@@ -500,7 +504,7 @@ private:
     bool secretAction(const Action& action, std::string* why, const std::string& client);
     bool createSession(const Action& action, std::string* why, const std::string& client, bool requireDefault = false);
     bool make(const Action& action, const SessionInfo& info, std::string* why, const std::string& client);
-    bool applyMessage(const Action& input, const StoredSession& session, std::string* why, const std::string& client);
+    bool applyMessage(const Action& input, const StoredSession& session, std::string* why, const std::string& client, bool goalReminder = false);
     bool set(const Action& action, std::string* why, const std::string& client, bool announce = false, const std::optional<std::string>& effort = {});
     bool accountAction(const Action& action, std::string* why, const std::string& client);
     bool count(const Action& action, std::string* why, const std::string& client);
@@ -563,6 +567,7 @@ private:
     SecretEvents* secretEvents_ = nullptr;
     std::function<bool()> takers_;
     std::function<std::uint64_t()> clock_;
+    std::function<std::uint64_t()> goalClock_ = [] { return std::uint64_t(0); };
     std::map<SessionId, std::deque<std::uint64_t>> askTimes_;   // each asker's asks in the last kSecretAskWindowMs
     std::function<LoginAsk(const accounts::Account&)> loginAsk_;
     std::deque<std::pair<std::string, std::string>> reask_;     // nexus's own asks to make again: account, what

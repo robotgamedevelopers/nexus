@@ -123,8 +123,8 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
 
     std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
     auto* d = doc.get();
-    if (!prJsonParse(d, pr(answer), nullptr) || prJsonKind(d, 0) != PrJsonKind_Array || prJsonCount(d, 0) > 16) {
-        why = "return a list of up to 16 commands";
+    if (!prJsonParse(d, pr(answer), nullptr) || prJsonKind(d, 0) != PrJsonKind_Array || prJsonCount(d, 0) > (client ? 128u : 16u)) {
+        why = client ? "return a list of up to 128 window commands" : "return a list of up to 16 commands";
         return false;
     }
     MessagePlan plan;
@@ -170,6 +170,9 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
         } else if (name == "sign_out" && client && !text.data && prJsonCount(d, 0) == 1 &&
                    std::string_view(intent) == "Enter" && state.text == "/logout") {
             plan.delivery = Delivery::SignOut;
+        } else if (!client && name == "goal") {
+            plan.delivery = Delivery::Goal;
+            if (text.data) plan.text.emplace(text.data, text.size);
         } else if (!client && !text.data && (name == "clear_context" || name == "compact_context")) {
             plan.delivery = name == "clear_context" ? Delivery::Clear : Delivery::Compact;
         } else if (!client && text.data && (name == "set_model" || name == "set_effort")) {

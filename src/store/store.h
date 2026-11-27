@@ -101,6 +101,8 @@ struct Info {
     std::string effort;
     std::string instance{};     // the AI's instance (empty: its default)
     bool auto_account = false;
+    std::string goal{};
+    std::uint64_t goal_next_ms = 0;
     bool operator==(const Info&) const = default;
 };
 
