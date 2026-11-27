@@ -1820,7 +1820,16 @@ void toolLinesAreOneCompactLine() {
     CHECK(shipped.commandInk && *shipped.commandInk == 0x86c5ff);
     CHECK(!h.hasText(h.window(), "Bash: ls src"));
     checkTextPaint(h, "$ ls src", 0x86c5ff, shipped.fill);
-    checkTextPaint(h, std::string(400, 'x'), shipped.toolInks.at("Read"), shipped.fill);
+    auto readLeaf = prLayoutNodeNextSibling(h.tree, prLayoutNodeFirstChild(h.tree, e[1]));
+    while (readLeaf && prLayoutNodeKind(h.tree, readLeaf) != PrLayoutNodeKind_Text)
+        readLeaf = prLayoutNodeFirstChild(h.tree, readLeaf);
+    CHECK(readLeaf);
+    if (readLeaf) {
+        const auto raw = prLayoutNodeText(h.tree, readLeaf);
+        const std::string preview(raw.data, raw.size);
+        CHECK(preview.ends_with("…"));
+        checkTextPaint(h, preview, shipped.toolInks.at("Read"), shipped.fill);
+    }
     checkTextPaint(h, "Let me look.", shipped.ink, *shipped.panelFill);
     std::vector<PrLayoutNode> lines;
     for (PrLayoutNode n = prLayoutNodeFirstChild(h.tree, e[1]); n != kPrLayoutNodeNone;
