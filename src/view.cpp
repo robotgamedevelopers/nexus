@@ -254,7 +254,7 @@ struct BoxRecipe {
                 break;
             case Part::CaptionBubble:
                 box.display = PrLayoutDisplay_Block;
-                box.maxWidth = prLayoutLengthPercent(100);
+                box.maxWidth = prLayoutLengthPercent(look.transcriptStyle.replyWidth);
                 padding(box, look.transcriptStyle.captionPaddingY * k, look.transcriptStyle.captionPaddingX * k,
                     look.transcriptStyle.captionPaddingY * k, look.transcriptStyle.captionPaddingX * k);
                 break;

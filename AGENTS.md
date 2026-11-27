@@ -321,3 +321,5 @@ Tabs
 - Command–Shift–Left/Right extends the prompt selection to the start/end of the whole prompt, including multiple lines. The fork owns these bindings through `prompt_selection_shortcuts`; tab reordering uses Command–Shift–PageUp/PageDown.
 
 - The prompt keeps `#272728`; the output panel uses the sampled `#15171b`. Retain their separate configuration fields.
+
+- Warning and notice bubbles are left-aligned and at most two-thirds of the column on desktop/laptop, using the same reply-width setting as AI text; mobile uses full width.

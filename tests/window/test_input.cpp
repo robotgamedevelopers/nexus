@@ -1478,6 +1478,24 @@ void personBubblesWrapFromTheRight() {
     }
 }
 
+void warningsUseReplyWidthFromTheLeft() {
+    Harness h;
+    const std::string warning = "WARNING: " + std::string(30, 'x') + " ";
+    std::string text;
+    for (int i = 0; i < 20; ++i) text += warning;
+    h.model.append(0, {EntryKind::Notice, text});
+    for (bool mobile : {false, true}) {
+        h.view.fullWidthReplies = mobile;
+        h.frame(); h.frame();
+        const auto entry = h.entries().front();
+        const auto row = h.bounds(entry);
+        const auto bubble = h.bounds(prLayoutNodeFirstChild(h.tree, entry));
+        CHECK(near(row.left, bubble.left));
+        const float fraction = (bubble.right - bubble.left) / (row.right - row.left);
+        CHECK(std::abs(fraction - (mobile ? 1.f : 2.f / 3.f)) < .01f);
+    }
+}
+
 void conversationBubblesAndSignInCard() {
     Harness h;
     const std::string live = "Streaming reply";
@@ -4027,6 +4045,7 @@ int main(int argc, char** argv) {
     markdownListsAndLinks();
     longInlineCommandWrapsInTheReply();
     personBubblesWrapFromTheRight();
+    warningsUseReplyWidthFromTheLeft();
     conversationBubblesAndSignInCard();
     signInCardInTheShippedMenu();
     overlayKeepsAllButTheBackgroundOpaque();
