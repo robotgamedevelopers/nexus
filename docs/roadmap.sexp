@@ -102,7 +102,7 @@
    :rows (
      ("screen-observation" "Let an AI see a display or window the human chooses with Screen Recording permission" :later t)
      ("desktop-input" "Let an AI click and type in other apps with separate Accessibility permission and a human stop control" :later t)
-     ("point-release-024" "Finish v0.2.4: verify the remaining platform gates, deploy the matching client and policy, merge the release PR, then publish the source archive and checksums")
+     ("point-release-025" "Finish v0.2.5: verify the remaining platform gates, deploy the matching client and policy, merge the release PR, then publish the source archive and checksums")
      ("work-preview-details" "Compact work groups: keep only the latest three unwrapped lines; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup")
      ("ai-paragraph-selection" "AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text")
      ("quoted-ai-paste" "Enter from a focused AI-output selection, or paste a copied AI selection, inserts a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble")
@@ -132,7 +132,7 @@
      ("screen-observation" "done" "t-screen-observation")
      ("desktop-input" "done" "t-desktop-input")
      ("terminal-tabs" "done" "t-terminal-tabs")
-     ("point-release-024" "done" "t-point-release-024")
+     ("point-release-025" "done" "t-point-release-025")
      ("work-preview-details" "done" "t-work-preview-details")
      ("ai-paragraph-selection" "done" "t-ai-paragraph-selection")
      ("quoted-ai-paste" "done" "t-quoted-ai-paste")
@@ -321,8 +321,8 @@
   (:id "t-ui-defaults-source" :type :task :title "Move remaining presentation defaults from native structs into the shipped profile and generate compatible fallback records from one source" :state :todo)
   (:id "t-transcript-presentation-policy" :type :task :title "Make public transcript grouping, compact work previews, details, warning widths and labels configurable while retaining mandatory native privacy redaction" :state :todo)
   (:id "t-input-policy-tuning" :type :task :title "Move application gesture thresholds and intent precedence into documented policy; test customized profiles through real client input" :state :todo)
-  (:id "t-point-release-024" :type :task :title "Finish and publish Nexus v0.2.4" :state :doing
-   :note "Release PR #149. Native window, goal-layout and policy-match checks passed on the fleet Mac; Windows and Linux passed for the frozen product code. Remaining Apple CI results, final client installation, merge, tag and publication must be verified before claiming release completion. The source-only roadmap changes do not implement the deferred UI behavior.")
+  (:id "t-point-release-025" :type :task :title "Finish and publish Nexus v0.2.5" :state :doing
+   :note "Release PR #149 merged after all platform checks passed, and the matching client and policy are installed. v0.2.4 was published independently before that merge; this batch ships as v0.2.5. The version bump, tag and publication remain to be completed. The source-only roadmap changes do not implement the deferred UI behavior.")
   (:id "t-work-preview-details" :type :task :title "Compact work groups: keep only the latest three unwrapped lines; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup" :state :todo
    :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Keep desktop previews left-aligned at two-thirds width, whole-character truncation and no chevron. Preserve private-event filtering, scrolling and modal precedence. Qualify implementation traces and negative witnesses before delivery.")
   (:id "t-ai-paragraph-selection" :type :task :title "AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text" :state :todo
