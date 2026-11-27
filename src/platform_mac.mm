@@ -41,12 +41,20 @@
         boolean_t defaults = FALSE;
         const auto read = task_policy_get(mach_task_self(), TASK_CATEGORY_POLICY,
             reinterpret_cast<task_policy_t>(&category), &count, &defaults);
-        self.previousRole = read == KERN_SUCCESS ? category.role : TASK_UNSPECIFIED;
-        category.role = TASK_FOREGROUND_APPLICATION;
-        const auto status = task_policy_set(mach_task_self(), TASK_CATEGORY_POLICY,
-            reinterpret_cast<task_policy_t>(&category), TASK_CATEGORY_POLICY_COUNT);
-        if (status != KERN_SUCCESS)
-            std::fprintf(stderr, "nexus: foreground scheduling could not be applied: %s\n", mach_error_string(status));
+        // XNU accepts these application roles on set, but not every role returned by get
+        // (notably TASK_UNSPECIFIED for command-line launches). Preserve roles we cannot restore.
+        const bool restorable = read == KERN_SUCCESS && (category.role == TASK_FOREGROUND_APPLICATION ||
+            category.role == TASK_BACKGROUND_APPLICATION || category.role == TASK_DEFAULT_APPLICATION);
+        self.previousRole = restorable ? category.role : TASK_UNSPECIFIED;
+        if (read != KERN_SUCCESS)
+            std::fprintf(stderr, "nexus: scheduling role could not be read: %s\n", mach_error_string(read));
+        if (restorable) {
+            category.role = TASK_FOREGROUND_APPLICATION;
+            const auto status = task_policy_set(mach_task_self(), TASK_CATEGORY_POLICY,
+                reinterpret_cast<task_policy_t>(&category), TASK_CATEGORY_POLICY_COUNT);
+            if (status != KERN_SUCCESS)
+                std::fprintf(stderr, "nexus: foreground scheduling could not be applied: %s\n", mach_error_string(status));
+        }
         self.qosOverride = pthread_override_qos_class_start_np(pthread_self(), QOS_CLASS_USER_INTERACTIVE, 0);
         if (!self.qosOverride)
             std::fprintf(stderr, "nexus: user-interactive thread priority could not be applied\n");
@@ -59,11 +67,13 @@
             pthread_override_qos_class_end_np(self.qosOverride);
             self.qosOverride = nullptr;
         }
-        task_category_policy_data_t category{self.previousRole};
-        const auto status = task_policy_set(mach_task_self(), TASK_CATEGORY_POLICY,
-            reinterpret_cast<task_policy_t>(&category), TASK_CATEGORY_POLICY_COUNT);
-        if (status != KERN_SUCCESS)
-            std::fprintf(stderr, "nexus: normal scheduling could not be restored: %s\n", mach_error_string(status));
+        if (self.previousRole != TASK_UNSPECIFIED) {
+            task_category_policy_data_t category{self.previousRole};
+            const auto status = task_policy_set(mach_task_self(), TASK_CATEGORY_POLICY,
+                reinterpret_cast<task_policy_t>(&category), TASK_CATEGORY_POLICY_COUNT);
+            if (status != KERN_SUCCESS)
+                std::fprintf(stderr, "nexus: normal scheduling could not be restored: %s\n", mach_error_string(status));
+        }
     }
 }
 - (void)suspendFocus:(NSNotification*)notification {

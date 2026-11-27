@@ -51,16 +51,28 @@ int main() {
         window.releasedWhenClosed = NO;
         window.pretendForeground = YES;
         const auto before = role();
+        const auto boosted = before == TASK_FOREGROUND_APPLICATION || before == TASK_BACKGROUND_APPLICATION ||
+            before == TASK_DEFAULT_APPLICATION ? TASK_FOREGROUND_APPLICATION : before;
         const PrSurface surface{.kind = PrSurfaceKind_NsView, .handle = (__bridge void*)window.contentView};
         nexus::trackForegroundPriority(surface, {}, true);
-        if (role() != TASK_FOREGROUND_APPLICATION) return 1;
+        if (role() != boosted) return 1;
         nexus::updateForegroundPriority(surface, false);
         if (role() != before) return 2;
         nexus::updateForegroundPriority(surface, true);
-        if (role() != TASK_FOREGROUND_APPLICATION) return 3;
+        if (role() != boosted) return 3;
         window.pretendForeground = NO;
         [NSNotificationCenter.defaultCenter postNotificationName:NSWindowDidResignKeyNotification object:window];
         if (role() != before) return 4;
+        // Also exercise a role the kernel permits us to restore, regardless of the test launcher.
+        task_category_policy_data_t background{TASK_BACKGROUND_APPLICATION};
+        if (task_policy_set(mach_task_self(), TASK_CATEGORY_POLICY,
+                reinterpret_cast<task_policy_t>(&background), TASK_CATEGORY_POLICY_COUNT) != KERN_SUCCESS) return 12;
+        window.pretendForeground = YES;
+        [NSNotificationCenter.defaultCenter postNotificationName:NSWindowDidBecomeKeyNotification object:window];
+        if (role() != TASK_FOREGROUND_APPLICATION) return 13;
+        window.pretendForeground = NO;
+        [NSNotificationCenter.defaultCenter postNotificationName:NSWindowDidResignKeyNotification object:window];
+        if (role() != TASK_BACKGROUND_APPLICATION) return 14;
         // Restore only an already-focused visible overlay. Never activate a real desktop window in this test.
         nexus::protectOverlayFocus(surface, true, true);
         if (window.focusRequests != 0) return 8;
