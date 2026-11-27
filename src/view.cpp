@@ -2363,8 +2363,10 @@ struct Builder {
             record.groups[PrLayoutGroup_Box] = prLayoutBoxStyleIntern(tree, &box);
             record.groups[PrLayoutGroup_Decoration] = prLayoutDecorationStyleIntern(tree, &decoration);
             prLayoutTreeFrameSetStyle(tree, bubble, prLayoutStyleIntern(tree, &record));
-            caption(bubble, look.transcriptStyle.goalLabel, textStyle(PrKitTextRole_Meta, kStatusTone));
-            caption(bubble, goal, textStyle(PrKitTextRole_Body, kPersonTone));
+            // The goal already owns a padded, bounded card. Nested caption bubbles would apply the
+            // warning width limit again and needlessly clip its text with wider platform fonts.
+            label(bubble, look.transcriptStyle.goalLabel, textStyle(PrKitTextRole_Meta, kStatusTone));
+            label(bubble, goal, textStyle(PrKitTextRole_Body, kPersonTone));
         }
     }
 
