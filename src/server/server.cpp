@@ -503,6 +503,10 @@ bool Server::restoreAll(std::string* why) {
                                                                   verifiedHelper_, authClaude_});
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get(),
         [this] { return dirNow("policy.bundle.json"); });
+    hub_->goalsWith([] {
+        return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    });
     drivers_->attach(*hub_);
     // The dashboards every window shows a tab for, from this server's config (home.h).
     hub_->setDashboards(settings_.dashboards);
@@ -1369,6 +1373,8 @@ PassOrder::Outcome Server::apply(std::string* why) {
         if (hub_->failed())
             break;
     }
+    // Process explicit goal cancellation above before admitting reminders in this same pass.
+    if (!hub_->failed() && !drain_.draining() && !stopping_ && hub_->serveGoals()) changed = true;
     if (hub_->failed()) {
         // What reached the disk is unknown: stop before acknowledging anything more. A restart reopens the store from
         // what is durable, and the windows reconnect.

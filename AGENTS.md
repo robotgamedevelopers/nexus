@@ -255,3 +255,9 @@ Tabs
 - Commits use the shared agent identity, whose email is `305107455+rowan-claude@users.noreply.github.com`, set with repo-local `git config` only.
 - No personal names anywhere in the repository: code, comments, docs or commit messages.
 - License: GNU AGPL v3, permanently.
+
+## Session goals (owner, 2026-11-27)
+
+`/goal <text>` sends immediately, then repeats every five minutes per session across harnesses. The server persists
+and schedules it; `/goal off` stops future sends, and `/goal` reports it. Skip identical waiting prompts and missed
+interval bursts. New sessions inherit no goal. See `docs/goals.md` and `models/SessionGoal.tla`.

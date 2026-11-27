@@ -285,6 +285,8 @@ bool Hub::createSession(const Action& action, std::string* why, const std::strin
     if (!policy::newSession(application_, bundlePath_(), defaults, from ? &from->info : nullptr, f,
                             bool(accounts_), pool.size() > 1, info, error))
         return counted(action, "New session application: " + error, why, client);
+    info.goal.clear();
+    info.goalNextMs = 0;
     if (requireDefault && !onDefaultInstance(info.instance, f))
         return counted(action, "The new session policy must select the recipient's default instance for bus delivery.", why, client);
     if (info.autoAccount) {
@@ -440,7 +442,7 @@ bool Hub::receiveBus(const std::string& recipient, const std::string& id, const 
     return true;
 }
 
-bool Hub::applyMessage(const Action& action, const StoredSession& session, std::string* why, const std::string& client) {
+bool Hub::applyMessage(const Action& action, const StoredSession& session, std::string* why, const std::string& client, bool goalReminder) {
     std::string failed;
     auto commit = [&](const std::vector<SessionChange>& changes) {
         if (changes.empty() && client.empty()) {
@@ -455,11 +457,16 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
         return false;
     };
     std::vector<SessionChange> notices;
+    if (goalReminder) {
+        auto info = session.info;
+        info.goalNextMs = goalClock_() + kGoalIntervalMs;
+        notices.push_back(infoChange(std::move(info)));
+    }
     policy::MessagePlan plan;
     std::string refused;
     ActionKind kind = action.kind;
     const std::string* text = &action.text;
-    if (kind != ActionKind::Stop && text->size() <= limits_.text) {
+    if (!goalReminder && kind != ActionKind::Stop && text->size() <= limits_.text) {
         policy::MessageState state{*text, session.info.aiName, session.info.model, session.queue.size(),
             session.driver.openTurn != 0, session.info.effort, session.info.harness,
             responder_ ? responder_->catalog(session.info) : std::string{}};
@@ -476,6 +483,26 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
                 notices.emplace_back(entry(EntryKind::Notice, notice), std::string());
             if (plan.text)
                 text = &*plan.text;
+            if (plan.delivery == policy::Delivery::Goal) {
+                if (!plan.text || plan.text->empty()) {
+                    std::vector<SessionChange> changes;
+                    if (plan.text) {
+                        auto info = session.info;
+                        info.goal.clear();
+                        info.goalNextMs = 0;
+                        changes.push_back(infoChange(std::move(info)));
+                    }
+                    changes.push_back({entry(EntryKind::Notice, policy::noticeText(application_, bundlePath_(),
+                        plan.text ? "goal_stopped" : "goal_status", {{"goal", session.info.goal}})), {}});
+                    const bool ok = commit(changes);
+                    if (ok) refresh(action.session);
+                    return ok;
+                }
+                auto info = session.info;
+                info.goal = *text;
+                info.goalNextMs = goalClock_() + kGoalIntervalMs;
+                notices.push_back(infoChange(std::move(info)));
+            }
             if (plan.delivery == policy::Delivery::SetModel || plan.delivery == policy::Delivery::SetEffort) {
                 Action setting = action;
                 setting.kind = plan.delivery == policy::Delivery::SetModel ? ActionKind::SetModel : ActionKind::SetEffort;
@@ -530,7 +557,7 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
                 refresh(action.session);
                 return true;
             }
-            kind = plan.delivery == policy::Delivery::Send ? ActionKind::Send : ActionKind::Queue;
+            kind = plan.delivery == policy::Delivery::Send || plan.delivery == policy::Delivery::Goal ? ActionKind::Send : ActionKind::Queue;
         }
     }
     if (refused.empty()) {
@@ -563,7 +590,9 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
         }
     }
     if (!refused.empty()) {
-        if (!commit({SessionChange{entry(EntryKind::Notice, refused), {}}})) {
+        if (!goalReminder) notices.clear();
+        notices.push_back({entry(EntryKind::Notice, refused), {}});
+        if (!commit(notices)) {
             return false;
         }
         refresh(action.session);
@@ -595,6 +624,33 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
     }
     refresh(action.session);
     return true;
+}
+
+bool Hub::serveGoals() {
+    const auto now = goalClock_();
+    bool changed = false;
+    for (const auto id : store_.ids()) {
+        const auto* session = store_.find(id);
+        if (session->info.goal.empty() || now < session->info.goalNextMs ||
+                (session->info.aiName == kPrimaryChat && !isPrimary(id))) continue;
+        const auto& text = session->info.goal;
+        const auto contains = [&](const auto& list) { return std::find(list.begin(), list.end(), text) != list.end(); };
+        if (contains(session->driver.waiting) || contains(session->queue)) {
+            auto info = session->info;
+            info.goalNextMs = now + kGoalIntervalMs;
+            if (!store_.commit(id, {infoChange(std::move(info))}, {}, 0, nullptr)) break;
+            refresh(id);
+        } else {
+            Action reminder;
+            reminder.kind = ActionKind::Send;
+            reminder.session = id;
+            reminder.text = text;
+            applyMessage(reminder, *session, nullptr, {}, true);
+        }
+        changed = true;
+        if (failed()) break;
+    }
+    return changed;
 }
 
 // A new session, with the next id, in one step with the client's counter.
@@ -681,8 +737,11 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client,
             changes.push_back(SessionChange{switchNotice(info.account), {}});
         }
     }
-    if (announce && refused.empty())
-        changes.push_back({entry(EntryKind::Notice, std::string(settingName(action.kind)) + " set to " + action.text + (effort ? " with " + *effort + " effort" : "") + "."), {}});
+    if (announce && refused.empty()) {
+        const auto setting = action.kind == ActionKind::SetModel ? "model" : action.kind == ActionKind::SetEffort ? "effort" : "account";
+        changes.push_back({entry(EntryKind::Notice, policy::noticeText(application_, bundlePath_(), "setting",
+            {{"setting", setting}, {"value", action.text}, {"effort", effort ? *effort : ""}})), {}});
+    }
     std::string failed;
     if ((!changes.empty() || !client.empty()) &&
             !store_.commit(changes.empty() ? 0 : action.session, changes, client, action.num, &failed)) {

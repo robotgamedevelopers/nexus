@@ -187,6 +187,23 @@ void get_auto_account(Reader& r, Info& info) {
     }
 }
 
+// Optional framed tail: old readers skip it, old records mean no goal.
+constexpr std::uint8_t kSessionGoal = 0xA4;
+void put_goal(Writer& w, const Info& info) {
+    if (info.goal.empty()) return;
+    w.u8(kSessionGoal);
+    w.str(info.goal);
+    w.u64(info.goal_next_ms);
+}
+void get_goal(Reader& r, Info& info) {
+    Reader extension = r;
+    if (!r.done() && extension.u8() == kSessionGoal) {
+        info.goal = extension.str();
+        info.goal_next_ms = extension.u64();
+        r = extension;
+    }
+}
+
 // A change's fields: an append's entry, an enqueue's prompt, a driver, an info; a dequeue has none.
 void put_change(Writer& w, const Change& c) {
     if (c.kind == Change::Kind::Append) {
@@ -202,6 +219,7 @@ void put_change(Writer& w, const Change& c) {
         put_info(w, c.info);
         put_info_tail(w, c.info);
         put_auto_account(w, c.info);
+        put_goal(w, c.info);
     }
 }
 
@@ -647,6 +665,7 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
             if (framed) {
                 get_info_tail(in, c.info);
                 get_auto_account(in, c.info);
+                get_goal(in, c.info);
             }
         } else if (framed) {
             ++skipped_;
@@ -723,6 +742,7 @@ Bytes Store::encode_snapshot() const {
         put_session_account(frame, t.driver);
         put_continuation(frame, t.driver);
         put_auto_account(frame, t.info);
+        put_goal(frame, t.info);
         w.bytes(frame.out());
     }
     w.u32(std::uint32_t(applied_.size()));
@@ -807,6 +827,7 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
             get_session_account(in, t.driver);
             get_continuation(in, t.driver);
             get_auto_account(in, t.info);
+            get_goal(in, t.info);
         }
         // A framed session may go on with what a later format adds, which is skipped.
         if (framed && !framedIn.ok()) {
