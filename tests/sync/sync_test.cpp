@@ -1813,10 +1813,9 @@ void format4_read_caps() {
     CHECK(refusedAsBadDiff([&] { small.apply_string(crafted); }, past));
     CHECK(small == kept);
 
-    // The sign-in's field (format 5) under the same caps. A flow that is an id alone is 12 bytes and loads into 48, four
-    // times (measured: 300,000 of them, 3,600,036 bytes, load into 14,400,064), so within kMaxDiffBytes the flows
-    // stay within kMaxReadBytes: 300,000 read, as any diff under both caps does. 350,000 (4,200,036 bytes) are longer
-    // than the link carries: refused before they are measured, and the window keeps its state.
+    // Sign-in offers carry an appended cancellation capability. An id-only offer is still 12 wire bytes, but now
+    // occupies 56 bytes when loaded. 280,000 fit both caps; 300,000 fit the wire cap but exceed the read cap.
+    // 350,000 exceed the wire cap and are refused before measurement. None of these refusals changes window state.
     const auto flowsOf = [](std::size_t count) {
         codec::SessionsChange flows;
         flows.offers.resize(count);
@@ -1825,9 +1824,14 @@ void format4_read_caps() {
         }
         return codec::writeTables(flows, kSignInFormat);
     };
-    const std::string within = flowsOf(300000);
+    const std::string within = flowsOf(280000);
     CHECK(within.size() <= codec::kMaxDiffBytes);
-    CHECK(codec::readTables(within, &unknown).offers.size() == 300000);
+    CHECK(codec::readTables(within, &unknown).offers.size() == 280000);
+    const std::string memoryHeavy = flowsOf(300000);
+    CHECK(memoryHeavy.size() <= codec::kMaxDiffBytes);
+    CHECK(refusedAsBadDiff([&] { (void)codec::readTables(memoryHeavy, &unknown); }, past));
+    CHECK(refusedAsBadDiff([&] { small.apply_string(memoryHeavy); }, past));
+    CHECK(small == kept);
     const std::string longerFlows = flowsOf(350000);
     CHECK(longerFlows.size() > codec::kMaxDiffBytes);
     CHECK(refusedAsBadDiff([&] { (void)codec::readTables(longerFlows, &unknown); }, longer));

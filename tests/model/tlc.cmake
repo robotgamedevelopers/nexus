@@ -359,6 +359,12 @@ elseif(DEFINED PASSWALK AND NOT "${PASSWALK}" STREQUAL "")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "pass_walk failed (${walk_rc}): ${walk_out}")
     endif()
+elseif(DEFINED ENROLLCANCELWALK AND NOT "${ENROLLCANCELWALK}" STREQUAL "")
+    execute_process(COMMAND "${ENROLLCANCELWALK}" "${FAULTY}" "${WORK}/EnrollmentCancelTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "enrollment_cancel_trace failed (${walk_rc}): ${walk_out}")
+    endif()
 elseif(DEFINED LOGINPREPWALK AND NOT "${LOGINPREPWALK}" STREQUAL "")
     execute_process(COMMAND "${LOGINPREPWALK}" "${FAULTY}" "${WORK}/LoginPreparationTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)

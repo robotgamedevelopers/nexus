@@ -564,7 +564,7 @@ void SignInRunner::readTerminal(const std::string& account, Proc& p) {
 // to the end, so that what the program wrote before it ended goes through the scanners; then its group is ended, so
 // that nothing it started outlives it; then its directory is removed. The login is the last one it printed, handed
 // over when it exited 0, or when the runner ended it (the flow ended first: a login printed meanwhile is stored late);
-// otherwise its end is reported, unless the flow ended first (`reported`).
+// otherwise its end is reported even after stop, so an explicitly cancelled flow can release its account.
 void SignInRunner::reap(const std::string& account, Proc& p, bool reported, std::optional<int> status) {
     if (p.master >= 0) {
         readTerminal(account, p);
@@ -602,7 +602,7 @@ void SignInRunner::reap(const std::string& account, Proc& p, bool reported, std:
         if (exitedZero && !endedByUs && !reported && events_.enrolled) {
             acted_ = true;
             events_.enrolled(account, provider, id);
-        } else if (!reported && events_.exited) {
+        } else if (events_.exited) {
             std::string reason = why;
             if (provider == "claude" && status && WIFEXITED(st)) {
                 switch (WEXITSTATUS(st)) {
@@ -632,7 +632,7 @@ void SignInRunner::reap(const std::string& account, Proc& p, bool reported, std:
         }
         return;
     }
-    if (!reported && events_.exited) {
+    if (events_.exited) {
         events_.exited(account, id, why);
     }
 }

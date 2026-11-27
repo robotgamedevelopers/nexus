@@ -64,6 +64,11 @@ if(NEXUS_SERVER_PARTS)
     target_compile_options(strip_walk PRIVATE ${warnings})
 
     # The account menu's gesture (src/account_menu.h), for AccountMenuTrace.tla.
+    add_executable(enrollment_cancel_trace enrollment_cancel_trace.cpp)
+    target_link_libraries(enrollment_cancel_trace PRIVATE nexus_sync)
+    target_compile_options(enrollment_cancel_trace PRIVATE ${warnings})
+    add_dependencies(model_checks enrollment_cancel_trace)
+
     add_executable(login_preparation_trace login_preparation_trace.cpp)
     target_include_directories(login_preparation_trace PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_compile_options(login_preparation_trace PRIVATE ${warnings})
@@ -131,7 +136,7 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options LOGINPREPTRACE SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK GLIDEWALK MENUWALK SUPWALK PASSWALK ACCWALK SECWALK
+    set(options ENROLLCANCELTRACE LOGINPREPTRACE SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK GLIDEWALK MENUWALK SUPWALK PASSWALK ACCWALK SECWALK
         SIGNWALK RECONNECTWALK RELAYWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
     cmake_parse_arguments(T "${options}"
         "CREDITMODE;PROPERTY;SEED;STEPS;AIS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
@@ -196,7 +201,9 @@ function(tlc_test name module cfg expect)
     elseif(T_BUSDELIVERYTRACE)
         list(APPEND defs -DBUSDELIVERYWALK=$<TARGET_FILE:bus_delivery_trace>)
     endif()
-    if(T_LOGINPREPTRACE)
+    if(T_ENROLLCANCELTRACE)
+        list(APPEND defs -DENROLLCANCELWALK=$<TARGET_FILE:enrollment_cancel_trace>)
+    elseif(T_LOGINPREPTRACE)
         list(APPEND defs -DLOGINPREPWALK=$<TARGET_FILE:login_preparation_trace>)
     elseif(T_SERVICETRACE)
         list(APPEND defs -DSERVICEWALK=$<TARGET_FILE:service_process_functional>)
@@ -703,4 +710,11 @@ tlc_test(tlc_login_preparation_trace LoginPreparationTrace LoginPreparationTrace
 foreach(fault ack browser)
     tlc_test(tlc_login_preparation_${fault} LoginPreparationTrace LoginPreparationTrace.cfg invariant
              PROPERTY Matches LOGINPREPTRACE FAULTY ${fault})
+endforeach()
+
+tlc_test(tlc_enrollment_cancel_spec EnrollmentCancel EnrollmentCancel.cfg pass)
+tlc_test(tlc_enrollment_cancel_trace EnrollmentCancelTrace EnrollmentCancelTrace.cfg pass ENROLLCANCELTRACE)
+foreach(fault id owner drain)
+    tlc_test(tlc_enrollment_cancel_${fault} EnrollmentCancelTrace EnrollmentCancelTrace.cfg invariant
+             PROPERTY Matches ENROLLCANCELTRACE FAULTY ${fault})
 endforeach()

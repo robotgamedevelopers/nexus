@@ -65,6 +65,31 @@ struct Fixture {
     }
 };
 
+void cancelsOwnedEnrollmentBeforeUrl() {
+    for (const auto* provider : {"claude", "codex", "antigravity", "grok", "muse"}) {
+        for (const bool supported : {false, true}) for (const bool owned : {false, true}) {
+            Fixture f("studio.local", "laptop");
+            auto state = offering(owned ? "tokWindowA1" : "another-window", "", "studio", provider);
+            auto offers = state.offers();
+            offers.front().cancelSupported = supported;
+            state.setOffers(offers);
+            f.signIn.received(state);
+            f.signIn.choose(std::string(provider) + "-main");
+            CHECK(f.port.sent.empty());
+            f.signIn.choose("replacement");
+            CHECK(f.opened.empty());
+            if (supported && owned) {
+                CHECK(f.port.sent.size() == 1);
+                if (!f.port.sent.empty()) {
+                    const auto& action = f.port.sent.front();
+                    CHECK(action.kind == sync::ActionKind::SignInCancel && action.request == 3);
+                    CHECK(action.text == "tokWindowA1" && action.secret.empty());
+                }
+            } else CHECK(f.port.sent.empty());
+        }
+    }
+}
+
 void claimsOnceShown() {
     Fixture f("studio.local", "studio");
     f.signIn.received(offering("", "", "studio"));
@@ -254,6 +279,7 @@ void lockedClaimsNothing() {
 } // namespace
 
 int main() {
+    cancelsOwnedEnrollmentBeforeUrl();
     claimsOnceShown();
     lockedClaimsNothing();
     opensOnOneMachine();

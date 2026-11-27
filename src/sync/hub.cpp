@@ -226,7 +226,7 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         return secretAction(action, why, client);
     }
     if (action.kind == ActionKind::SignInClaim || action.kind == ActionKind::SignInOpened ||
-            action.kind == ActionKind::SignInCallback) {
+            action.kind == ActionKind::SignInCallback || action.kind == ActionKind::SignInCancel) {
         return signInAction(action, why, client);
     }
     if (action.kind == ActionKind::SignOut) {
@@ -1534,6 +1534,9 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
             signInEffects(signIns_.claim(id, action.text, clock_ ? clock_() : 0));
             break;
         }
+        case ActionKind::SignInCancel:
+            signInEffects(signIns_.cancel(action.request, action.text));
+            break;
         case ActionKind::SignInOpened:
             signInEffects(signIns_.opened(action.request, action.text));
             break;

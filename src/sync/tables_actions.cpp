@@ -29,6 +29,7 @@ wire::ActionKind actionOut(ActionKind k) {
         case ActionKind::SecretAnswer: return wire::ActionKind::SecretAnswer;
         case ActionKind::SecretCancel: return wire::ActionKind::SecretCancel;
         case ActionKind::SignInClaim: return wire::ActionKind::SignInClaim;
+        case ActionKind::SignInCancel: return wire::ActionKind::SignInCancel;
         case ActionKind::SignInOpened: return wire::ActionKind::SignInOpened;
         case ActionKind::SignOut: return wire::ActionKind::SignOut;
         case ActionKind::SignInCallback: return wire::ActionKind::SignInCallback;
@@ -39,7 +40,7 @@ wire::ActionKind actionOut(ActionKind k) {
 
 bool isSignIn(ActionKind k) {
     return k == ActionKind::SignOut || k == ActionKind::SignInClaim ||
-        k == ActionKind::SignInOpened || k == ActionKind::SignInCallback;
+        k == ActionKind::SignInOpened || k == ActionKind::SignInCallback || k == ActionKind::SignInCancel;
 }
 
 // A kind this build does not know (None: a later window's) is Unknown, which the server counts and never applies.
@@ -62,6 +63,7 @@ ActionKind actionIn(wire::ActionKind k) {
         case wire::ActionKind::SecretAnswer: return ActionKind::SecretAnswer;
         case wire::ActionKind::SecretCancel: return ActionKind::SecretCancel;
         case wire::ActionKind::SignInClaim: return ActionKind::SignInClaim;
+        case wire::ActionKind::SignInCancel: return ActionKind::SignInCancel;
         case wire::ActionKind::SignInOpened: return ActionKind::SignInOpened;
         case wire::ActionKind::SignOut: return ActionKind::SignOut;
         case wire::ActionKind::SignInCallback: return ActionKind::SignInCallback;

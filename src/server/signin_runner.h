@@ -128,8 +128,8 @@ private:
     };
     void readTerminal(const std::string& account, Proc& p);
     // The process ended (its status, already collected) or is ended now: its terminal read to the end, its group
-    // ended, its directory removed, and its login handed over or its end reported (unless the flow ended first:
-    // `reported`).
+    // ended, its directory removed, and its login handed over or its end reported, including after a stop.
+    // `reported` prevents an intentionally stopped enrollment from being reported as successful.
     void reap(const std::string& account, Proc& p, bool reported, std::optional<int> status);
     bool connectReplay(Replay& r);
     void acceptHelper();

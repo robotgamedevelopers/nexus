@@ -204,6 +204,15 @@ Made in building the AI tabs from the server's list, to keep the locked rules ab
 - A saved AI tab is selected again once its AI arrives, and only a person's own change of tab is saved as the selection: the server's AIs come after launch, and a tab they select (the saved one arriving, another after the one that showed went) is no choice of the person's (`frame_host_unit`).
 - A server from before the list of AIs sends none: the window then shows the AIs of the server's sessions and removes none, so an older server keeps working.
 
+## Authentication direction (2026-11-27)
+
+Account switching is owned by Nexus across all harnesses. Prefer isolated authentication inside Nexus; automatically
+use system authentication when the provider requires it. No manual Safari logout handoff is part of the target flow.
+All interactive authentication runs on the client. The server may be headless Linux: it runs the harness, verifies
+and stores its credentials, and requires no browser or desktop. Client and server platforms are independent.
+See `docs/authentication.md` for the target contract and the implementation gaps; this is not a claim of delivered
+cross-platform support.
+
 ## Decided by the owner, not yet built (2026-11-11)
 
 Each of these moves into the locked rules above, with its test or model, in the pull request that builds it. Until then it is the design to build, not a thing to redecide.

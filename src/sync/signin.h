@@ -103,19 +103,20 @@ struct SignInOffer {
     std::string opener;         // the claim token of the window that holds it; empty: none
     std::string host;           // the server's host name, for sameMachine
     SecretValue url{};          // with an opener, once the process gave it; else empty
+    bool cancelSupported = false; // absent on older servers; never send an unsupported cancellation request
     bool operator==(const SignInOffer&) const = default;
 };
 
-// A flow's state (models/SignIn.tla): needed (no process; offered for a claim); started (its process runs, no URL
+// A flow's state (models/SignIn.tla and models/EnrollmentCancel.tla): needed (no process; offered for a claim); started (its process runs, no URL
 // yet); url-sent (the URL offered to the window that holds it); waiting (that window opened it); callback-forwarded
-// (the window's callback replayed to the listener); and how it ended: captured (the token went to the one-chance
+// (the window's callback replayed to the listener); cancelling (waiting for its stopped process to exit); and how it ended: captured (the token went to the one-chance
 // store), failed, cancelled (the person declined on the page), expired (past its deadline), dropped (the server ended,
 // or the account was signed in otherwise).
 enum class SignInState : std::uint8_t {
-    Needed, Started, UrlSent, Waiting, CallbackForwarded, Captured, Failed, Cancelled, Expired, Dropped
+    Needed, Started, UrlSent, Waiting, CallbackForwarded, Captured, Failed, Cancelled, Expired, Dropped, Cancelling
 };
 const char* signInStateName(SignInState state);
-bool signInRunning(SignInState state);  // started .. callback-forwarded: its process runs
+bool signInRunning(SignInState state);  // its process runs, including while cancellation drains
 
 // What one step of the desk did. Never a URL, a code or a token, but in `replays` (the query, a SecretValue).
 struct SignInEffects {
@@ -167,6 +168,9 @@ public:
     // The window's gate sent a callback: replayed once, from the window holding the flow, while it waits, and only
     // with the state of its URL and a code or an error; any other is dropped, its bytes in no effect.
     SignInEffects callback(std::uint64_t id, const std::string& opener, const SecretValue& query);
+    // Stop the exact flow owned by this window, across providers, even before its URL exists.
+    // A forwarded callback is already being verified and cannot be cancelled; any resulting grant is kept.
+    SignInEffects cancel(std::uint64_t id, const std::string& opener);
     // The process of `account` printed its token: the flow is captured (the caller puts the token in the one-chance
     // store). Returns the flow's id; 0 when none was running, and then it is late().
     std::uint64_t printed(const std::string& account, SignInEffects* out);
@@ -176,7 +180,7 @@ public:
     void late(const std::string& account, SignInEffects* out);
     // The process of `account` ended with no token: its flow fails, or is cancelled when the person declined.
     SignInEffects exited(const std::string& account, std::uint64_t id, const std::string& why);
-    // Every running flow past its deadline expires, its process ended; one whose callback was forwarded has
+    // Running flows past their deadline expire, except cancellation awaiting the runner's bounded stop. A forwarded callback has
     // kSignInExchangeGraceMs more first.
     SignInEffects expire(std::uint64_t now);
     // A window's link ended: the flows it held are let go of, for another window to take over (the same window, back,

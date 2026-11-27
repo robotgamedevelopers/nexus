@@ -19,7 +19,7 @@
 //   group          the program leaves a process of its own running: stopped, or exiting, its whole group is ended
 //   declined       the person declines on the page: the program exits 1, and its end is reported
 //   api_key        the program prints an API key: the scanner passes it over, and the program's end is reported
-//   stopped        the flow ends before any URL: the process is ended, its end not reported, its directory removed
+//   stopped        the flow ends before any URL: the process is ended, its drain reported, its directory removed
 //   unguarded      a wrong request straight to the program's listener ends the login: why the gate refuses them
 //   gate_in_use    the gate's port is taken: the gate says so, and takes nothing
 //   gate_v6_in_use the gate's port is free on 127.0.0.1 but held on [::1]: the gate fails, and listens on neither
@@ -445,7 +445,7 @@ void caseStopped() {
     CHECK(std::filesystem::exists(r.accounts + "/claude-main/.signin"));
     r.runner->stop("claude-main");
     CHECK(pump(r, [&] { return !r.runner->running("claude-main"); }));
-    CHECK(!r.exited);   // the flow ended first: its process's end is not news
+    CHECK(r.exited);    // the stopped process released its lock; the desk can now finish cancellation
     CHECK(!r.gotUrl);
     checkClean(r);
 }
@@ -714,8 +714,8 @@ void enrollment(const std::string& provider, const std::string& mode) {
               r.enrolledAccount == account && !r.exited);
     } else {
         CHECK(r.enrollmentCount == 0);
-        CHECK(r.exited == (mode == "failure"));
-        if (r.exited) {
+        CHECK(r.exited); // cancelled children also report that their credential lock was released
+        if (mode == "failure") {
             CHECK(r.why == "it exited 8");
         }
     }

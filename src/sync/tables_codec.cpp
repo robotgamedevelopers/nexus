@@ -196,6 +196,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         for (const SignInOffer& o : change.offers) {
             wire::SignInOffer* x = added(wire::SessionsDiffSigninsAdd(b.main, d->signins));
             x->id = o.id;
+            x->cancel_supported = o.cancelSupported;
             putText(b.main, x->account, o.account, scratch);
             putText(b.main, x->provider, o.provider, scratch);
             putText(b.main, x->opener, o.opener, scratch);
@@ -318,6 +319,7 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
     for (const wire::SignInOffer& x : d->signins) {
         SignInOffer o;
         o.id = x.id;
+        o.cancelSupported = x.cancel_supported;
         o.account = textOf(x.account);
         o.provider = textOf(x.provider);
         o.opener = textOf(x.opener);
