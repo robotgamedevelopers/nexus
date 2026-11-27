@@ -237,7 +237,7 @@ constexpr int kTabWaitSeconds = 20;
 #endif
 
 PrAppWindowBackdrop overlayBackdrop(bool blur) {
-    return blur ? PrAppWindowBackdrop_Blur : PrAppWindowBackdrop_Transparent;
+    return static_cast<PrAppWindowBackdrop>(blur ? PrAppWindowBackdrop_Blur : PrAppWindowBackdrop_Transparent);
 }
 
 // The client lock's time: seconds on the monotonic clock (ClientLock takes time as an argument).
