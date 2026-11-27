@@ -197,6 +197,25 @@ or sign out of Claude in that browser and sign in with the displayed email. Nexu
 only when Claude reports that email for the login just completed. A mismatch or missing identity
 leaves the selected slot awaiting sign-in.
 
+### Switching accounts
+
+Signing in to another of the AI's linked accounts from its tab (the window's sign-in claim naming the session and
+that account) is a switch. The conversation stays on its account until the new sign-in succeeds; then it moves at
+once, its driver ends as soon as no turn is open, and the next one starts on the new account's own login. A sign-in
+that fails, is declined on the page or expires changes nothing: the conversation stays where it was and is told so.
+An account that is signed in already needs no browser: the conversation moves to it at once. Each account's login is
+its own file under `accounts/<name>/`, and a driver reads only its account's, so nothing of the old account is where
+the new one's driver reads. The old account's login is kept for switching back. These rules are
+`models/LoginSwitch.tla`, and `link_e2e_account_switch` runs them through the real server and link.
+
+A Claude account with no `email` learns it from its first sign-in: the identity Claude reports for the login just
+completed is recorded as the account's `email` in `accounts.json` (a commit in the config repository), shown in the
+account menu, and told in the transcript ("Signed in to work as you@example.org."). From then on the account takes only
+that identity. A sign-in whose identity is already another Claude account's email is refused, and its login removed:
+a browser still signed in to one account (a personal session, say) cannot quietly become another account's login. The
+conversation is told why, and stays where it was. Without nexus-claude-auth beside the server, an account with no email
+signs in by the older `claude setup-token`, which proves no identity.
+
 To clear an existing Nexus login, open the AI tab, type `/logout`
 in the AI's prompt, press **Enter**, and confirm. Finish or stop active work using that login and finish
 or cancel an in-progress sign-in first. This removes the Nexus credential for that account across

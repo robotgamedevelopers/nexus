@@ -1097,13 +1097,20 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
     return true;    // committed: applied, whatever the store did after
 }
 
-// The registry becomes `next`; an account it no longer holds loses its sign-in, and one it did not hold before is
-// probed (probeSignInWith).
+// Two email addresses the same, as Claude compares them: ASCII letters in either case, nothing else folded.
+static bool sameAddress(const std::string& a, const std::string& b) {
+    auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c; };
+    return !a.empty() && a.size() == b.size() &&
+        std::equal(a.begin(), a.end(), b.begin(), [&](char x, char y) { return lower(x) == lower(y); });
+}
+
 static bool sameLogin(const accounts::Account* previous, const accounts::Account& current) {
     return previous && previous->provider == current.provider &&
         (current.provider != "claude" || previous->email == current.email);
 }
 
+// The registry becomes `next`; an account it no longer holds loses its sign-in, and one it did not hold before is
+// probed (probeSignInWith).
 void Hub::take(accounts::Registry next) {
     std::optional<accounts::Registry> was = std::move(accounts_);
     accounts_ = std::move(next);
@@ -1158,6 +1165,7 @@ void Hub::reportSignedIn(const std::string& account, bool signedIn) {
     }
     if (signedIn) {
         if (signedIn_.insert(account).second && accounts_) stateAIs();
+        switchSignedIn(account);
         // Signed in otherwise (a paste, its driver): a flow for it ends, its process ended.
         if (signIns_.live(account)) {
             signInEffects(signIns_.signedIn(account));
@@ -1358,16 +1366,62 @@ void Hub::signInEnrolled(const std::string& account, const std::string& provider
     if (!flow || flow->first != id || !signInRunning(flow->second) || a == nullptr || a->provider != provider) {
         return;
     }
-    if (!probe_ || !probe_(*a)) {
+    // A Claude account with no email set learns it from the login: the identity Claude reported for it. One that is
+    // another Claude account's email is that account's login, never this one's: refused, and the login removed.
+    const bool learn = a->provider == "claude" && a->email.empty() && identity_;
+    std::string identity;
+    if (learn) {
+        identity = identity_(*a);
+        std::string refused;
+        if (identity.empty()) {
+            refused = "Claude did not report who signed in";
+        }
+        for (const accounts::Account& other : accounts_->accounts) {
+            if (refused.empty() && other.name != account && other.provider == "claude" &&
+                    sameAddress(other.email, identity)) {
+                refused = "this browser signed in as " + identity + ", which is " + other.name + "'s login. Sign out "
+                    "of " + identity + " in the browser, or choose another identity, and sign in to " + account +
+                    " again";
+            }
+        }
+        if (!refused.empty()) {
+            if (signOut_) signOut_(*a);
+            const std::string said = "Could not sign in to " + account + ": " + refused;
+            dropSwitches(account, said);
+            tellAccount(account, said + ".");
+            signInExited(account, id, refused);
+            return;
+        }
+    } else if (!probe_ || !probe_(*a)) {
         signInExited(account, id, "the provider did not confirm this account's enrollment");
         return;
     }
     SignInEffects effects;
     signIns_.printed(account, &effects);
     signInEffects(effects);
+    if (learn) {
+        accounts::Registry next = *accounts_;
+        for (accounts::Account& row : next.accounts) {
+            if (row.name == account) row.email = identity;
+        }
+        const std::string message = "the account " + account + " signed in as " + identity + " (its email, recorded)";
+        std::string failed;
+        if (keeper_ != nullptr && !keeper_->keep(next, message, &failed)) {
+            tellAccount(account, "Signed in to " + account + " as " + identity + ", but its email was not recorded (" +
+                        failed + "), so the login is not used. Sign in again.");
+            if (signOut_ && accounts_->account(account)) signOut_(*accounts_->account(account));
+            reportSignedIn(account, false);
+            return;
+        }
+        take(std::move(next));
+    }
     reportSignedIn(account, true);
     if (responder_ != nullptr) {
         responder_->signedIn(account);
+    }
+    if (const accounts::Account* now = accounts_->account(account); now && now->provider == "claude" &&
+            !now->email.empty() && signedIn_.contains(account)) {
+        noteAccount(account, "Signed in to " + account + " as " + now->email + ".");
     }
 }
 
@@ -1516,7 +1570,17 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
                 // A card or Enter names the exact session/account the person chose. Recheck it
                 // after any pending account changes and before allocating or claiming a flow.
                 const auto* session = store_.find(action.session);
-                if (!isClaimToken(action.text) || !session || action.account.empty() ||
+                // A login switch: a session on one account signs in to another linked one. It stays where it is
+                // until that sign-in succeeds, then moves (switchSignedIn); one signed in already moves now.
+                if (isClaimToken(action.text) && session && !action.account.empty() &&
+                        session->info.account != action.account && !isPrimary(action.session) && accounts_ &&
+                        accounts_->linked(session->info.aiName, action.account) && signsIn(action.account)) {
+                    if (signedIn_.contains(action.account)) {
+                        switchTo(action.session, action.account);
+                        break;
+                    }
+                    switchOnSignIn_[action.account].insert(action.session);
+                } else if (!isClaimToken(action.text) || !session || action.account.empty() ||
                     session->info.account != action.account || !signsIn(action.account) ||
                     (!isPrimary(action.session) && !accounts_->linked(session->info.aiName, action.account)) ||
                     signedIn_.contains(action.account)) {
@@ -1526,6 +1590,10 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
                 if (!id) needSignIn(action.account);
                 const auto flow = signIns_.flowOf(action.account);
                 if (!flow || (id && flow->first != id)) {
+                    if (const auto p = switchOnSignIn_.find(action.account); p != switchOnSignIn_.end()) {
+                        p->second.erase(action.session);
+                        if (p->second.empty()) switchOnSignIn_.erase(p);
+                    }
                     if (why) *why = "The sign-in offer changed or could not be created. Retry the current account.";
                     return false;
                 }
@@ -1589,8 +1657,60 @@ void Hub::signInEffects(const SignInEffects& effects) {
     // A flow that ended unsigned leaves its account needing a fresh one, which a window claims at the person's next
     // show of the overlay: nothing starts without the person there.
     for (const std::string& account : effects.needAgain) {
+        dropSwitches(account, "The sign-in to " + account + " did not finish");
         if (signedIn_.count(account) == 0 && signsIn(account)) {
             needSignIn(account);
+        }
+    }
+}
+
+// The session moves to `account` as a person's account choice moves it (set): its driver ends once no turn is open,
+// and the next starts on `account`'s login alone. Only while the account is still one of its AI's and signed in.
+bool Hub::switchTo(SessionId id, const std::string& account) {
+    const StoredSession* s = store_.find(id);
+    if (s == nullptr || isPrimary(id) || !accounts_ || !accounts_->linked(s->info.aiName, account) ||
+            !signedIn_.contains(account)) {
+        return false;
+    }
+    Action a;
+    a.kind = ActionKind::SetAccount;
+    a.session = id;
+    a.text = account;
+    return set(a, nullptr, std::string());
+}
+
+// `account` is signed in: each session waiting on that sign-in to switch moves to it now.
+void Hub::switchSignedIn(const std::string& account) {
+    const auto it = switchOnSignIn_.find(account);
+    if (it == switchOnSignIn_.end()) {
+        return;
+    }
+    const std::set<SessionId> waiting = std::move(it->second);
+    switchOnSignIn_.erase(it);
+    for (SessionId id : waiting) {
+        switchTo(id, account);
+    }
+}
+
+// `account`'s sign-in ended without a login: every session waiting to switch to it stays on its own account, and is
+// told so.
+void Hub::dropSwitches(const std::string& account, const std::string& why) {
+    const auto it = switchOnSignIn_.find(account);
+    if (it == switchOnSignIn_.end()) {
+        return;
+    }
+    const std::set<SessionId> waiting = std::move(it->second);
+    switchOnSignIn_.erase(it);
+    for (SessionId id : waiting) {
+        const StoredSession* s = store_.find(id);
+        if (s == nullptr) {
+            continue;
+        }
+        const std::string text = why + "; this conversation stays on " +
+            (s->info.account.empty() ? std::string("no account") : s->info.account) + ".";
+        std::string failed;
+        if (store_.commit(id, {SessionChange{entry(EntryKind::Notice, text), {}}}, std::string(), 0, &failed)) {
+            refresh(id);
         }
     }
 }

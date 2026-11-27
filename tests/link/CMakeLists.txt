@@ -43,15 +43,20 @@ add_test(NAME link_e2e_ais COMMAND link_e2e ${server} ${e2e_dir}-ais ais $<TARGE
 add_test(NAME link_e2e_signin COMMAND link_e2e ${server} ${e2e_dir}-signin signin $<TARGET_FILE:nexus_fake_claude>)
 add_test(NAME link_e2e_verified_claude COMMAND link_e2e ${server} ${e2e_dir}-verified-claude verified-claude
          $<TARGET_FILE:nexus_fake_claude>)
+# One AI moved between three Claude accounts by sign-in, back with none, and signed out, through the real server and
+# link: each account's login its own, nothing of one where another's driver reads (link_e2e.cpp accountSwitch).
+add_test(NAME link_e2e_account_switch COMMAND link_e2e ${server} ${e2e_dir}-account-switch account-switch
+         $<TARGET_FILE:nexus_fake_claude> $<TARGET_FILE:nexus_fake_driver>)
 add_test(NAME link_e2e_signin_leaky COMMAND link_e2e $<TARGET_FILE:nexus-server-leaky> ${e2e_dir}-leaky signin
          $<TARGET_FILE:nexus_fake_claude> leaky)
 # The window's own link reconnecting by itself: after a clean stop (told by the server's shutdown, keeping a stopped
 # server stopped until the next starts, and resending unacknowledged actions), then after SIGKILL (found by silence).
 add_test(NAME link_e2e_takeover COMMAND link_e2e ${server} ${e2e_dir}-takeover takeover)
 set(e2e_tests link_e2e_loopback link_e2e_outage link_e2e_soak link_e2e_restart link_e2e_older_server link_e2e_flush
-    link_e2e_secret link_e2e_ais link_e2e_signin link_e2e_signin_leaky link_e2e_verified_claude link_e2e_takeover)
+    link_e2e_secret link_e2e_ais link_e2e_signin link_e2e_signin_leaky link_e2e_verified_claude link_e2e_account_switch
+    link_e2e_takeover)
 set(e2e_dirs ${e2e_dir}-loopback ${e2e_dir}-outage ${e2e_dir}-soak ${e2e_dir}-restart ${e2e_dir}-older
-    ${e2e_dir}-flush ${e2e_dir}-secret ${e2e_dir}-ais ${e2e_dir}-signin ${e2e_dir}-leaky ${e2e_dir}-verified-claude ${e2e_dir}-takeover)
+    ${e2e_dir}-flush ${e2e_dir}-secret ${e2e_dir}-ais ${e2e_dir}-signin ${e2e_dir}-leaky ${e2e_dir}-verified-claude ${e2e_dir}-account-switch ${e2e_dir}-takeover)
 find_package(Python3 3.11 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME link_e2e_private_signin COMMAND link_e2e ${server} ${e2e_dir}-private-signin private-signin

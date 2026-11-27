@@ -1400,7 +1400,8 @@ sync::Action signInAction(sync::ActionKind kind, std::uint64_t id, const std::st
 // mosh's transport): the flow is offered to both; the first claims it and its state alone carries the URL, the other
 // sees it held; the first window's link ends and the flow is let go of; the second takes it over, and its state now
 // carries the URL; it sends the callback up as a window on another machine would, the server replays it to the fake's
-// listener, and the fake's token lands in a1's file. An AI's `config sign-in a1`, asked while the flow waits, answers
+// listener, and the fake's login lands in a1's verified-claude.json, its identity as a1's email.
+// An AI's `config sign-in a1`, asked while the flow waits, answers
 // `signed in` once it does; one for an account not set up is refused. Then, the server stopped, every file the run
 // left (server.log first) and every state the second window held before it held the flow is searched for the URL's
 // state, the code and the token.
@@ -1413,7 +1414,10 @@ int signin(const std::string& binary, const std::string& dir, const std::string&
     const std::string abs = std::filesystem::absolute(dir).string();
     const std::string home = dir + "/home";
     const std::string accounts = home + "/.nexus/server/accounts";
-    const std::string file = accounts + "/a1/oauth-token";
+    // a1 has no email, so its sign-in goes through nexus-claude-auth (beside the server): the login is
+    // verified-claude.json, and the identity the fake claude reports (work@example.test) becomes a1's email.
+    const std::string file = accounts + "/a1/verified-claude.json";
+    const std::string access = "fixture-access-work";
     std::error_code ec;
     std::filesystem::create_directories(accounts + "/a1", ec);
     for (const std::string& d : {home, home + "/.nexus", home + "/.nexus/server", accounts, accounts + "/a1"}) {
@@ -1512,8 +1516,10 @@ int signin(const std::string& binary, const std::string& dir, const std::string&
                                  std::string("code=") + kFakeCode + "&state=" + kFakeState));
     CHECK(settle([&] {
         return w2.session->allAcknowledged() && offerOf(w2.session->state(), 1) == nullptr &&
-            readFile(file) == kFakeToken;
+            readFile(file).find(access) != std::string::npos;
     }));
+    CHECK(readFile(dir + "/nexus-config/accounts.json").find("\"work@example.test\"") != std::string::npos);
+    CHECK(!std::filesystem::exists(accounts + "/a1/oauth-token"));
     ai.join();
     CHECK(asked.end == CommandResult::End::Exited && asked.code == 0 && asked.out == "signed in\n");
     struct stat st{};
@@ -1535,7 +1541,7 @@ int signin(const std::string& binary, const std::string& dir, const std::string&
     int read = 0;
     bool logLeaks = false;
     bool otherLeaks = false;
-    for (const char* v : {kFakeState, kFakeCode, kFakeToken}) {
+    for (const char* v : {kFakeState, kFakeCode, kFakeToken, access.c_str()}) {
         const test::LeakScan scan(v);
         logLeaks = logLeaks || scan.in(log);
         for (const std::string& where : leaksUnder(dir, file, scan, &read)) {
@@ -1812,6 +1818,278 @@ int verifiedClaude(const std::string& binary, const std::string& dir, const std:
     return failures == 0 ? 0 : 1;
 }
 
+// ---- account-switch: one AI's conversation moved between three Claude accounts, end to end ----
+
+// The access token the FAKE claude grants the identity <name>@example.test (tests/server/fake_claude.cpp).
+std::string tokenOf(const std::string& name) { return "fixture-access-" + name; }
+
+// Every file under `root` holding `value`, as paths relative to `root`.
+std::vector<std::string> filesHolding(const std::string& root, const std::string& value) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    for (auto it = std::filesystem::recursive_directory_iterator(root, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        if (it->is_regular_file(ec) && readFile(it->path().string()).find(value) != std::string::npos) {
+            out.push_back(std::filesystem::relative(it->path(), root).string());
+        }
+    }
+    return out;
+}
+
+// The real nexus-server, its HOME the test's own, with three Claude accounts a1, a2 and a3, none with an email, all
+// linked to ada. A sign-in is the verified Claude login (nexus-claude-auth beside the server) over the FAKE claude, in
+// which the person's browser signs in as whichever identity the test's callback names (<name>@example.test), with a
+// grant of that identity's own (tokenOf). ada's driver is the FAKE driver, which records at each start the login it
+// would run on, read as the Claude driver reads it (the helper's `access`). A window over the real link (ssh, mosh's
+// transport) sends what the app sends: a sign-in claim naming the session and the account (/login), the browser's
+// callback, a prompt, a sign-out (/logout). Each case, in order:
+//   1. a1 signed in as a1@example.test, which becomes a1's email, in accounts.json, the menu and the transcript;
+//   2. the conversation switched from a1 to a2 while its driver runs: it stays on a1 until a2's sign-in succeeds, then
+//      moves; its next driver runs on a2's login, and a1's login is nowhere but a1's own file;
+//   7. a sign-in to a2 in a browser signed in as a1@example.test (the personal session left in the browser) is refused:
+//      a1's identity never becomes a2's login, a2 learns no email, and the conversation stays on a1 and is told why;
+//   4. a sign-in to a3 declined on the page changes nothing: the conversation stays on a2 and is told; a second try
+//      signs a3 in and moves it;
+//   3. back to a1 with no sign-in: a1's login was kept, so the conversation moves at once and no flow is offered;
+//   5. /logout of a1 deletes a1's login (the others kept), and the conversation asks for a1's sign-in;
+//   6. a second window connecting afterwards (the iPad reconnecting) sees the conversation on a1, a1 needing sign-in,
+//      a2 and a3 signed in with their emails, and no token in anything it holds.
+int accountSwitch(const std::string& binary, const std::string& dir, const std::string& fakeClaude,
+                  const std::string& fakeDriver) {
+    Server server(binary, dir);
+    CHECK(::mkdir(dir.c_str(), 0700) == 0);
+    const std::string abs = std::filesystem::absolute(dir).string();
+    const std::string home = abs + "/home";
+    const std::string accounts = home + "/.nexus/server/accounts";
+    const std::vector<std::string> names = {"a1", "a2", "a3"};
+    std::error_code ec;
+    for (const std::string& name : names) {
+        std::filesystem::create_directories(accounts + "/" + name, ec);
+    }
+    for (const std::string& d : {home, home + "/.nexus", home + "/.nexus/server", accounts, accounts + "/a1",
+                                 accounts + "/a2", accounts + "/a3"}) {
+        CHECK(::chmod(d.c_str(), 0700) == 0);
+    }
+    CHECK(writeFile(abs + "/config", "claude " + fakeClaude + "\n"));
+    accounts::Registry registry;
+    for (const std::string& name : names) {
+        accounts::Account a{name, "claude"};
+        a.signInOnUse = true;
+        registry.accounts.push_back(a);
+    }
+    registry.ais = {{"ada", names, "a1"}};
+    const std::string config = abs + "/nexus-config";
+    std::filesystem::create_directories(config, ec);
+    CHECK(writeFile(config + "/accounts.json", accounts::accountsText(registry)));
+    CHECK(writeFile(config + "/ais.json", accounts::aisText(registry)));
+    const std::string logins = abs + "/logins";
+    std::string script = "record-login " + logins + "\n"
+        "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"claude\",\"features\":[\"limit\"]}\n";
+    for (int i = 0; i < 8; ++i) {
+        script += "send\nemit {\"kind\":\"text\",\"delta\":\"ok\"}\nemit {\"kind\":\"text-end\"}\n"
+                  "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
+    }
+    CHECK(writeFile(abs + "/ada.script", script));
+    CHECK(writeFile(abs + "/drivers", "driver claude " + fakeDriver + " --script " + abs + "/ada.script --account a1\n"
+                    "ai ada claude " + abs + "\n"));
+    const pid_t pid = startServe(binary, dir);
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
+
+    Window w;
+    link::Connect connect;
+    if (!openWindow(server, "localhost", "127.0.0.1", nullptr, &w, &connect)) {
+        return 1;
+    }
+    CHECK(connect.format >= sync::kSignInFormat);
+    std::vector<Window*> windows{&w};
+    const auto until = [&](const std::function<bool()>& done) {
+        return waitFor([&] { step(windows, nullptr, 20); return done(); }, kStallSeconds);
+    };
+    sync::Action ensure;
+    ensure.kind = sync::ActionKind::Ensure;
+    ensure.aiName = "ada";
+    w.session->add(ensure);
+    if (!until([&] { return w.session->state().sessions().size() == 1; })) {
+        CHECK(false);
+        return 1;
+    }
+    const sync::SessionId id = w.session->state().sessions().front()->id;
+    const auto accountNow = [&] { return w.session->state().sessions().front()->info.account; };
+    // The account's row in the menu: whether it needs sign-in, and the email it shows.
+    const auto row = [&](const sync::Sessions& state, const std::string& name) -> std::optional<std::pair<bool, std::string>> {
+        for (const auto& f : state.ais())
+            for (const auto& a : f.accounts)
+                if (f.name == "ada" && a.name == name) return std::make_pair(a.needsSignIn, a.email);
+        return std::nullopt;
+    };
+    const auto needsSignIn = [&](const sync::Sessions& state, const std::string& name) -> std::optional<bool> {
+        const auto r = row(state, name);
+        return r ? std::optional<bool>(r->first) : std::nullopt;
+    };
+    const auto emailShown = [&](const std::string& name) {
+        const auto r = row(w.session->state(), name);
+        return r ? r->second : std::string("(no row)");
+    };
+    const auto notices = [&](const std::string& part) {
+        std::size_t n = 0;
+        for (const auto& e : w.session->state().sessions().front()->entries)
+            if (e->kind == EntryKind::Notice && e->text.find(part) != std::string::npos) ++n;
+        return n;
+    };
+    const auto loginFile = [&](const std::string& name) { return accounts + "/" + name + "/verified-claude.json"; };
+    const auto loginOnly = [&](const std::string& name) {
+        return std::vector<std::string>{".nexus/server/accounts/" + name + "/verified-claude.json"};
+    };
+    const auto lastLogin = [&] {
+        const std::string all = readFile(logins);
+        const std::size_t start = all.rfind("login ", all.size() > 1 ? all.size() - 2 : 0);
+        return start == std::string::npos ? std::string() : all.substr(start, all.find('\n', start) - start);
+    };
+    int prompts = 0;
+    // A prompt answered: the driver that answers it started (or was already running) on the session's account.
+    const auto prompt = [&] {
+        const std::string text = "prompt " + std::to_string(++prompts);
+        w.session->add(act(sync::ActionKind::Send, id, text));
+        return until([&] {
+            const auto& entries = w.session->state().sessions().front()->entries;
+            for (std::size_t i = 0; i + 1 < entries.size(); ++i)
+                if (entries[i]->kind == EntryKind::Person && entries[i]->text == text &&
+                    entries.back()->kind == EntryKind::AI && entries.back()->text == "ok" &&
+                    w.session->state().sessions().front()->activity == sync::Activity::Idle)
+                    return true;
+            return false;
+        });
+    };
+    int claims = 0;
+    // The person's /login of `name` in ada's tab: the claim naming the session and the account, the URL opened, and the
+    // browser's callback, signed in as <as>@example.test (empty: the person declined on the page). False when no flow
+    // was offered for it.
+    const auto login = [&](const std::string& name, const std::string& as) {
+        const std::string opener = "accountSwitchOpener" + std::to_string(++claims);
+        sync::Action claim = signInAction(sync::ActionKind::SignInClaim, 0, opener);
+        claim.session = id;
+        claim.account = name;
+        w.session->add(claim);
+        const sync::SignInOffer* offer = nullptr;
+        if (!until([&] {
+                for (const auto& o : w.session->state().offers())
+                    if (o.account == name && o.opener == opener && !o.url.empty()) offer = &o;
+                return offer != nullptr;
+            })) {
+            return false;
+        }
+        const std::uint64_t flow = offer->id;
+        sync::SignInTarget target;
+        CHECK(sync::parseSignInUrl("claude", offer->url.bytes(), &target) && target.state == kFakeState);
+        w.session->add(signInAction(sync::ActionKind::SignInOpened, flow, opener));
+        w.session->add(signInAction(sync::ActionKind::SignInCallback, flow, opener,
+                                    std::string(as.empty() ? "error=access_denied" : "code=" + std::string(kFakeCode) +
+                                    "As" + as) + "&state=" + kFakeState));
+        return true;
+    };
+
+    // 1. The first account, then (below) the second and the third: each signs in to its own login, and the identity
+    // it signed in as becomes its email.
+    CHECK(accountNow() == "a1");
+    CHECK(needsSignIn(w.session->state(), "a1") == true && emailShown("a1").empty());
+    CHECK(login("a1", "a1"));
+    CHECK(until([&] { return needsSignIn(w.session->state(), "a1") == false && emailShown("a1") == "a1@example.test"; }));
+    CHECK(notices("Signed in to a1 as a1@example.test.") == 1);
+    CHECK(readFile(config + "/accounts.json").find("\"a1@example.test\"") != std::string::npos);
+    CHECK(prompt());
+    CHECK(lastLogin() == "login a1=" + tokenOf("a1"));
+
+    // 2. Switched from a1 to a2 with a1's driver running: on a1 until a2's sign-in succeeds, then on a2.
+    CHECK(control(dir, "config sign-in a1") == "OK signed in");
+    const std::size_t startsOnA1 = count(readFile(logins), "login a1=");
+    // 7 first: the browser is still signed in as a1@example.test. That is a1's login, so a2 refuses it.
+    CHECK(login("a2", "a1") && accountNow() == "a1");
+    CHECK(until([&] { return notices("which is a1's login") >= 1; }));
+    CHECK(accountNow() == "a1" && !std::filesystem::exists(loginFile("a2")));
+    CHECK(needsSignIn(w.session->state(), "a2") == true && emailShown("a2").empty());
+    CHECK(readFile(config + "/accounts.json").find("\"a2@example.test\"") == std::string::npos);
+    CHECK((filesHolding(home, tokenOf("a1")) == loginOnly("a1")));
+    // The person signs in as a2's own identity: the switch goes through.
+    CHECK(login("a2", "a2") && accountNow() == "a1");
+    CHECK(until([&] { return accountNow() == "a2" && emailShown("a2") == "a2@example.test"; }));
+    CHECK(needsSignIn(w.session->state(), "a2") == false && notices("Signed in to a2 as a2@example.test.") == 1);
+    CHECK(prompt());
+    CHECK(lastLogin() == "login a2=" + tokenOf("a2"));
+    CHECK(count(readFile(logins), "login a1=") == startsOnA1);
+    // a1's login: its own file alone, nowhere a2's driver reads, nor anywhere else under HOME.
+    CHECK((filesHolding(home, tokenOf("a1")) == loginOnly("a1")));
+    CHECK((filesHolding(home, tokenOf("a2")) == loginOnly("a2")));
+
+    // 4. A sign-in to a3 declined on the page: nothing changes, and the conversation is told it stays on a2.
+    CHECK(login("a3", ""));
+    CHECK(until([&] { return notices("stays on a2") == 1; }));
+    CHECK(accountNow() == "a2" && !std::filesystem::exists(loginFile("a3")));
+    CHECK(needsSignIn(w.session->state(), "a3") == true && needsSignIn(w.session->state(), "a2") == false);
+    CHECK(prompt());
+    CHECK(lastLogin() == "login a2=" + tokenOf("a2"));
+    // The second try: a3 signed in, the conversation on it.
+    CHECK(login("a3", "a3"));
+    CHECK(until([&] { return accountNow() == "a3" && emailShown("a3") == "a3@example.test"; }));
+    CHECK(prompt());
+    CHECK(lastLogin() == "login a3=" + tokenOf("a3"));
+
+    // 3. Back to a1 with no new sign-in: its login was kept, so the move is at once and no flow is offered.
+    sync::Action back = signInAction(sync::ActionKind::SignInClaim, 0, "accountSwitchBack");
+    back.session = id;
+    back.account = "a1";
+    w.session->add(back);
+    CHECK(until([&] { return w.session->allAcknowledged() && accountNow() == "a1"; }));
+    for (const auto& o : w.session->state().offers()) CHECK(o.account != "a1");
+    CHECK(prompt());
+    CHECK(lastLogin() == "login a1=" + tokenOf("a1"));
+    for (const std::string& name : names) {
+        CHECK((filesHolding(home, tokenOf(name)) == loginOnly(name)));
+    }
+
+    // 5. /logout of a1: its login deleted, the others kept; the conversation stays on a1, which asks for sign-in.
+    sync::Action logout;
+    logout.kind = sync::ActionKind::SignOut;
+    logout.session = id;
+    logout.account = "a1";
+    w.session->add(logout);
+    CHECK(until([&] { return notices("Signed out of a1") == 1 && needsSignIn(w.session->state(), "a1") == true; }));
+    CHECK(!std::filesystem::exists(loginFile("a1")) && filesHolding(home, tokenOf("a1")).empty());
+    CHECK((filesHolding(home, tokenOf("a2")) == loginOnly("a2")) && (filesHolding(home, tokenOf("a3")) == loginOnly("a3")));
+    CHECK(accountNow() == "a1");
+    CHECK(control(dir, "config sign-in a2") == "OK signed in");
+
+    // 6. A window connecting now (the iPad again) holds the server's account state as it is, and no token.
+    Window later;
+    link::Connect laterConnect;
+    if (!openWindow(server, "localhost", "127.0.0.1", nullptr, &later, &laterConnect)) {
+        return 1;
+    }
+    windows.push_back(&later);
+    CHECK(until([&] {
+        return later.session->stateNum() != 0 && later.session->state().sessions().size() == 1 &&
+            needsSignIn(later.session->state(), "a1").has_value();
+    }));
+    CHECK(later.session->state().sessions().front()->info.account == "a1");
+    CHECK(needsSignIn(later.session->state(), "a1") == true && needsSignIn(later.session->state(), "a2") == false &&
+          needsSignIn(later.session->state(), "a3") == false);
+    for (const std::string& name : names) {
+        CHECK(row(later.session->state(), name)->second == name + "@example.test");
+        const test::LeakScan scan(tokenOf(name));
+        CHECK(!scan.in(later.session->state().init_diff()) && !scan.in(w.session->state().init_diff()));
+    }
+
+    for (Window* each : windows) {
+        each->session->shutdown();
+    }
+    CHECK(until([&] { return w.session->shutdownDone() && later.session->shutdownDone(); }));
+    CHECK(control(dir, "stop") == "OK");
+    int status = 0;
+    CHECK(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    std::printf("account-switch: %s\n", failures == 0 ? "ok" : "FAILED");
+    return failures == 0 ? 0 : 1;
+}
+
 // How many sessions the server log says were made (`new` answered): one line per CONNECT.
 std::size_t sessionsLogged(const std::string& dir) {
     return static_cast<std::size_t>(count(readFile(dir + "/server.log"), " on UDP port "));
@@ -2035,13 +2313,16 @@ int main(int argc, char** argv) {
     if (argc == 6 && std::strcmp(argv[3], "private-signin") == 0) {
         return privateSignIn(argv[1], argv[2], argv[4], argv[5]);
     }
+    if (argc == 6 && std::strcmp(argv[3], "account-switch") == 0) {
+        return accountSwitch(argv[1], argv[2], argv[4], argv[5]);
+    }
     if (argc == 4 && std::strcmp(argv[3], "takeover") == 0) {
         return takeover(argv[1], argv[2]);
     }
     std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
                          "soak <clients> <prompts> | restart | older_server | flush <nexus-fake-driver> |\n"
                          "       secret <nexus-fake-driver> | AIs <nexus-fake-driver> | "
-                         "signin <fake claude> [leaky] | private-signin <python> <fixture> | verified-claude <fake claude> | takeover\n"
+                         "signin <fake claude> [leaky] | private-signin <python> <fixture> | verified-claude <fake claude> | account-switch <fake claude> <fake driver> | takeover\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }
