@@ -84,13 +84,12 @@ Launch and the overlay
 - An overlay that had the keyboard and lost it (to Command-Tab or a click on another app) hides. One that never got the keyboard after a show is hidden at the key check rather than left standing over other apps.
 - Escape dismisses an open account menu. With no menu or dialog open, Escape hides the overlay on the sprint tab and on an AI's tab. On a terminal tab, Escape always goes to the terminal: vim, shells and agents need it.
 
-The client lock (owner, 2026-11-25: "you cannot use nexus without auth"; `docs/security.md`, `models/ClientLock.tla`, `src/client_lock.h`)
-- Every window is locked until the device's owner passes the system's authentication: Touch ID, an Apple Watch or the login password on macOS (LocalAuthentication, device-owner policy), Windows Hello on Windows, Face ID on iOS. Nothing turns it off.
-- Locked, the window draws the lock screen alone (owner: "no dashboard, no talk to ais, no terminals. nothing."): no Dashboard, no tab strip, no AI tab or name, no transcript or prompt, no terminal, no dialog, no sound of what an AI did; no input reaches anything but the lock screen (`window_input` `lockedWindowDrawsOnlyTheLockScreen`, `frame_host_unit` `lockedHostDropsInput`). The link, the AIs' work and the shells go on unseen.
-- It locks at launch, at sleep or the displays sleeping, at a screen lock, at a session switch, in the background on iOS, and after the idle timeout (client policy `lock_idle_minutes`, 10 unless set, 1 to 240). Locking hides the overlay at once. Launch still shows nothing. On macOS the overlay hotkey asks the system while Nexus stays hidden; only success reveals it. Cancellation or failure leaves it hidden and another hotkey retries. Other windows ask when shown locked, and again by Return or a click after a refusal, which the lock screen names.
-- Only the system's grant for the current attempt unlocks; an answer that a relock overtook unlocks nothing (`UnlockOnlyByCurrent`, `StaleIgnored`).
-- Locked, the window claims no sign-in and opens no link, and plays no sound (`window_unit_signin` `lockedClaimsNothing`, `window_lock_unit`). Only deliberate input (a key, text, a press, a scroll, a paste, a drop) keeps it unlocked; a pointer or a drag passing over, a gesture or a trackpad touch does not. A `--windowed` window that locks is veiled at once (opacity 0) until the lock screen's frame is drawn.
-- `--screenshot` draws a state file or the demo only, never the live window. The test build's stand-in authenticator (`NEXUS_TEST_AUTHENTICATOR`) is a configure error in a Release, multi-config or signed build, and every build of the app checks that it has none of it (`nexus_no_test_authenticator`).
+Access to the client (owner, 2026-11-26: the signed-in OS session is sufficient; `docs/security.md`)
+- The desktop client does not ask for a separate Nexus unlock. Command-backtick reveals the overlay directly; `--windowed` opens directly. No Touch ID, password or Windows Hello check is added by Nexus at launch, after hiding, after sleep or after idle time.
+- The operating system controls access to the signed-in desktop session. Nexus does not create a live client lock, authenticator, idle-lock timer or session-lock watcher.
+- Provider logins and the server connection's authentication remain required. Reuse a saved provider login; ask for sign-in only when that account needs it.
+- Launch still shows no overlay and takes no focus. `--screenshot` draws a state file or the demo only, never the live window; `--locked` is a retained screenshot fixture, not a live access mode.
+- The lock component, its model and tests remain for the explicit fixture. The stand-in authenticator remains forbidden in Release, multi-config or signed builds (`nexus_no_test_authenticator`).
 
 Tabs
 - The fork defines tab types, groups, group order, close permissions and key bindings in client Starlark and JSON. The following bindings and groups describe the shipped profile.
