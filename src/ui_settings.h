@@ -10,7 +10,7 @@
 
 namespace nexus {
 struct UiMetrics {
-#define NEXUS_UI_STYLE(key, value) float key = value;
+#define NEXUS_UI_STYLE(key, value) float key = static_cast<float>(value);
 #include "nexus_ui_defaults.inc"
 #undef NEXUS_UI_STYLE
     int stepsDown() const { return int((1 - zoom_min) / zoom_step + 0.0001f); }
