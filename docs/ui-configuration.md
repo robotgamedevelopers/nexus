@@ -354,4 +354,4 @@ plain Up/Down continue to navigate the account selector. Both are documented in 
 
 `prompt_selection_shortcuts` maps chords to `start` or `end`, extending the current prompt selection with its anchor preserved. The shipped bindings are Command–Shift–Left/Right. `tab_reorder` defaults to Command–Shift–PageUp/PageDown.
 
-The shipped outer canvas below the opaque black header is `#181818` at 90% opacity. `opaque_history_backdrop` is disabled so history margins use that same transparency. Prompt and conversation-panel fills are both `#272728` and remain independently configurable.
+The shipped outer canvas below the opaque black header is `#0c0f13` at 100% opacity. `opaque_history_backdrop` is disabled so history margins use that same transparency. Prompt and conversation-panel fills are both `#272728` and remain independently configurable.

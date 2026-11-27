@@ -40,7 +40,7 @@
     "code": "Backquote",
     "modifiers": "Command"
   },
-  "overlay_opacity": 0.9,
+  "overlay_opacity": 1,
   "prompt_style": {
     "bold": true,
     "border": "#3a3a3a",
@@ -325,7 +325,7 @@
     "cursor_lost_hue": 0
   },
   "ui_colors": {
-    "background": "#181818",
+    "background": "#0c0f13",
     "control_hover": "#303030",
     "control_divider": "#373737",
     "control_ink": "#f3f3f3",
