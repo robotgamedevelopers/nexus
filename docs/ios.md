@@ -101,3 +101,23 @@ The window is laid out inside the safe area, clear of the status bar and the hom
 keyboard shows, in the room above it, so the prompt sits at the safe area's foot or just above the keyboard. A tap
 outside the prompt's box ends editing and lowers the keyboard, as in other apps; a drag or a scroll, a tap in the
 prompt's box and a tap on a tab do not, and the draft stays. A tap in the prompt's box, or a key typed, edits again.
+
+## The lock
+
+nexus shows nothing until the device's owner unlocks it (`src/client_lock.h`, as on the desktop): no Dashboard, no AI
+tabs or their names, nothing typed reaches nexus. The lock screen asks the system with LocalAuthentication's
+device-owner policy, so Face ID or Touch ID, with the device's passcode behind it (`src/lock_ios.mm`;
+`NSFaceIDUsageDescription` in `cmake/ios_info.plist.in`). It asks at launch and whenever the app comes back after a
+relock; after a refusal, or the idle timeout (client policy `lock_idle_minutes`, ten minutes as shipped), it waits for a
+tap on the lock screen, so that a refusal is never answered by the same prompt in a loop.
+
+It locks again when the app goes to the background, when it goes inactive while unlocked (the app switcher, Control
+Centre, a call), when the device's screen locks, and after the idle timeout. Input that arrives locked is dropped, never
+held for later. While the app is not active its window is covered, so the app switcher's snapshot shows nothing of
+nexus. What each iOS event means to the lock is `src/ios_lock.h`; its behaviour is checked against
+`models/ClientLock.tla` by the traces of `tests/model/ios_lock_walk.cpp`, and `ios_lock_unit` tests it on a simulator.
+
+On the simulator, Features > Face ID > Enrolled, then Matching Face or Non-matching Face, answers the prompt; from a
+shell, `xcrun simctl spawn DEVICE notifyutil -s com.apple.BiometricKit.enrollmentChanged 1` and `notifyutil -p
+com.apple.BiometricKit.enrollmentChanged` enroll, and `notifyutil -p com.apple.BiometricKit_Sim.pearl.match` (or
+`.nomatch`) answers.

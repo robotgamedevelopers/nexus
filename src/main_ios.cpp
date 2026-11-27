@@ -16,6 +16,11 @@
 // `nexus-server new` (link/bootstrap.h serverCommandWords), as on the desktop: the mock's command (docs/mock.md). A
 // device key behind nexus-ios-gate runs only nexus-server new and history-page, so the gate refuses any other.
 //
+// The window is locked (client_lock.h, ios_lock.h): until the device's owner passes Face ID or Touch ID (or the
+// passcode) it draws the lock screen alone and no input reaches nexus, and it locks again when the app goes to the
+// background or goes inactive (the app switcher), when the device's screen locks, and at the idle timeout. While it is
+// not active the window is covered, so the app switcher's snapshot shows nothing of nexus.
+//
 // Usage (as the simulator or devicectl passes a launch's arguments):
 //   nexus [--server USER@HOST] [--server-command WORDS] | nexus --state FILE [--lost]
 
@@ -47,9 +52,12 @@
 #include "pr/ui_records.h"
 
 #include "board.h"
+#include "client_lock.h"
+#include "client_lock_platform.h"
 #include "client_home.h"
 #include "frame_host.h"
 #include "hitch.h"
+#include "ios_lock.h"
 #include "keyboard_room.h"
 #include "keyboard_start.h"
 #include "link/bootstrap.h"
@@ -63,6 +71,7 @@
 #include "tab_order.h"
 #include "url_opener.h"
 #include "view.h"
+#include "window_app.h"
 
 #if NEXUS_PROCESSES
 #error "src/main_ios.cpp is the iOS app's: build it for iOS only (cmake/ios.cmake)"
@@ -88,6 +97,20 @@ struct App {
     TextInputStart textInput;               // whether the frames edit text, for the keyboard's start (keyboard_start.h)
     PrAppInsets safeArea{};                 // the frame's safe area, which Prax pads the window's panel by
     float keyboardRoom = 0;                 // px of content above the on-screen keyboard this frame; 0: none covers it
+    // The client lock (client_lock.h, ios_lock.h): nothing of nexus is drawn and no input reaches it until the device's
+    // owner passes Face ID, Touch ID or the passcode. Made in main, before the window opens.
+    std::unique_ptr<ClientLock> lock;
+    std::unique_ptr<IosLock> iosLock;
+    std::unique_ptr<LockAuthenticator> authenticator;
+    // The authenticator's answers, from its thread to the window's, taken at the next frame. Shared with what posts
+    // them, so that an answer the system gives after the window has gone lands here, not in a freed App (as main.cpp).
+    struct LockInbox {
+        LockMailbox mail;
+        std::atomic<PrApp*> app{nullptr};
+    };
+    std::shared_ptr<LockInbox> lockInbox = std::make_shared<LockInbox>();
+    std::string lockMethod;                 // how the lock screen names the authentication: "Face ID or your passcode"
+    LockState lockShown = LockState::Locked; // the lock's state as the window last showed it
     HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
         HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
 };
@@ -151,16 +174,113 @@ App& appOf(void* context) {
     return *static_cast<App*>(context);
 }
 
+// The client lock's part of the window (ios_lock.h). The tag of its idle timer among the app's timers.
+constexpr std::uint64_t kLockTimer = 0x6c6f636b;  // "lock"
+
+// The lock screen (View::lockScreen) while nexus is not unlocked, and none once it is. Each change is said on stderr
+// (the device's console), and an unlock lets a sign-in claim its flow, which a locked window never does (main.cpp).
+void syncLockScreen(App& a) {
+    const ClientLock& lock = a.iosLock->lock();
+    if (lock.state() != a.lockShown) {
+        const LockState before = a.lockShown;
+        a.lockShown = lock.state();
+        if (lock.state() == LockState::Unlocked) {
+            std::fprintf(stderr, "nexus: unlocked\n");
+            a.host.signIn.shown();
+        } else if (lock.state() == LockState::Locked) {
+            std::fprintf(stderr, "nexus: %s (reason %d)\n", before == LockState::Unlocked ? "locked" : "not unlocked",
+                int(lock.reason()));
+        }
+    }
+    if (a.iosLock->frame()) {
+        a.view.lockScreen.reset();
+        return;
+    }
+    a.view.lockScreen = View::LockScreen{lockTitle(lock.state()),
+        lockMessage(lock.state(), lock.reason(), a.lockMethod, a.iosLock->detail())};
+}
+
+IosLifecycle iosLifecycle(PrAppLifecycle lifecycle) {
+    switch (lifecycle) {
+    case PrAppLifecycle_Active: return IosLifecycle::Active;
+    case PrAppLifecycle_Inactive: return IosLifecycle::Inactive;
+    default: return IosLifecycle::Background;
+    }
+}
+
+// The window opened: the lock asks the system through it, and covers it for the app switcher; a timer each second
+// counts the idle time; and the app's state now is the lock's first (an app launched active asks at once).
+void startLock(App& a, PrStudioWindow* window) {
+    PrApp* app = prStudioWindowApp(window);
+    IosLockSystem system;
+    system.request = [&a](std::uint64_t attempt) {
+        PrSurface surface{};
+        if (a.window) prAppWindowSurface(prStudioWindowAppWindow(a.window), &surface);
+        a.authenticator->request(attempt, surface, [inbox = a.lockInbox](LockNotice notice) {
+            inbox->mail.post(std::move(notice));
+            if (PrApp* app = inbox->app.load()) prAppWake(app);
+        });
+    };
+    system.cancel = [&a] { a.authenticator->cancel(); };
+    system.cover = [&a](bool on) {
+        PrSurface surface{};
+        if (a.window && prAppWindowSurface(prStudioWindowAppWindow(a.window), &surface) == PrStatus_Ok)
+            iosCoverWindow(surface, on);
+    };
+    a.iosLock = std::make_unique<IosLock>(*a.lock, std::move(system));
+    a.lockInbox->app = app;
+    a.view.unlock = [&a] { a.iosLock->unlock(); };
+    prAppTimerSet(app, kLockTimer, 1.0, 1.0);
+    a.iosLock->lifecycle(iosLifecycle(prAppLifecycle(app)));
+    syncLockScreen(a);
+}
+
+// The window closing: a prompt still up is taken down, and the lock stays as it is (locked, unless the window closes
+// unlocked, when nothing more is drawn anyway).
+void stopLock(App& a) {
+    if (!a.iosLock) return;
+    prAppTimerCancel(prStudioWindowApp(a.window), kLockTimer);
+    a.lockInbox->app = nullptr;
+    a.authenticator->cancel();
+    a.view.unlock = nullptr;
+    a.iosLock.reset();
+}
+
+// The app's own events (PrStudioAppDesc::event): its lifecycle, the screen lock, and the idle timer.
+void appEvent(void* context, PrStudioApp*, const PrAppEvent* e) {
+    App& a = appOf(context);
+    if (!a.iosLock || !a.window) return;
+    PrApp* app = prStudioWindowApp(a.window);
+    switch (e->kind) {
+    case PrAppEventKind_LifecycleChanged: a.iosLock->lifecycle(iosLifecycle(prAppLifecycle(app))); break;
+    case PrAppEventKind_ScreenLocked: a.iosLock->screenLocked(); break;
+    case PrAppEventKind_Timer: {
+        if (e->tag != kLockTimer) return;
+        const bool was = a.iosLock->drawsContent();
+        a.iosLock->tick(e->time);
+        if (a.iosLock->drawsContent() == was) return;   // a frame only when the idle timeout locked it
+        break;
+    }
+    default: return;
+    }
+    // The lock screen is drawn in the frame this asks for: on going inactive, before the system's snapshot.
+    syncLockScreen(a);
+    prAppWindowRequestFrame(prStudioWindowAppWindow(a.window));
+}
+
 bool open(void* context, PrStudioWindow* window) {
     App& a = appOf(context);
     a.window = window;
     a.wakeApp = prStudioWindowApp(window);
+    startLock(a, window);
     PrKitTheme theme = windowTheme(a.fonts, false);
     prKitSetTheme(prStudioWindowKit(window), &theme);
     a.urls = std::make_unique<UrlOpener>(systemBrowser(prStudioWindowApp(window)));
-    a.view.openLink = a.urls->handle();
+    // A page's link that arrives while nexus is locked is not opened (ios_lock.h openWhileUnlocked).
+    const auto logLine = [](const std::string& line) { std::fprintf(stderr, "nexus: %s\n", line.c_str()); };
+    a.view.openLink = openWhileUnlocked(*a.lock, a.urls->handle(), logLine);
     a.host.signIn.openUrl = a.urls->handle();
-    a.host.signIn.shown();
+    if (a.iosLock->drawsContent()) a.host.signIn.shown();   // locked, a sign-in waits for the unlock
     a.host.ui = prStudioWindowUi(window);
     a.view.copy = [&a](const std::string& text) {
         return a.window && prAppDataWriteText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard,
@@ -175,7 +295,7 @@ bool open(void* context, PrStudioWindow* window) {
         board.window = prStudioWindowAppWindow(window);
         if (!a.home.empty()) board.storageDirectory = a.home + "/dashboard-storage";
         board.initialExtent = {1000, 780};
-        board.open = a.urls->handle();
+        board.open = openWhileUnlocked(*a.lock, a.urls->handle(), logLine);
         board.fromServer = true;
         a.board = std::make_unique<PraxBoard>(board);
         a.view.board = a.board.get();
@@ -188,6 +308,7 @@ bool open(void* context, PrStudioWindow* window) {
 
 void closeWindow(void* context, PrStudioWindow*, PrStatus) {
     App& a = appOf(context);
+    stopLock(a);
     a.window = nullptr;
     a.wakeApp = nullptr;
     a.view.openLink = nullptr;
@@ -219,11 +340,24 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     const bool known = prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok;
     a.view.columnScale = known && regularWidth(surface) ? style::kRegularWidthColumn : 1;
     a.view.fullWidthReplies = known && !regularWidth(surface);
+    // The cover comes off once the frame before this one, drawn since the app came back, has been presented.
+    a.iosLock->frameBegins();
+    // The authenticator's answers, then the time: the frame draws the lock screen unless the lock is unlocked now.
+    a.iosLock->notices(a.lockInbox->mail.take(), f->time);
+    a.iosLock->tick(f->time);
+    syncLockScreen(a);
     a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
 }
 
 bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
     auto& a = appOf(context);
+    // The person's input reaches nexus only while it is unlocked (ClientLock::input, which also restarts the idle
+    // time). Locked, only the lock screen takes it (FrameHost::event with View::lockScreen): nothing is queued for
+    // later.
+    if (isInputEvent(*e) && a.iosLock->drawsContent() && !a.iosLock->input(e->time, resetsIdle(*e))) {
+        syncLockScreen(a);   // the idle timeout locked it at this input, which is dropped
+        return true;
+    }
     if (e->kind == PrAppEventKind_KeyDown || e->kind == PrAppEventKind_Text || e->kind == PrAppEventKind_PointerDown)
         a.view.lastInput = e->time;
     return a.host.event(*e);
@@ -427,6 +561,19 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The client lock, locked from the start: the first frame is the lock screen's (client_lock.h). The idle timeout is
+    // the client policy's (window_app.h lockIdleSeconds).
+    {
+        std::string why;
+        const double idle = lockIdleSeconds(*a.view.application, why);
+        if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
+        a.lock = std::make_unique<ClientLock>(idle);
+        a.authenticator = systemLockAuthenticator();
+        a.lockMethod = a.authenticator->method();
+        a.view.lockScreen = View::LockScreen{lockTitle(a.lock->state()),
+            lockMessage(a.lock->state(), a.lock->reason(), a.lockMethod, {})};
+    }
+
     a.fonts = prFontSetCreate(nullptr);
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     prFontSetSetSystem(a.fonts, system);
@@ -451,7 +598,7 @@ int main(int argc, char** argv) {
     PrAppOptions options = prAppOptionsDefault();
     options.windowModel = PrAppWindowModel_Single;
     PrStudioAppDesc desc{.fonts = a.fonts, .options = &options, .window = &window,
-        .lastWindow = PrStudioAppLastWindow_Stop, .context = &a};
+        .lastWindow = PrStudioAppLastWindow_Stop, .event = appEvent, .context = &a};
     const PrStatus status = prStudioAppRun(&desc);
     if (status != PrStatus_Ok)
         std::fprintf(stderr, "nexus: the window could not open or the run could not start (status %d)\n", int(status));
