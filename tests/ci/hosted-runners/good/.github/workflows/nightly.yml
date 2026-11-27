@@ -1,9 +1,9 @@
-# Planted: not per-commit, so a hosted runner here is only a warning.
+# Planted (.github/hosted-runners-check.sh --selftest): a scheduled workflow on fleet labels; passes.
 name: nightly
 on:
   schedule:
     - cron: "0 3 * * *"
 jobs:
-  hosted:
-    runs-on: ubuntu-24.04
+  fleet:
+    runs-on: [self-hosted, nexus-nightly, Linux, X64]
     steps: [{run: "true"}]

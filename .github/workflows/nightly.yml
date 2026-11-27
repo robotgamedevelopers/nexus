@@ -55,8 +55,8 @@ jobs:
         run: bash .github/ctest.sh --test-dir build -L '^model_nightly$' -j "$TEST_JOBS" --output-on-failure
 
   model:
-    # Keep the compiled trace walks and the CPU-intensive specs on prebuilt runners.
-    runs-on: ${{ (matrix.build || matrix.prebuilt) && fromJSON('["self-hosted","nexus-nightly","Linux","X64","tlc"]') || 'ubuntu-24.04' }}
+    # Every shard on the fleet's TLC benches (amd-1's nexus-nightly runners: Java and the pinned jar are the machine's).
+    runs-on: [self-hosted, nexus-nightly, Linux, X64, tlc]
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -90,7 +90,6 @@ jobs:
             build: supervisor_walk
             skip: '^tlc_supervisor_(switch_|place_|signin_|ai_)?temporal_[0-9]+$'
           - shard: link-ensure
-            prebuilt: true
             run: '^tlc_link_ensure$'
           - shard: link-one-window
             run: '^tlc_link_one_window$'
@@ -103,7 +102,6 @@ jobs:
             build: link_walk
             skip: '^tlc_link_(ensure|one_window|tabs|two_windows)$'
           - shard: accounts
-            prebuilt: true
             run: '^tlc_accounts$'
           - shard: accounts-rest
             run: '^tlc_accounts_'
@@ -272,11 +270,6 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Fetch the pinned TLC jar for hosted runners
-        if: runner.environment == 'github-hosted'
-        run: |
-          mkdir -p "$HOME/sdk/tla"
-          curl -fsSL --retry 3 https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar -o "$HOME/sdk/tla/tla2tools.jar"
       - name: Java and the pinned TLC jar from the runner's machine
         shell: bash
         run: |
@@ -460,13 +453,11 @@ jobs:
   # The watch's speech test (watch/tests/speech.cmake): recordings spoken by `say`, through the recognizer the phone
   # uses (SpeechTranscriber, on device, as nexus-watch-relay --transcribe) and the shared name matcher, and silence
   # refused with its reason; with its planted twin, which must fail. nexus-watch-relay links the link, so this is the
-  # full configure (ci.yml's macOS Debug, from its cache: hosted-caches and nexus-build, which bring Ninja, protobuf and
-  # the pinned Rust) on a runner with Xcode. Never the studio (Glenn's screen); the fleet's only other Mac, mini-m5, has
-  # no Xcode and no runner label apart from the studio's, so this runs on GitHub's hosted macOS (macos-26) until a
-  # fleet Mac off the studio carries Xcode.
+  # full configure (macos-debug's: hosted-caches and nexus-build, which bring Ninja, protobuf and the pinned Rust) on the
+  # fleet Mac with Xcode (the macbook's nexus-nightly runner). Never the studio (Glenn's screen).
   watch-speech:
-    runs-on: macos-26
-    timeout-minutes: 15
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -475,10 +466,9 @@ jobs:
       - name: Tools and caches
         uses: ./.github/actions/hosted-caches
         with:
-          name: mac-debug
+          name: fleet-mac-watch-speech
           require: "false"
           brew: ninja protobuf
-          brew-keep: protobuf abseil
       - name: Build the relay and the matcher
         uses: ./.github/actions/nexus-build
         with:
@@ -555,6 +545,9 @@ jobs:
         run: bash .github/ssh-localhost.sh "$RUNNER_TEMP/ssh-localhost"
       - name: Functional tests
         run: bash .github/ctest.sh --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure
+      - name: Stop this job's sshd
+        if: always()
+        run: bash .github/ssh-localhost.sh --stop "$RUNNER_TEMP/ssh-localhost"
       - name: ccache hits in this job
         if: always()
         shell: bash
@@ -573,8 +566,8 @@ jobs:
           cmake --build build --parallel "$(sh .github/job-cores.sh)" --target server_lock
           bash .github/ctest.sh --test-dir build -R '^server_lock_functional$' --output-on-failure
 
-  # The Claude driver's token wall inside captain's WSL2 (claude-driver-wall-linux below runs it on hosted Ubuntu
-  # too; WSL2 needs the fleet).
+  # The Claude driver's token wall inside captain's WSL2 (claude-driver-wall-linux below runs it on the fleet's Ubuntu
+  # benches).
   claude-driver-wall-wsl2:
     strategy:
       fail-fast: false
@@ -583,10 +576,7 @@ jobs:
         # The unlimited runs each in a job of its own: on WSL2 under load one run took 52 s, two past the cap. The two
         # limited runs share one: each took seconds on macOS (2026-11-15); WSL2 under load is the one to watch.
         run: [whole-wall, without-the-hook, "limited,limited-nohook"]
-        include:
-          - where: wsl2
-            labels: [self-hosted, nexus-nightly, Linux, X64, wsl2]
-    runs-on: ${{ matrix.labels }}
+    runs-on: [self-hosted, nexus-nightly, Linux, X64, wsl2]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -847,16 +837,14 @@ jobs:
           fi
           "${frames[@]}"
 
-  # The Tailscale shim on Windows (tailscale-windows.yml), with no time limit: restoring its primed cache alone took 83 s
-  # on the hosted Windows image (docs/tailscale.md), which does not fit a per-commit job's 2 minutes, so no per-commit
-  # workflow calls it and it runs here. It saves the primed cache again when the pins changed.
+  # The Tailscale shim on Windows (tailscale-windows.yml), with no time limit, on captain's Windows runners: no
+  # per-commit workflow calls it (docs/tailscale.md), so it runs here, in the runner's own key directory.
   tailscale-windows:
     uses: ./.github/workflows/tailscale-windows.yml
     permissions:
       contents: read
     with:
       prime: true
-      save: true
 
   # The shim on macOS with its x86_64 slice under Rosetta, and on Linux (tailscale.yml), with no time limit: the x86_64
   # build and run do not fit beside the arm64 one in a per-commit job, so ci.yml runs macOS arm64 and Linux and this
@@ -871,10 +859,9 @@ jobs:
       # Its unit tests run per pull request (ci.yml); here its functional tests.
       tests: '^functional$'
 
-  # From ci.yml, so that a pull request asks for few hosted macOS runners (about five run at once for the
-  # organisation): the macOS sanitizers, the Claude driver and its token wall on the fleet Mac, with no time limit. Their
-  # Linux forms run here too, on hosted Ubuntu. The sanitizers restore no hosted cache (one built by another Xcode does not
-  # configure here): ccache in ~/nexus-ci on the machine keeps their rebuilds short.
+  # From ci.yml, with no time limit: the macOS sanitizers, the Claude driver and its token wall on the fleet Mac. Their
+  # Linux forms run here too, on the fleet's Ubuntu benches (amd-1). The sanitizers restore no cache built elsewhere (one
+  # built by another Xcode does not configure here): ccache in ~/nexus-ci on the machine keeps their rebuilds short.
   # The model and its check programs built Debug with AddressSanitizer and UndefinedBehaviorSanitizer, which stop at
   # the first report: the unit tests, and the trace walks (the window's on every AI count, the overlay's) with every
   # fault (no TLC); the same for the link's states (src/sync) and their walks, and the store (store_test, durable_test
@@ -1260,7 +1247,7 @@ jobs:
       - name: Unit tests
         run: bash .github/ctest.sh --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
       # The link's functional tests reach this machine over `ssh localhost` as the runner's login, which this Mac allows.
-      # The watch's speech test runs in watch-speech, on hosted macOS, never here.
+      # The watch's speech test runs in watch-speech, never here.
       - name: Functional tests
         run: >-
           bash .github/ctest.sh --test-dir build -L functional
@@ -1280,8 +1267,8 @@ jobs:
   # macos-release, server-lock).
   #
   # macOS Debug, as a pull request builds it (asserts on), on the fleet Mac. The link's tests reach this machine over
-  # `ssh localhost` as the runner's login, which this Mac allows. The watch's speech test runs in watch-speech,
-  # on hosted macOS, never here.
+  # `ssh localhost` as the runner's login, which this Mac allows. The watch's speech test runs in watch-speech, never
+  # here.
   macos-debug:
     runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
     steps:
@@ -1305,9 +1292,10 @@ jobs:
           -E '^(window_frame_budget|window_frame_budget_injected_paced|server_lock_functional|watch_speech|watch_speech_planted)$'
           -j "$TEST_JOBS" --output-on-failure
 
-  # Linux, as ci.yml's build-linux builds it, on hosted Ubuntu.
+  # Linux, as ci.yml's linux job builds it (all of it here, not tier_pr_build), on the fleet's Ubuntu benches (amd-1's
+  # nexus-nightly runners), in the runner's own build directory outside the checkout (.github/actions/fleet-build).
   linux-nightly:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, nexus-nightly, Linux, X64, tlc]
     env:
       CC: clang
       CXX: clang++
@@ -1316,40 +1304,45 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Tools and caches
-        uses: ./.github/actions/hosted-caches
+      # What the build and the link's programs need from the machine, from the fleet's runner packages (as ci.yml's
+      # linux job); this job installs nothing.
+      - name: The machine's packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          need=()
+          for package in libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev lld clang openssh-server openssh-client; do
+            dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed' || need+=("$package")
+          done
+          if [ ${#need[@]} -gt 0 ]; then
+            echo "::error::$(hostname -s) lacks ${need[*]}: they are fleet runner packages (nova-fleet runner-packages)"
+            exit 1
+          fi
+      - name: Build directory and caches
+        uses: ./.github/actions/fleet-build
         with:
-          name: linux-release
-          require: "false"
-          apt: libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev openssh-server
+          name: linux-nightly
       - name: Configure and build
         uses: ./.github/actions/nexus-build
         with:
           config: linux-release
-      # The link's functional tests reach this machine over `ssh localhost` without a password prompt
-      # (tests/link/CMakeLists.txt): a key made here, for this job only, authorized for the runner's own login.
-      - name: Passwordless ssh to this machine
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          if [ ! -f ~/.ssh/id_ed25519 ]; then ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519; fi
-          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
-          chmod 600 ~/.ssh/authorized_keys
-          chmod go-w ~
-          if ! nc -z -w 2 127.0.0.1 22; then
-            sudo systemctl start ssh
-          fi
-          ssh-keyscan -T 5 localhost 127.0.0.1 >> ~/.ssh/known_hosts
-          ssh -o BatchMode=yes localhost true
-          echo "ssh localhost works for $(id -un)"
+          dir: ${{ env.NEXUS_BUILD }}
+      # Every target built, so the source times can be recorded for the next run here (.github/source-times.sh).
+      - name: Record the sources' times
+        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
+      # The link's functional tests reach this machine over `ssh localhost` (tests/link/CMakeLists.txt), through this
+      # job's own sshd on 127.0.0.1 (.github/ssh-localhost.sh says how, and on what terms).
+      - name: ssh localhost, through this job's own sshd
+        run: bash .github/ssh-localhost.sh "$RUNNER_TEMP/ssh-localhost"
       # The server lock under contention runs in server-lock (macOS) and inside WSL2 (wsl2-functional), as macos-debug
       # leaves it out too.
       - name: The tier_nightly tests
         run: >-
-          bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
+          bash .github/ctest.sh --test-dir "$NEXUS_BUILD" -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver)$'
           -E '^server_lock_functional$' -j "$TEST_JOBS" --output-on-failure
+      - name: Stop this job's sshd
+        if: always()
+        run: bash .github/ssh-localhost.sh --stop "$RUNNER_TEMP/ssh-localhost"
 
   # iOS, the simulator build whole (ios.yml's builds only what its tier_pr tests run), on the fleet Mac: the shots,
   # their reversed witnesses and the in-app ssh end to end, on a simulator device.
@@ -1377,7 +1370,7 @@ jobs:
         run: bash .github/ctest.sh --test-dir build -L '^tier_nightly$' -j "$TEST_JOBS" --output-on-failure
 
   # Windows, as ci.yml's windows job builds it, on a fleet Windows runner: the unit tests too slow for a pull request. The WSL2
-  # terminal test needs a WSL2 distribution, which hosted Windows lacks: wsl2-terminal runs it on captain.
+  # terminal test needs a WSL2 distribution: wsl2-terminal runs it inside captain's.
   windows-nightly:
     runs-on: [self-hosted, nexus-pr, Windows, X64]
     defaults:
@@ -1394,11 +1387,11 @@ jobs:
           & ./.github/ctest.ps1 --test-dir "$env:NEXUS_BUILD" -C Release -L '^tier_nightly$' -LE '^(model|model_nightly|claude_driver|wsl2_terminal)$' -j $env:TEST_JOBS --output-on-failure
           if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }
 
-  # The protocol's conformance cases against the Claude driver as a process (ctest -L claude_driver) on hosted Ubuntu,
+  # The protocol's conformance cases against the Claude driver as a process (ctest -L claude_driver) on amd-1,
   # as claude-driver-macos runs them on the fleet Mac; ci.yml's claude-driver runs the driver's own unit tests per pull
   # request.
   claude-driver-linux:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, nexus-nightly, Linux, X64, tlc]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -1424,8 +1417,8 @@ jobs:
       - name: Build the driver
         working-directory: drivers/claude
         run: npm run check
-      # Clang, as the other builds use: Prax does not build with the image's GCC. The Release build is ThinLTO, which
-      # only LLD links: the image's LLVM 18 linker.
+      # Clang, as the other builds use: Prax does not build with GCC. The Release build is ThinLTO, which only LLD links
+      # (/usr/bin/ld.lld, a fleet runner package). Built in the runner's own directory outside the checkout, kept.
       - name: Configure (the protocol and the conformance test only)
         env:
           CC: clang
@@ -1433,19 +1426,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -e /usr/bin/ld.lld ] && [ -x /usr/bin/ld.lld-18 ]; then sudo ln -s ld.lld-18 /usr/bin/ld.lld; fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DCMAKE_LINKER_TYPE=LLD
+          if [ ! -e /usr/bin/ld.lld ]; then
+            echo "::error::no /usr/bin/ld.lld on $(hostname -s): lld is a fleet runner package (nova-fleet runner-packages)"
+            exit 1
+          fi
+          build="$RUNNER_WORKSPACE/fleet-build/claude-driver-linux"
+          echo "DRIVER_BUILD=$build" >> "$GITHUB_ENV"
+          cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DCMAKE_LINKER_TYPE=LLD
       - name: Build the conformance test
-        run: cmake --build build --parallel "$JOBS" --target driver_conformance_test
+        run: cmake --build "$DRIVER_BUILD" --parallel "$JOBS" --target driver_conformance_test
       - name: Conformance of the Claude driver
-        run: bash .github/ctest.sh --test-dir build -L claude_driver -j "$TEST_JOBS" --output-on-failure
+        run: bash .github/ctest.sh --test-dir "$DRIVER_BUILD" -L claude_driver -j "$TEST_JOBS" --output-on-failure
 
   # The same wall on Linux, where Claude's sandbox is bubblewrap and socat, both built by nexus from pinned sources
   # (cmake/sandbox.cmake) and found by the driver (drivers/claude/src/tools.ts), with nothing installed for them: on an
   # Ubuntu bench (the tlc runners are the amd benches, never WSL2), whose AppArmor lets a program make user namespaces
   # only with a profile, which the driver loads for nexus's bwrap through passwordless sudo (the test unloads it first
-  # where sudo -n can, NEXUS_WALL_FRESH_PROFILE, so that the real step runs each time). On GitHub-hosted Ubuntu, from
-  # ci.yml (the happy path per pull request leaves it here); the same wall inside captain's WSL2 is claude-driver-wall-wsl2.
+  # where sudo -n can, NEXUS_WALL_FRESH_PROFILE, so that the real step runs each time). On amd-1's nexus-nightly runners;
+  # the same wall inside captain's WSL2 is claude-driver-wall-wsl2. The fleet's runner login (ghrunner) has no sudo, so
+  # here the profile for this runner's bwrap must already be loaded; "The AppArmor profile" step fails by name when it
+  # is not (loading one lets the runner's login make user namespaces with a program it builds: held for Glenn).
   claude-driver-wall-linux:
     strategy:
       fail-fast: false
@@ -1454,10 +1454,7 @@ jobs:
         # The unlimited runs each in a job of its own: on WSL2 under load one run took 52 s, two past the cap. The two
         # limited runs share one: each took seconds on macOS (2026-11-15); WSL2 under load is the one to watch.
         run: [whole-wall, without-the-hook, "limited,limited-nohook"]
-        include:
-          - where: ubuntu
-            labels: ubuntu-24.04
-    runs-on: ${{ matrix.labels }}
+    runs-on: [self-hosted, nexus-nightly, Linux, X64, tlc]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -1503,6 +1500,22 @@ jobs:
           cmake --build "$SANDBOX_BUILD" --target nexus_sandbox_tools --parallel "$(sh .github/job-cores.sh)"
           "$NEXUS_SANDBOX_BIN/bwrap/bwrap" --version
           "$NEXUS_SANDBOX_BIN/socat/socat" -V | head -2
+      - name: The AppArmor profile for this runner's bwrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          restrict=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)
+          if [ "$restrict" != 1 ] || sudo -n true 2>/dev/null; then
+            echo "restrict_unprivileged_userns $restrict; the driver loads what it needs itself"
+            exit 0
+          fi
+          bwrap=$(realpath "$NEXUS_SANDBOX_BIN/bwrap/bwrap")
+          if grep -lsF "\"$bwrap\"" /etc/apparmor.d/nexus-bwrap-* >/dev/null; then
+            echo "a profile for $bwrap is in /etc/apparmor.d: $(grep -lsF "\"$bwrap\"" /etc/apparmor.d/nexus-bwrap-* | tr '\n' ' ')"
+            exit 0
+          fi
+          echo "::error::$(hostname -s) restricts unprivileged user namespaces and $(id -un) has no sudo, and no AppArmor profile for $bwrap is loaded: the token wall cannot run here. Loading one lets this runner's login make user namespaces with a program it builds; that is a fleet security decision held for Glenn"
+          exit 1
       - name: Install the pinned packages, with the Claude executable
         working-directory: drivers/claude
         # Installed once per lockfile on each runner and kept beside its other caches: WSL2's install took 24 to 47 s
@@ -1543,51 +1556,22 @@ jobs:
 
 
 
-  # The macOS sanitizers job's programs and walks on Linux, with clang's AddressSanitizer and UndefinedBehaviorSanitizer.
-  # One build, shared: build-linux-asan builds every program the parts run and uploads the build tree; three parts run
-  # in parallel: the unit programs, and the trace walks with their faults in two halves. From ci.yml (the happy path per
-  # pull request leaves it here).
-  build-linux-asan:
-    runs-on: ubuntu-24.04
+  # The macOS sanitizers job's programs and walks on Linux, with clang's AddressSanitizer and UndefinedBehaviorSanitizer,
+  # on amd-1's nexus-nightly runners. Three parts run in parallel: the unit programs, and the trace walks with their
+  # faults in two halves; each builds every program the parts run in its runner's own build directory outside the
+  # checkout (.github/actions/fleet-build; ccache keeps a second part on the same machine short). From ci.yml (the happy
+  # path per pull request leaves it here).
+  sanitizers-linux:
+    runs-on: [self-hosted, nexus-nightly, Linux, X64, tlc]
     env:
       CC: clang
       CXX: clang++
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-          submodules: recursive
-      - name: Tools and caches
-        uses: ./.github/actions/hosted-caches
-        with:
-          name: linux-asan
-          require: "false"
-          apt: ""
-      - name: Configure and build the programs the parts run
-        uses: ./.github/actions/nexus-build
-        with:
-          config: linux-asan
-          targets: >-
-            model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
-            store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
-            nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
-            overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
-            journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-            migration_walk takeover_walk steering_walk
-      - name: Share the build tree
-        uses: ./.github/actions/build-share
-        with:
-          name: build-linux-asan
-
-  sanitizers-linux:
-    needs: build-linux-asan
-    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         include:
           - part: units
-          # The walks in two halves (every other walk each): together they took past 2 minutes on the image's 4 cores.
+          # The walks in two halves (every other walk each): split so each half finishes sooner on its runner.
           - part: walks
             half: 1
           - part: walks
@@ -1597,10 +1581,26 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: The build tree
-        uses: ./.github/actions/build-fetch
+          submodules: recursive
+      - name: Build directory and caches
+        uses: ./.github/actions/fleet-build
         with:
-          name: build-linux-asan
+          name: linux-asan
+      - name: Configure and build the programs the parts run
+        uses: ./.github/actions/nexus-build
+        with:
+          config: linux-asan
+          dir: ${{ env.NEXUS_BUILD }}
+          targets: >-
+            model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
+            store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
+            nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
+            overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk relay_walk secrets_walk signin_walk
+            journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+            migration_walk takeover_walk steering_walk
+      # The parts below run the programs by their paths under build/.
+      - name: build/ is this runner's build directory
+        run: ln -sfn "$NEXUS_BUILD" build
       # Every unit program here runs in memory (MemFs where it has files; no sockets, processes or shared paths), so
       # they are independent: they run at once, at most TEST_JOBS at a time, each with its own output under units/.
       - name: Unit tests under the sanitizers

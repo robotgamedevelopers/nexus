@@ -50,7 +50,7 @@ Nightly (`nightly.yml`), with `-L '^tier_nightly$'`:
   - the `model*` jobs;
   - `claude-driver-macos` and `claude-driver-linux`;
   - `frame-budget`, `macos-release` and `server-lock`;
-  - `watch-speech`: the watch's speech test, on hosted macOS.
+  - `watch-speech`: the watch's speech test, on the fleet Mac.
 - The nightly also runs configurations a pull request does not build: the Release build with LTO, the sanitizers, WSL2, the token walls, and the Tailscale shim's functional tests and Windows build.
 - `python-native`: the Python tests that need a real Mac (`.github/python-native-tests.txt`), on the fleet Mac. `.github/python-tests.py` holds them to the same rule as ctest: a skip fails the run.
 

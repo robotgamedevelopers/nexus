@@ -151,8 +151,8 @@ The macOS and Linux jobs run on fleet machines, which keep that directory: `cach
 and by hand after a pin change) builds and tests with no time limit on each machine and leaves it primed; every
 per-commit job then uses it in place. A per-commit job whose machine is not primed for its pins builds nothing, sets
 its status to failure and fails, saying to run cache-warm (a cold build does not fit the 2 minutes; the times below).
-The Windows job (`tailscale-windows.yml`, nightly) still runs on a GitHub-hosted runner and restores a GitHub Actions
-cache.
+The Windows job (`tailscale-windows.yml`, nightly) runs on captain's Windows runners and keeps its key directory there
+(`%LOCALAPPDATA%\nexus-ci-tailscale\<key>`) in the same way; nothing is restored from or saved to GitHub's cache.
 
 #### Build times
 

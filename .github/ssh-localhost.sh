@@ -4,16 +4,40 @@
 # The link's functional tests reach this machine over ssh (tests/link/CMakeLists.txt). A fleet Linux runner's login
 # (ghrunner, or the fleet login inside captain's WSL2) has no ssh login of its own to this machine: the host's sshd
 # refuses it (DenyUsers), and its ~/.ssh is the host's, not this job's to change. So this starts an sshd of the job's
-# own, as the runner's login, listening on 127.0.0.1 at a free port, which accepts one key made here and that login
-# alone, and writes an ssh wrapper that reaches it as `localhost` (its own config: port, key, known host). It grants
-# nothing the job's login does not already have. The tests run the wrapper because NEXUS_E2E_SSH names it
-# (tests/link/link_e2e.cpp); the product's own ssh is untouched.
+# own, as the runner's login, and writes an ssh wrapper that reaches it as `localhost` (its own config: port, key,
+# known host). The tests run the wrapper because NEXUS_E2E_SSH names it (tests/link/link_e2e.cpp); the product's own
+# ssh is untouched. Ruled fine by the coordinator, 2026-11-26, on these terms, which this script keeps:
 #
-#   bash .github/ssh-localhost.sh DIR   starts it under DIR (made here, 0700) and writes NEXUS_E2E_SSH to $GITHUB_ENV
-#                                       (or prints it when GITHUB_ENV is unset); sshd's pid is DIR/sshd.pid
-# The runner ends the sshd with the job (it ends every process the job started); a rerun in the same DIR stops the
-# previous one first.
+#   - it binds 127.0.0.1 only (ListenAddress 127.0.0.1:<free port>), so it adds no network access;
+#   - its host key and its one client key are made per job, here, under DIR, and it accepts that key for the runner's
+#     own login alone (AllowUsers; no passwords, no forwarding); it grants nothing the job's login does not already have;
+#   - it is stopped by PID in an always() step (`--stop DIR`, below), so it dies with the job even when a test fails.
+#
+#   bash .github/ssh-localhost.sh DIR          starts it under DIR (made here, 0700) and writes NEXUS_E2E_SSH to
+#                                              $GITHUB_ENV (or prints it when GITHUB_ENV is unset); its pid is DIR/sshd.pid
+#   bash .github/ssh-localhost.sh --stop DIR   stops it by that PID and fails if it is still running (nothing to stop: a
+#                                              line saying so); every job that starts it runs this in an `if: always()`
+#                                              step
 set -euo pipefail
+if [ "${1-}" = --stop ]; then
+  dir=${2:?usage: ssh-localhost.sh --stop DIR}
+  if [ ! -f "$dir/sshd.pid" ]; then
+    echo "no sshd.pid under $dir: this job's sshd never started, nothing to stop"
+    exit 0
+  fi
+  pid=$(cat "$dir/sshd.pid")
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "this job's sshd (pid $pid) has already ended"
+    exit 0
+  fi
+  kill "$pid"
+  for _ in $(seq 50); do
+    if ! kill -0 "$pid" 2>/dev/null; then echo "stopped this job's sshd (pid $pid)"; exit 0; fi
+    sleep 0.1
+  done
+  echo "::error::this job's sshd (pid $pid) is still running 5 s after SIGTERM"
+  exit 1
+fi
 dir=${1:?usage: ssh-localhost.sh DIR}
 sshd=/usr/sbin/sshd
 if [ ! -x "$sshd" ]; then
