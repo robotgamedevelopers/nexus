@@ -514,7 +514,7 @@ void accountCommandOpensTheSelector() {
     CHECK(w.switches().empty());
 }
 
-// The menu's last row runs /login: its dialog lists the accounts that need signing in. Plant: run /account instead.
+// The menu's last row runs /login: its card lists all linked accounts. Plant: filter saved logins out.
 void signInRowRunsLogin() {
     Window w;
     w.press(w.centre(w.tabNode("rowan")));
@@ -522,7 +522,7 @@ void signInRowRunsLogin() {
     w.slide(last);
     w.lift(last);
     CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::Login);
-    CHECK(w.view.accounts.dialogRows.size() == 1 && w.view.accounts.dialogRows[0].account == "a3");
+    CHECK(w.view.accounts.dialogRows.size() == 3 && w.view.accounts.dialogRows[2].account == "a3");
     CHECK(w.switches().empty());
 }
 
@@ -530,14 +530,15 @@ void signInRowRunsLogin() {
 void loginCardUsesTheOriginalLayout() {
     for (const PrVec2 extent : {PrVec2{1376, 1032}, PrVec2{402, 874}}) {
         Window w(extent);
+        w.rowan[0].needsSignIn = true; // also exercise the signed-out background page’s arrow bindings
         w.rowan[1].needsSignIn = true;
         w.publish();
         w.frame();
         w.command("/login");
         w.frame();
         CHECK(w.view.accountMenu != kPrLayoutNodeNone);
-        CHECK(w.view.accountRows.size() == 2);
-        if (w.view.accountRows.size() != 2) continue;
+        CHECK(w.view.accountRows.size() == 3);
+        if (w.view.accountRows.size() != 3) continue;
         const auto card = w.bounds(w.view.accountMenu);
         CHECK(card.right > card.left && card.left >= 0 && card.right <= extent.x);
         if (std::abs((card.left + card.right) / 2 - extent.x / 2) >= 2)
@@ -552,6 +553,15 @@ void loginCardUsesTheOriginalLayout() {
         w.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Down, PrAppKeyCode_ArrowDown));
         w.frame();
         CHECK(w.view.accounts.loginHighlighted == 1);
+        w.send(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Up, PrAppKeyCode_ArrowUp));
+        w.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Up, PrAppKeyCode_ArrowUp));
+        w.frame();
+        CHECK(w.view.accounts.loginHighlighted == 0);
+        w.send(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Up, PrAppKeyCode_ArrowUp));
+        w.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Up, PrAppKeyCode_ArrowUp));
+        w.frame();
+        CHECK(w.view.accounts.loginHighlighted == 2); // wraps to the last address
+        CHECK(w.switches().empty());
         w.enter();
         CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::None);
         CHECK((w.switches() == std::vector<std::string>{"7:a3"}));
@@ -559,9 +569,9 @@ void loginCardUsesTheOriginalLayout() {
     Window pointer;
     pointer.command("/login");
     pointer.frame();
-    CHECK(pointer.view.accountRows.size() == 1);
-    if (pointer.view.accountRows.size() == 1) {
-        const auto at = pointer.centre(pointer.view.accountRows.front());
+    CHECK(pointer.view.accountRows.size() == 3);
+    if (pointer.view.accountRows.size() == 3) {
+        const auto at = pointer.centre(pointer.view.accountRows.back());
         pointer.press(at);
         pointer.lift(at);
         CHECK((pointer.switches() == std::vector<std::string>{"7:a3"}));
@@ -593,6 +603,9 @@ void overlayKeepsDialogsInsideItsWindow() {
     CHECK(overlay.switches().empty());
     CHECK(prUiFocus(overlay.ui) == overlay.view.prompt);
     overlay.command("/login");
+    overlay.frame();
+    overlay.send(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Up, PrAppKeyCode_ArrowUp));
+    overlay.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Up, PrAppKeyCode_ArrowUp));
     overlay.frame();
     overlay.enter();
     CHECK((overlay.switches() == std::vector<std::string>{"7:a3"}));
@@ -687,7 +700,8 @@ void rowsFromTheRoster() {
     const auto rows = accountMenuRows(roster, "a3");
     CHECK(rows.size() == 3 && rows[0].text == "h@x" && !rows[0].current && rows[1].text == "Lab" && rows[1].current &&
           rows[2].signIn);
-    CHECK(accountLoginRows(roster).size() == 1 && accountLoginRows(roster)[0].account == "a2");
+    CHECK(accountLoginRows(roster).size() == 3 && accountLoginRows(roster)[0].account == "a1" &&
+          accountLoginRows(roster)[1].account == "a2" && accountLoginRows(roster)[2].account == "a3");
     CHECK(accountAfterLogout(roster, "a1") == "a3");
     CHECK(accountAfterLogout(roster, "a3") == "a1");
     roster.accounts[3].needsSignIn = true;

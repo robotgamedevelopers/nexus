@@ -2329,6 +2329,9 @@ struct Builder {
 
     // Both the window root and the detached account menu surface use these same policy bindings.
     void captureShortcuts(PrLayoutNode keys) {
+        // A modal owns its keys. The signed-out page underneath also binds arrows, Enter and Escape;
+        // capturing those first would move its hidden picker instead of the visible sign-in card.
+        if (view.accounts.dialog != AccountMenuView::Dialog::None) return;
         std::vector<Shortcut> pressed;
         for (const auto& binding : view.windowApp.shortcuts) {
             if ((!view.secrets || !view.secrets->showing()) && prUiKeyCaptured(ui, keys, binding.key, binding.modifiers))
@@ -2498,8 +2501,7 @@ struct Builder {
     }
 
     // The /account, /login and /logout dialogs (openAccountDialog): Prax's dialog, over the AI's page. /account lists the
-    // signed-in accounts, the current one checked, and "Sign in to another account…"; /login the accounts that need
-    // signing in; /logout asks to confirm, naming the email. Closing one changes nothing.
+    // signed-in accounts, the current one checked, and "Sign in to another account…"; /login all linked accounts; /logout asks to confirm, naming the email. Closing one changes nothing.
     void accountDialog(PrLayoutNode window) {
         auto& menu = view.accounts;
         using Dialog = AccountMenuView::Dialog;
@@ -2559,7 +2561,7 @@ struct Builder {
                     menu.loginHighlighted = (menu.loginHighlighted + 1) % count;
             }
             std::vector<AccountItem> items{{view.windowApp.signInHeading, "", false}};
-            if (!count) items.push_back({"Every linked account is signed in.", "", false});
+            if (!count) items.push_back({"No accounts are linked to this AI.", "", false});
             for (std::size_t i = 0; i < count; ++i) {
                 const auto& row = menu.dialogRows[i];
                 items.push_back({row.text, "login:" + row.account, i == menu.loginHighlighted});
