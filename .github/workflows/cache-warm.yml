@@ -56,8 +56,6 @@ jobs:
           dir: ${{ env.NEXUS_BUILD }}
           # As ci.yml builds this directory (NEXUS_LTO off), so it stays warm for the pull requests.
           lto: "OFF"
-      - name: Record the sources the build was made from
-        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
 
   macos:
     name: mac-debug (${{ matrix.slot }})
@@ -81,8 +79,6 @@ jobs:
         with:
           config: mac-debug
           dir: ${{ env.NEXUS_BUILD }}
-      - name: Record the sources the build was made from
-        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
 
   watch:
     name: watch (${{ matrix.slot }})
@@ -112,8 +108,6 @@ jobs:
           cmake -S . -B "$NEXUS_BUILD/device" -G Ninja -DCMAKE_SYSTEM_NAME=watchOS -DCMAKE_OSX_SYSROOT=watchos \
             -DCMAKE_OSX_ARCHITECTURES=arm64_32 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_BUILD_TYPE=Release
           cmake --build "$NEXUS_BUILD/device" --parallel "$JOBS"
-      - name: Record the sources the builds were made from
-        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
 
   # ios.yml's two builds, each in its own directory (ios-device, ios-simulator), whole.
   ios:
@@ -142,8 +136,6 @@ jobs:
         with:
           config: ios-${{ matrix.target }}
           dir: ${{ env.NEXUS_BUILD }}
-      - name: Record the sources the build was made from
-        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
 
   windows:
     name: windows-release (${{ matrix.slot }})

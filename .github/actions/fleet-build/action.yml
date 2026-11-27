@@ -16,13 +16,14 @@
 #                        the login's own ~/.rustup or ~/.cargo
 # The machine's nexus-ci cache is ~/.cache/nexus-ci on Linux and ~/Library/Caches/nexus-ci on macOS.
 #
-# File times. A checkout rewrites only the files that differ from what it had, so the build trusts their times; and in
-# case a checkout starts over (every file new), the sources a build of every target was made from are recorded in the
-# build directory (.github/source-times.sh record, the caller's `record` step), and a file whose content is exactly
-# what was recorded gets a fixed old time before the next build (apply). The record is removed before each build and
-# written only after a build of everything that succeeded: then every output reflects it. A build of part of the tree
-# (ci.yml's tier_pr_build) or one that failed or was cut off records nothing, since an output it did not rebuild may be
-# older than a source the record would call old.
+# File times. The runner has one checkout and keeps several build directories beside it (mac-debug, ios-device,
+# ios-simulator, watch, ...), and every job moves the checkout's times, so no directory trusts them: before each
+# build the sources get the times this directory last saw them with, and a file changed since gets the time now
+# (.github/source-times.sh own, its record in the build directory, written before the build). Each directory then
+# sees the checkout as a checkout of its own would show it, whatever the other directories' jobs did to the times,
+# and a build that failed, was cut off or built part of the tree (ci.yml's tier_pr_build) leaves a record that is
+# still true. On 2026-11-26 a record read by one directory set a file back to an old time that another directory,
+# which had not yet seen that file's change, trusted: its stale object was linked (cache-warm run 45861944639).
 #
 # Nothing is installed here: what the build needs comes with the machine (nova-fleet runner-packages, sdk-toolchain),
 # and a missing tool fails at once by name.
@@ -72,15 +73,10 @@ runs:
           echo "::error::$(hostname -s) lacks ${missing[*]} on the runner's PATH: the fleet installs them (nova-fleet runner-packages, sdk-toolchain)"
           exit 1
         fi
-        # Times by content, against what the last successful build here was made from; then that record goes until
-        # this build succeeds.
-        manifest="$build/.nexus-ci-sources"
-        if [ -f "$manifest" ]; then
-          bash .github/source-times.sh apply "$manifest"
-          rm -f "$manifest"
-        else
-          echo "no record of a finished build in $build: the build trusts the checkout's times"
-        fi
+        # The sources' times as this directory last saw them, a change since at the time now (the header says why).
+        # The record of the old scheme goes: no step reads it.
+        rm -f "$build/.nexus-ci-sources"
+        bash .github/source-times.sh own "$build/.nexus-ci-times"
         if [ "$RUST" = true ]; then
           toolchain=1.98.1
           export RUSTUP_HOME="$caches/rustup" CARGO_HOME="$caches/cargo"
