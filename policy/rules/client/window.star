@@ -146,9 +146,11 @@ def handle(event, state, config):
                 target = state["active_tab"] + direction
                 target = target % count if config.get("tab_navigation_wrap", False) else max(0, min(target, count - 1))
                 shortcuts = _bind(shortcuts, chord, ["select_tab", target])
-            for chord, direction in config.get("tab_reorder", {"Command+Shift+ArrowLeft": -1, "Command+Shift+ArrowRight": 1}).items():
+            for chord, direction in config.get("tab_reorder", {"Command+Shift+PageUp": -1, "Command+Shift+PageDown": 1}).items():
                 shortcuts = _bind(shortcuts, chord, ["move_tab", direction])
         if state["tab"] == "ai":
+            for chord, edge in config.get("prompt_selection_shortcuts", {"Command+Shift+ArrowLeft": "start", "Command+Shift+ArrowRight": "end"}).items():
+                shortcuts = _bind(shortcuts, chord, ["select_prompt", edge])
             for chord, command in config.get("account_shortcuts", {}).items():
                 shortcuts = _bind(shortcuts, chord, ["account_command", command])
             default_picker = {} if "account_shortcuts" in config else {"ArrowUp": "previous", "ArrowDown": "next"}
@@ -386,7 +388,8 @@ def handle(event, state, config):
                 shortcuts += [submit + "   Send the current prompt.", queue + "   Queue the current prompt."]
             references = [
                 ("tab_navigation", {"Command+ArrowLeft": -1, "Command+ArrowRight": 1}, "Select previous / next tab"),
-                ("tab_reorder", {"Command+Shift+ArrowLeft": -1, "Command+Shift+ArrowRight": 1}, "Move the current tab left / right"),
+                ("prompt_selection_shortcuts", {"Command+Shift+ArrowLeft": "start", "Command+Shift+ArrowRight": "end"}, "Select from the prompt cursor to the start / end of the whole prompt"),
+                ("tab_reorder", {"Command+Shift+PageUp": -1, "Command+Shift+PageDown": 1}, "Move the current tab left / right"),
                 ("account_picker_shortcuts", {"ArrowUp": "previous", "ArrowDown": "next"}, "Open / navigate the account picker (plain ↑ / ↓)"),
                 ("transcript_scroll_keys", {"Command+ArrowUp": "top", "Command+ArrowDown": "bottom", "Control+ArrowUp": "top", "Control+ArrowDown": "bottom", "PageUp": "page_up", "PageDown": "page_down"}, "Scroll the transcript"),
                 ("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}, "Navigate / confirm / close the open account picker"),

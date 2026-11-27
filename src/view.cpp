@@ -3073,6 +3073,14 @@ struct Builder {
                     view.prompted = ~std::size_t(0);
                 }
                 break;
+            case WindowCommand::SelectPrompt: {
+                if (!model.tab_count() || model.tab(model.active()).kind != TabKind::AI ||
+                        !view.prompt || prUiFocus(ui) != view.prompt || prUiTextEditIsComposing(ui, view.prompt)) break;
+                auto selection = prUiTextEditSelection(ui, view.prompt);
+                selection.caret = key.type == "start" ? 0 : static_cast<uint32_t>(model.tab(model.active()).draft.size());
+                prUiTextEditSetSelection(ui, view.prompt, selection);
+                break;
+            }
             case WindowCommand::SelectTab: {
                 const auto index = static_cast<std::size_t>(key.argument);
                 select(index);

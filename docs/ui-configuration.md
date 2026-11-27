@@ -351,3 +351,7 @@ request window frames. Security lock screens retain their protected reveal.
 window's title-bar buttons do not show through. The outer margins retain the configured overlay transparency.
 The clock uses 28-point regular text, matching the tab size. Command–Up/Down scroll history to its top/bottom;
 plain Up/Down continue to navigate the account selector. Both are documented in `/help`.
+
+`prompt_selection_shortcuts` maps chords to `start` or `end`, extending the current prompt selection with its anchor preserved. The shipped bindings are Command–Shift–Left/Right. `tab_reorder` defaults to Command–Shift–PageUp/PageDown.
+
+The shipped outer canvas below the opaque black header is `#181818` at 90% opacity. `opaque_history_backdrop` is disabled so history margins use that same transparency. Prompt and conversation-panel fills are both `#272728` and remain independently configurable.

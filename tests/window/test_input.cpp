@@ -531,6 +531,26 @@ void commandEnterSendsTheHeldAndTheDraft() {
     CHECK(h.active().queue.empty() && h.active().held.empty() && h.active().draft.empty());
 }
 
+void commandShiftArrowsSelectPromptEdges() {
+    Harness h;
+    h.type("first");
+    h.enter(PrAppModifierFlag_Shift);
+    h.type("second");
+    const auto tab = h.model.active();
+    const auto shiftCommand = PrAppModifierFlags(style::kCommand | PrAppModifierFlag_Shift);
+    prUiTextEditSetSelection(h.ui, h.view.prompt, {8, 8});
+    h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft, shiftCommand);
+    auto selection = prUiTextEditSelection(h.ui, h.view.prompt);
+    CHECK(selection.anchor == 8 && selection.caret == 0);
+    CHECK(h.model.active() == tab && h.active().draft == "first\nsecond");
+    h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight, shiftCommand);
+    selection = prUiTextEditSelection(h.ui, h.view.prompt);
+    CHECK(selection.anchor == 8 && selection.caret == 12);
+    h.type("!");
+    CHECK(h.active().draft == "first\nse!");
+    CHECK(h.model.active() == tab);
+}
+
 void shiftEnterInsertsOneLineFeed() {
     Harness h;
     h.type("a");
@@ -3771,11 +3791,11 @@ int main(int argc, char** argv) {
         CHECK(h.active().type == "right");
         // Move and select entirely by keyboard. The default fence rejects a step into the next group.
         const auto reorder = PrAppModifierFlags(style::kCommand | PrAppModifierFlag_Shift);
-        h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft, reorder);
+        h.key(PrAppKey_PageUp, PrAppKeyCode_PageUp, reorder);
         CHECK(h.ids() == "4 5 2 0 3 1" && h.active().type == "right");
-        h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft, reorder);
+        h.key(PrAppKey_PageUp, PrAppKeyCode_PageUp, reorder);
         CHECK(h.ids() == "4 5 2 0 3 1" && h.active().type == "right");
-        h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight, reorder);
+        h.key(PrAppKey_PageDown, PrAppKeyCode_PageDown, reorder);
         CHECK(h.ids() == "4 5 2 0 1 3" && h.active().type == "right");
         activate(argv[4]);
         h.dragTab(5, 0);
@@ -3787,7 +3807,7 @@ int main(int argc, char** argv) {
         CHECK(h.ids() == "4 5 2 0 3 1");
         h.commandDigit(1);  // select across groups, then reorder and close using only the keys
         h.commandDigit(5);
-        h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight, reorder);
+        h.key(PrAppKey_PageDown, PrAppKeyCode_PageDown, reorder);
         CHECK(h.active().type == "right" && h.model.active() == 5);
         h.key('W', PrAppKeyCode_KeyW, style::kCommand);
         CHECK(h.model.tab_count() == 5 && h.active().type == "words");
@@ -3970,6 +3990,7 @@ int main(int argc, char** argv) {
     logoutRequiresAnExplicitEnterAndNeverBecomesChat();
     enterInThePromptLeavesSignInToTheAccountMenu();
     commandEnterSendsTheHeldAndTheDraft();
+    commandShiftArrowsSelectPromptEdges();
     shiftEnterInsertsOneLineFeed();
     blankDraftsSendNothing();
     commandDigitSelectsATabAndTypesNothing();

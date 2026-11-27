@@ -55,7 +55,7 @@
     "caret_peak": 3,
     "caret_radius": 3.36,
     "caret_seconds": 1.5,
-    "fill": "#303030",
+    "fill": "#272728",
     "ink": "#f3f3f3",
     "radius": 20.16,
     "show_plus": false,
@@ -325,7 +325,7 @@
     "cursor_lost_hue": 0
   },
   "ui_colors": {
-    "background": "#202020",
+    "background": "#181818",
     "control_hover": "#303030",
     "control_divider": "#373737",
     "control_ink": "#f3f3f3",
@@ -393,7 +393,7 @@
     "hide_on_blur": true,
     "protect_overlay_focus": true,
     "dashboard_background_updates": true,
-    "opaque_history_backdrop": true,
+    "opaque_history_backdrop": false,
     "mobile_top_dialogs": true,
     "mobile_tap_ends_editing": true,
     "mobile_full_width_replies": true,

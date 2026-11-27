@@ -97,7 +97,7 @@ Tabs
 - AI tabs come from the server's list of AIs and never close: the server is the authority, and the client holds only visual preferences and what is being typed (owner). An AI added on the server gets its tab live; one removed there loses its tab live (`Window.tla` `AddAI`, `RemoveAI`; `link_e2e_ais`).
 - Nothing a person typed is lost silently (owner): an AI tab's draft that is not empty, when its AI is removed, is kept and given back when an AI of that name on the same server has a tab again (`AIStrip.tla` `DraftsKept`, `KeptOnlyAbsent`, bound by `strip_walk`; `window_unit` `keptDraftsAcrossARestart`; `link_e2e_ais`).
 - The client saves tab group membership, order, selection and terminal directories in its local layout. Restoration respects the current fork policy (docs/plugins.md).
-- Click-drag or Command-Shift-Left/Right reorders a tab within its group. A cross-group drop leaves the tab in place. Other forks can permit transfers through the destination group’s `accepts_from` policy. Selection stays with the moved tab.
+- Click-drag or Command-Shift-PageUp/PageDown reorders a tab within its group. A cross-group drop leaves the tab in place. Other forks can permit transfers through the destination group’s `accepts_from` policy. Selection stays with the moved tab.
 - The AIs' order is saved after every drag and restored at launch. AIs the saved order doesn't name follow in list order, and names that no longer exist are dropped.
 - Command-1 to Command-0 select tabs 1 to 10 in the strip's current order. Command-1 is the sprint tab, and pressing it also takes the board back home. A key with no tab does nothing.
 - Command-T opens a terminal tab at the end, running the login shell in the home directory, and shows it. A terminal that cannot start leaves the previous tab showing.
@@ -298,7 +298,7 @@ Tabs
 - File operations are purple with the same perceptual lightness as shell-command orange. Tool colors, work chevrons,
   goal presentation and idle animation behavior live in the shipped profile; pulsing continues on battery by default.
 
-- The outer canvas is `#202020` at 90% opacity; the AI output panel is opaque `#272728`. Prompt and message fills
+- The outer canvas is `#181818` at 90% opacity; the AI output panel is opaque `#272728`. Prompt and message fills
   remain independently configurable. The local clock sits at the top right above the strip divider, formatted
   `Fri 27 Nov 10:45 AM`. Typography, colors, strings, interaction tuning, window options and the clock are fork-owned
   in Starlark/config; see `docs/ui-configuration.md`. Native code validates and renders these values.
@@ -316,5 +316,8 @@ Tabs
 - Dashboard polling and local rendering continue on its worker while another tab is selected or the overlay is
   hidden. Tab selection and overlay reveal prepare the latest local frame, never reload or wait for a network
   response. `ui_flags.dashboard_background_updates` permits a fork to suspend hidden polling.
-- The history viewport has an opaque backing so another application's title-bar controls cannot bleed through.
-  Its outer canvas margins retain configured transparency; the clock matches regular-weight tab text size.
+- The history viewport uses the outer canvas's 90% opacity without a second opaque backing; the clock matches regular-weight tab text size.
+
+- Command–Shift–Left/Right extends the prompt selection to the start/end of the whole prompt, including multiple lines. The fork owns these bindings through `prompt_selection_shortcuts`; tab reordering uses Command–Shift–PageUp/PageDown.
+
+- The prompt and output panel share the shipped background color `#272728`; retain their separate configuration fields.
