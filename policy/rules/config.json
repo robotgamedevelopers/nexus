@@ -237,6 +237,8 @@
     "label_size": 24,
     "meta_size": 21,
     "terminal_size": 21,
+    "terminal_inset": 12,
+    "connecting_text_size": 56,
     "line_pitch": 39.76,
     "entry_gap": 44.8,
     "bubble_padding_x": 29.96,
@@ -331,13 +333,15 @@
     "control_ink": "#f3f3f3",
     "control_muted_ink": "#9e9e9e",
     "control_faint_ink": "#8c8c8c",
-    "clock_ink": "#f3f3f3"
+    "clock_ink": "#f3f3f3",
+    "connecting_ink": "#ffffff"
   },
   "ui_text": {
     "sign_in_action": "Sign in to {account}",
     "sign_in_hint": "Press Enter or click to sign in.",
     "dashboard_title": "Dashboard",
     "dashboard_unavailable": "this build has no dashboard",
+    "connecting_label": "Connecting to nexus",
     "prompt_failure": "Prompt application: {reason}",
     "prompt_limit": "draft exceeds the prompt limit",
     "connect_sign_out": "Connect to the Nexus server to sign out.",

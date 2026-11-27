@@ -1384,7 +1384,11 @@ struct Builder {
             caption(centered, problem, textStyle(PrKitTextRole_Body, kNoticeTone, PrKitTextAlign_Center));
             return;
         }
-        view.terminals->show(tab.id, window);
+        PrKitBoxStyle terminalBox{};
+        terminalBox.place.flex = PrKitFlex_Fill;
+        terminalBox.place.minHeight = prKitPx(0);
+        terminalBox.padding.top = terminalBox.padding.left = look.ui.terminal_inset * k();
+        view.terminals->show(tab.id, prKitBox(kit, window, {}, terminalBox));
     }
 
     // The sprint tab: its page fills the window's width and the height below the strip, with no prompt; or, while there
@@ -1410,6 +1414,10 @@ struct Builder {
         if (view.board == nullptr || !view.board->show(box, extent, &problem)) {
             PrLayoutNode column = element(box, Part::Column);
             PrLayoutNode centered = element(column, Part::Centered);
+            if (view.connecting) {
+                connectingMessage(centered);
+                return;
+            }
             caption(centered, problem, textStyle(PrKitTextRole_Body, kNoticeTone, PrKitTextAlign_Center));
             // A dashboard waits on the server, so the link's own line shows under it while there is one: connecting,
             // lost, or why it failed (a host key that changed, a key the server did not take), never hidden behind
@@ -2240,7 +2248,7 @@ struct Builder {
         }
     }
 
-    PrColor promptPulse(bool visible, double amplitude) {
+    double promptPulseGain(bool visible, double amplitude) {
         const bool animate = idleAnimation(view.lastInput);
         view.energyAnimating |= visible && animate;
         const double phase = std::fmod(view.time, look.prompt.caretSeconds);
@@ -2254,7 +2262,32 @@ struct Builder {
             (1 - std::cos(3.141592653589793 * ramp)) / 2 : sampleMotion(look.prompt.caretCurve, phase / look.prompt.caretSeconds);
         const double peak = std::clamp(prUiDisplay(ui).headroom, 1.f, look.prompt.caretPeak);
         const double gain = std::round(64 * (look.ui.caret_floor + (peak - look.ui.caret_floor) * (0.5 + amplitude * (wave - 0.5)))) / 64;
-        return linearGain(rgb(look.prompt.caretInk), gain);
+        return gain;
+    }
+
+    PrColor promptPulse(bool visible, double amplitude) {
+        return linearGain(rgb(look.prompt.caretInk), promptPulseGain(visible, amplitude));
+    }
+
+    void connectingMessage(PrLayoutNode parent) {
+        const auto node = label(parent, look.words.connecting_label,
+            textStyle(PrKitTextRole_Title, kNoticeTone, PrKitTextAlign_Center));
+        auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, node));
+        auto font = prLayoutFontStyleRecord(tree, record.groups[PrLayoutGroup_Font]);
+        auto face = prTextFontStyle(font.font);
+        face.size = look.ui.connecting_text_size * k();
+        if (!view.connectingFont || prTextFontStyle(view.connectingFont.get()).size != face.size ||
+            prTextFontStyle(view.connectingFont.get()).weight != face.weight ||
+            prTextFontSet(view.connectingFont.get()) != kit->theme.fonts) {
+            const PrTextFontDesc desc{.set = kit->theme.fonts, .families = &kit->theme.ui,
+                .familyCount = 1, .style = face, .locale = prTextFontLocale(font.font)};
+            view.connectingFont.reset(prTextFontCreate(&desc));
+        }
+        font.font = view.connectingFont.get();
+        font.lineHeight = prLayoutLineHeightPx(face.size * look.ui.display_line_height);
+        record.groups[PrLayoutGroup_Font] = prLayoutFontStyleIntern(tree, &font);
+        prLayoutTreeFrameSetStyle(tree, node, prLayoutStyleIntern(tree, &record));
+        ink(node, look.colors.connecting_ink, false, promptPulseGain(true, 1));
     }
 
     void promptCaret(PrLayoutNode parent, PrLayoutNode edit) {
@@ -3256,8 +3289,11 @@ struct Builder {
                     break;
                 }
                 case Panel::Status:
-                    caption(element(window, Part::Footer), view.status,
-                        textStyle(PrKitTextRole_BodySmall, kStatusTone, PrKitTextAlign_Center));
+                    if (view.connecting)
+                        connectingMessage(element(window, Part::Footer));
+                    else
+                        caption(element(window, Part::Footer), view.status,
+                            textStyle(PrKitTextRole_BodySmall, kStatusTone, PrKitTextAlign_Center));
                     // Where the window asks for its server (iOS), the way to change it, under the line that says how
                     // the link to it goes.
                     if (view.serverChoice != nullptr && !view.serverChoice->current().empty()) {
@@ -3403,7 +3439,7 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
         look.ui = surface.ui;
         look.colors = surface.colors;
         look.words = surface.words;
-        if (look.fonts != surface.fonts) view.clockFont.reset();
+        if (look.fonts != surface.fonts) { view.clockFont.reset(); view.connectingFont.reset(); }
         look.fonts = surface.fonts;
         look.flags = surface.flags;
         if (look.transcriptStyle.showNotices != askedTranscript.showNotices ||

@@ -3201,6 +3201,35 @@ void sprintTabSaysWhyThereIsNoPage() {
     CHECK(h.hasText(prLayoutTreeRoot(h.tree), "this build has no dashboard"));
 }
 
+void connectingUsesWhiteCursorPulse() {
+    Harness h = withSprint();
+    h.board.page = false;
+    h.view.connecting = true;
+    h.view.status = "Connecting to test-host";
+    h.display.headroom = h.display.potentialHeadroom = 4;
+    auto colorAt = [&](double time) {
+        h.time = time;
+        h.frame(); h.frame();
+        const auto leaf = h.findText(h.window(), "Connecting to nexus");
+        CHECK(leaf && !h.hasText(h.window(), h.board.problem) && !h.hasText(h.window(), h.view.status));
+        if (!leaf) return PrColor{};
+        const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, prLayoutNodeParent(h.tree, leaf)));
+        const auto font = prLayoutFontStyleRecord(h.tree, record.groups[PrLayoutGroup_Font]);
+        CHECK(prTextFontStyle(font.font).size >= 2 * h.look.ui.body_size);
+        return prColorFromColor16(prLayoutColorStyleRecord(h.tree, record.groups[PrLayoutGroup_Color]).color);
+    };
+    const auto low = colorAt(0);
+    const auto high = colorAt(.55);
+    CHECK(low.r < 1 && high.r > 1 && high.r == high.g && high.g == high.b);
+    CHECK(h.view.energyAnimating);
+    h.preferences.reducedMotion = true;
+    const auto steady = colorAt(0);
+    CHECK(!h.view.energyAnimating && steady.r == colorAt(.55).r);
+    h.view.connecting = false;
+    h.frame(); h.frame();
+    CHECK(h.hasText(h.window(), h.board.problem) && !h.hasText(h.window(), "Connecting to nexus"));
+}
+
 // The text scale's keys zoom the page.
 void textKeysZoomTheBoard() {
     Harness h = withSprint();
@@ -4037,6 +4066,7 @@ int main(int argc, char** argv) {
     selectionChangesAreSaved();
     sprintTabKeysCloseNothing();
     sprintTabSaysWhyThereIsNoPage();
+    connectingUsesWhiteCursorPulse();
     textKeysZoomTheBoard();
     dashboardKeepsRosterDiagnosticsOffscreen();
     regularWidthNarrowsThePromptAndTheColumn();

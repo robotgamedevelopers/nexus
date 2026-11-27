@@ -184,6 +184,7 @@ struct AccountMenuView {
 
 struct View {
     WindowCalendar calendar;
+    std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> connectingFont{nullptr, prTextFontRelease};
     std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> clockFont{nullptr, prTextFontRelease};
     std::function<void(const Chirp&)> playChirp;
     // Plays a cue through playChirp, and none while locked (lockScreen): no sound says what an AI did.
@@ -344,6 +345,7 @@ struct View {
     std::string cutDraft;
     bool cutComing = false;
     bool cutFollow = false;
+    bool connecting = false;                    // derived from the link phase, never from its status wording
     bool promptOpen = true;                     // false: no prompt on an AI's tab (before the server is reached)
     std::string status;                         // one plain line where the prompt stands (the link's state); empty,
                                                 // none

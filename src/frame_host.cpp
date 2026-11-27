@@ -428,6 +428,7 @@ void FrameHost::pollLink() {
     settleLogin();
     refreshPicker();
     heardMsAgo = s.heardMsAgo;
+    view->connecting = s.phase == sync::LinkPhase::Connecting;
     view->status = sync::linkStatus(s.phase, host, s.heardMsAgo, s.problem);
 }
 
@@ -1065,6 +1066,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         signIn.opener.setToken(newClaimToken());
     }
     view->promptOpen = false;
+    view->connecting = true;
     view->status = sync::linkStatus(sync::LinkPhase::Connecting, host, 0, "");
     view->requestService = [this](const std::string& service, const std::string& text) -> std::string {
         if (!link || phase != sync::LinkPhase::Connected)
