@@ -43,6 +43,13 @@ void updateForegroundPriority(const PrSurface& surface, bool enabled);
 PrRect displayNotch(const PrSurface& surface);
 #endif
 
+// Desktop overlay only: block unsolicited focus changes where the OS supports it, or recover the keyboard.
+// `restore` is true only after this showing has owned the keyboard. Hidden windows never acquire focus.
+// Disable before an intentional hide, external browser handoff, or shutdown.
+#if NEXUS_MACOS || defined(_WIN32)
+void protectOverlayFocus(const PrSurface& surface, bool enabled, bool restore);
+#endif
+
 bool coverScreen(const PrSurface& surface);
 
 #if !NEXUS_PROCESSES

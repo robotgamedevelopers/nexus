@@ -25,7 +25,7 @@ VARIABLES visible, active, keyed, armed, last, held
 vars == <<visible, active, keyed, armed, last, held>>
 
 Acts == {"None", "Show", "Hide"}
-Ops == {"init", "hotkey", "escape", "observe", "keycheck", "lose", "click", "open"}
+Ops == {"init", "hotkey", "escape", "observe", "keycheck", "lose", "click", "restore", "open"}
 
 \* Each input and each act of the OS leaves nexus's hold on the window as it is: only Open changes it.
 Did(op, a) == last' = [op |-> op, act |-> a] /\ held' = held
@@ -111,6 +111,14 @@ Click ==
     /\ UNCHANGED <<visible, keyed, armed>>
     /\ Did("click", "None")
 
+\* Native protection can restore an unsolicited loss before Observe. Configuration opt-out and deliberate
+\* switching do not take this action. No hidden/unkeyed window is activated; the OS can refuse recovery.
+Restore ==
+    /\ visible /\ ~active /\ keyed
+    /\ active' \in BOOLEAN
+    /\ UNCHANGED <<visible, keyed, armed>>
+    /\ Did("restore", "None")
+
 \* Prax. A Studio window's open (main.cpp open, which sets a.window) comes with the window's first frame, and a hidden
 \* window has no frames (Prax 2908525: studio_window.h prStudioWindowCreate, app_window.h prAppWindowSetVisible). So
 \* a window nexus waits on open for is held only once something else has shown it.
@@ -121,7 +129,7 @@ Open ==
     /\ last' = [op |-> "open", act |-> "None"]
 
 \* A witness passes its broken action in place of the real one.
-NextWith(H, E, O, K) == H \/ E \/ O \/ K \/ Lose \/ Click \/ Open
+NextWith(H, E, O, K) == H \/ E \/ O \/ K \/ Lose \/ Click \/ Restore \/ Open
 
 Next == NextWith(Hotkey, Escape, Observe, KeyCheck)
 

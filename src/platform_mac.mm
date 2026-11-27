@@ -7,6 +7,8 @@
 
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
+#import <Carbon/Carbon.h>
+#include "overlay.h"
 
 @interface NexusForegroundActivity : NSObject
 @property(nonatomic, strong) id activity;
@@ -14,12 +16,22 @@
 @property(nonatomic) pthread_override_t qosOverride;
 @property(nonatomic) task_role_t previousRole;
 @property(nonatomic, strong) id quitMonitor;
+@property(nonatomic) BOOL yieldFocus;
+- (void)suspendFocus:(NSNotification*)notification;
 - (void)update:(NSNotification*)notification;
 @end
 
 @implementation NexusForegroundActivity
 - (void)update:(NSNotification*)notification {
     NSWindow* window = notification.object;
+    if ([notification.name isEqualToString:NSWindowDidBecomeKeyNotification]) self.yieldFocus = NO;
+    if ([notification.name isEqualToString:NSWindowDidResignKeyNotification]) {
+        // Snapshot explicit switching before the next frame: Cmd-Tab can be released by then.
+        const bool switching = (NSEvent.modifierFlags & NSEventModifierFlagCommand) &&
+            CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, kVK_Tab);
+        const bool outsideClick = NSEvent.pressedMouseButtons && !NSPointInRect(NSEvent.mouseLocation, window.frame);
+        self.yieldFocus = self.yieldFocus || switching || outsideClick || NSApp.modalWindow || window.attachedSheet;
+    }
     const bool foreground = window.isKeyWindow && window.isVisible && !window.isMiniaturized &&
         ![notification.name isEqualToString:NSWindowWillCloseNotification] &&
         ![notification.name isEqualToString:NSWindowDidResignKeyNotification];
@@ -54,7 +66,13 @@
             std::fprintf(stderr, "nexus: normal scheduling could not be restored: %s\n", mach_error_string(status));
     }
 }
+- (void)suspendFocus:(NSNotification*)notification {
+    (void)notification;
+    self.yieldFocus = YES;
+}
 - (void)dealloc {
+    [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self];
+    [NSNotificationCenter.defaultCenter removeObserver:self];
     if (_quitMonitor) [NSEvent removeMonitor:_quitMonitor];
     if (_activity) [NSProcessInfo.processInfo endActivity:_activity];
     if (_qosOverride) pthread_override_qos_class_end_np(_qosOverride);
@@ -110,6 +128,11 @@ void trackForegroundPriority(const PrSurface& surface, const std::function<void(
                                       NSWindowDidMiniaturizeNotification, NSWindowWillCloseNotification]) {
         [NSNotificationCenter.defaultCenter addObserver:observer selector:@selector(update:) name:name object:window];
     }
+    for (NSNotificationName name in @[NSWorkspaceWillSleepNotification, NSWorkspaceScreensDidSleepNotification,
+                                      NSWorkspaceSessionDidResignActiveNotification]) {
+        [NSWorkspace.sharedWorkspace.notificationCenter addObserver:observer selector:@selector(suspendFocus:)
+            name:name object:nil];
+    }
     [observer update:[NSNotification notificationWithName:NSWindowDidUpdateNotification object:window]];
 }
 
@@ -120,6 +143,22 @@ void updateForegroundPriority(const PrSurface& surface, bool enabled) {
     if (!observer || observer.enabled == enabled) return;
     observer.enabled = enabled;
     [observer update:[NSNotification notificationWithName:NSWindowDidUpdateNotification object:window]];
+}
+
+void protectOverlayFocus(const PrSurface& surface, bool enabled, bool restore) {
+    if (surface.kind != PrSurfaceKind_NsView || !surface.handle) return;
+    NSWindow* window = ((__bridge NSView*)surface.handle).window;
+    NexusForegroundActivity* observer = objc_getAssociatedObject(window, &priorityObserverKey);
+    if (!observer || !window) return;
+    if (!enabled) { observer.yieldFocus = YES; return; }
+    if (window.isKeyWindow) { observer.yieldFocus = NO; return; }
+    const bool visible = window.isVisible && !window.isMiniaturized && window.alphaValue > 0;
+    const bool yielded = observer.yieldFocus || NSApp.modalWindow || window.attachedSheet;
+    if (!overlayMayRestoreFocus(enabled, visible, restore, yielded)) return;
+    const pid_t other = NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
+    [window makeKeyAndOrderFront:nil];
+    std::fprintf(stderr, "nexus: focus recovery time=%.3f other_pid=%d restored=%d\n",
+        NSDate.date.timeIntervalSince1970, int(other), int(window.isKeyWindow));
 }
 
 PrRect displayNotch(const PrSurface& surface) {

@@ -392,6 +392,7 @@
     "overlay_blur": false,
     "overlay_accessory": true,
     "hide_on_blur": true,
+    "protect_overlay_focus": true,
     "mobile_top_dialogs": true,
     "mobile_tap_ends_editing": true,
     "mobile_full_width_replies": true,

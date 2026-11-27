@@ -259,6 +259,9 @@ void carryOut(App& a, OverlayAct act) {
     if ((act == OverlayAct::Hide) == bool(prAppWindowIsVisible(window))) prioritizeOverlayTransition(a.view.windowApp.surface.flags.foreground_priority);
 #endif
     if (act == OverlayAct::Hide) {
+        PrSurface focusSurface{};
+        if (prAppWindowSurface(window, &focusSurface) == PrStatus_Ok)
+            protectOverlayFocus(focusSurface, false, false);
         a.preparingReveal = false;
         if (a.board) a.board->cancelPreparation();
         a.boardRevealStep.reset();
@@ -519,7 +522,12 @@ bool open(void* context, PrStudioWindow* window) {
     // A page's link that arrives while the window is locked is not opened (window_lock.h openUnlessLocked).
     const auto lockedNow = [&a] { return a.lock && !a.lock->drawsContent(); };
     const auto logLine = [](const std::string& line) { std::fprintf(stderr, "nexus: %s\n", line.c_str()); };
-    board.open = openUnlessLocked(a.urls->handle(), lockedNow, logLine);
+    const auto openExternal = [&a](const std::string& url) {
+        // A requested browser/sign-in handoff deliberately releases focus before launching another app.
+        if (a.overlay) carryOut(a, OverlayAct::Hide);
+        a.urls->open(url);
+    };
+    board.open = openUnlessLocked(openExternal, lockedNow, logLine);
     // Linked to a server: the board it says it serves, and this window's own lookup only if it says none.
     board.fromServer = a.link != nullptr;
     if (a.overlay)
@@ -545,9 +553,9 @@ bool open(void* context, PrStudioWindow* window) {
     // In-app sign-in's URL, in the default browser off the frame thread (frame_host.h LinkSignIn, url_opener.h); a URL
     // the system cannot open is the flow's to end at its deadline, and is never printed. A window that is not an overlay
     // shows from the start, so it may claim now.
-    a.view.openLink = openUnlessLocked(a.urls->handle(), lockedNow, logLine);
+    a.view.openLink = openUnlessLocked(openExternal, lockedNow, logLine);
     a.view.playChirp = [&a](const Chirp& cue) { a.audio.play(cue); };
-    a.host.signIn.openUrl = a.urls->handle();
+    a.host.signIn.openUrl = openExternal;
     // Return or a click on the lock screen asks the system again.
     a.view.unlock = [&a] { if (a.lock) a.lock->ask(); };
     if (!a.overlay && (!a.lock || a.lock->drawsContent())) {
@@ -620,6 +628,11 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
             a.model->tab(a.model->active()).kind == TabKind::Sprint;
         a.revealFrameReady = !sprint || (a.boardRevealStep && a.board->readyToReveal(*a.boardRevealStep));
         return;
+    }
+    if (a.overlay) {
+        PrSurface focusSurface{};
+        if (prAppWindowSurface(prStudioWindowAppWindow(window), &focusSurface) == PrStatus_Ok)
+            protectOverlayFocus(focusSurface, a.view.windowApp.surface.flags.protect_overlay_focus, a.rules.keyed());
     }
     // A change of the window's visibility or keyboard asks for a frame, so each one is seen here.
     if (a.overlay && a.view.windowApp.surface.flags.hide_on_blur)

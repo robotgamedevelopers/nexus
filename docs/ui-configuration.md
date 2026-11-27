@@ -240,6 +240,7 @@ canonical, and `docs/policy.md` documents the existing style groups.
 | `overlay_blur` | `false` |
 | `overlay_accessory` | `true` |
 | `hide_on_blur` | `true` |
+| `protect_overlay_focus` | `true` |
 | `mobile_top_dialogs` | `true` |
 | `mobile_tap_ends_editing` | `true` |
 | `mobile_full_width_replies` | `true` |
@@ -329,3 +330,11 @@ reported to inspect the preceding frames, rather than starting a profiler after 
 bound diagnostic memory/disk usage. Set the flag to false to stop collecting; existing recordings remain available.
 
 User messages, including held and sending messages, are right aligned and wrap at two-thirds of the conversation width. `ui_style.person_bubble_max_percent` controls this independently of tool and information bubbles. AI replies use `transcript_style.reply_width` from the left.
+
+`ui_flags.protect_overlay_focus` protects an open desktop overlay against unsolicited focus changes. macOS attempts
+keyboard recovery before hide-on-blur; observed Command–Tab, clicks outside the overlay, sleep/session switching and
+requested browser/sign-in handoffs yield normally. Recovery uses public AppKit APIs and the OS can refuse it. Windows
+uses `LockSetForegroundWindow` while foreground; explicit Alt switching and clicks retain the OS escape behavior.
+Protection never opens a hidden overlay. Turn it off to restore the previous immediate hide-on-blur behavior.
+Linux currently builds the server and window libraries, but has no runnable graphical client backend in this checkout;
+iOS focus belongs to UIKit. No focus-lock capability is claimed for those platforms.

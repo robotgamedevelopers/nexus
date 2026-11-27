@@ -81,7 +81,7 @@ Launch and the overlay
 - The macOS client starts at GUI login in overlay mode. Keep example plugins, their services, groups and bindings in isolated test fixtures.
 - At launch and relaunch nothing shows: no window, no single frame, and no change of focus. nexus connects to `nexus-server` in the background, and only the hotkey shows it. The one exception is a hotkey that fails to register, because then nothing else could show nexus.
 - The hotkey is Command-backtick, the key left of 1, chosen by key position. It hides an overlay that is visible and has the keyboard, and shows it in every other case: after Command-Tab, the next press shows it rather than merely reactivating it.
-- An overlay that had the keyboard and lost it (to Command-Tab or a click on another app) hides. One that never got the keyboard after a show is hidden at the key check rather than left standing over other apps.
+- An overlay that had the keyboard and deliberately yields it (to Command-Tab or a click on another app) hides. Unsolicited focus changes are blocked or recovered by the desktop platform before hide-on-blur, controlled by `ui_flags.protect_overlay_focus`. Hidden overlays never acquire focus; browser/sign-in handoffs and OS session changes yield. One that never got the keyboard after a show is hidden at the key check rather than left standing over other apps.
 - Escape dismisses an open account menu. With no menu or dialog open, Escape hides the overlay on the sprint tab and on an AI's tab. On a terminal tab, Escape always goes to the terminal: vim, shells and agents need it.
 
 Access to the client (owner, 2026-11-26: the signed-in OS session is sufficient; `docs/security.md`)

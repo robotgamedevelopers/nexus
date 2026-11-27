@@ -64,6 +64,21 @@ void showLaunchError(const std::string& text) {
     MessageBoxW(nullptr, wide(shown).c_str(), L"nexus", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
 }
 
+void protectOverlayFocus(const PrSurface& surface, bool enabled, bool restore) {
+    (void)restore; // Windows blocks the request before focus changes; deliberate OS switching remains available.
+    static HWND locked = nullptr;
+    if (surface.kind != PrSurfaceKind_Hwnd) return;
+    const HWND window = static_cast<HWND>(surface.handle);
+    const bool foreground = window && IsWindowVisible(window) && GetForegroundWindow() == window;
+    const bool switching = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+    if ((!enabled || !foreground || switching) && locked) {
+        LockSetForegroundWindow(LSFW_UNLOCK);
+        locked = nullptr;
+    }
+    if (enabled && foreground && !switching && locked != window && LockSetForegroundWindow(LSFW_LOCK))
+        locked = window;
+}
+
 bool coverScreen(const PrSurface& surface) {
     if (surface.kind != PrSurfaceKind_Hwnd) {
         return false;

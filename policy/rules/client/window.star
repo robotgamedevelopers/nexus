@@ -362,6 +362,7 @@ def handle(event, state, config):
                 "Command+1 … Command+9, Command+0   Select tabs 1–10.",
                 "Command+T / Command+W   Open a terminal / close a closable tab.",
                 "⌘Q (macOS overlay)   Hide Nexus and keep its connection running.",
+                "Focus protection   Reject unsolicited desktop focus changes while open where supported; explicit app switching and browser sign-in handoffs yield.",
                 "Command+= / Command+Shift++ / Command+- (⌘+ / ⌘−)   Increase / decrease text size.",
                 "Command+Escape   Stop the current AI turn. Use /goal off to stop future goal reminders.",
                 "Escape   Close the current picker/dialog first; otherwise hide the overlay. Terminals receive Escape.",

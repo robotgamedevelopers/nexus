@@ -45,6 +45,7 @@ Step(s) ==
          [] s.op = "keycheck" -> O!KeyCheck
          [] s.op = "lose"     -> O!Lose
          [] s.op = "click"    -> O!Click
+         [] s.op = "restore"  -> O!Restore
          [] OTHER             -> FALSE
 
 traceVars == <<visible, active, keyed, armed, last, held, l>>

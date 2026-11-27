@@ -517,7 +517,7 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
         endif()
         set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         set_source_files_properties(src/lock_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-        target_link_libraries(nexus PRIVATE "-framework AppKit" "-framework LocalAuthentication")
+        target_link_libraries(nexus PRIVATE "-framework AppKit" "-framework CoreGraphics" "-framework LocalAuthentication")
         # The app's name is nexus: the bundle's name and display name (cmake/Info.plist.in, CMake's
         # template with CFBundleDisplayName added), the executable (the process's name in Activity Monitor and the app
         # menu's About, Hide and Quit) and the window's title (main.cpp).

@@ -21,12 +21,15 @@
 @end
 @interface PriorityTestWindow : NSWindow
 @property(nonatomic) BOOL pretendForeground;
+@property(nonatomic) BOOL pretendVisible;
+@property(nonatomic) int focusRequests;
 @property(nonatomic, strong) NSScreen* testScreen;
 @end
 @implementation PriorityTestWindow
 - (NSScreen*)screen { return self.testScreen ? self.testScreen : [super screen]; }
 - (BOOL)isKeyWindow { return self.pretendForeground; }
-- (BOOL)isVisible { return self.pretendForeground; }
+- (BOOL)isVisible { return self.pretendForeground || self.pretendVisible; }
+- (void)makeKeyAndOrderFront:(id)sender { (void)sender; ++self.focusRequests; self.pretendForeground = YES; }
 - (BOOL)isMiniaturized { return NO; }
 @end
 
@@ -58,6 +61,25 @@ int main() {
         window.pretendForeground = NO;
         [NSNotificationCenter.defaultCenter postNotificationName:NSWindowDidResignKeyNotification object:window];
         if (role() != before) return 4;
+        // Restore only an already-focused visible overlay. Never activate a real desktop window in this test.
+        nexus::protectOverlayFocus(surface, true, true);
+        if (window.focusRequests != 0) return 8;
+        window.pretendVisible = YES;
+        nexus::protectOverlayFocus(surface, true, false);
+        if (window.focusRequests != 0) return 9;
+        nexus::protectOverlayFocus(surface, true, true);
+        if (window.focusRequests != 1 || !window.isKeyWindow) return 10;
+        nexus::protectOverlayFocus(surface, false, true);
+        window.pretendForeground = NO;
+        nexus::protectOverlayFocus(surface, true, true);
+        if (window.focusRequests != 1) return 11;
+        window.pretendForeground = YES;
+        nexus::protectOverlayFocus(surface, true, true);
+        [NSWorkspace.sharedWorkspace.notificationCenter postNotificationName:NSWorkspaceSessionDidResignActiveNotification object:nil];
+        window.pretendForeground = NO;
+        nexus::protectOverlayFocus(surface, true, true);
+        if (window.focusRequests != 1) return 12;
+        window.pretendVisible = NO;
         // Screen coordinates can be negative on a secondary display. The same notch must map correctly in both
         // AppKit view orientations, and disappear when the content is entirely below the camera housing.
         auto* screen = [NotchTestScreen new];
