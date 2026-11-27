@@ -2520,7 +2520,7 @@ struct Builder {
             prKitSetOpen(kit, window, true);
             menu.dialogShown = true;
         }
-        const char* title = menu.dialog == Dialog::Account ? "Account" : menu.dialog == Dialog::Login ? "Sign in" : "Sign out";
+        const char* title = menu.dialog == Dialog::Account ? "Account" : menu.dialog == Dialog::Login ? "Sign in" : menu.dialog == Dialog::BrowserLogout ? "Sign out in your browser" : "Sign out";
         PrKitDialog dialog{};
         dialog.key = prHashString(sv(std::string("account-dialog/") + title), 0);
         dialog.title = sv(std::string_view(title));
@@ -2535,6 +2535,24 @@ struct Builder {
         auto about = textStyle(PrKitTextRole_Body, PrKitTone_Primary);
         about.wrap = PrKitWrap_Wrap;
         const std::string name(model.tab(model.active()).displayName());
+        if (menu.dialog == Dialog::BrowserLogout) {
+            label(body, "Sign out of Claude in the browser page that opened. Then return here to continue with the selected account.", about);
+            label(body, "If the browser already shows a sign-in page, continue. Nexus waits for your confirmation.",
+                  textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted));
+            const auto reopen = prKitButton(kit, body, {.key = prHashString(sv("browser-logout-open"), 0),
+                .text = sv("Open Claude")}, {});
+            const auto cancel = prKitButton(kit, body, {.key = prHashString(sv("browser-logout-cancel"), 0),
+                .text = sv("Cancel")}, {});
+            const auto confirm = prKitButton(kit, body, {.key = prHashString(sv("browser-logout-confirm"), 0),
+                .text = sv("I’ve signed out — Continue")}, {.variant = PrKitButtonVariant_Primary});
+            if (prKitActivated(kit, reopen) && view.openBrowserLogout) view.openBrowserLogout();
+            if (prKitActivated(kit, cancel)) {
+                menu.dialog = Dialog::None;
+                if (view.cancelLoginPreparation) view.cancelLoginPreparation();
+            }
+            if (prKitActivated(kit, confirm) && view.browserLogoutConfirmed) view.browserLogoutConfirmed();
+            return;
+        }
         if (menu.dialog == Dialog::Logout) {
             label(body, "Sign " + name + " out of " + menu.logoutShown + "? This deletes its saved login.", about);
             label(body, menu.logoutNext.empty() ? name + " will ask you to sign in." :

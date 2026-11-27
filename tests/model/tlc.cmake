@@ -28,6 +28,7 @@
 #               with SEED, STEPS and AIS (2 or 3), and FAULTY one of forget, wait
 #   GLIDEWALK   optional, in place of WALK: glide_walk; it is run first and writes GlideTraceData.tla into WORK, with
 #               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
+#   LOGINPREPWALK optional: login_preparation_trace, writes LoginPreparationTraceData.tla; FAULTY ack or browser
 #   MENUWALK    optional, in place of WALK: account_menu_walk; it is run first and writes AccountMenuTraceData.tla
 #               into WORK, with SEED and STEPS, and FAULTY sideways for the gesture that keeps the menu on a sideways move
 #   SUPWALK     optional, in place of WALK: tests/server's supervisor_walk; it is run first and writes
@@ -357,6 +358,12 @@ elseif(DEFINED PASSWALK AND NOT "${PASSWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "pass_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED LOGINPREPWALK AND NOT "${LOGINPREPWALK}" STREQUAL "")
+    execute_process(COMMAND "${LOGINPREPWALK}" "${FAULTY}" "${WORK}/LoginPreparationTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "login_preparation_trace failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED MENUWALK AND NOT "${MENUWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")

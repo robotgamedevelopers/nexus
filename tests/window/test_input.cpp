@@ -2251,16 +2251,20 @@ void accountPickerIsAnExplicitChoice() {
     host.view = &h.view;
     host.connect(&link, "test");
     h.view.selected = [&] { host.personSelected(); };
+    bool workUnsigned = false;
+    std::vector<sync::EntryRef> notices;
     const auto publish = [&](const std::string& account, bool automatic = false, bool supportsAuto = false) {
         auto session = std::make_shared<sync::SessionView>();
         session->id = 17;
+        session->entries = notices;
         session->info = {"f1", "codex", account, "", ""};
         session->info.autoAccount = automatic;
         link.state.phase = sync::LinkPhase::Connected;
         link.state.loopback = true;
         link.state.sessions = sync::Sessions({session});
-        link.state.sessions.setAIs({{"f1", {{"a", "Personal"}, {"b", "Work"}, {"c", "Archive", true}}, supportsAuto},
+        link.state.sessions.setAIs({{"f1", {{"a", "Personal"}, {"b", "Work", workUnsigned}, {"c", "Archive", true}}, supportsAuto},
                                       {"f2"}});
+        link.state.sessions.setNextAction(link.sent.size() + 1);
         link.changed = true;
         host.pollLink();
         h.frame();
@@ -2316,20 +2320,24 @@ void accountPickerIsAnExplicitChoice() {
     h.enter();
     h.frame();
     CHECK(!h.view.accountPicker && signIns == 0 && h.active().draft == "keep my draft" && h.active().held.empty());
-    CHECK(link.sent.size() == 1 && link.sent[0].kind == sync::ActionKind::SetAccount &&
-          link.sent[0].session == 17 && link.sent[0].text == "c");
+    CHECK(link.sent.size() == 1 && link.sent[0].kind == sync::ActionKind::SignOut &&
+          link.sent[0].session == 17 && link.sent[0].account == "b");
+    workUnsigned = true;
+    notices.push_back(std::make_shared<sync::SessionEntry>(EntryKind::Notice, "Signed out of b in Nexus."));
+    publish("b");
+    CHECK(link.sent.size() == 2 && link.sent[1].kind == sync::ActionKind::SetAccount && link.sent[1].text == "c");
     // Archive needs signing in, and the shipped profile signs in on select (sign_in_on_select): once the server has
     // the session on it, the window claims its sign-in, and the menu stands open asking for it.
     publish("c");
-    CHECK(link.sent.size() == 2 && link.sent[1].kind == sync::ActionKind::SignInClaim && link.sent[1].account == "c" &&
-          link.sent[1].session == 17);
+    CHECK(link.sent.size() == 3 && link.sent[2].kind == sync::ActionKind::SignInClaim && link.sent[2].account == "c" &&
+          link.sent[2].session == 17);
     CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.view.accountRows.size() == 3);
     arrow(false, style::kCommand);
     CHECK(preview("b", "c"));
     h.commandDigit(3);
     h.frame();
     CHECK(h.active().name == "f2" && !h.view.accountPicker && h.view.accountMenu == kPrLayoutNodeNone);
-    CHECK(link.sent.size() == 2);
+    CHECK(link.sent.size() == 3);
     h.commandDigit(2);
     CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.active().draft == "keep my draft");
     arrow(true, style::kCommand);
@@ -2341,9 +2349,15 @@ void accountPickerIsAnExplicitChoice() {
     h.pointer(PrAppEventKind_PointerDown, point);
     h.pointer(PrAppEventKind_PointerUp, point);
     CHECK(!h.view.accountPicker && signIns == 0 && h.active().draft == "keep my draft");
-    CHECK(link.sent.size() == 3 && link.sent[2].kind == sync::ActionKind::SetAccount && link.sent[2].text == "b");
+    CHECK(link.sent.size() == 4 && link.sent[3].kind == sync::ActionKind::SignOut && link.sent[3].account == "c");
+    notices.push_back(std::make_shared<sync::SessionEntry>(EntryKind::Notice, "Signed out of c in Nexus."));
+    publish("c");
+    CHECK(link.sent.size() == 5 && link.sent[4].kind == sync::ActionKind::SetAccount && link.sent[4].text == "b");
     publish("b");
-    CHECK(h.view.accountMenu == kPrLayoutNodeNone && link.sent.size() == 3);
+    CHECK(link.sent.size() == 6 && link.sent[5].kind == sync::ActionKind::SignInClaim && link.sent[5].account == "b");
+    workUnsigned = false;
+    publish("b");
+    CHECK(h.view.accountMenu == kPrLayoutNodeNone && link.sent.size() == 6);
     // The shipped menu lists the linked accounts only: automatic choice is the server's (auto_accounts), never a row.
     publish("a", true, true);
     arrow(false, style::kCommand);
@@ -2351,7 +2365,7 @@ void accountPickerIsAnExplicitChoice() {
     for (const auto row : h.view.accountRows) CHECK(!h.hasText(row, "auto"));
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     h.frame();
-    CHECK(link.sent.size() == 3 && h.active().draft == "keep my draft");
+    CHECK(link.sent.size() == 6 && h.active().draft == "keep my draft");
 }
 
 void fableLimitOffersKeyboardAndMouseChoices() {

@@ -30,6 +30,7 @@
 
 #include "hitch.h"
 #include "link_port.h"
+#include "login_preparation.h"
 #include "model.h"
 #include "sync/actions.h"
 #include "sync/client.h"
@@ -244,8 +245,19 @@ private:
     LimitOffer currentLimit() const;
     std::optional<std::pair<sync::SessionId, std::string>> signInSelection_;
     std::map<std::string, std::uint64_t> pendingClaims_; // until the offer changes or this link ends
-    // /login: the session and the account signing in while the session stays on its own; it switches once signed in.
+    // /login after preparation: the selected session/account waiting for verified enrollment.
     std::optional<std::pair<sync::SessionId, std::string>> pendingLogin_;
+    std::uint64_t pendingLoginAction_ = 0;
+    struct LoginPreparationState {
+        sync::SessionId session;
+        std::string previous, target;
+        LoginPreparation machine;
+        std::uint64_t action = 0, noticeFrom = 0;
+        bool signedOut = false;
+    };
+    std::optional<LoginPreparationState> loginPreparation_;
+    void prepareLogin(bool browserConfirmed = false);
+    void enrollSelected(const std::string& account);
     std::string logoutNext_;    // /logout: the account the AI moves to after, chosen as the dialog opened
     const sync::ServerAI* rosterOf(sync::SessionId session) const;
     std::optional<std::string> signInTarget() const;
