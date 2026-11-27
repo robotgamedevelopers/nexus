@@ -1384,11 +1384,7 @@ struct Builder {
             caption(centered, problem, textStyle(PrKitTextRole_Body, kNoticeTone, PrKitTextAlign_Center));
             return;
         }
-        PrKitBoxStyle terminalBox{};
-        terminalBox.place.flex = PrKitFlex_Fill;
-        terminalBox.place.minHeight = prKitPx(0);
-        terminalBox.padding.top = terminalBox.padding.left = look.ui.terminal_inset * k();
-        view.terminals->show(tab.id, prKitBox(kit, window, {}, terminalBox));
+        view.terminals->show(tab.id, window);
     }
 
     // The sprint tab: its page fills the window's width and the height below the strip, with no prompt; or, while there

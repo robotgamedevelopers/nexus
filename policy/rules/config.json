@@ -237,7 +237,6 @@
     "label_size": 24,
     "meta_size": 21,
     "terminal_size": 21,
-    "terminal_inset": 12,
     "connecting_text_size": 56,
     "line_pitch": 39.76,
     "entry_gap": 44.8,

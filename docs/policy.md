@@ -568,3 +568,5 @@ The shipped `client/window.star` formats `/help`; `server/conversation.star` for
 setting acknowledgements and goal status as Markdown. Native state changes and validation remain authoritative.
 
 The client window operation `["select_prompt", "start"|"end"]` extends the focused AI prompt selection to the corresponding document edge, retaining its anchor. It does nothing outside a focused AI prompt or during input-method composition.
+
+The connection presentation uses `ui_text.connecting_label` ("Connecting to nexus"), `ui_style.connecting_text_size` (56), and `ui_colors.connecting_ink` (white). While the link is connecting, it replaces the dashboard waiting captions with one centered label. It shares the prompt cursor's HDR pulse settings and respects reduced motion and display headroom. Connection failures retain their actionable diagnostics.

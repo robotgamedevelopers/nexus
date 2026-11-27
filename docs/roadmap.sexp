@@ -301,6 +301,8 @@
   (:id "t-ui-defaults-source" :type :task :title "Move remaining presentation defaults from native structs into the shipped profile and generate compatible fallback records from one source" :state :todo)
   (:id "t-transcript-presentation-policy" :type :task :title "Make public transcript grouping, compact work previews, details, warning widths and labels configurable while retaining mandatory native privacy redaction" :state :todo)
   (:id "t-input-policy-tuning" :type :task :title "Move application gesture thresholds and intent precedence into documented policy; test customized profiles through real client input" :state :todo)
+  (:id "t-terminal-hdr-cursor" :type :task :title "Prax feedback: expose terminal cursor painting with HDR color and host-controlled pulse timing" :state :todo
+   :note "The pinned terminal exposes its cursor color as PrColor8 and applies an internal on/off blink. Matching the prompt cursor requires a native rendering hook that preserves cursor visibility, shape, wide cells, composition, focus and scrollback. Do not patch the Prax dependency or mutate the shell cursor state to imitate a rendering hook.")
   (:id "t-policy-deployment-identity" :type :task :title "Stage and verify a binary and policy from one immutable commit; support compatible live previews and close them with warning-free matching packages" :state :todo)
   (:id "t-personal-policy" :type :task :title "Move further client and server decisions into fork-owned Starlark" :state :todo)
   (:id "t-client-config" :type :task :title "Client config as documented, versioned JSON in git, relayed by the server, never stored by it" :state :todo)
