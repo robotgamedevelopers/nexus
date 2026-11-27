@@ -345,8 +345,8 @@ struct DecorationRecipe {
                 d.background = prColor16FromColor(rgb(look.transcriptStyle.panelFill.value_or(look.tabs.fill)));
                 d.outlineStyle = PrDrawBorderStyle_Solid;
                 d.outlineColor = prColor16FromColor(rgb(look.colors.output_border));
-                d.outlineWidth = px(look.ui.output_border_width * k);
-                d.outlineOffset = px(-look.ui.output_border_width * k);
+                d.outlineWidth = prLayoutUnitFromPx(look.ui.output_border_width * k);
+                d.outlineOffset = prLayoutUnitFromPx(-look.ui.output_border_width * k);
                 radius(d, look.transcriptStyle.radius * k);
                 break;
             case Part::TabDivider:
