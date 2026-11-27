@@ -123,6 +123,8 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         putText(b.main, x->info.limit_account, s.info.limitAccount, scratch);
         x->info.context_epoch = s.info.contextEpoch;
         putText(b.main, x->info.catalog, s.info.catalog, scratch);
+        putText(b.main, x->info.goal, s.info.goal, scratch);
+        x->info.goal_next_ms = s.info.goalNextMs;
         putText(b.main, x->info.limit_model, s.info.limitModel, scratch);
         x->info.auto_account = s.info.autoAccount;
         if (s.info.primaryAccount) {
@@ -196,6 +198,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         for (const SignInOffer& o : change.offers) {
             wire::SignInOffer* x = added(wire::SessionsDiffSigninsAdd(b.main, d->signins));
             x->id = o.id;
+            x->cancel_supported = o.cancelSupported;
             putText(b.main, x->account, o.account, scratch);
             putText(b.main, x->provider, o.provider, scratch);
             putText(b.main, x->opener, o.opener, scratch);
@@ -257,6 +260,8 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
             s.info.limitAccount = textOf(x.info.limit_account);
             s.info.contextEpoch = x.info.context_epoch;
             s.info.catalog = textOf(x.info.catalog);
+            s.info.goal = textOf(x.info.goal);
+            s.info.goalNextMs = x.info.goal_next_ms;
             s.info.limitModel = textOf(x.info.limit_model);
             s.info.autoAccount = x.info.auto_account;
             if (const auto* choice = wire::AccountChoiceAt(x.primary_account))
@@ -318,6 +323,7 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
     for (const wire::SignInOffer& x : d->signins) {
         SignInOffer o;
         o.id = x.id;
+        o.cancelSupported = x.cancel_supported;
         o.account = textOf(x.account);
         o.provider = textOf(x.provider);
         o.opener = textOf(x.opener);

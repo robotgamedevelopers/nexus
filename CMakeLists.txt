@@ -377,8 +377,9 @@ target_compile_options(nexus_hitch PRIVATE ${NEXUS_WARNINGS})
 
 # The sprint board's scrolling (src/scroll_glide.h): the curves and the scroller over its page. No OS, no time, no
 # Prax, so that the model job builds its trace walk alone.
+include(cmake/ui_defaults.cmake)
 add_library(nexus_scroll STATIC src/scroll_glide.cpp)
-target_include_directories(nexus_scroll PUBLIC src)
+target_include_directories(nexus_scroll PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_options(nexus_scroll PRIVATE ${NEXUS_WARNINGS})
 
 # nexus's settings files (src/config.h), the window's ~/.nexus/client/config and nexus-server's
@@ -418,7 +419,7 @@ if(NEXUS_WINDOW_LOGIC)
     # them), a terminal tab's label in ssh (remote.h), the saved tab order, the window's home and config (client_home.h),
     # and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
     add_library(nexus_window_logic STATIC src/command.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp
-        src/client_home.cpp src/server_choice.cpp)
+        src/client_home.cpp src/server_choice.cpp src/frame_trace.cpp)
     target_include_directories(nexus_window_logic PUBLIC src)
     target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_window_logic PUBLIC nexus_config nexus_model nexus_accounts nexus_sync nexus_scroll prax::app prax::json prax::process prax::core_cpp)
@@ -427,7 +428,7 @@ endif()
 if(NEXUS_WINDOW)
     # The window's tree over Prax's UI context and Studio Kit: built by the app, and headless by tests/window/.
     add_library(nexus_view STATIC src/view.cpp src/chat_markdown.cpp src/chat_selection.cpp src/window_app.cpp src/native_tabs.cpp src/font_prefetch.cpp)
-    target_include_directories(nexus_view PUBLIC src)
+    target_include_directories(nexus_view PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_compile_options(nexus_view PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_view PUBLIC nexus_policy nexus_window_logic nexus_hitch
         prax::markdown prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app prax::core_cpp)
@@ -516,7 +517,7 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
         endif()
         set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         set_source_files_properties(src/lock_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-        target_link_libraries(nexus PRIVATE "-framework AppKit" "-framework LocalAuthentication")
+        target_link_libraries(nexus PRIVATE "-framework AppKit" "-framework CoreGraphics" "-framework LocalAuthentication")
         # The app's name is nexus: the bundle's name and display name (cmake/Info.plist.in, CMake's
         # template with CFBundleDisplayName added), the executable (the process's name in Activity Monitor and the app
         # menu's About, Hide and Quit) and the window's title (main.cpp).

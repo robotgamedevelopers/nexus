@@ -102,6 +102,7 @@ struct Window {
     std::string current = "a1";
     std::vector<sync::SignInOffer> offers;
     std::uint64_t next = 1;
+    std::vector<sync::EntryRef> notices;
 
     explicit Window(PrVec2 size = PrVec2{1376, 1032}) : extent(size) {
         prFontSetSetSystem(fonts, system);
@@ -137,6 +138,7 @@ struct Window {
     void publish() {
         auto r = std::make_shared<sync::SessionView>();
         r->id = kRowan;
+        r->entries = notices;
         r->info = {"rowan", "claude", current, "", ""};
         auto s = std::make_shared<sync::SessionView>();
         s->id = kStella;
@@ -514,7 +516,7 @@ void accountCommandOpensTheSelector() {
     CHECK(w.switches().empty());
 }
 
-// The menu's last row runs /login: its dialog lists the accounts that need signing in. Plant: run /account instead.
+// The menu's last row runs /login: its card lists all linked accounts. Plant: filter saved logins out.
 void signInRowRunsLogin() {
     Window w;
     w.press(w.centre(w.tabNode("rowan")));
@@ -522,56 +524,195 @@ void signInRowRunsLogin() {
     w.slide(last);
     w.lift(last);
     CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::Login);
-    CHECK(w.view.accounts.dialogRows.size() == 1 && w.view.accounts.dialogRows[0].account == "a3");
+    CHECK(w.view.accounts.dialogRows.size() == 3 && w.view.accounts.dialogRows[2].account == "a3");
     CHECK(w.switches().empty());
 }
 
-// /login of a3: one claim names a3 (token, no request) while rowan's session stays on a1, with no SetAccount first; the
-// server signs a3 in and moves the session, and the window sends nothing more. Plants: SetAccount before the claim; a
-// second claim or a SetAccount after the sign-in.
-void loginSignsInThenSwitches() {
+// The sign-in dialog uses the centered account card and keeps keyboard and pointer selection working.
+void loginCardUsesTheOriginalLayout() {
+    for (const PrVec2 extent : {PrVec2{1376, 1032}, PrVec2{402, 874}}) {
+        Window w(extent);
+        w.rowan[0].needsSignIn = true; // also exercise the signed-out background page’s arrow bindings
+        w.rowan[1].needsSignIn = true;
+        w.publish();
+        w.frame();
+        w.command("/login");
+        w.frame();
+        CHECK(w.view.accountMenu != kPrLayoutNodeNone);
+        CHECK(w.view.accountRows.size() == 3);
+        if (w.view.accountRows.size() != 3) continue;
+        const auto card = w.bounds(w.view.accountMenu);
+        CHECK(card.right > card.left && card.left >= 0 && card.right <= extent.x);
+        if (std::abs((card.left + card.right) / 2 - extent.x / 2) >= 2)
+            std::fprintf(stderr, "login card at %.1f, %.1f - %.1f, %.1f in %.1f x %.1f\n",
+                         card.left, card.top, card.right, card.bottom, extent.x, extent.y);
+        CHECK(std::abs((card.left + card.right) / 2 - extent.x / 2) < 2);
+        CHECK(std::abs((card.top + card.bottom) / 2 - extent.y / 2) < 2);
+        const auto first = w.bounds(w.view.accountRows[0]);
+        const auto second = w.bounds(w.view.accountRows[1]);
+        CHECK(first.bottom <= second.top);
+        w.send(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Down, PrAppKeyCode_ArrowDown));
+        w.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Down, PrAppKeyCode_ArrowDown));
+        w.frame();
+        CHECK(w.view.accounts.loginHighlighted == 1);
+        w.send(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Up, PrAppKeyCode_ArrowUp));
+        w.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Up, PrAppKeyCode_ArrowUp));
+        w.frame();
+        CHECK(w.view.accounts.loginHighlighted == 0);
+        w.send(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Up, PrAppKeyCode_ArrowUp));
+        w.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Up, PrAppKeyCode_ArrowUp));
+        w.frame();
+        CHECK(w.view.accounts.loginHighlighted == 2); // wraps to the last address
+        CHECK(w.switches().empty());
+        w.enter();
+        CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::None);
+        CHECK(w.link.sent.back().kind == sync::ActionKind::SignOut && w.switches().empty());
+    }
+    Window pointer;
+    pointer.command("/login");
+    pointer.frame();
+    CHECK(pointer.view.accountRows.size() == 3);
+    if (pointer.view.accountRows.size() == 3) {
+        const auto at = pointer.centre(pointer.view.accountRows.back());
+        pointer.press(at);
+        pointer.lift(at);
+        CHECK(pointer.link.sent.back().kind == sync::ActionKind::SignOut && pointer.switches().empty());
+    }
+}
+
+// Studio installs a native portal host on desktop. Overlay dialogs must remain in the main window so opening
+// /login cannot hand keyboard focus to a child window and trigger the overlay's focus-loss dismissal.
+void overlayKeepsDialogsInsideItsWindow() {
+    const PrUiHost native{.window = [](void*, PrUiViewport) -> PrAppWindow* { return nullptr; }};
+    Window normal;
+    prUiSetHost(normal.ui, &native);
+    normal.command("/login");
+    normal.frame();
+    CHECK(prUiViewports(normal.ui, nullptr, 0) == 1);
+
+    Window overlay;
+    overlay.look.overlay = true;
+    prUiSetHost(overlay.ui, &native);
+    overlay.command("/login");
+    overlay.frame();
+    CHECK(overlay.view.accounts.dialog == AccountMenuView::Dialog::Login);
+    CHECK(overlay.view.accountMenu != kPrLayoutNodeNone);
+    CHECK(prUiViewports(overlay.ui, nullptr, 0) == 0);
+    overlay.send(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Escape, PrAppKeyCode_Escape));
+    overlay.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Escape, PrAppKeyCode_Escape));
+    overlay.frame();
+    CHECK(overlay.view.accounts.dialog == AccountMenuView::Dialog::None);
+    CHECK(overlay.switches().empty());
+    CHECK(prUiFocus(overlay.ui) == overlay.view.prompt);
+    overlay.command("/login");
+    overlay.frame();
+    overlay.send(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Up, PrAppKeyCode_ArrowUp));
+    overlay.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Up, PrAppKeyCode_ArrowUp));
+    overlay.frame();
+    overlay.enter();
+    CHECK(overlay.link.sent.back().kind == sync::ActionKind::SignOut && overlay.switches().empty());
+    CHECK(prUiViewports(overlay.ui, nullptr, 0) == 0);
+}
+
+// A mouse click belongs to the modal, even when a selectable transcript sits behind the account row.
+void loginMouseClickDoesNotSelectTheTranscript() {
     Window w;
+    for (int i = 0; i < 35; ++i)
+        w.model.append(w.model.active(), {EntryKind::AI, "A transcript line underneath the sign-in card."});
+    w.frame();
     w.command("/login");
-    CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::Login);
-    const auto sentBefore = w.link.sent.size();
+    w.frame();
+    CHECK(w.view.accountRows.size() == 3);
+    if (w.view.accountRows.size() != 3) return;
+    const auto at = w.centre(w.view.accountRows.back());
+    auto down = pointerEvent(PrAppEventKind_PointerDown, at);
+    down.pointer.type = PrAppPointerType_Mouse;
+    auto up = down;
+    up.kind = PrAppEventKind_PointerUp;
+    // The app must let Prax route both events to its modal, not consume them in the background transcript.
+    CHECK(!w.host.event(down));
+    prUiPushEvent(w.ui, kPrUiViewportMain, &down);
+    w.frame();
+    CHECK(!w.host.event(up));
+    prUiPushEvent(w.ui, kPrUiViewportMain, &up);
+    w.frame();
+    CHECK(w.link.sent.back().kind == sync::ActionKind::SignOut && w.switches().empty());
+}
+
+// The real UI starts one ordered preparation; server refusal or an unacknowledged action cannot advance it.
+void loginSignsOutThenSwitches() {
+    Window w;
+    std::vector<std::string> pages;
+    w.host.signIn.openUrl = [&](const std::string& url) { pages.push_back(url); };
     w.view.loginAccount("a3");
-    CHECK(w.link.sent.size() == sentBefore + 1);
-    if (w.link.sent.size() != sentBefore + 1) return;
-    const auto& claim = w.link.sent.back();
-    CHECK(claim.kind == sync::ActionKind::SignInClaim && claim.account == "a3" && claim.session == kRowan &&
-          claim.request == 0 && !claim.text.empty());
-    CHECK((w.switches() == std::vector<std::string>{"7:a3"}));
-    // The server opens a flow for a3, held by this window; the session stays on a1.
-    w.offers = {sync::SignInOffer{.id = 4, .account = "a3", .provider = "claude"}};
+    const auto count = w.link.sent.size();
+    CHECK(w.link.sent.back().kind == sync::ActionKind::SignOut && w.link.sent.back().account == "a1");
+    w.view.loginAccount("a2"); // A second click cannot overlap the mutation already sent.
+    w.frame();
+    CHECK(w.link.sent.size() == count && pages.empty());
+    w.rowan[0].needsSignIn = true;
+    w.notices.push_back(std::make_shared<sync::SessionEntry>(EntryKind::Notice, "Signed out of a1 in Nexus."));
     w.publish();
     w.frame();
-    CHECK((w.switches() == std::vector<std::string>{"7:a3"}));
-    CHECK(!w.view.problem.empty());
-    // a3 signs in, and the server moves the session to it.
-    w.rowan[2].needsSignIn = false;
-    w.offers.clear();
-    w.publish();
-    w.frame();
+    CHECK(w.link.sent.back().kind == sync::ActionKind::SetAccount && w.link.sent.back().text == "a3");
+    CHECK(pages.empty()); // Sending selection is not its acknowledgment.
     w.current = "a3";
     w.publish();
     w.frame();
-    CHECK((w.switches() == std::vector<std::string>{"7:a3"}));
-    CHECK(w.view.problem.empty());
-}
-
-// A /login whose sign-in ends without signing in (cancelled, failed, expired) changes nothing. Plant: switch anyway.
-void cancelledLoginChangesNothing() {
-    Window w;
-    w.view.loginAccount("a3");
-    w.offers = {sync::SignInOffer{.id = 4, .account = "a3", .provider = "claude"}};
+    CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::BrowserLogout);
+    CHECK((pages == std::vector<std::string>{"https://claude.ai/"}));
+    const auto selected = w.link.sent.size();
+    w.view.activateSignIn();
+    w.frame();
+    CHECK(w.link.sent.size() == selected && pages.size() == 1);
+    w.view.browserLogoutConfirmed();
+    CHECK(w.link.sent.back().kind == sync::ActionKind::SignInClaim && w.link.sent.back().account == "a3");
+    CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::None);
+    w.offers = {sync::SignInOffer{.id = 4, .account = "a3", .provider = "claude", .opener = w.host.signIn.opener.token()}};
     w.publish();
     w.frame();
+    CHECK(!w.view.problem.empty()); // Merely selecting a3 is not a completed login.
     w.offers.clear();
-    w.publish();    // the flow is gone; a3 still needs signing in
+    w.publish();
     w.frame();
-    CHECK((w.switches() == std::vector<std::string>{"7:a3"}));
     CHECK(w.view.problem.find("did not finish") != std::string::npos);
-    CHECK(!w.view.problem.empty());
+    CHECK(w.current == "a3" && w.rowan[0].needsSignIn);
+    CHECK(w.link.sent.back().kind == sync::ActionKind::SignInClaim); // Failure never requests a fallback.
+}
+
+void refusedSignOutStopsLogin() {
+    for (const bool alreadyUnsigned : {false, true}) {
+        Window w;
+        w.rowan[0].needsSignIn = alreadyUnsigned;
+        // An OLD success notice must not count as this request's success.
+        w.notices.push_back(std::make_shared<sync::SessionEntry>(EntryKind::Notice, "Signed out of a1 in Nexus."));
+        w.publish(); w.frame();
+        w.view.loginAccount("a3");
+        const auto count = w.link.sent.size();
+        w.publish(); w.frame(); // Acknowledged but refused: no new success notice.
+        CHECK(w.link.sent.size() == count && w.link.sent.back().kind == sync::ActionKind::SignOut);
+        CHECK(w.view.problem.find("switch stopped") != std::string::npos);
+        CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::None);
+    }
+}
+
+void cancelledBrowserLogoutNeverStartsEnrollment() {
+    Window w;
+    w.view.loginAccount("a3");
+    w.rowan[0].needsSignIn = true;
+    w.notices.push_back(std::make_shared<sync::SessionEntry>(EntryKind::Notice, "Signed out of a1 in Nexus."));
+    w.publish(); w.frame();
+    w.current = "a3";
+    w.publish(); w.frame();
+    const auto count = w.link.sent.size();
+    w.send(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Escape, PrAppKeyCode_Escape));
+    w.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Escape, PrAppKeyCode_Escape));
+    w.frame(); w.frame();
+    CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::None);
+    CHECK(w.link.sent.size() == count);
+    CHECK(w.view.problem.find("cancelled") != std::string::npos);
+    w.view.browserLogoutConfirmed(); // A stale UI action cannot revive the cancelled preparation.
+    CHECK(w.link.sent.size() == count);
 }
 
 // /logout asks first, naming the email; only the confirm signs out (SignOut naming the session and the account), and
@@ -614,7 +755,8 @@ void rowsFromTheRoster() {
     const auto rows = accountMenuRows(roster, "a3");
     CHECK(rows.size() == 3 && rows[0].text == "h@x" && !rows[0].current && rows[1].text == "Lab" && rows[1].current &&
           rows[2].signIn);
-    CHECK(accountLoginRows(roster).size() == 1 && accountLoginRows(roster)[0].account == "a2");
+    CHECK(accountLoginRows(roster).size() == 3 && accountLoginRows(roster)[0].account == "a1" &&
+          accountLoginRows(roster)[1].account == "a2" && accountLoginRows(roster)[2].account == "a3");
     CHECK(accountAfterLogout(roster, "a1") == "a3");
     CHECK(accountAfterLogout(roster, "a3") == "a1");
     roster.accounts[3].needsSignIn = true;
@@ -638,8 +780,12 @@ int main() {
     stillFramesWhileTheMenuIsOpen();
     accountCommandOpensTheSelector();
     signInRowRunsLogin();
-    loginSignsInThenSwitches();
-    cancelledLoginChangesNothing();
+    loginCardUsesTheOriginalLayout();
+    overlayKeepsDialogsInsideItsWindow();
+    loginMouseClickDoesNotSelectTheTranscript();
+    loginSignsOutThenSwitches();
+    refusedSignOutStopsLogin();
+    cancelledBrowserLogoutNeverStartsEnrollment();
     logoutConfirmsThenMoves();
     logoutOfTheLastAccountMovesNowhere();
     if (failures != 0) {

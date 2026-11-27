@@ -378,6 +378,105 @@ void enterDuringAccountSwitchWaitsForServerState() {
     CHECK(w.link.sent.size() == 4 && w.link.sent.back().kind == sync::ActionKind::Send);
 }
 
+void remoteLoginSwitchAndRetry(bool cancelSupported) {
+    Window w("chat");
+    auto session = std::make_shared<sync::SessionView>();
+    session->id = 37;
+    session->info = {"chat", "claude", "first", "", ""};
+    std::vector<sync::SignInOffer> offers;
+    bool firstUnsigned = true, secondUnsigned = true;
+    auto publish = [&] {
+        w.link.state.phase = sync::LinkPhase::Connected;
+        w.link.state.sessions = sync::Sessions({std::make_shared<sync::SessionView>(*session)});
+        w.link.state.sessions.setAIs({{"chat", {{"first", "First", firstUnsigned}, {"second", "Second", secondUnsigned}}}});
+        w.link.state.sessions.setOffers(offers);
+        w.link.state.sessions.setNextAction(w.link.sent.size() + 1);
+        w.link.changed = true;
+        w.host.pollBackground();
+    };
+    sync::SignInOffer first;
+    first.cancelSupported = cancelSupported;
+    first.id = 1; first.account = "first"; first.provider = "claude"; first.host = "studio";
+    first.opener = w.host.signIn.opener.token();
+    first.url = sync::SecretValue("https://claude.com/cai/oauth/authorize?client_id=test"
+        "&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback&state=fakeFirst%26%2B%25");
+    auto second = first;
+    second.id = 2; second.account = "second";
+    second.url = sync::SecretValue("https://claude.com/cai/oauth/authorize?client_id=test"
+        "&redirect_uri=http%3A%2F%2Flocalhost%3A54546%2Fcallback&state=fakeSecond");
+    offers = {first};
+    w.host.signIn.local = "laptop";
+    w.host.signIn.openGate = [](const sync::SignInTarget&) { return std::unique_ptr<SignInGate>(); };
+    std::vector<std::string> pages;
+    w.host.signIn.openUrl = [&](const std::string& url) { pages.push_back(url); };
+    publish();
+    CHECK(pages.size() == 1 && w.host.signIn.opener.gate() == first.id);
+    w.model.set_draft(w.model.active(), "keep my draft");
+    w.view.loginAccount("second");
+    w.host.pollBackground();
+    CHECK(pages.size() == 1 && !w.host.signIn.opener.gate());
+    if (cancelSupported) {
+        CHECK(w.link.sent.back().kind == sync::ActionKind::SignInCancel);
+        CHECK(w.link.sent.back().request == first.id && w.link.sent.back().secret.empty());
+        const auto count = w.link.sent.size();
+        offers.front().url.clear();
+        publish(); // Cancellation was accepted, but its child still owns the account.
+        CHECK(w.link.sent.size() == count);
+        CHECK(pages.size() == 1);
+    } else {
+        CHECK(w.link.sent.back().kind == sync::ActionKind::SignInCallback);
+        CHECK(sync::queryValue(w.link.sent.back().secret.bytes(), "error") == "access_denied");
+        CHECK(sync::queryValue(w.link.sent.back().secret.bytes(), "state") == "fakeFirst&+%");
+    }
+    // The server finishes cancellation before it is asked to sign the old account out.
+    offers.clear(); publish();
+    CHECK(w.link.sent.back().kind == sync::ActionKind::SignOut);
+    session->entries.push_back(std::make_shared<sync::SessionEntry>(EntryKind::Notice, "Signed out of first in Nexus."));
+    publish();
+    CHECK(w.link.sent.back().kind == sync::ActionKind::SetAccount && w.link.sent.back().text == "second");
+    session->info.account = "second"; publish();
+    CHECK(pages.size() == 2 && pages.back() == "https://claude.ai/");
+    w.view.browserLogoutConfirmed();
+    CHECK(w.link.sent.back().kind == sync::ActionKind::SignInClaim);
+    offers = {second}; publish();
+    CHECK(pages.size() == 3 && pages.back() == second.url.bytes());
+    CHECK(w.host.signIn.opener.gate() == second.id);
+    // Server completion is processed while hidden, with no renderer or frame build.
+    secondUnsigned = false; offers.clear(); publish();
+    CHECK(w.view.signInAccount().name.empty() && w.view.problem.empty());
+    CHECK(!w.host.signIn.opener.gate());
+    CHECK(w.model.tab(w.model.active()).draft == "keep my draft");
+}
+
+void goalCancellationWaitsForServer() {
+    Window w("chat");
+    auto session = std::make_shared<sync::SessionView>();
+    session->id = 37;
+    session->info = {"chat", "claude", "first", "", ""};
+    session->info.goal = "keep going";
+    auto publish = [&] {
+        w.link.state.phase = sync::LinkPhase::Connected;
+        w.link.state.sessions = sync::Sessions({std::make_shared<sync::SessionView>(*session)});
+        w.link.state.sessions.setAIs({{"chat", {{"first", "First", false}}}});
+        w.link.changed = true;
+        w.host.pollBackground();
+    };
+    publish();
+    const auto tab = w.model.tab(w.model.active()).id;
+    CHECK(w.view.goal(tab) == "keep going");
+    w.view.cancelGoal();
+    CHECK(w.link.sent.back().kind == sync::ActionKind::Send && w.link.sent.back().text == "/goal off");
+    CHECK(w.link.sent.back().session == 37 && w.view.goal(tab) == "keep going");
+    session->info.goal.clear(); publish();
+    CHECK(w.view.goal(tab).empty());
+    session->info.goal = "another goal"; publish();
+    const auto count = w.link.sent.size();
+    w.host.phase = sync::LinkPhase::Failed;
+    w.view.cancelGoal();
+    CHECK(w.link.sent.size() == count && w.view.goal(tab) == "another goal");
+    CHECK(w.view.problem.find("Reconnect") != std::string::npos);
+}
+
 void explicitSignInKeepsTheDraft() {
     Window w("chat");
     auto session = std::make_shared<sync::SessionView>();
@@ -512,7 +611,10 @@ int main() {
     accountCommandsUseTheActiveConversation();
     automaticAccountIsASelectionMode();
     accountPickerRechecksTheServerRoster();
+    goalCancellationWaitsForServer();
     explicitSignInKeepsTheDraft();
+    remoteLoginSwitchAndRetry(false);
+    remoteLoginSwitchAndRetry(true);
     enterDuringAccountSwitchWaitsForServerState();
     logoutUsesTheConfirmedAccountAndReturnsToSignIn();
     savedStateShowsTheSelectedEmailWithoutStartingSignIn();

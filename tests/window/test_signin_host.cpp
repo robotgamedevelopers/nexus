@@ -65,6 +65,31 @@ struct Fixture {
     }
 };
 
+void cancelsOwnedEnrollmentBeforeUrl() {
+    for (const auto* provider : {"claude", "codex", "antigravity", "grok", "muse"}) {
+        for (const bool supported : {false, true}) for (const bool owned : {false, true}) {
+            Fixture f("studio.local", "laptop");
+            auto state = offering(owned ? "tokWindowA1" : "another-window", "", "studio", provider);
+            auto offers = state.offers();
+            offers.front().cancelSupported = supported;
+            state.setOffers(offers);
+            f.signIn.received(state);
+            f.signIn.choose(std::string(provider) + "-main");
+            CHECK(f.port.sent.empty());
+            f.signIn.choose("replacement");
+            CHECK(f.opened.empty());
+            if (supported && owned) {
+                CHECK(f.port.sent.size() == 1);
+                if (!f.port.sent.empty()) {
+                    const auto& action = f.port.sent.front();
+                    CHECK(action.kind == sync::ActionKind::SignInCancel && action.request == 3);
+                    CHECK(action.text == "tokWindowA1" && action.secret.empty());
+                }
+            } else CHECK(f.port.sent.empty());
+        }
+    }
+}
+
 void claimsOnceShown() {
     Fixture f("studio.local", "studio");
     f.signIn.received(offering("", "", "studio"));
@@ -136,6 +161,34 @@ void refusesALookalike() {
     f.signIn.problem.clear();
     f.signIn.step();
     CHECK(f.signIn.problem.empty() && f.opened.empty());    // once
+}
+
+void deliberateSwitchOnly() {
+    Fixture f("studio", "laptop");
+    f.signIn.received(offering("tokWindowA1", kUrl, "studio"));
+    f.signIn.step();
+    const auto sent = f.port.sent.size();
+    f.signIn.choose("claude-main");
+    CHECK(f.signIn.opener.gate() == 3 && f.port.sent.size() == sent);
+    f.signIn.lock();
+    f.signIn.choose("another");
+    CHECK(f.signIn.opener.gate() == 3 && f.port.sent.size() == sent);
+    f.signIn.unlock();
+    f.signIn.choose("another");
+    CHECK(!f.signIn.opener.gate() && f.port.sent.size() == sent + 1);
+    const auto& cancel = f.port.sent.back();
+    CHECK(cancel.kind == sync::ActionKind::SignInCallback && cancel.request == 3);
+    sync::SignInDesk desk;
+    desk.need(3, "claude-main", "claude");
+    desk.claim(3, "tokWindowA1", 0);
+    desk.url("claude-main", 3, sync::SecretValue(kUrl));
+    desk.opened(3, "tokWindowA1");
+    CHECK(desk.callback(3, cancel.text, cancel.secret).replays.size() == 1);
+    CHECK(desk.callback(3, cancel.text, cancel.secret).replays.empty());
+    desk.exited("claude-main", 3, "declined");
+    CHECK(desk.stateOf(3) == sync::SignInState::Cancelled);
+    f.signIn.choose("third");
+    CHECK(f.port.sent.size() == sent + 1);
 }
 
 void privateSignInPages() {
@@ -226,6 +279,7 @@ void lockedClaimsNothing() {
 } // namespace
 
 int main() {
+    cancelsOwnedEnrollmentBeforeUrl();
     claimsOnceShown();
     lockedClaimsNothing();
     opensOnOneMachine();
@@ -234,6 +288,7 @@ int main() {
     lostForgetsTheView();
     refusesALookalike();
     privateSignInPages();
+    deliberateSwitchOnly();
     if (failures != 0) {
         std::fprintf(stderr, "signin host: %d check(s) failed\n", failures);
         return 1;

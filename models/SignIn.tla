@@ -405,6 +405,9 @@ RedirectWith(G(_, _, _), c, i, ok) ==
 
 Redirect(c, i, ok) == RedirectWith(GateCorrect, c, i, ok)
 
+\* Choosing another account declines the abandoned remote page through the same state-matched callback.
+Cancel(c, i) == c \in Remote /\ gate[c] = i /\ Redirect(c, i, FALSE)
+
 \* A request on a window's gate that is not its callback (another path, another state, a second request): answered
 \* "not found", never sent up. S(c) is what a gate does with it.
 StrayWith(S(_), c) == gate[c] # 0 /\ S(c) /\ UNCHANGED <<conn, armed, view, claimed, opened, browser>> /\
@@ -439,6 +442,7 @@ ServerNextWith(N(_), R(_), P(_, _), T(_)) ==
 WindowNextOpening(O(_), Rd(_, _, _), St(_)) ==
     \/ \E c \in Clients : Show(c) \/ Hide(c) \/ Sync(c) \/ Claim(c) \/ O(c) \/ St(c) \/ Disconnect(c) \/ Connect(c)
     \/ \E c \in Clients, i \in Ids, ok \in BOOLEAN : Rd(c, i, ok)
+    \/ \E c \in Remote, i \in Ids : Cancel(c, i)
 
 WindowNextWith(Rd(_, _, _), St(_)) == WindowNextOpening(Open, Rd, St)
 

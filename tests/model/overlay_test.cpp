@@ -187,6 +187,9 @@ void closeBeforeOpenFails() {
 }
 
 int main() {
+    for (int bits = 0; bits < 16; ++bits) {
+        CHECK(nexus::overlayMayRestoreFocus(bits & 1, bits & 2, bits & 4, bits & 8) == (bits == 7));
+    }
     closeBeforeOpenFails();
     launchShowsWithTheKeyboard();
     hotkeyToggles();

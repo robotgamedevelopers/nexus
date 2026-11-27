@@ -123,8 +123,8 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
 
     std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
     auto* d = doc.get();
-    if (!prJsonParse(d, pr(answer), nullptr) || prJsonKind(d, 0) != PrJsonKind_Array || prJsonCount(d, 0) > 16) {
-        why = "return a list of up to 16 commands";
+    if (!prJsonParse(d, pr(answer), nullptr) || prJsonKind(d, 0) != PrJsonKind_Array || prJsonCount(d, 0) > (client ? 128u : 16u)) {
+        why = client ? "return a list of up to 128 window commands" : "return a list of up to 16 commands";
         return false;
     }
     MessagePlan plan;
@@ -170,6 +170,9 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
         } else if (name == "sign_out" && client && !text.data && prJsonCount(d, 0) == 1 &&
                    std::string_view(intent) == "Enter" && state.text == "/logout") {
             plan.delivery = Delivery::SignOut;
+        } else if (!client && name == "goal") {
+            plan.delivery = Delivery::Goal;
+            if (text.data) plan.text.emplace(text.data, text.size);
         } else if (!client && !text.data && (name == "clear_context" || name == "compact_context")) {
             plan.delivery = name == "clear_context" ? Delivery::Clear : Delivery::Compact;
         } else if (!client && text.data && (name == "set_model" || name == "set_effort")) {
@@ -190,6 +193,29 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
     }
     out = std::move(plan);
     return true;
+}
+
+std::string noticeText(Host& host, const std::string& path, const std::string& kind,
+        const std::map<std::string, std::string>& fields) {
+    std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);
+    prJsonWriterBeginObject(w.get());
+    prJsonWriterKey(w.get(), pr("kind"));
+    prJsonWriterString(w.get(), pr(kind));
+    for (const auto& [key, value] : fields) {
+        prJsonWriterKey(w.get(), pr(key));
+        prJsonWriterString(w.get(), pr(value));
+    }
+    prJsonWriterEndObject(w.get());
+    const auto context = prJsonWriterText(w.get());
+    std::string why;
+    const auto answer = host.decide(path, "app.notice", std::string(context.data, context.size), why);
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    if (!why.empty()) return "Notice policy: " + why;
+    if (!prJsonParse(doc.get(), pr(answer), nullptr) || prJsonKind(doc.get(), 0) != PrJsonKind_String)
+        return "Notice policy must return text. Check the app.notice handler in server/conversation.star.";
+    const auto text = prJsonString(doc.get(), 0);
+    if (text.size > 32768) return "Notice policy returned more than 32 KiB. Shorten the app.notice reply.";
+    return std::string(text.data, text.size);
 }
 
 int textZoom(Host& host, const std::string& path, int current, int delta, int low, int high) {

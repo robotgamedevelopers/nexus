@@ -332,6 +332,30 @@ void theEndsBounceAndSpringBack() {
     }
 }
 
+void profileTuningKeepsTheSameLandingRules() {
+    Rig slow, fast;
+    slow.s.tuning.hold_pixels_per_second = 500;
+    fast.s.tuning.hold_pixels_per_second = 2500;
+    slow.down(1); fast.down(1);
+    slow.frames(0.4); fast.frames(0.4);
+    CHECK(fast.page.y > slow.page.y + 300);
+    slow.up(1); fast.up(1);
+    slow.settle(); fast.settle();
+    CHECK(!slow.s.busy() && !fast.s.busy());
+    Rig tap;
+    tap.s.tuning.hold_tap_seconds = 0.2;
+    tap.s.tuning.coast_decay_per_ms = 0.98;
+    tap.down(1); tap.frames(0.12); tap.up(1); tap.settle();
+    CHECK(tap.page.y == kLine && !tap.s.busy());
+    tap.page.y = tap.page.range;
+    tap.s.tuning.bump_pixels = 40;
+    tap.s.tuning.spring_omega = 8;
+    tap.notch(1); tap.frames(0.1);
+    CHECK(tap.s.overscroll() > 0);
+    tap.settle();
+    CHECK(tap.page.y == tap.page.range && tap.s.overscroll() == 0 && !tap.s.busy());
+}
+
 void aPageThatScrollsItselfKeepsItsPlace() {
     Rig r;
     r.down(1);
@@ -361,6 +385,7 @@ void leavingTheScreenEndsWhereItWasGoing() {
 
 int main() {
     theCurves();
+    profileTuningKeepsTheSameLandingRules();
     aTapMovesExactlyOneLine();
     aHoldScrollsWhileHeldAndCoastsToRest();
     focusLossOtherKeysAndPressesEndAHold();

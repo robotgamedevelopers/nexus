@@ -31,12 +31,18 @@
 #include "hitch.h"
 #include "model.h"
 #include "window_app.h"
+#include "window_clock.h"
 #include "native_tabs.h"
 
 namespace nexus {
 
 // How the window's own records are drawn. Its address owns the window's records (pr/ui_records.h).
 struct Look {
+    UiMetrics ui;
+    UiColors colors;
+    UiText words;
+    UiFonts fonts;
+    UiFlags flags;
     bool overlay = false;           // the window background and tab strip are see-through (style::kOverlayOpacity)
     int textSteps = 0;              // the text scale it is drawn at, in steps from 1 (style::textScale)
     TabStyle tabs{};
@@ -50,7 +56,7 @@ struct Look {
 // text scale `steps` steps from 1.
 PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps = 0, float opacity = style::kOverlayOpacity,
                        const MessageCardStyle& card = {}, const TranscriptStyle& transcript = {}, const TabStyle& tabs = {},
-                       const PromptStyle& prompt = {});
+                       const PromptStyle& prompt = {}, const UiMetrics& ui = {}, const UiColors& colors = {}, const UiFonts& families = {});
 
 // The shells of the terminal tabs, by Tab::id. Our own seam (Prax's terminal cannot run without a process), so that the
 // tab logic runs in tests without one; terminals.h is the one over Prax's terminal (pr/terminal.h).
@@ -72,6 +78,7 @@ struct Terminals {
     }
     // Its tab's label, or empty: the title its shell set, or while ssh runs in it the machine it reaches (remote.h).
     virtual std::string title(std::size_t id) = 0;
+    virtual void setFontFamily(const std::string&) {}
     virtual void setTextScale(float k) = 0;     // every terminal's font, at the text scale k
 };
 
@@ -83,6 +90,8 @@ struct Board {
     // nothing, writes to `problem` one line that says what is happening or what failed and what to do, and returns false.
     virtual bool show(PrLayoutNode parent, PrVec2 extent, std::string* problem) = 0;
     virtual void hidden() = 0;                  // the sprint tab does not show this round
+    virtual void setScrollStyle(const UiScroll&) {}
+    virtual void setBackgroundUpdates(bool) {}
     virtual void setTextScale(float k) = 0;     // the page's zoom, at the text scale k
     // The sprint tab was chosen, by its Command key or a click on its tab, whether or not it showed already: a page
     // that has left the board goes back to it.
@@ -155,7 +164,7 @@ struct TranscriptItems {
 // docs/accounts.md "Switching accounts"). The menu's gesture is fed the pointer by routeAccountMenu before the tab strip
 // sees it; the menu draws below the tab's highlight and changes nothing about the tab.
 struct AccountMenuView {
-    enum class Dialog : std::uint8_t { None, Account, Login, Logout };
+    enum class Dialog : std::uint8_t { None, Account, Login, Logout, BrowserLogout };
     AccountMenuGesture gesture;
     std::size_t tab = ~std::size_t(0);          // the Tab::id the menu drops from, while it is open
     std::vector<AccountMenuRow> rows;           // the rows it opened with
@@ -166,6 +175,7 @@ struct AccountMenuView {
     std::vector<PrLayoutNode> rowNodes;         // its rows
     std::vector<PrLayoutNode> rowTexts;         // each row's text
     Dialog dialog = Dialog::None;               // the dialog that shows
+    std::size_t loginHighlighted = 0;           // keyboard selection in the centered sign-in card
     bool dialogShown = false;                   // a dialog showed last round
     std::size_t dialogTab = ~std::size_t(0);    // the Tab::id it was opened on
     std::vector<AccountMenuRow> dialogRows;     // its rows
@@ -173,6 +183,9 @@ struct AccountMenuView {
 };
 
 struct View {
+    WindowCalendar calendar;
+    std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> connectingFont{nullptr, prTextFontRelease};
+    std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> clockFont{nullptr, prTextFontRelease};
     std::function<void(const Chirp&)> playChirp;
     // Plays a cue through playChirp, and none while locked (lockScreen): no sound says what an AI did.
     void chirp(const Chirp& cue) const {
@@ -184,9 +197,12 @@ struct View {
     // The active AI's menu rows (its signed-in accounts and the sign-in row); none while it has no accounts, the link is
     // down, or a switch is on its way.
     std::function<std::optional<std::vector<AccountMenuRow>>()> accountMenuRows;
-    std::function<std::vector<AccountMenuRow>()> accountLoginRows;  // the active AI's accounts that need signing in
+    std::function<std::vector<AccountMenuRow>()> accountLoginRows;  // all linked accounts, including saved logins
     std::function<void(const std::string&)> switchAccount;          // the active AI's session goes to this account
-    std::function<void(const std::string&)> loginAccount;           // sign this account in; switch once it is
+    std::function<void(const std::string&)> loginAccount;           // sign out, select, then enroll this account
+    std::function<void()> browserLogoutConfirmed;
+    std::function<void()> cancelLoginPreparation;
+    std::function<void()> openBrowserLogout;
     // /logout: the active AI's current account, its email, and where the AI goes after (empty: the sign-in prompt).
     std::function<bool(std::string&, std::string&, std::string&)> logoutTarget;
     std::function<bool()> logout;                                   // signs out and moves the AI, as the dialog says
@@ -228,6 +244,11 @@ struct View {
     Terminals* terminals = nullptr;             // the terminal tabs' shells; unset, Command-T adds none
     Board* board = nullptr;                     // the sprint tab's page; unset, the tab says it has none
     PrVec2 extent{};                            // the window's extent in px, which the host sets before each frame
+    PrRect headerNotch{};                       // host-measured display obstruction in logical view coordinates
+    PrLayoutNode headerTabs = kPrLayoutNodeNone;
+    float headerHeight = 0;
+    uint64_t revealedHeaderTab = 0;
+    float revealedHeaderWidth = 0;
     std::shared_ptr<policy::Host> application = std::make_shared<policy::Host>("client");
     WindowApplication windowApp;
     NativeTabs nativeTabs;
@@ -272,6 +293,8 @@ struct View {
     std::function<const std::string*(std::size_t id)> growing;
     // With a server: the state cursor of an AI's tab (by Tab::id), under its last text (cursor.h). Unset: none.
     std::function<CursorState(std::size_t id)> cursor;
+    std::function<std::string(std::size_t id)> goal;
+    std::function<void()> cancelGoal;
     std::function<unsigned(std::size_t)> activeAgents;
     std::string choiceKind, choiceValue;
     std::size_t choiceTab = SIZE_MAX;
@@ -322,6 +345,7 @@ struct View {
     std::string cutDraft;
     bool cutComing = false;
     bool cutFollow = false;
+    bool connecting = false;                    // derived from the link phase, never from its status wording
     bool promptOpen = true;                     // false: no prompt on an AI's tab (before the server is reached)
     std::string status;                         // one plain line where the prompt stands (the link's state); empty,
                                                 // none
@@ -343,6 +367,7 @@ struct View {
     // its newest entry, where it follows what arrives.
     static constexpr float kAtEnd = -1;
     std::vector<float> scrolls;
+    std::optional<std::size_t> followEndTab; // a prompt action requests the newest transcript before the next layout
     std::vector<TranscriptItems> items;         // each AI's transcript as laid out, by Tab::id
     std::size_t shown = ~std::size_t(0);        // the AI (Tab::id) the transcript showed last round
     std::size_t prompted = ~std::size_t(0);     // the AI (Tab::id) whose draft the prompt edited last round

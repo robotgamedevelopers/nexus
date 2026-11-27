@@ -21,7 +21,7 @@
 (*            an answer), its attempt, the seconds it let pass, and what   *)
 (*            the code answered (a frame: drew content; input: delivered)  *)
 (*                                                                         *)
-(* Inputs: prompt (the lock screen shown, or Try again), the              *)
+(* Inputs: prompt (the overlay hotkey, lock screen, or Try again), the              *)
 (* authenticator's answer to an attempt, a relock event from the OS        *)
 (* (sleep, the screen locked, the user session switched, the app sent to   *)
 (* the background on a phone), time passing (tick), the person's input,    *)
@@ -71,7 +71,7 @@ LockFor(w) ==
     /\ idle' = 0
     /\ granted' = 0
 
-\* The lock screen asks the system: a new attempt, only from locked. ClientLock::prompt.
+\* The hotkey or lock screen asks the system: a new attempt, only from locked. ClientLock::prompt.
 Prompt ==
     /\ state = "locked"
     /\ attempt < MaxAttempt

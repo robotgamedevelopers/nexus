@@ -49,7 +49,7 @@ by the person ends its shell and returns focus to the previously selected tab. A
 still closes its tab. A fork that enables closing AI tabs dismisses the local tab until the next launch.
 Its server session continues.
 
-Command-Shift-Left and Command-Shift-Right move the selected tab one position, using the same rules as dragging. The fork can rebind these through its `tab_reorder` map. Dragging within a group keeps its members together. A group can opt into receiving tabs from another group
+Command-Shift-PageUp and Command-Shift-PageDown move the selected tab one position, using the same rules as dragging. The fork can rebind these through its `tab_reorder` map. Dragging within a group keeps its members together. A group can opt into receiving tabs from another group
 with `"accepts_from":["source-group-id"]`. Clicking a tab or selecting it with the arrow keys only changes focus.
 To change the rules for a running window, edit the fork's client Starlark or JSON and apply the client bundle.
 

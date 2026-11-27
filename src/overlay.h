@@ -52,5 +52,7 @@ private:
 // and the run closes it only after shutdown: so a close before open, outside shutdown, is Prax refusing the window.
 // `opened`: main.cpp open() ran; `stopping`: the run's shutdown has begun.
 bool overlayCloseFailed(bool opened, bool stopping);
+// Eligibility only. Native focus recovery occurs before observe(), and may be refused by the OS.
+bool overlayMayRestoreFocus(bool enabled, bool visible, bool keyed, bool yielded);
 
 } // namespace nexus

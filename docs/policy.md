@@ -209,9 +209,9 @@ while hidden. Return a physical key code and modifiers, for example
 Use UI Events physical codes such as `Backquote`, `KeyJ` and `F8`. In-window shortcuts
 continue to use logical key names. Applying a client profile updates the global binding.
 
-The client lock's idle timeout is the `lock` event's answer, `{"idle_minutes": N}`: the stock rule reads
-`lock_idle_minutes`, 10 unless set. N is a whole number of minutes from 1 to 240; nothing turns the lock off, and
-any other answer is the default with a logged reason (`docs/security.md`).
+The legacy `lock` event and `lock_idle_minutes` value are retained for compatibility with the isolated lock
+component. The live desktop client does not read them: the signed-in OS session is sufficient, and Nexus adds
+no unlock prompt or idle relock ([security](security.md)).
 
 Type `/help` in an AI tab to show overlay, terminal, tab and account shortcuts alongside the slash-command reference. It works while signed out. A fork can add descriptions to the client config’s `command_help` map or replace the help handler in Starlark.
 
@@ -286,7 +286,15 @@ messages their own text color. Omitting it uses `ink` for both speakers. `notice
 `switch_email_ink` sets the address color in that notice. Colors accept six hexadecimal digits after `#`. The corner radius
 accepts 0–64 logical points before keyboard zoom. All fields are optional. Set `show_notices` or `show_tools`
 to `false` to hide those transcript entries in the client. Their history stays available when you enable them
-again. In `transcript_style`, `"tool_prompts": {"Bash": "$ "}` displays Bash activity as a selectable monospace command. Each key matches the tool name exactly. An empty map preserves the original tool labels. Apply the client policy to see the changes in a running window.
+again. `hidden_notice_fragments` hides only notices containing one of its case-sensitive strings (at most 32
+nonempty strings of at most 256 bytes). It never hides user messages, AI replies or tools. The shipped profile hides
+routine authentication and account-switch history, including expired sign-in attempts. Visible app responses use
+left-aligned dark bubbles with white text and the shared Markdown renderer, including `/help`, `/info` and setting confirmations.
+Other failures and command responses remain visible; `/help` remains available. Setting the list to `[]` restores the
+hidden history. In `transcript_style`, `"tool_prompts": {"Bash": "$ "}` displays Bash activity as a selectable monospace command. Each key matches the tool name exactly. An empty map preserves the original tool labels. Apply the client policy to see the changes in a running window.
+
+`tool_inks` maps exact tool names to `#RRGGBB` colors, overriding `command_ink` for those tools. The shipped profile
+uses dark purple (`#aa79dd`) for Edit, MultiEdit, Write, apply_patch and ApplyPatch; shell commands remain orange.
 
 The Starlark `window` result accepts these color settings, also available in the client JSON profile:
 
@@ -337,9 +345,9 @@ echo '{"ai":"reviewer","intent":"send","text":"hello","model":"","queued":0,"bus
 | Server `message` | Receives the same text and session fields with `intent` (`send` or `queue`) and server-side `busy` (an open turn). Returns a command list. |
 | Server `new_session` | Receives `ai`, driver `defaults`, an optional `source` session, and an optional `roster` with `linked`, `preferred`, `instances` and `can_auto_account`. Returns optional boolean `auto_account` (default false) and string fields `account`, `instance`, `model` and `effort`. The host validates these before creating the session. |
 
-Message command lists accept up to 16 operations. Each operation is a dictionary with an `op` field. A `notice`
+Server message command lists accept up to 16 operations; client lists accept up to 128 so `/help` can document the complete command and keyboard reference. Each operation is a dictionary with an `op` field. A `notice`
 carries `text`. A client `draft` replaces the current draft. A final `send` or `queue` can supply replacement
-`text` or use the input. A final server `native` names a registered service in `name` and can supply input
+`text` or use the input. A final server `goal` with text starts or replaces a five-minute session goal and sends it immediately; empty text stops it, and omitted text reports its status (see `docs/goals.md`). A final server `native` names a registered service in `name` and can supply input
 `text`. An empty list consumes the input. The server validates the entire plan before acting and commits its
 changes together with the request acknowledgement. The client accepts a single `sign_out` operation for Enter on
 the exact draft `/logout`. It targets the account the server confirmed for this conversation. The command stays in the
@@ -514,7 +522,9 @@ disables the sweep and collapse. Both the overlay and opaque windows request HDR
 
 Sent bubbles have no outline by default. To add one, set `transcript_style.sent_outline_width` and `transcript_style.sent_outline_ink`. Pending bubbles use a dashed selection-color outline. Set `transcript_style.pending_dash_seconds` to the time for one dash and gap to travel (default 2 seconds, 0 for stationary). Reduced Motion holds the dashes and text still. The unsent text gently dims and brightens over `pending_text_seconds` (2.8 by default). Set `pending_text_pulse` to zero to disable it. The default is 0.10. Set `sounds.discard` to tune the click when Command-Delete clears the composer. Set `transcript_style.pending_outline_width` from 0 to 8 points before text scaling (default 3). `sounds.startup` plays once the overlay hotkey registers. Set `synth` to true for a layered tone that swells and fades. `sounds.step` is the quiet tick when the selected menu row changes. `sounds.hold` plays on staging (silent by default), and `sounds.send` plays when a new outgoing message appears in the live server transcript.
 
-Read tool calls display the path alone. `transcript_style.read_path_ink` sets its color and defaults to the link or selection color.
+Read tool calls display the path alone through `transcript_style.tool_prompts.Read = ""`. File tools, including Read,
+Edit and Write, use the purple entries in `transcript_style.tool_inks`; this map takes precedence over the legacy
+`read_path_ink` fallback.
 
 For a single active cell, `transcript_style.scanner_pulse_floor` sets the dimmest part of the pulse (0–1, default 0.12).
 
@@ -531,7 +541,7 @@ Set `prompt_style.caret_gap` to the trailing space in points between typed text 
 
 The window policy can return a `sounds` object with `tab` and `confirm` cues. Each has `from_hz`, `to_hz`, `duration_ms`, and `gain` (0–1). Omit a cue or set its gain to zero to silence it.
 
-`prompt_style.text_peak` sets steady HDR brightness for the entire draft, capped by display headroom. The keyboard profile uses `prompt_style.bold` for the editor and `transcript_style.person_bold` for the person's messages. In `transcript_style`, `person_flash_peak` and `person_flash_seconds` set the initial brightness and fade of a submitted message. `glyph_peak`, `glyph_seconds`, and `glyph_stagger` control the short-lived glow of newly streamed reply text. Peak brightness is a linear-light multiplier capped by the display's available HDR headroom. A peak of 1 disables the corresponding effect. Reduced Motion disables both.
+`prompt_style.text_peak` sets steady HDR brightness for the entire draft, capped by display headroom. The keyboard profile uses `prompt_style.bold` for the editor and `transcript_style.person_bold` for the person's messages. In `transcript_style`, `person_flash_peak` and `person_flash_seconds` set the initial brightness and fade of a submitted message. `glyph_peak`, `glyph_seconds`, and `glyph_stagger` control an optional short-lived glow of newly streamed reply text. The shipped `glyph_peak` is 1, so new AI text has no HDR flash. Peak brightness is a linear-light multiplier capped by the display's available HDR headroom. A peak of 1 disables the corresponding effect. Reduced Motion disables both.
 
 The client profile's `clear_draft_keys` binds the `clear_composer` action, which clears the active AI's draft and all its locally staged bubbles in one press. The defaults cover Command with either the Mac Delete key (Backspace) or forward Delete.
 
@@ -544,3 +554,19 @@ The optional `sounds` entries `open`, `close`, `dialog`, `confirm`, `cancel`, an
 Copying selected transcript text clears its highlight and plays `sounds.copy`. All cues pass through the client audio player, where `/quiet` mutes them globally.
 
 In an AI chat, `transcript_scroll_keys` maps key chords to `top`, `bottom`, `page_up` or `page_down`. Control-Up and Control-Down snap to the oldest and newest displayed output. Page Up and Page Down move one viewport. The prompt retains focus.
+
+
+### Complete UI profile
+
+See [UI configuration](ui-configuration.md) for the typography, layout, control palette, fonts, captions, keys,
+scroll tuning, local clock and platform window options. These values are returned by `app.window`. Native fallback
+values for the `ui_*` groups are generated from the shipped JSON at build time, so changing a fork's defaults does
+not require maintaining a second list in C++.
+
+The server also handles `app.notice`: input `{kind, ...named_fields}` produces a JSON string for command acknowledgements.
+The shipped `client/window.star` formats `/help`; `server/conversation.star` formats `/info`, model/effort lists,
+setting acknowledgements and goal status as Markdown. Native state changes and validation remain authoritative.
+
+The client window operation `["select_prompt", "start"|"end"]` extends the focused AI prompt selection to the corresponding document edge, retaining its anchor. It does nothing outside a focused AI prompt or during input-method composition.
+
+The connection presentation uses `ui_text.connecting_label` ("Connecting to nexus"), `ui_style.connecting_text_size` (56), and `ui_colors.connecting_ink` (white). While the link is connecting, it replaces the dashboard waiting captions with one centered label. It shares the prompt cursor's HDR pulse settings and respects reduced motion and display headroom. Connection failures retain their actionable diagnostics.

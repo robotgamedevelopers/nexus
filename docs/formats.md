@@ -379,3 +379,23 @@ harness. An empty catalog means discovery has supplied no choices. `context_epoc
 on a server-side clear, so windows discard entries from the previous context even after a
 reconnect. The durable journal records this boundary as framed entry kind 4. Snapshots preserve
 boundaries. The active transcript and context handoff use entries after the last boundary.
+
+### Explicit enrollment cancellation
+
+`SignInOffer.cancel_supported` is an appended Boolean, false when absent. A client sends `SignInCancel` only for an
+owned offer advertising it. The action carries the exact flow ID in `request` and the window claim token in `text`.
+The server revalidates both, stops an enrollment before callback verification, and ignores late or foreign requests.
+An accepted callback is preserved and may still complete. Older peers skip the capability field and unknown enum
+value. Links before the sign-in format carry neither the claim token nor cancellation intent.
+
+Cancellation keeps the enrollment owned and its URL empty until its process exits. Only then is a new unclaimed
+offer published, so sign-out cannot race a child that still holds or writes the account credential. An already
+received credential is still stored before a later explicit sign-out.
+
+### Session goals
+
+`SessionInfo.goal` and `goal_next_ms` are appended table fields. Empty text means inactive; the deadline is server
+wall-clock milliseconds. Old readers skip them and old writers default to no goal. The store appends optional tag
+`0xA4`, a length-prefixed goal string and a uint64 deadline after its existing info extensions, in both framed info
+changes and snapshots. Default inactive goals omit the tail, preserving old bytes. Goal and turn admission commit
+together. Older servers do not execute goals; downgrading and rewriting a session can discard its unknown goal tail.

@@ -75,22 +75,21 @@ Glenn, 2026-11-25: "I am changing the settings for users to have when they start
 Each rule here has a test or a model behind it. A change that breaks one is a regression, not a redesign. Only the owner changes a rule, and the change is recorded here in the same pull request.
 
 Launch and the overlay
-- nexus is an overlay: a borderless panel above other apps, on every Space and beside fullscreen apps. Its dark background defaults to 60% opacity, configurable by client policy. It covers the whole screen including the menu bar, and runs as an Accessory app with no Dock icon. `--windowed` gives an ordinary opaque window instead, in which Escape does nothing.
+- nexus is an overlay: a borderless panel above other apps, on every Space and beside fullscreen apps. Its dark background defaults to 90% opacity, configurable by client policy. It covers the whole screen including the menu bar, and runs as an Accessory app with no Dock icon. `--windowed` gives an ordinary opaque window instead, in which Escape does nothing.
 - One live client owns each user’s client home. Command-Q hides the macOS overlay and keeps its server connection active.
 - A normal app launch reads the server host from client config, including after macOS relaunches the app for a permission change. Dashboard keeps connection and roster diagnostics out of the overlay.
 - The macOS client starts at GUI login in overlay mode. Keep example plugins, their services, groups and bindings in isolated test fixtures.
 - At launch and relaunch nothing shows: no window, no single frame, and no change of focus. nexus connects to `nexus-server` in the background, and only the hotkey shows it. The one exception is a hotkey that fails to register, because then nothing else could show nexus.
 - The hotkey is Command-backtick, the key left of 1, chosen by key position. It hides an overlay that is visible and has the keyboard, and shows it in every other case: after Command-Tab, the next press shows it rather than merely reactivating it.
-- An overlay that had the keyboard and lost it (to Command-Tab or a click on another app) hides. One that never got the keyboard after a show is hidden at the key check rather than left standing over other apps.
+- An overlay that had the keyboard and deliberately yields it (to Command-Tab or a click on another app) hides. Unsolicited focus changes are blocked or recovered by the desktop platform before hide-on-blur, controlled by `ui_flags.protect_overlay_focus`. Hidden overlays never acquire focus; browser/sign-in handoffs and OS session changes yield. One that never got the keyboard after a show is hidden at the key check rather than left standing over other apps.
 - Escape dismisses an open account menu. With no menu or dialog open, Escape hides the overlay on the sprint tab and on an AI's tab. On a terminal tab, Escape always goes to the terminal: vim, shells and agents need it.
 
-The client lock (owner, 2026-11-25: "you cannot use nexus without auth"; `docs/security.md`, `models/ClientLock.tla`, `src/client_lock.h`)
-- Every window is locked until the device's owner passes the system's authentication: Touch ID, an Apple Watch or the login password on macOS (LocalAuthentication, device-owner policy), Windows Hello on Windows, Face ID on iOS. Nothing turns it off.
-- Locked, the window draws the lock screen alone (owner: "no dashboard, no talk to ais, no terminals. nothing."): no Dashboard, no tab strip, no AI tab or name, no transcript or prompt, no terminal, no dialog, no sound of what an AI did; no input reaches anything but the lock screen (`window_input` `lockedWindowDrawsOnlyTheLockScreen`, `frame_host_unit` `lockedHostDropsInput`). The link, the AIs' work and the shells go on unseen.
-- It locks at launch, at sleep or the displays sleeping, at a screen lock, at a session switch, in the background on iOS, and after the idle timeout (client policy `lock_idle_minutes`, 10 unless set, 1 to 240). Locking hides the overlay at once. Launch still shows nothing: the system is asked when the window shows locked, and again by Return or a click after a refusal, which the lock screen names.
-- Only the system's grant for the current attempt unlocks; an answer that a relock overtook unlocks nothing (`UnlockOnlyByCurrent`, `StaleIgnored`).
-- Locked, the window claims no sign-in and opens no link, and plays no sound (`window_unit_signin` `lockedClaimsNothing`, `window_lock_unit`). Only deliberate input (a key, text, a press, a scroll, a paste, a drop) keeps it unlocked; a pointer or a drag passing over, a gesture or a trackpad touch does not. A `--windowed` window that locks is veiled at once (opacity 0) until the lock screen's frame is drawn.
-- `--screenshot` draws a state file or the demo only, never the live window. The test build's stand-in authenticator (`NEXUS_TEST_AUTHENTICATOR`) is a configure error in a Release, multi-config or signed build, and every build of the app checks that it has none of it (`nexus_no_test_authenticator`).
+Access to the client (owner, 2026-11-26: the signed-in OS session is sufficient; `docs/security.md`)
+- The desktop client does not ask for a separate Nexus unlock. Command-backtick reveals the overlay directly; `--windowed` opens directly. No Touch ID, password or Windows Hello check is added by Nexus at launch, after hiding, after sleep or after idle time.
+- The operating system controls access to the signed-in desktop session. Nexus does not create a live client lock, authenticator, idle-lock timer or session-lock watcher.
+- Provider logins and the server connection's authentication remain required. Reuse a saved provider login; ask for sign-in only when that account needs it.
+- Launch still shows no overlay and takes no focus. `--screenshot` draws a state file or the demo only, never the live window; `--locked` is a retained screenshot fixture, not a live access mode.
+- The lock component, its model and tests remain for the explicit fixture. The stand-in authenticator remains forbidden in Release, multi-config or signed builds (`nexus_no_test_authenticator`).
 
 Tabs
 - The fork defines tab types, groups, group order, close permissions and key bindings in client Starlark and JSON. The following bindings and groups describe the shipped profile.
@@ -98,7 +97,7 @@ Tabs
 - AI tabs come from the server's list of AIs and never close: the server is the authority, and the client holds only visual preferences and what is being typed (owner). An AI added on the server gets its tab live; one removed there loses its tab live (`Window.tla` `AddAI`, `RemoveAI`; `link_e2e_ais`).
 - Nothing a person typed is lost silently (owner): an AI tab's draft that is not empty, when its AI is removed, is kept and given back when an AI of that name on the same server has a tab again (`AIStrip.tla` `DraftsKept`, `KeptOnlyAbsent`, bound by `strip_walk`; `window_unit` `keptDraftsAcrossARestart`; `link_e2e_ais`).
 - The client saves tab group membership, order, selection and terminal directories in its local layout. Restoration respects the current fork policy (docs/plugins.md).
-- Click-drag or Command-Shift-Left/Right reorders a tab within its group. A cross-group drop leaves the tab in place. Other forks can permit transfers through the destination group’s `accepts_from` policy. Selection stays with the moved tab.
+- Click-drag or Command-Shift-PageUp/PageDown reorders a tab within its group. A cross-group drop leaves the tab in place. Other forks can permit transfers through the destination group’s `accepts_from` policy. Selection stays with the moved tab.
 - The AIs' order is saved after every drag and restored at launch. AIs the saved order doesn't name follow in list order, and names that no longer exist are dropped.
 - Command-1 to Command-0 select tabs 1 to 10 in the strip's current order. Command-1 is the sprint tab, and pressing it also takes the board back home. A key with no tab does nothing.
 - Command-T opens a terminal tab at the end, running the login shell in the home directory, and shows it. A terminal that cannot start leaves the previous tab showing.
@@ -148,6 +147,11 @@ Accounts and AIs (`models/Accounts.tla`, `src/accounts/registry.h`, `docs/accoun
 Sign-in (`models/SignIn.tla`, `docs/secrets.md` "Sign-in")
 - Each subscription login belongs to one named account. Claude, Codex, Antigravity, Grok and Muse support browser enrollment in the window (docs/secrets.md). A claude account with no login is signed in from inside nexus with one browser sign-in: no paste, no terminal, no file to save (the owner's ruling). It is signed in once, ever: asking again is a bug, except after an explicit sign-out, a refused or expired login, or when a configured Claude email first requires proof of identity.
 - For every Claude account with a configured email, enroll in an isolated CLI home. Verify the first-party identity from the completed login before storing that same grant. Require the matching verified grant before use and isolate its renewal by named account. An older setup token proves no identity. A pasted token cannot satisfy this requirement.
+- Owner, 2026-11-26: choosing a different account in the sign-in card signs out of the current account in both Nexus and the browser first.
+  Wait for the server's durable sign-out success before selecting the new account. A failed login leaves the new account selected,
+  without restoring the previous saved login. The current Claude browser handoff opens claude.ai and waits for the person's
+  confirmation that they signed out; opening a page is not proof of logout. Retrying the currently selected account preserves
+  its in-progress enrollment.
 - The typed `/logout` action targets the concrete account the server confirmed for the current AI and retires its idle drivers. It clears only that slot after its work and enrollment have finished. Keep the browser login and conversation history independent.
 - For Claude without a configured email, the client opens the browser and the server runs the unmodified `claude setup-token` under a pty, with its own CLAUDE_CONFIG_DIR, an environment made from scratch with no API-key variable, and nexus's helper as its `open` and BROWSER, which hands the URL to the server and opens nothing. The window the person shows claims the flow and opens the URL in the system browser. Across machines the window's gate takes exactly one GET with the redirect's path and state and sends its query up; the server replays it once to Claude Code's listener. The token goes from the pty straight into the one-chance store, checked to be a subscription's login, and the account's drivers start.
 - One flow per account; one process per account; exactly one callback forwarded per flow, and only with the URL's state; no second flow from a second window or a reconnect (`OneFlowPerAccount`, `OneProcessPerAccount`, `OneCallbackPerFlow`, `CallbackOnlyMatching`, `GateForwardsOnlyMatching`); a captured token is never dropped (`TokenNeverDropped`), and a token the process prints after its flow ended is stored all the same (`EveryPrintTaken`). Every end (captured, failed, cancelled, expired, dropped) is a defined state with one plain notice, and each but captured and dropped offers a fresh flow.
@@ -155,8 +159,10 @@ Sign-in (`models/SignIn.tla`, `docs/secrets.md` "Sign-in")
 - With only windows from before sign-ins (state format 4 or older, read from each window's Hello and nothing else) linked, a Claude account without a configured email can be asked for its login by a paste instead, as before sign-ins (`FallBack`).
 - A server that starts after a crash ends every `claude setup-token` still holding a lock its runner gave it, and removes every `.signin` left (`signin_functional_crashed`).
 - No AI ever sees the URL, the code or the token: none in a transcript, a log line, a driver event, a state file or a test's output (`NoTokenToWindows`, `NoTokenInLog`; `signin_unit_leak`, `signin_functional_*`, `link_e2e_signin` with its reversed witness `link_e2e_signin_leaky`). nexus never puts the URL in an argv or an environment of its own. An AI's only surface is `nexus-server config sign-in <account>`: `signed in` or `refused: <why>`.
+- Overlay dialogs stay inside the overlay’s native window, using Prax’s embedded portals. Opening a dialog must not transfer native keyboard focus and trigger hiding.
+- `/login` and the account menu’s sign-in entry use the same centered account-card appearance as automatic sign-in, including the configured `message_card` typography, spacing and highlight. It lists every linked account, including saved logins. Its keys take precedence over the page underneath. Up/Down selects, Enter signs in, and Escape dismisses without hiding Nexus.
 - The selected account’s sign-in action appears in a centered opaque rounded white card in the AI tab. When an email is configured, it appears in light blue between the account title and the activation hint. Enter in the prompt or clicking the card opens sign-in for that account and keeps the draft. The window opens the browser off its frame thread (`window_frame_budget`).
-- The default overlay darkens the desktop at 60% opacity. The person’s messages and the AI’s replies use dark bubbles. The fork can set outgoing text color independently using `transcript_style.person_ink`. Transcript notices use light red text on a dark bubble. Tool output and status labels use light neutral text on a dark bubble. The centered sign-in action alone uses the white card with large black text. The fork can change `transcript_style`, `overlay_opacity` and `message_card` through the client application without rebuilding either binary.
+- The default overlay darkens the desktop at 60% opacity. The person’s messages and the AI’s replies use dark bubbles. The fork can set outgoing text color independently using `transcript_style.person_ink`. Routine authentication notices are hidden; remaining transcript notices use neutral text. Tool output and status labels use light neutral text on a dark bubble. The centered sign-in action alone uses the white card with large black text. The fork can change `transcript_style`, `overlay_opacity` and `message_card` through the client application without rebuilding either binary.
 
 The sprint tab
 - It keeps nova-sprint's original branding and logo. The app itself is called "nexus" (its bundle display name), but the board is not rebranded.
@@ -198,6 +204,15 @@ Made in building the AI tabs from the server's list, to keep the locked rules ab
 - A saved AI tab is selected again once its AI arrives, and only a person's own change of tab is saved as the selection: the server's AIs come after launch, and a tab they select (the saved one arriving, another after the one that showed went) is no choice of the person's (`frame_host_unit`).
 - A server from before the list of AIs sends none: the window then shows the AIs of the server's sessions and removes none, so an older server keeps working.
 
+## Authentication direction (2026-11-27)
+
+Account switching is owned by Nexus across all harnesses. Prefer isolated authentication inside Nexus; automatically
+use system authentication when the provider requires it. No manual Safari logout handoff is part of the target flow.
+All interactive authentication runs on the client. The server may be headless Linux: it runs the harness, verifies
+and stores its credentials, and requires no browser or desktop. Client and server platforms are independent.
+See `docs/authentication.md` for the target contract and the implementation gaps; this is not a claim of delivered
+cross-platform support.
+
 ## Decided by the owner, not yet built (2026-11-11)
 
 Each of these moves into the locked rules above, with its test or model, in the pull request that builds it. Until then it is the design to build, not a thing to redecide.
@@ -230,7 +245,7 @@ Sessions
 - Command-M opens a pop-up selector of the harness's models and Command-E one of its effort levels. Up/Down move, Enter picks, Escape closes it. Nothing shows the model or effort otherwise.
 
 Tabs
-- Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. Command-Up/Down on an AI tab navigate its account menu.
+- Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. Command-Up/Down on an AI tab jump to the top/bottom of history; plain Up/Down navigate its account menu.
 
 ## Tests
 
@@ -263,3 +278,52 @@ Tabs
 - Commits use the shared agent identity, whose email is `305107455+rowan-claude@users.noreply.github.com`, set with repo-local `git config` only.
 - No personal names anywhere in the repository: code, comments, docs or commit messages.
 - License: GNU AGPL v3, permanently.
+
+## Session goals and help (2026-11-27)
+
+- `/goal <text>` sends immediately and repeats every five minutes in this session, for every harness. `/goal` reports
+  it; `/goal clear`, `/goal off` and Command–Delete stop future reminders. Command–Delete also clears the composer and held message.
+- The server persists and schedules goals, including on headless Linux and while the client is disconnected. Missed
+  intervals never cause catch-up bursts, and an identical waiting goal is not duplicated. New sessions inherit no goal.
+- The active goal is pinned below the held message and above the prompt, with a thick solid orange outline using the
+  cursor's pulse and HDR behavior. The server confirms removal; disconnected clients cannot claim a goal is stopped.
+- All shipped commands and keyboard actions are documented in `/help`. Changes to commands or bindings update that
+  reference in the same change. Contracts and qualification: `docs/goals.md`, `models/SessionGoal.tla`.
+- Keep the conversation clean: hide routine sign-in and account-switch history in the shipped client profile,
+  including old sign-in timeouts and harness-account reset notices. Keep the durable history, actionable failures
+  and requested command responses. Visible app responses are compact left-aligned dark conversation bubbles with
+  white text and Markdown formatting, including `/model`, `/info` and `/help` (owner, 2026-11-27).
+- Enter or Command–Enter on a prepared message returns the transcript immediately to its newest content, including
+  when Enter holds the message. Shift–Enter inserts a newline without changing the transcript position.
+- Work-operation text uses the scanner's bright blue without HDR, with separate shell and per-tool color settings. Tool colors, work chevrons,
+  goal presentation and idle animation behavior live in the shipped profile; pulsing continues on battery by default.
+
+- The outer canvas is `#0c0f13` at 100% opacity; the AI output panel is opaque `#15171b`. Prompt and message fills
+  remain independently configurable. The local clock sits at the top right above the strip divider, formatted
+  `Fri 27 Nov 10:45 AM`. Typography, colors, strings, interaction tuning, window options and the clock are fork-owned
+  in Starlark/config; see `docs/ui-configuration.md`. Native code validates and renders these values.
+
+- New AI reply text has no HDR flash by default (`transcript_style.glyph_peak = 1`). Keep cursor/goal pulses separate.
+- Capture frame performance continuously, before a person reports a stutter: numeric timings only, bounded on disk,
+  written off the UI thread. `ui_flags.performance_recording` controls it. The foreground macOS UI uses the highest
+  standard interactive QoS and a foreground task role; `ui_flags.foreground_priority` controls that boost. Background
+  build/test work must yield to interaction (low CPU and I/O priority), including on battery.
+
+- The header above the divider is opaque black. When the window overlaps a display notch, tabs and the clock use
+  the safe areas on either side; overflowing tabs scroll and keyboard selection reveals them. A narrow view or large
+  text moves the header below the notch. Detection and spacing follow the display and fork-owned UI configuration.
+
+- Dashboard polling and local rendering continue on its worker while another tab is selected or the overlay is
+  hidden. Tab selection and overlay reveal prepare the latest local frame, never reload or wait for a network
+  response. `ui_flags.dashboard_background_updates` permits a fork to suspend hidden polling.
+- The history viewport uses the outer canvas's full opacity without a second opaque backing; the clock matches regular-weight tab text size.
+
+- Command–Shift–Left/Right extends the prompt selection to the start/end of the whole prompt, including multiple lines. The fork owns these bindings through `prompt_selection_shortcuts`; tab reordering uses Command–Shift–PageUp/PageDown.
+
+- The prompt keeps `#272728`; the output panel uses the sampled `#15171b`. Retain their separate configuration fields.
+
+- Warning and notice bubbles are left-aligned and at most two-thirds of the column on desktop/laptop, using the same reply-width setting as AI text; mobile uses full width.
+
+- Work bubbles shorten long lines at whole UTF-8 character boundaries with an ellipsis, without wrapping, at two-thirds of the column from the left on desktop/laptop. Their text is bright scanner blue `#86c5ff` with no HDR gain.
+
+- While connecting, show one large white "Connecting to nexus" label with the prompt cursor's HDR pulse. Preserve actionable failure diagnostics. Terminal spacing is unchanged.

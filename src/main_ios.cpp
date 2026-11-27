@@ -50,6 +50,7 @@
 #include "client_home.h"
 #include "frame_host.h"
 #include "hitch.h"
+#include "frame_trace.h"
 #include "keyboard_room.h"
 #include "keyboard_start.h"
 #include "link/bootstrap.h"
@@ -75,6 +76,7 @@ using namespace nexus;
 struct App {
     Model* model = nullptr;
     View view;
+    FrameTrace frameTrace;
     Look look;
     PrFontSet* fonts = nullptr;
     PrStudioWindow* window = nullptr;
@@ -151,8 +153,16 @@ App& appOf(void* context) {
     return *static_cast<App*>(context);
 }
 
+void clockEvent(void* context, PrStudioApp*, const PrAppEvent* event) {
+    App& a = appOf(context);
+    if (event->kind == PrAppEventKind_Timer && event->tag == 5 && updateLocalCalendar(a.view.calendar) && a.window)
+        prAppWindowRequestFrame(prStudioWindowAppWindow(a.window));
+}
+
 bool open(void* context, PrStudioWindow* window) {
     App& a = appOf(context);
+    updateLocalCalendar(a.view.calendar);
+    prAppTimerSet(prStudioWindowApp(window), 5, 1, 1);
     a.window = window;
     a.wakeApp = prStudioWindowApp(window);
     PrKitTheme theme = windowTheme(a.fonts, false);
@@ -188,6 +198,7 @@ bool open(void* context, PrStudioWindow* window) {
 
 void closeWindow(void* context, PrStudioWindow*, PrStatus) {
     App& a = appOf(context);
+    a.frameTrace.flush();
     a.window = nullptr;
     a.wakeApp = nullptr;
     a.view.openLink = nullptr;
@@ -210,6 +221,7 @@ void palette(void*, PrStudioWindow* window, const PrAppUserPreferences*, PrKitPa
 // hidden.
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
+    updateLocalCalendar(a.view.calendar);
     a.hitch.begin();
     a.safeArea = f->safeArea;
     a.keyboardRoom = roomAboveKeyboard(f->extent, f->safeArea, f->keyboard);
@@ -217,8 +229,10 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     // iPhone's compact width gives the replies the column's whole width (View::fullWidthReplies).
     PrSurface surface{};
     const bool known = prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok;
-    a.view.columnScale = known && regularWidth(surface) ? style::kRegularWidthColumn : 1;
-    a.view.fullWidthReplies = known && !regularWidth(surface);
+    a.view.columnScale = known && regularWidth(surface) ? a.view.windowApp.surface.ui.regular_width_column : 1;
+    a.view.fullWidthReplies = known && !regularWidth(surface) && a.view.windowApp.surface.flags.mobile_full_width_replies;
+    a.view.dialogsAtTop = a.view.windowApp.surface.flags.mobile_top_dialogs;
+    a.view.tapEndsEditing = a.view.windowApp.surface.flags.mobile_tap_ends_editing;
     a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
 }
 
@@ -253,7 +267,11 @@ bool laidOut(void* context, PrStudioWindow* window) {
 }
 
 void trace(void* context, const PrStudioWindowFrameTimes* t) {
-    HitchDetector& hitch = appOf(context).hitch;
+    App& a = appOf(context);
+    if (a.view.windowApp.surface.flags.performance_recording)
+        a.frameTrace.record(prTimeSystemToUnixMilliseconds(prTimeSystemNow()), prTimeMonotonicMilliseconds(),
+            {t->total, t->wait, t->build, t->scene, t->play, t->render, t->gap, t->inputWait, t->extent.x, t->extent.y});
+    HitchDetector& hitch = a.hitch;
     if (hitch.inFrame()) {
         hitch.add(Phase::Layout, t->build);
         hitch.add(Phase::Draw, t->scene + t->play);
@@ -271,6 +289,8 @@ void keepHome(App& a, const std::string& home) {
     static TabOrderStore scale;
     static TabOrderStore layoutStore;
     if (home.empty()) return;
+    const auto traceStore = writer.wrap(frameTraceStore(home + "/performance.jsonl"));
+    a.frameTrace.write = [traceStore](const std::string& batch) { std::string why; traceStore.write(batch, &why); };
     a.view.application->watch(home + "/policy.bundle.json");
     order = writer.wrap(fileTabOrderStore());
     selection = writer.wrap(fileSelectedTabStore());
@@ -320,8 +340,8 @@ void keepHome(App& a, const std::string& home) {
     a.host.selectionStore = &selection;
     a.view.selected = [&a] { a.host.personSelected(); };
     warning.clear();
-    a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &warning,
-        style::kDefaultTextSteps);
+    a.view.askedTextSteps = loadTextScale(scale, -a.view.windowApp.surface.ui.stepsDown(), a.view.windowApp.surface.ui.stepsUp(), &warning,
+        a.view.windowApp.surface.ui.defaultSteps(true));
     if (!warning.empty()) std::fprintf(stderr, "nexus: %s\n", warning.c_str());
     a.view.scaled = [&a] {
         std::string why;
@@ -451,7 +471,7 @@ int main(int argc, char** argv) {
     PrAppOptions options = prAppOptionsDefault();
     options.windowModel = PrAppWindowModel_Single;
     PrStudioAppDesc desc{.fonts = a.fonts, .options = &options, .window = &window,
-        .lastWindow = PrStudioAppLastWindow_Stop, .context = &a};
+        .lastWindow = PrStudioAppLastWindow_Stop, .event = clockEvent, .context = &a};
     const PrStatus status = prStudioAppRun(&desc);
     if (status != PrStatus_Ok)
         std::fprintf(stderr, "nexus: the window could not open or the run could not start (status %d)\n", int(status));

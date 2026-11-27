@@ -22,3 +22,11 @@ policy_unit_stale_bundle                    pr       NEXUS_POLICY_TOOL_TESTS    
 policy_unit_stale_bundle_applied            pr       NEXUS_POLICY_TOOL_TESTS            # what apply writes from this commit is not stale
 client_lock_unit                            pr       ALWAYS              # the client lock's rules (no content without the owner's authentication)
 window_lock_unit                            pr       NEXUS_WINDOW        # the client lock's window gate, over the fake authenticator
+
+# Live profile, local clock and pinned goal presentation.
+window_functional_notch                    pr       NEXUS_WINDOW
+window_functional_ui_config                pr       NEXUS_WINDOW
+window_functional_goal                     pr       NEXUS_WINDOW
+frame_trace_unit                          pr       NEXUS_WINDOW_LOGIC
+frame_trace_rotation                      pr       NEXUS_WINDOW_LOGIC
+window_functional_foreground_priority      pr       NEXUS_WINDOW+APPLE

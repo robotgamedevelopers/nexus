@@ -196,6 +196,7 @@ struct Harness {
     FakeBoard board;
     View view;
     PrAppDisplay display = prAppDisplayDefault();
+    PrAppUserPreferences preferences{};
     double time = 1000;
     PrVec2 extent{1000, 780};
     int hides = 0;      // hide requests reaching the host seam (View::hide), which the overlay connects to hideOverlay
@@ -247,7 +248,7 @@ struct Harness {
             .extent = extent,
             .maxRounds = rounds,
             .display = display,
-            .preferences = {},
+            .preferences = preferences,
         };
         // Under a surface that fills the viewport, as Prax's studio window builds the app's round (studio_window.cpp
         // build), so that the window is not the tree's root, as in the app.
@@ -528,6 +529,26 @@ void commandEnterSendsTheHeldAndTheDraft() {
     CHECK(h.active().transcript.size() == 2);
     CHECK(h.active().transcript.size() == 2 && h.active().transcript[1].text == "first\nthen this");
     CHECK(h.active().queue.empty() && h.active().held.empty() && h.active().draft.empty());
+}
+
+void commandShiftArrowsSelectPromptEdges() {
+    Harness h;
+    h.type("first");
+    h.enter(PrAppModifierFlag_Shift);
+    h.type("second");
+    const auto tab = h.model.active();
+    const auto shiftCommand = PrAppModifierFlags(style::kCommand | PrAppModifierFlag_Shift);
+    prUiTextEditSetSelection(h.ui, h.view.prompt, {8, 8});
+    h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft, shiftCommand);
+    auto selection = prUiTextEditSelection(h.ui, h.view.prompt);
+    CHECK(selection.anchor == 8 && selection.caret == 0);
+    CHECK(h.model.active() == tab && h.active().draft == "first\nsecond");
+    h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight, shiftCommand);
+    selection = prUiTextEditSelection(h.ui, h.view.prompt);
+    CHECK(selection.anchor == 8 && selection.caret == 12);
+    h.type("!");
+    CHECK(h.active().draft == "first\nse!");
+    CHECK(h.model.active() == tab);
 }
 
 void shiftEnterInsertsOneLineFeed() {
@@ -944,6 +965,10 @@ void draftAndScrollStayWithTheirAI() {
     CHECK(position().offset.y.raw == position().range.top.raw);
     h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown, PrAppModifierFlag_Control);
     CHECK(position().offset.y.raw == position().range.bottom.raw);
+    h.key(PrAppKey_Up, PrAppKeyCode_ArrowUp, style::kCommand);
+    CHECK(position().offset.y.raw == position().range.top.raw);
+    h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown, style::kCommand);
+    CHECK(position().offset.y.raw == position().range.bottom.raw);
     CHECK(h.model.tab(0).draft == "for f2");
 }
 
@@ -1131,14 +1156,13 @@ void promptSegmentTracksInsertionAndUsesHeadroom() {
         h.frame();
         return fillOf(h, cell()).r;
     };
-    // The shipped caret (prompt_style): a 1.5 s cycle, 0.1 s held at the top, 0.2 s at the bottom, falling in half the
-    // time it rises.
-    const double rise = (1.5 - 0.1 - 0.2) / 1.5;
+    // The shipped caret rises quickly, holds, then falls twice as slowly on its own 1.8 s cycle.
+    const double rise = (1.8 - 0.1 - 0.1) / 3;
     const float floor = redAt(0);
-    CHECK(floor < 1 && redAt(1.301) == floor && redAt(1.401) == floor && redAt(1.499) == floor);
+    CHECK(floor < 1 && redAt(1.701) == floor && redAt(1.751) == floor && redAt(1.799) == floor);
     const float crest = redAt(rise);
     CHECK(crest > 1 && redAt(rise + 0.095) == crest);
-    CHECK(std::abs(redAt(rise / 2) - redAt(rise + 0.1 + rise / 4)) < 0.01);
+    CHECK(std::abs(redAt(rise / 2) - redAt(rise + 0.1 + rise)) < 0.01);
     prUiTextEditSetSelection(h.ui, h.view.prompt, {0, 2});
     h.frame();
     CHECK(cell() == kPrLayoutNodeNone);
@@ -1235,6 +1259,8 @@ PrLayoutNode checkTextPaint(const Harness& h, const std::string& text, unsigned 
 // the prompt box, its border, the bubbles (the queued one too) and all text are opaque.
 void switchNoticeBubble() {
     Harness h;
+    // Forks can still opt into the detailed account history.
+    h.view.windowApp.transcriptStyle.hiddenNoticeFragments.clear();
     const std::string prefix(kAccountSwitchPrefix);
     const std::string email = "subscriber@example.test";
     const std::string suffix = " (work)";
@@ -1243,9 +1269,9 @@ void switchNoticeBubble() {
     h.frame();
     h.frame();
     const TranscriptStyle& shipped = h.look.transcriptStyle;
-    const auto bubble = checkTextPaint(h, prefix, shipped.statusInk, h.look.tabs.fill);
-    CHECK(bubble == checkTextPaint(h, email, shipped.switchEmailInk, h.look.tabs.fill));
-    CHECK(bubble == checkTextPaint(h, suffix, shipped.statusInk, h.look.tabs.fill));
+    const auto bubble = checkTextPaint(h, prefix, shipped.statusInk, shipped.fill);
+    CHECK(bubble == checkTextPaint(h, email, shipped.switchEmailInk, shipped.fill));
+    CHECK(bubble == checkTextPaint(h, suffix, shipped.statusInk, shipped.fill));
     const auto prefixBounds = h.bounds(h.findText(h.window(), prefix));
     const auto emailBounds = h.bounds(h.findText(h.window(), email));
     const auto suffixBounds = h.bounds(h.findText(h.window(), suffix));
@@ -1370,7 +1396,7 @@ void markdownListsAndLinks() {
     CHECK(pointer(PrAppEventKind_PointerMove, {at.x - 12, at.y}));
     CHECK(pointer(PrAppEventKind_PointerUp, at));
     CHECK(opened.size() == 1);
-    checkTextPaint(h, "web link", h.look.tabs.selectedFill, h.look.tabs.fill);
+    checkTextPaint(h, "web link", h.look.tabs.selectedFill, *h.look.transcriptStyle.panelFill);
 }
 
 void longInlineCommandWrapsInTheReply() {
@@ -1425,6 +1451,81 @@ void longInlineCommandWrapsInTheReply() {
     }
 }
 
+void personBubblesWrapFromTheRight() {
+    for (const float viewport : {1000.0f, 1600.0f}) {
+        Harness h;
+        h.extent = h.view.extent = {viewport, 1400};
+        std::string text;
+        for (int i = 0; i < 30; ++i) text += "A message long enough to wrap across several lines. ";
+        h.model.append(0, {EntryKind::Person, text});
+        h.frame(); h.frame();
+        const auto entries = h.entries();
+        CHECK(entries.size() == 1);
+        if (entries.size() != 1) continue;
+        const auto row = h.bounds(entries.front());
+        const auto bubble = h.bounds(prLayoutNodeFirstChild(h.tree, entries.front()));
+        CHECK(near(bubble.right, row.right));
+        CHECK(std::abs((bubble.right - bubble.left) / (row.right - row.left) - 2.0f / 3.0f) < 0.01f);
+        CHECK(bubble.bottom - bubble.top > h.look.ui.line_pitch * 2);
+        h.model.set_draft(0, text);
+        h.model.hold_draft(0);
+        h.frame(); h.frame();
+        const auto heldRow = h.bounds(h.entries().back());
+        const auto held = h.bounds(prLayoutNodeFirstChild(h.tree, h.entries().back()));
+        CHECK(near(held.right, heldRow.right));
+        CHECK(std::abs((held.right - held.left) / (heldRow.right - heldRow.left) - 2.0f / 3.0f) < 0.01f);
+    }
+}
+
+void workLinesClipAtReplyWidth() {
+    for (const float viewport : {650.f, 1000.f, 1600.f}) {
+        Harness h;
+        h.extent = h.view.extent = {viewport, 1400};
+        std::string command;
+        for (int i = 0; i < 100; ++i) command += "café 世界 ";
+        h.model.append(0, {EntryKind::Tool, "Bash: " + command});
+        h.frame(); h.frame(); h.frame();
+        const auto group = h.entries().front();
+        const auto column = h.bounds(h.view.items[h.active().id].column);
+        const auto bubble = h.bounds(group);
+        const float inset = h.look.ui.bubble_padding_x * h.look.ui.scale(h.look.textSteps);
+        CHECK(near(bubble.left, column.left + inset));
+        CHECK((bubble.right - bubble.left) <= (column.right - column.left - 2 * inset) * 2.f / 3.f + 1);
+        auto leaf = prLayoutNodeFirstChild(h.tree, group);
+        while (leaf && prLayoutNodeKind(h.tree, leaf) != PrLayoutNodeKind_Text)
+            leaf = prLayoutNodeFirstChild(h.tree, leaf);
+        CHECK(leaf);
+        if (!leaf) continue;
+        const auto raw = prLayoutNodeText(h.tree, leaf);
+        const std::string preview(raw.data, raw.size);
+        CHECK(preview.ends_with("…"));
+        CHECK(("$ " + command).starts_with(preview.substr(0, preview.size() - 3)));
+        const auto text = h.bounds(leaf);
+        const float padding = h.look.transcriptStyle.captionPaddingX * h.look.ui.scale(h.look.textSteps);
+        CHECK(text.right <= bubble.right - padding + 1);
+        CHECK(h.height(leaf) <= h.look.ui.tool_pitch + 1);
+        CHECK(h.active().transcript.front().text == "Bash: " + command);
+    }
+}
+
+void warningsUseReplyWidthFromTheLeft() {
+    Harness h;
+    const std::string warning = "WARNING: " + std::string(30, 'x') + " ";
+    std::string text;
+    for (int i = 0; i < 20; ++i) text += warning;
+    h.model.append(0, {EntryKind::Notice, text});
+    for (bool mobile : {false, true}) {
+        h.view.fullWidthReplies = mobile;
+        h.frame(); h.frame();
+        const auto entry = h.entries().front();
+        const auto row = h.bounds(entry);
+        const auto bubble = h.bounds(prLayoutNodeFirstChild(h.tree, entry));
+        CHECK(near(row.left, bubble.left));
+        const float fraction = (bubble.right - bubble.left) / (row.right - row.left);
+        CHECK(std::abs(fraction - (mobile ? 1.f : 2.f / 3.f)) < .01f);
+    }
+}
+
 void conversationBubblesAndSignInCard() {
     Harness h;
     const std::string live = "Streaming reply";
@@ -1439,20 +1540,19 @@ void conversationBubblesAndSignInCard() {
     if (entries.size() != 4) return;
     const auto bubble = [&](std::size_t i) { return prLayoutNodeFirstChild(h.tree, entries[i]); };
     CHECK(colorMatches(fillOf(h, bubble(0)), h.look.transcriptStyle.fill));
-    CHECK(colorMatches(fillOf(h, h.view.conversation), h.look.tabs.fill));
+    CHECK(colorMatches(fillOf(h, h.view.conversation), *h.look.transcriptStyle.panelFill));
     CHECK(fillOf(h, bubble(1)).a == 0 && fillOf(h, bubble(3)).a == 0);
     CHECK(h.bounds(bubble(0)).left > h.bounds(bubble(1)).left);
     CHECK(near(h.bounds(bubble(1)).left, h.bounds(bubble(3)).left));
     // A stored, closed Notice uses the same model entry after hydration. Live status and chat keep distinct colors.
     const TranscriptStyle& shipped = h.look.transcriptStyle;
     checkTextPaint(h, "Hello", shipped.ink, shipped.fill);
-    checkTextPaint(h, "A reply.", shipped.ink, h.look.tabs.fill);
-    checkTextPaint(h, "Usage limit reached.", shipped.noticeInk, h.look.tabs.fill);
-    checkTextPaint(h, live, shipped.ink, h.look.tabs.fill);
+    checkTextPaint(h, "A reply.", shipped.ink, *shipped.panelFill);
+    checkTextPaint(h, "Usage limit reached.", shipped.noticeInk, shipped.fill);
+    checkTextPaint(h, live, shipped.ink, *shipped.panelFill);
     // The shipped transcript_style (policy/rules/config.json) is what the window draws with.
     CHECK(shipped.ink == 0xffffff && shipped.personInk == 0xffffff && shipped.fill == 0x252525);
-    CHECK(shipped.noticeInk == 0xff4455 && shipped.statusInk == 0xd8d8d8 && shipped.busInk == 0x86c5ff);
-    CHECK(shipped.ink != shipped.noticeInk && shipped.statusInk != shipped.noticeInk);
+    CHECK(shipped.noticeInk == 0xffffff && shipped.statusInk == 0xd8d8d8 && shipped.busInk == 0x86c5ff);
 
 }
 
@@ -1529,16 +1629,16 @@ void overlayKeepsAllButTheBackgroundOpaque() {
     CHECK(h.active().transcript.size() == 1 && h.active().held == "held");
     h.time = 1008; // crest of the 2.8-second unsent-text pulse
     h.frame();
-    // The shipped overlay_opacity (policy/rules/config.json): 70%.
+    // The shipped overlay_opacity (policy/rules/config.json): fully opaque.
     // The window, the surface's one child: in the shipped profile the transcript stands in its conversation panel
     // (transcript_style panel_fill), which draws no background of its own over the window's.
     PrLayoutNode window = h.window();
     CHECK(prLayoutNodeParent(h.tree, prLayoutNodeParent(h.tree, h.view.transcript)) == window);
     CHECK(fillOf(h, prLayoutNodeParent(h.tree, h.view.transcript)).a == 0);
-    CHECK(near(fillOf(h, window).a * 100, 70.0f));
+    CHECK(near(fillOf(h, window).a * 100, 100.0f));
     CHECK(prColorFromColor16(prLayoutTreeCanvasColor(h.tree)).a == 0);
     CHECK(fillOf(h, prLayoutNodeParent(h.tree, window)).a == 0);
-    CHECK(near(h.kit->theme.palette.bg0.a * 100, 70.0f));
+    CHECK(near(h.kit->theme.palette.bg0.a * 100, 100.0f));
     CHECK(near(h.kit->theme.palette.bg1.a * 100, style::kOverlayStripFill * 100));
     CHECK(fillOf(h, h.view.promptBox).a == 1);
     for (int side = 0; side < PrRectSide_Count; ++side)
@@ -1717,15 +1817,26 @@ void toolLinesAreOneCompactLine() {
     const TranscriptStyle& shipped = h.look.transcriptStyle;
     // The shipped tool_prompts and command_ink: a Bash line reads as a shell command, in the command ink.
     CHECK(shipped.toolPrompts.count("Bash") == 1 && shipped.toolPrompts.at("Bash") == "$ ");
-    CHECK(shipped.commandInk && *shipped.commandInk == 0xdc7334);
+    CHECK(shipped.commandInk && *shipped.commandInk == 0x86c5ff);
     CHECK(!h.hasText(h.window(), "Bash: ls src"));
-    checkTextPaint(h, "$ ls src", 0xdc7334, shipped.fill);
-    checkTextPaint(h, std::string(400, 'x'), h.look.tabs.selectedFill, shipped.fill);
-    checkTextPaint(h, "Let me look.", shipped.ink, h.look.tabs.fill);
+    checkTextPaint(h, "$ ls src", 0x86c5ff, shipped.fill);
+    auto readLeaf = prLayoutNodeNextSibling(h.tree, prLayoutNodeFirstChild(h.tree, e[1]));
+    while (readLeaf && prLayoutNodeKind(h.tree, readLeaf) != PrLayoutNodeKind_Text)
+        readLeaf = prLayoutNodeFirstChild(h.tree, readLeaf);
+    CHECK(readLeaf);
+    if (readLeaf) {
+        const auto raw = prLayoutNodeText(h.tree, readLeaf);
+        const std::string preview(raw.data, raw.size);
+        CHECK(preview.ends_with("…"));
+        checkTextPaint(h, preview, shipped.toolInks.at("Read"), shipped.fill);
+    }
+    checkTextPaint(h, "Let me look.", shipped.ink, *shipped.panelFill);
     std::vector<PrLayoutNode> lines;
     for (PrLayoutNode n = prLayoutNodeFirstChild(h.tree, e[1]); n != kPrLayoutNodeNone;
             n = prLayoutNodeNextSibling(h.tree, n)) {
-        lines.push_back(n);
+        const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, n));
+        if (prLayoutBoxStyleRecord(h.tree, record.groups[PrLayoutGroup_Box]).position != PrLayoutPosition_Absolute)
+            lines.push_back(n);
     }
     CHECK(lines.size() == 2);
     PrRect column = h.bounds(prLayoutNodeFirstChild(h.tree, h.view.transcript));
@@ -2251,16 +2362,20 @@ void accountPickerIsAnExplicitChoice() {
     host.view = &h.view;
     host.connect(&link, "test");
     h.view.selected = [&] { host.personSelected(); };
+    bool workUnsigned = false;
+    std::vector<sync::EntryRef> notices;
     const auto publish = [&](const std::string& account, bool automatic = false, bool supportsAuto = false) {
         auto session = std::make_shared<sync::SessionView>();
         session->id = 17;
+        session->entries = notices;
         session->info = {"f1", "codex", account, "", ""};
         session->info.autoAccount = automatic;
         link.state.phase = sync::LinkPhase::Connected;
         link.state.loopback = true;
         link.state.sessions = sync::Sessions({session});
-        link.state.sessions.setAIs({{"f1", {{"a", "Personal"}, {"b", "Work"}, {"c", "Archive", true}}, supportsAuto},
+        link.state.sessions.setAIs({{"f1", {{"a", "Personal"}, {"b", "Work", workUnsigned}, {"c", "Archive", true}}, supportsAuto},
                                       {"f2"}});
+        link.state.sessions.setNextAction(link.sent.size() + 1);
         link.changed = true;
         host.pollLink();
         h.frame();
@@ -2283,9 +2398,9 @@ void accountPickerIsAnExplicitChoice() {
         return p.tab == tabId && p.session == 17 && p.current == current && p.highlighted < p.options.size() &&
                p.options[p.highlighted].name == wanted;
     };
-    // An opening chord (Command-Down) opens the menu on the account in use, centred over the window and anchored to no
+    // An opening chord (Down) opens the menu on the account in use, centred over the window and anchored to no
     // tab; it sends nothing and keeps the draft.
-    arrow(true, style::kCommand);
+    arrow(true, 0);
     CHECK(preview("b", "b"));
     CHECK(link.sent.empty() && signIns == 0 && h.active().id == tabId && h.active().draft == "keep my draft");
     CHECK(h.view.accountAnchor == kPrLayoutNodeNone && h.view.accountMenu != kPrLayoutNodeNone);
@@ -2295,12 +2410,12 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(menu.top >= h.bounds(h.tabs()[h.model.active()]).bottom);
     CHECK(h.view.accountRows.size() == 3);
     for (const char* label : {"Personal", "Work", "Archive"}) CHECK(h.hasText(h.view.accountMenu, label));
-    // Open, the arrows alone and with Command move the highlight, and only that.
+    // Open, the plain arrows move the highlight, and only that.
     arrow(true, 0);
     CHECK(preview("c", "b"));
     arrow(false, 0);
     CHECK(preview("b", "b"));
-    arrow(false, style::kCommand);
+    arrow(false, 0);
     CHECK(preview("a", "b") && link.sent.empty());
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     h.frame();
@@ -2316,23 +2431,27 @@ void accountPickerIsAnExplicitChoice() {
     h.enter();
     h.frame();
     CHECK(!h.view.accountPicker && signIns == 0 && h.active().draft == "keep my draft" && h.active().held.empty());
-    CHECK(link.sent.size() == 1 && link.sent[0].kind == sync::ActionKind::SetAccount &&
-          link.sent[0].session == 17 && link.sent[0].text == "c");
+    CHECK(link.sent.size() == 1 && link.sent[0].kind == sync::ActionKind::SignOut &&
+          link.sent[0].session == 17 && link.sent[0].account == "b");
+    workUnsigned = true;
+    notices.push_back(std::make_shared<sync::SessionEntry>(EntryKind::Notice, "Signed out of b in Nexus."));
+    publish("b");
+    CHECK(link.sent.size() == 2 && link.sent[1].kind == sync::ActionKind::SetAccount && link.sent[1].text == "c");
     // Archive needs signing in, and the shipped profile signs in on select (sign_in_on_select): once the server has
     // the session on it, the window claims its sign-in, and the menu stands open asking for it.
     publish("c");
-    CHECK(link.sent.size() == 2 && link.sent[1].kind == sync::ActionKind::SignInClaim && link.sent[1].account == "c" &&
-          link.sent[1].session == 17);
+    CHECK(link.sent.size() == 3 && link.sent[2].kind == sync::ActionKind::SignInClaim && link.sent[2].account == "c" &&
+          link.sent[2].session == 17);
     CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.view.accountRows.size() == 3);
-    arrow(false, style::kCommand);
+    arrow(false, 0);
     CHECK(preview("b", "c"));
     h.commandDigit(3);
     h.frame();
     CHECK(h.active().name == "f2" && !h.view.accountPicker && h.view.accountMenu == kPrLayoutNodeNone);
-    CHECK(link.sent.size() == 2);
+    CHECK(link.sent.size() == 3);
     h.commandDigit(2);
     CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.active().draft == "keep my draft");
-    arrow(true, style::kCommand);
+    arrow(true, 0);
     CHECK(preview("a", "c"));
     CHECK(h.view.accountRows.size() == 3);
     if (h.view.accountRows.size() != 3) return;
@@ -2341,17 +2460,23 @@ void accountPickerIsAnExplicitChoice() {
     h.pointer(PrAppEventKind_PointerDown, point);
     h.pointer(PrAppEventKind_PointerUp, point);
     CHECK(!h.view.accountPicker && signIns == 0 && h.active().draft == "keep my draft");
-    CHECK(link.sent.size() == 3 && link.sent[2].kind == sync::ActionKind::SetAccount && link.sent[2].text == "b");
+    CHECK(link.sent.size() == 4 && link.sent[3].kind == sync::ActionKind::SignOut && link.sent[3].account == "c");
+    notices.push_back(std::make_shared<sync::SessionEntry>(EntryKind::Notice, "Signed out of c in Nexus."));
+    publish("c");
+    CHECK(link.sent.size() == 5 && link.sent[4].kind == sync::ActionKind::SetAccount && link.sent[4].text == "b");
     publish("b");
-    CHECK(h.view.accountMenu == kPrLayoutNodeNone && link.sent.size() == 3);
+    CHECK(link.sent.size() == 6 && link.sent[5].kind == sync::ActionKind::SignInClaim && link.sent[5].account == "b");
+    workUnsigned = false;
+    publish("b");
+    CHECK(h.view.accountMenu == kPrLayoutNodeNone && link.sent.size() == 6);
     // The shipped menu lists the linked accounts only: automatic choice is the server's (auto_accounts), never a row.
     publish("a", true, true);
-    arrow(false, style::kCommand);
+    arrow(false, 0);
     CHECK(preview("a", "a") && h.view.accountRows.size() == 3);
     for (const auto row : h.view.accountRows) CHECK(!h.hasText(row, "auto"));
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     h.frame();
-    CHECK(link.sent.size() == 3 && h.active().draft == "keep my draft");
+    CHECK(link.sent.size() == 6 && h.active().draft == "keep my draft");
 }
 
 void fableLimitOffersKeyboardAndMouseChoices() {
@@ -2492,7 +2617,7 @@ bool anyTextHas(const std::vector<std::string>& texts, const std::string& part) 
 // terminals and the board are serviced unseen. Typing reaches nothing; Return asks the system, Escape hides. Unlocked
 // again, the same window shows the AIs' names and the draft, so the checks above can see them when they are there.
 void lockedWindowDrawsOnlyTheLockScreen() {
-    Harness h(std::vector<AIInfo>{AIInfo{"alex", "m1"}, AIInfo{"emma", "m2"}}, true, true);
+    Harness h(std::vector<AIInfo>{AIInfo{"first", "m1"}, AIInfo{"second", "m2"}}, true, true);
     h.commandT();
     const std::size_t terminal = h.active().id;
     CHECK(h.active().kind == TabKind::Terminal);
@@ -2504,7 +2629,7 @@ void lockedWindowDrawsOnlyTheLockScreen() {
     CHECK(draft == "secret plan");
     // Shown unlocked: the names and the draft are drawn.
     auto texts = allTexts(h);
-    CHECK(anyTextHas(texts, "alex") && anyTextHas(texts, "emma") && anyTextHas(texts, "secret plan"));
+    CHECK(anyTextHas(texts, "First") && anyTextHas(texts, "Second") && anyTextHas(texts, "secret plan"));
 
     int unlocks = 0;
     h.view.unlock = [&] { ++unlocks; };
@@ -2521,7 +2646,7 @@ void lockedWindowDrawsOnlyTheLockScreen() {
     CHECK(anyTextHas(texts, "Touch ID"));
     for (const auto& t : texts)
         CHECK(t == "nexus is locked" || t == "Press Return or click here to unlock with Touch ID.");
-    CHECK(!anyTextHas(texts, "alex") && !anyTextHas(texts, "emma") && !anyTextHas(texts, "secret"));
+    CHECK(!anyTextHas(texts, "First") && !anyTextHas(texts, "Second") && !anyTextHas(texts, "secret"));
     CHECK(h.view.prompt == kPrLayoutNodeNone && h.view.promptBox == kPrLayoutNodeNone);
     CHECK(h.view.transcript == kPrLayoutNodeNone && h.view.boardBox == kPrLayoutNodeNone);
     CHECK(h.terminals.shown.size() == shown);           // no terminal drawn
@@ -2546,7 +2671,7 @@ void lockedWindowDrawsOnlyTheLockScreen() {
     h.frame();
     h.frame();
     texts = allTexts(h);
-    CHECK(anyTextHas(texts, "alex") && anyTextHas(texts, "emma") && anyTextHas(texts, "secret plan"));
+    CHECK(anyTextHas(texts, "First") && anyTextHas(texts, "Second") && anyTextHas(texts, "secret plan"));
 }
 
 // A clipboard file or image whose read finishes after the lock starts, before the next frame takes the prompt away,
@@ -3076,6 +3201,35 @@ void sprintTabSaysWhyThereIsNoPage() {
     CHECK(h.hasText(prLayoutTreeRoot(h.tree), "this build has no dashboard"));
 }
 
+void connectingUsesWhiteCursorPulse() {
+    Harness h = withSprint();
+    h.board.page = false;
+    h.view.connecting = true;
+    h.view.status = "Connecting to test-host";
+    h.display.headroom = h.display.potentialHeadroom = 4;
+    auto colorAt = [&](double time) {
+        h.time = time;
+        h.frame(); h.frame();
+        const auto leaf = h.findText(h.window(), "Connecting to nexus");
+        CHECK(leaf && !h.hasText(h.window(), h.board.problem) && !h.hasText(h.window(), h.view.status));
+        if (!leaf) return PrColor{};
+        const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, prLayoutNodeParent(h.tree, leaf)));
+        const auto font = prLayoutFontStyleRecord(h.tree, record.groups[PrLayoutGroup_Font]);
+        CHECK(prTextFontStyle(font.font).size >= 2 * h.look.ui.body_size);
+        return prColorFromColor16(prLayoutColorStyleRecord(h.tree, record.groups[PrLayoutGroup_Color]).color);
+    };
+    const auto low = colorAt(0);
+    const auto high = colorAt(.55);
+    CHECK(low.r < 1 && high.r > 1 && high.r == high.g && high.g == high.b);
+    CHECK(h.view.energyAnimating);
+    h.preferences.reducedMotion = true;
+    const auto steady = colorAt(0);
+    CHECK(!h.view.energyAnimating && steady.r == colorAt(.55).r);
+    h.view.connecting = false;
+    h.frame(); h.frame();
+    CHECK(h.hasText(h.window(), h.board.problem) && !h.hasText(h.window(), "Connecting to nexus"));
+}
+
 // The text scale's keys zoom the page.
 void textKeysZoomTheBoard() {
     Harness h = withSprint();
@@ -3188,7 +3342,7 @@ void checkTranscriptStyleValidation(nexus::policy::Host& host) {
     nexus::WindowApplication stock;
     stock.update(stockHost, "ai", "", true, false, 0, 1, "validate-style");
     const nexus::TranscriptStyle shipped = stock.transcriptStyle;
-    CHECK(shipped.ink == 0xffffff && shipped.noticeInk == 0xff4455 && shipped.fill == 0x252525);
+    CHECK(shipped.ink == 0xffffff && shipped.noticeInk == 0xffffff && shipped.fill == 0x252525);
     CHECK(shipped.toolPrompts.count("Bash") == 1);
     for (std::size_t i = 0; i < 14; ++i) {
         window.update(host, "ai", "", true, false, i, 14, "validate-style");
@@ -3204,7 +3358,243 @@ void checkTranscriptStyleValidation(nexus::policy::Host& host) {
     }
 }
 
+void cleanNoticePresentation() {
+    Harness h({AIInfo{"test", "m1"}});
+    const std::vector<std::string> routine = {
+        "work's sign-in was not finished in 10 minutes: show nexus's window to sign in again",
+        "work was signed in in the browser",
+        "Signed in to work as subscriber@example.test.",
+        "Switched to subscriber@example.test (work)",
+        "The previous harness session belongs to a different account. Starting fresh."
+    };
+    for (const auto& text : routine) h.model.append(0, {EntryKind::Notice, text});
+    h.model.append(0, {EntryKind::Person, "Hello"});
+    h.model.append(0, {EntryKind::AI, "Ready."});
+    const std::string failure = "The prompt was not sent. Reconnect to the server and retry.";
+    h.model.append(0, {EntryKind::Notice, failure});
+    h.frame(); h.frame();
+    for (const auto& text : routine) CHECK(!h.hasText(h.window(), text));
+    CHECK(h.hasText(h.window(), "Hello") && h.hasText(h.window(), "Ready."));
+    CHECK(h.hasText(h.window(), failure));
+    CHECK(h.active().transcript.size() == routine.size() + 3);
+    checkTextPaint(h, failure, 0xffffff, h.look.transcriptStyle.fill);
+    h.model.append(0, {EntryKind::Notice, "**Model:** `model-a`"});
+    h.model.append(0, {EntryKind::Person, "Next request"});
+    h.model.append(0, {EntryKind::Tool, "Edit: /tmp/example.cpp"});
+    h.model.append(0, {EntryKind::Tool, "Bash: build"});
+    h.frame(); h.frame();
+    const auto infoBubble = checkTextPaint(h, "Model:", 0xffffff, h.look.transcriptStyle.fill);
+    const auto personBubble = checkTextPaint(h, "Next request", 0xffffff, h.look.transcriptStyle.fill);
+    checkTextPaint(h, "model-a", 0xffffff, h.look.transcriptStyle.codeFill);
+    CHECK(h.bounds(infoBubble).left < h.bounds(personBubble).left);
+    CHECK(h.bounds(infoBubble).right - h.bounds(infoBubble).left < h.extent.x / 2);
+    checkTextPaint(h, "Edit: /tmp/example.cpp", 0x86c5ff, h.look.transcriptStyle.fill);
+    checkTextPaint(h, "$ build", 0x86c5ff, h.look.transcriptStyle.fill);
+    h.type("/help"); h.enter(); h.frame();
+    CHECK(h.view.helpTab == h.active().id && h.view.helpText.find("/goal <text>") != std::string::npos);
+}
+
+void activeGoalBubble() {
+    Harness h({AIInfo{"test", "m1"}}, true);
+    h.display.headroom = h.display.potentialHeadroom = 4;
+    h.view.savingPower = true; // The laptop is idle on battery for every pulse check below.
+    std::string goal = "Keep improving the client.";
+    int cancels = 0;
+    h.view.goal = [&](std::size_t) { return goal; };
+    h.view.cancelGoal = [&] { ++cancels; goal.clear(); };
+    h.type("held message"); h.enter(); h.type("draft"); h.frame();
+    const auto goalText = h.findText(h.window(), goal);
+    const auto held = h.findText(h.window(), "held message");
+    CHECK(goalText != kPrLayoutNodeNone);
+    CHECK(held != kPrLayoutNodeNone);
+    CHECK(h.hasText(h.window(), "Active goal · every 5 minutes"));
+    if (!goalText || !held) return;
+    CHECK(h.bounds(held).bottom <= h.bounds(goalText).top);
+    CHECK(h.bounds(goalText).bottom <= h.bounds(h.view.promptBox).top);
+    const auto findBubble = [&]() -> PrLayoutNode {
+        const auto text = h.findText(h.window(), goal);
+        auto node = text ? prLayoutNodeParent(h.tree, text) : kPrLayoutNodeNone;
+        while (node != kPrLayoutNodeNone) {
+            const auto r = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, node));
+            const auto d = prLayoutDecorationStyleRecord(h.tree, r.groups[PrLayoutGroup_Decoration]);
+            if (d.borderStyle[0] == PrDrawBorderStyle_Solid) return node;
+            node = prLayoutNodeParent(h.tree, node);
+        }
+        return kPrLayoutNodeNone;
+    };
+    CHECK(findBubble() != kPrLayoutNodeNone);
+    if (!findBubble()) return;
+    auto borderColor = [&] {
+        const auto r = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, findBubble()));
+        const auto b = prLayoutBoxStyleRecord(h.tree, r.groups[PrLayoutGroup_Box]);
+        CHECK(prLayoutUnitToPx(b.border[0]) >= 4);
+        return prColorFromColor16(prLayoutDecorationStyleRecord(h.tree, r.groups[PrLayoutGroup_Decoration]).borderColor[0]);
+    };
+    h.time = -1.0 / 60; h.frame(); const auto low = borderColor();
+    h.time = 0.8 - 1.0 / 60; h.frame(); const auto high = borderColor();
+    CHECK(low.r < 1 && high.r > 1 && high.r > high.g && high.g > high.b);
+    CHECK(std::abs(high.r - fillOf(h, prLayoutNodeNextSibling(h.tree, h.view.prompt)).r) < 0.01);
+    h.time = 90 - 1.0 / 60; h.frame(); const auto laterLow = borderColor();
+    h.time = 90.8 - 1.0 / 60; h.frame(); const auto laterHigh = borderColor();
+    CHECK(std::abs(laterLow.r - low.r) < 0.01 && std::abs(laterHigh.r - high.r) < 0.01);
+    CHECK(h.view.energyAnimating && windowWantsFrame(h.view));
+    const auto top = h.bounds(findBubble()).top;
+    for (int n = 0; n < 30; ++n) h.model.append(0, {EntryKind::AI, "Another reply."});
+    h.frame();
+    CHECK(near(h.bounds(findBubble()).top, top));
+    h.key(PrAppKey_Backspace, PrAppKeyCode_Backspace, style::kCommand); h.frame();
+    CHECK(cancels == 1 && h.active().held.empty() && h.active().draft.empty());
+    CHECK(!h.hasText(h.window(), "Active goal · every 5 minutes"));
+}
+
+void promptReturnsToLatest() {
+    Harness h({AIInfo{"test", "m1"}});
+    for (int i = 0; i < 100; ++i) h.model.append(0, {EntryKind::AI, "History " + std::to_string(i)});
+    h.frame(); h.frame();
+    for (const auto mods : {PrAppModifierFlags(0), style::kCommand}) {
+        h.type("Continue working.");
+        const auto port = h.bounds(h.view.transcript);
+        const PrVec2 middle{(port.left + port.right) / 2, (port.top + port.bottom) / 2};
+        h.push(pointerEvent(PrAppEventKind_PointerMove, middle));
+        for (int n = 0; n < 8; ++n) { h.push(scrollEvent(middle, {0, -1000000})); h.frame(); }
+        PrLayoutScrollInfo before{};
+        CHECK(prLayoutNodeScrollInfo(h.tree, h.view.transcript, &before));
+        CHECK(before.offset.y.raw < before.range.bottom.raw);
+        h.key(PrAppKey_Enter, PrAppKeyCode_Enter, mods);
+        h.frame(); h.frame();
+        PrLayoutScrollInfo after{};
+        CHECK(prLayoutNodeScrollInfo(h.tree, h.view.transcript, &after));
+        CHECK(after.offset.y.raw == after.range.bottom.raw);
+        CHECK(h.hasText(h.window(), "History 99"));
+    }
+}
+
+void notchAwareHeader() {
+    Harness h(aisNamed(18), true, true);
+    h.view.calendar = {5, 27, 11, 2026, 10, 45, 0, true};
+    h.view.headerNotch = {440, 0, 560, 38};
+    h.frame(); h.frame();
+    CHECK(h.view.headerTabs != kPrLayoutNodeNone);
+    auto lane = h.bounds(h.view.headerTabs);
+    CHECK(near(lane.left, 0) && near(lane.right, 428));
+    auto clock = h.findText(h.window(), "Fri 27 Nov 10:45 AM");
+    CHECK(clock != kPrLayoutNodeNone);
+    CHECK(h.bounds(clock).left >= 572 && h.bounds(clock).right <= h.extent.x);
+    const auto header = prLayoutNodeParent(h.tree, h.view.headerTabs);
+    CHECK(colorMatches(fillOf(h, header), 0x000000));
+    CHECK(near(fillOf(h, header).a, 1));
+    // Selecting a tab beyond the lane scrolls it into view, preserving order and selection.
+    h.model.select_tab(h.model.tab_count() - 1);
+    h.frame(); h.frame();
+    lane = h.bounds(h.view.headerTabs);
+    CHECK(h.bounds(h.view.tabNodes.back()).left >= lane.left - 1);
+    CHECK(h.bounds(h.view.tabNodes.back()).right <= lane.right + 1);
+    h.model.select_tab(0); h.frame(); h.frame();
+    CHECK(h.bounds(h.view.tabNodes.front()).left >= lane.left - 1);
+    CHECK(h.bounds(h.view.tabNodes.front()).right <= lane.right + 1);
+    // Narrow view: use the full width below the obstruction, keeping the divider and content below it.
+    h.model.select_tab(1);
+    h.extent = h.view.extent = {600, 780};
+    h.view.headerNotch = {240, 0, 360, 38};
+    h.frame(); h.frame();
+    CHECK(h.bounds(h.view.headerTabs).top >= 38);
+    clock = h.findText(h.window(), "Fri 27 Nov 10:45 AM");
+    CHECK(h.bounds(clock).top >= 38);
+    CHECK(h.bounds(clock).right <= h.extent.x);
+    CHECK(h.bounds(h.view.transcript).top > h.bounds(clock).bottom);
+    h.model.select_tab(0); h.frame(); h.frame();
+    CHECK(near(h.board.extent.y, h.extent.y - h.view.headerHeight));
+    // Moving to an unobscured monitor restores the full-width header.
+    h.view.headerNotch = {};
+    h.extent = h.view.extent = {1000, 780};
+    h.frame(); h.frame();
+    CHECK(h.view.headerTabs == kPrLayoutNodeNone);
+    CHECK(h.bounds(h.view.tabNodes.front()).top < 38);
+}
+
+void idlePulseAndConfiguration(const char* active, const char* disabled) {
+    Harness h({AIInfo{"test", "m1"}}, true);
+    CHECK(h.look.transcriptStyle.glyphPeak == 1);
+    h.view.calendar = {5, 27, 11, 2026, 10, 45, 0, true};
+    h.frame(); h.frame();
+    const auto clock = h.findText(h.window(), "Fri 27 Nov 10:45 AM");
+    CHECK(clock != kPrLayoutNodeNone);
+    if (clock) {
+        CHECK(h.bounds(clock).left > h.extent.x / 2);
+        CHECK(h.bounds(clock).bottom < h.bounds(h.view.transcript).top);
+    }
+    h.view.calendar.hour = 0; h.frame(); h.frame();
+    CHECK(h.hasText(h.window(), "Fri 27 Nov 12:45 AM"));
+    h.view.calendar.hour = 12; h.frame(); h.frame();
+    CHECK(h.hasText(h.window(), "Fri 27 Nov 12:45 PM"));
+    h.view.savingPower = true;
+    h.view.lastInput = -100;
+    h.type("held pulse"); h.enter();
+    const auto ink = [&] {
+        const auto leaf = h.findText(h.window(), "held pulse");
+        CHECK(leaf != kPrLayoutNodeNone);
+        const auto node = prLayoutNodeParent(h.tree, leaf);
+        const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, node));
+        return prColorFromColor16(prLayoutColorStyleRecord(h.tree, record.groups[PrLayoutGroup_Color]).color).r;
+    };
+    h.time = 28 - 1.0 / 60; h.frame(); const auto bright = ink();
+    h.time = 29.4 - 1.0 / 60; h.frame(); const auto dim = ink();
+    CHECK(bright > dim && h.view.energyAnimating);
+    h.time = 280 - 1.0 / 60; h.frame(); CHECK(std::abs(ink() - bright) < 0.01);
+    h.time = 281.4 - 1.0 / 60; h.frame(); CHECK(std::abs(ink() - dim) < 0.01);
+    h.preferences.reducedMotion = true;
+    h.frame(); const auto steady = ink();
+    h.time += 1.4; h.frame(); CHECK(std::abs(ink() - steady) < 0.01 && !h.view.energyAnimating);
+    h.preferences.reducedMotion = false;
+    const std::string live = std::string(active) + ".live";
+    std::filesystem::copy_file(active, live, std::filesystem::copy_options::overwrite_existing);
+    h.view.application->watch(live);
+    // Watching normally begins before the first frame. Advance the context when attaching it to this live rig.
+    h.view.calendar.minute = 46;
+    const auto wait = [&](bool enabled) {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        do {
+            h.frame();
+            if (h.look.ui.body_size == 30 && h.look.transcriptStyle.idleAnimations == enabled) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        } while (std::chrono::steady_clock::now() < until);
+        h.frame(); h.frame();
+        CHECK(h.look.ui.body_size == 30 && h.look.transcriptStyle.idleAnimations == enabled);
+    };
+    wait(true);
+    CHECK(h.look.colors.background == 0x102030 && h.look.transcriptStyle.panelFill == 0x304050);
+    auto canvas = fillOf(h, h.window()); canvas.a = 1;
+    CHECK(colorMatches(canvas, 0x102030));
+    CHECK(colorMatches(fillOf(h, h.view.conversation), 0x304050));
+    CHECK(near(fillOf(h, h.window()).a, 0.9f));
+    CHECK(near(h.kit->theme.types[PrKitTextRole_Body].size, 30));
+    CHECK(h.look.ui.bubble_padding_x == 12 && h.look.ui.entry_gap == 22);
+    CHECK(h.look.words.server_title == "Choose a host" && h.look.transcriptStyle.goalLabel == "Persistent task");
+    CHECK(h.look.transcriptStyle.goalOutlineWidth == 6 && !h.look.transcriptStyle.toolChevron);
+    CHECK(h.look.transcriptStyle.toolInks.at("Edit") == 0x9876ab);
+    h.model.pop_held(h.model.active()); h.type("custom send key");
+    h.key('S', PrAppKeyCode_KeyS, style::kCommand); h.frame();
+    CHECK(h.active().draft.empty() && h.active().held == "custom send key");
+    // Restore the text measured above, then reload just the animation switch.
+    h.model.pop_held(h.model.active());
+    h.model.restore_held(h.model.active(), "held pulse");
+    std::filesystem::copy_file(disabled, live, std::filesystem::copy_options::overwrite_existing);
+    wait(false);
+    CHECK(!h.hasText(h.window(), "Fri 27 Nov 12:46 PM"));
+    h.view.headerNotch = {440, 0, 560, 38}; h.frame(); h.frame();
+    CHECK(!h.view.windowApp.surface.flags.notch_aware && h.view.headerTabs == kPrLayoutNodeNone);
+    h.time = 28; h.frame(); const auto off = ink();
+    h.time = 29.4; h.frame(); CHECK(std::abs(ink() - off) < 0.01 && !h.view.energyAnimating);
+    CHECK(uiFormat("{account} / {value}", {{"account", "{value}"}, {"value", "safe"}}) == "{value} / safe");
+}
+
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--bubble-widths") { personBubblesWrapFromTheRight(); return failures ? 1 : 0; }
+    if (argc == 2 && std::string(argv[1]) == "--notch") { notchAwareHeader(); return failures ? 1 : 0; }
+    if (argc == 4 && std::string(argv[1]) == "--ui-config") { idlePulseAndConfiguration(argv[2], argv[3]); return failures ? 1 : 0; }
+    if (argc == 2 && std::string(argv[1]) == "--goal") { activeGoalBubble(); return failures ? 1 : 0; }
+    if (argc == 2 && std::string(argv[1]) == "--clean-notices") { cleanNoticePresentation(); return failures ? 1 : 0; }
+    if (argc == 2 && std::string(argv[1]) == "--prompt-follow") { promptReturnsToLatest(); return failures ? 1 : 0; }
     if ((argc == 3 || argc == 4) && std::string(argv[1]) == "--centered-accounts") {
         Harness h = withSprint(1);
         h.view.application->watch(argv[2]);
@@ -3213,16 +3603,18 @@ int main(int argc, char** argv) {
         host.model = &h.model;
         host.view = &h.view;
         host.connect(&link, "localhost");
-        const auto publish = [&](const std::string& name, uint64_t ack) {
+        const auto publish = [&](const std::string& name, uint64_t ack, bool signedOut = false) {
             auto session = std::make_shared<sync::SessionView>();
             session->id = 17;
             session->info = {"f1", "codex", name, "model-a", ""};
             session->info.catalog = R"({"default":"model-a","models":{"model-a":["low","high"],"model-b":["high"]}})";
+            if (signedOut) session->entries.push_back(std::make_shared<sync::SessionEntry>(
+                EntryKind::Notice, "Signed out of b in Nexus."));
             link.state.phase = sync::LinkPhase::Connected;
             link.state.loopback = true;
             link.state.sessions = sync::Sessions({session});
             link.state.sessions.setAIs({{"f1", {{"a", "A", false, "a@example.test"},
-                {"b", "B", false, "b@example.test"}, {"c", "C", true, "c@example.test"}}, true}, {"f2", {}, true}});
+                {"b", "B", signedOut, "b@example.test"}, {"c", "C", true, "c@example.test"}}, true}, {"f2", {}, true}});
             link.state.sessions.setNextAction(ack);
             link.changed = true;
             host.pollLink();
@@ -3324,9 +3716,11 @@ int main(int argc, char** argv) {
         down(style::kCommand);
         h.enter();
         h.frame();
-        CHECK(link.sent.size() == 1 && link.sent[0].kind == sync::ActionKind::SetAccount && link.sent[0].text == "c");
-        publish("c", 2);
-        CHECK(link.sent.size() == 2 && link.sent.back().kind == sync::ActionKind::SignInClaim &&
+        CHECK(link.sent.size() == 1 && link.sent[0].kind == sync::ActionKind::SignOut && link.sent[0].account == "b");
+        publish("b", link.sent.size() + 1, true);
+        CHECK(link.sent.size() == 2 && link.sent.back().kind == sync::ActionKind::SetAccount && link.sent.back().text == "c");
+        publish("c", link.sent.size() + 1, true);
+        CHECK(link.sent.size() == 3 && link.sent.back().kind == sync::ActionKind::SignInClaim &&
               link.sent.back().account == "c" && link.sent.back().session == 17);
         CHECK(!h.view.accountPicker && h.view.accountRows.size() == 3);
         CHECK(h.hasText(h.view.accountMenu, "Please sign in to ChatGPT"));
@@ -3408,7 +3802,7 @@ int main(int argc, char** argv) {
         CHECK(h.view.helpText.find("⌘↑ / ⌘↓") != std::string::npos);
         CHECK(h.view.helpText.find("⌘+ / ⌘−") != std::string::npos);
         CHECK(h.view.helpText.find("/login") != std::string::npos);
-        CHECK(h.hasText(h.view.transcript, h.view.helpText));
+        CHECK(h.hasText(h.view.transcript, "Keyboard actions") && h.hasText(h.view.transcript, "/goal <text>"));
         h.model.append(h.model.active(), {EntryKind::Notice, "local history"});
         h.model.set_draft(h.model.active(), "/clear");
         h.frame();
@@ -3483,11 +3877,11 @@ int main(int argc, char** argv) {
         CHECK(h.active().type == "right");
         // Move and select entirely by keyboard. The default fence rejects a step into the next group.
         const auto reorder = PrAppModifierFlags(style::kCommand | PrAppModifierFlag_Shift);
-        h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft, reorder);
+        h.key(PrAppKey_PageUp, PrAppKeyCode_PageUp, reorder);
         CHECK(h.ids() == "4 5 2 0 3 1" && h.active().type == "right");
-        h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft, reorder);
+        h.key(PrAppKey_PageUp, PrAppKeyCode_PageUp, reorder);
         CHECK(h.ids() == "4 5 2 0 3 1" && h.active().type == "right");
-        h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight, reorder);
+        h.key(PrAppKey_PageDown, PrAppKeyCode_PageDown, reorder);
         CHECK(h.ids() == "4 5 2 0 1 3" && h.active().type == "right");
         activate(argv[4]);
         h.dragTab(5, 0);
@@ -3499,7 +3893,7 @@ int main(int argc, char** argv) {
         CHECK(h.ids() == "4 5 2 0 3 1");
         h.commandDigit(1);  // select across groups, then reorder and close using only the keys
         h.commandDigit(5);
-        h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight, reorder);
+        h.key(PrAppKey_PageDown, PrAppKeyCode_PageDown, reorder);
         CHECK(h.active().type == "right" && h.model.active() == 5);
         h.key('W', PrAppKeyCode_KeyW, style::kCommand);
         CHECK(h.model.tab_count() == 5 && h.active().type == "words");
@@ -3645,7 +4039,7 @@ int main(int argc, char** argv) {
             waitForStyle(true);
             CHECK(styled.hasText(styled.window(), "Fixture notice") && !styled.hasText(styled.window(), "Bash: git status"));
             checkTextPaint(styled, "$ git status", 0xdc7334, 0x102030);
-            checkTextPaint(styled, "Fixture notice", 0xffa0a0, 0x182134);
+            checkTextPaint(styled, "Fixture notice", 0xffa0a0, 0x102030);
             CHECK(styled.active().transcript.size() == 4 && styled.entries().size() == 5);
             styled.view.promptOpen = false;
             styled.view.status = "Fixture transport status";
@@ -3672,6 +4066,7 @@ int main(int argc, char** argv) {
     selectionChangesAreSaved();
     sprintTabKeysCloseNothing();
     sprintTabSaysWhyThereIsNoPage();
+    connectingUsesWhiteCursorPulse();
     textKeysZoomTheBoard();
     dashboardKeepsRosterDiagnosticsOffscreen();
     regularWidthNarrowsThePromptAndTheColumn();
@@ -3682,6 +4077,7 @@ int main(int argc, char** argv) {
     logoutRequiresAnExplicitEnterAndNeverBecomesChat();
     enterInThePromptLeavesSignInToTheAccountMenu();
     commandEnterSendsTheHeldAndTheDraft();
+    commandShiftArrowsSelectPromptEdges();
     shiftEnterInsertsOneLineFeed();
     blankDraftsSendNothing();
     commandDigitSelectsATabAndTypesNothing();
@@ -3717,6 +4113,9 @@ int main(int argc, char** argv) {
     copyMarkdownConversation();
     markdownListsAndLinks();
     longInlineCommandWrapsInTheReply();
+    personBubblesWrapFromTheRight();
+    workLinesClipAtReplyWidth();
+    warningsUseReplyWidthFromTheLeft();
     conversationBubblesAndSignInCard();
     signInCardInTheShippedMenu();
     overlayKeepsAllButTheBackgroundOpaque();

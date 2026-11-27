@@ -7,7 +7,7 @@
 // family or the address not there), where no browser can reach ::1 either. It feeds each connection's bytes to
 // sync::CallbackGate: any request that is not the one
 // callback (its path, its state) is answered "not found" and changes nothing; the one is answered with a plain page
-// ("signed in, you can close this tab"), its query kept for the frame thread to take, and the gate closes. Nothing
+// ("Sign-in response received. Return to Nexus."), its query kept for the app thread to take, and the gate closes. Nothing
 // it reads is logged or kept past that: the connection's bytes are wiped, and the query lives in the gate until taken.
 //
 // Prax's net (pinned) connects but does not listen, so the sockets are POSIX's, and Winsock's on Windows. The frame
@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -33,13 +34,16 @@ std::string newClaimToken();
 class SignInGate {
 public:
     // Starts the gate's thread for `target`; it binds at once, and failed() says if it could not.
-    explicit SignInGate(sync::SignInTarget target);
+    // wake only posts an event; it must not call back into this gate. Runs after publishing a callback or failure.
+    explicit SignInGate(sync::SignInTarget target, std::function<void()> wake = {});
     ~SignInGate();
     SignInGate(const SignInGate&) = delete;
     SignInGate& operator=(const SignInGate&) = delete;
 
     // The callback's query, once the gate took it: true the one time, the query moved out. Never waits.
     bool take(sync::SecretValue* query);
+    // Stop accepting callbacks and take any already accepted one in the same critical section.
+    bool stopAndTake(sync::SecretValue* query);
     // True, with why, when the gate could not listen (the port is in use, say) or stopped on an error. Never waits.
     bool failed(std::string* why);
 

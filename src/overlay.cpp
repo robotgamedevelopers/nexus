@@ -37,6 +37,10 @@ OverlayAct OverlayRules::keyCheck(bool visible, bool active) {
     return act(visible ? OverlayAct::Hide : OverlayAct::None);
 }
 
+bool overlayMayRestoreFocus(bool enabled, bool visible, bool keyed, bool yielded) {
+    return enabled && visible && keyed && !yielded;
+}
+
 bool overlayCloseFailed(bool opened, bool stopping) {
     return !opened && !stopping;
 }

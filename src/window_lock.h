@@ -6,7 +6,7 @@
 // Locking from unlocked takes the content off the screen at once: the overlay hides; a normal window (--windowed) is
 // veiled (its opacity to 0, main.cpp) until the lock screen's frame is drawn, so that no old frame stays in a capture,
 // the Dock's thumbnail or Mission Control. It takes back the sign-in a show allowed (frame_host.h LinkSignIn::lock), and
-// a system prompt that is still up. Unlocking shows the overlay again if the system's prompt took the keyboard from it.
+// a system prompt that is still up. Unlocking reveals a hidden overlay; on macOS it stays hidden until this grant.
 
 #pragma once
 
@@ -49,7 +49,10 @@ public:
     const std::string& method() const { return method_; }
     void setIdleSeconds(double seconds) { lock_.setIdleSeconds(seconds); }
 
-    // Asks the system, over the window: only from locked, so never twice at once.
+    // A deliberate show request: check idle first, then authenticate while hidden if needed.
+    // True only when content may be revealed; a current grant invokes the reveal hook.
+    bool requestReveal(double now);
+    // Asks the system: only from locked, so never twice at once.
     void ask();
     // The window finished showing (the overlay's reveal): asks, unless a refusal waits for the person to read it.
     void shown();

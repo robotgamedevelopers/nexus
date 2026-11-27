@@ -209,7 +209,7 @@ the identity for that slot. The upgrade preserves the old credential file and co
 
 ### Switching accounts
 
-An AI can keep several accounts signed in at once and move between them without signing in again.
+The account menu can switch between saved logins. Choosing another account in the sign-in card explicitly signs the current account out first.
 
 - **The menu under the tab.** Press the active AI's tab (on iPhone, the AI's name at the top of its page). The
   menu opens at once, just below the tab's highlight, its left edge on the highlight's. It lists the AI's
@@ -219,15 +219,24 @@ An AI can keep several accounts signed in at once and move between them without 
   a tab always did. A press on another tab is unchanged: a tap switches to it, a drag moves it. The tab and its
   label look exactly the same throughout.
 - **`/account`** opens the same list as a dialog. Its last row runs `/login`.
-- **`/login`** signs in another of the AI's linked accounts without signing out first. The AI stays on its
-  current account while the sign-in runs; a cancelled or failed sign-in leaves everything as it was. When the
-  sign-in completes, the AI switches to the new account at once.
+- **`/login`** opens the original centered sign-in card, using the policy’s `message_card` appearance.
+  In overlay mode the card stays inside the overlay window, so it never steals native keyboard focus and hides Nexus.
+  Every linked account is listed, including saved logins. Up/Down selects an address, Enter signs in (or switches
+  to an already signed-in account), and Escape closes the card. Choosing a different account first removes the
+  current account's saved Nexus login. The client waits for the server to confirm that removal before selecting
+  the new account. A refusal stops the switch and the server's notice explains why.
+  For Claude, Nexus then opens claude.ai in the system browser. Sign out there, return to Nexus and choose
+  **I’ve signed out — Continue**. If Claude already shows its sign-in page, continue. Nexus cannot inspect the
+  browser session, so it waits for this explicit confirmation before starting enrollment; opening the page alone
+  does not count as signing out. Cancelling leaves the new account selected and does not restore the old login.
+  A failed enrollment also leaves the new account selected. A retry of the current account reopens its existing
+  sign-in, preserving a callback already received. A saved target login is reused after the browser step.
 - **`/logout`** asks first, naming the email, then deletes that account's saved login. If the AI was on it, the
   AI moves to its next signed-in account, or shows the sign-in prompt when there is none.
 
-After a switch the old account's login stays saved, so the menu or `/account` switches back with no sign-in. The
+The menu and `/account` preserve saved logins; a different account chosen through `/login` removes the previous one. The
 menu's look is the client policy's `account_menu` ([policy.md](policy.md#the-account-menu)). The gesture is
-modelled in `models/AccountMenu.tla`, and the code's traces are checked against it.
+modelled in `models/AccountMenu.tla`; login preparation is in `models/LoginPreparation.tla`. Both have implementation trace checks and negative witnesses. The client uses the server's action acknowledgment, durable sign-out notice and account status together; an acknowledgment alone is not success. A server that cannot confirm actions must be updated before this flow can run.
 
 ## ais.json
 

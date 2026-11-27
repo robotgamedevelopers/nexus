@@ -28,9 +28,9 @@
 // the host (PrHtmlHost::openWindow), which goes to the browser too. Whatever else moves the page off the board, choosing
 // the sprint tab brings it back (home).
 //
-// Off screen (another tab shows, or the overlay is hidden) the page runs nothing: no tasks, no timers, no fetches, no
-// frames asked for. Its visibility is hidden (visibilitychange fires), and the board's 1 s poll waits. When it shows
-// again, the overdue poll runs in the first frame, and its answer paints as soon as it arrives.
+// Background updates keep the page's own polling and rendering alive on its worker, even with the overlay hidden.
+// Choosing the tab prepares the latest locally available frame; it never reloads or waits for network replies.
+// Forks can disable background updates to suspend tasks while hidden.
 
 #pragma once
 
@@ -110,6 +110,8 @@ public:
     bool show(PrLayoutNode parent, PrVec2 extent, std::string* problem) override;
     void hidden() override;
     void setTextScale(float k) override;
+    void setScrollStyle(const UiScroll& style) override;
+    void setBackgroundUpdates(bool enabled) override;
     // Loads the board again if the page shows another document, or is on its way to one.
     void home() override;
     void prepare(PrVec2 extent) override;
@@ -146,7 +148,7 @@ public:
 private:
     // What the window's thread hands the page's thread.
     struct Message {
-        enum class Kind { Event, WindowKey, Hidden, Home, Refresh, Run } kind;
+        enum class Kind { Event, WindowKey, Hidden, Home, Prepare, Run } kind;
         PrAppEvent event{};                     // Event: placed in the page's CSS px; its text is in `text`
         std::string text;
         std::function<void(PrHtmlPage*)> run;  // Run
@@ -223,6 +225,7 @@ private:
     double time_ = 0;                       // the window's last frame
     PrAppDisplay display_ = prAppDisplayDefault();
     std::uint64_t refreshStep_ = 0;
+    bool backgroundUpdates_ = UiFlags{}.dashboard_background_updates;
     bool prewarming_ = false;
     bool onScreen_ = false;
     std::string lookupError_;               // protected by mutex_
@@ -230,6 +233,7 @@ private:
     std::string offeredUrl_;                // what it said, protected by mutex_
     PrVec2 extent_{};                       // the pane's, px
     float zoom_ = 1;
+    UiScroll scrollStyle_;
     PrDomAgent* waiting_ = nullptr;         // the agent the page's thread waits on, to wake it
     Shown out_;
 

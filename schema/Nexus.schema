@@ -63,6 +63,8 @@ table SessionInfo
     limit_model   *string
     context_epoch uint64
     catalog *string
+    goal *string
+    goal_next_ms uint64
 }
 
 // One entry a sessions diff carries: its kind, whether it is closed, how many bytes of its text the state diffed from
@@ -140,6 +142,7 @@ table SignInOffer
     opener   *string
     host     *string
     url      *bytes
+    cancel_supported bool
 }
 
 // A dashboard the server offers (sync/dashboards.h): the tab's name and the page's http:// or https:// address.
@@ -194,7 +197,8 @@ enum ActionKind
     SignInOpened,
     SignInCallback,
     SignOut,
-    ResolveLimit
+    ResolveLimit,
+    SignInCancel
 }
 
 // One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's AI,

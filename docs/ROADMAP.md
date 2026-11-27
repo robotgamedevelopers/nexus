@@ -57,6 +57,16 @@
 |---|:---:|
 | Let an AI see a display or window the human chooses with Screen Recording permission (later) | ❌ |
 | Let an AI click and type in other apps with separate Accessibility permission and a human stop control (later) | ❌ |
+| Finish v0.2.4: verify the remaining platform gates, deploy the matching client and policy, merge the release PR, then publish the source archive and checksums | ❌ |
+| Compact work groups: keep only the latest three unwrapped lines; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup | ❌ |
+| AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text | ❌ |
+| Enter from a focused AI-output selection, or paste a copied AI selection, inserts a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble | ❌ |
+| Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering | ❌ |
+| Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color | ❌ |
+| Render Markdown tables with native Prax table layout, aligned columns, readable headers and preserved inline formatting and links | ❌ |
+| Reduce the header height by six points while preserving notch avoidance, clock alignment and tab hit targets | ❌ |
+| Use full-width conversation bubbles and warnings on both phones and tablets | ❌ |
+| Prax cursor-rendering hook: match the prompt HDR pulse while preserving shell and editor cursor behavior | ❌ |
 | Terminal tabs: a shell per tab, after the AIs; added with Cmd-T, closed with Cmd-W | ✅ |
 | Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; the page opaque, as nova-sprint serves it | ❌ |
 | The plus button uploads a picked file to the server, into the selected AI's incoming/ directory; an image is also posted to the chat (needs layers 2 and 3) (later) | ❌ |
@@ -71,7 +81,7 @@
 | Windows depth: close the trace binding gaps (ten of seventeen review plants escaped the trace): constrain ranWell by the relay's run time (RelayLife.tla:171); model the tells as a sequence with a no-repeat invariant; unit tests for the acked_+1 re-cut, acked going down, and ended() after stop(); widen the CI seeds | ❌ |
 | Windows depth: a watchdog for a hung relay; keep the NEXUS_WSL_RELAY test hook out of shipping builds; show a notice when history requests are dropped; show a bubble for a message sent when nextAction()==0 (frame_host.cpp:779-783) | ❌ |
 | Linux desktop window: waits on Prax's Wayland backend (asked of Patrick); until then the Linux build is the server only | ❌ |
-| complete | 18% |
+| complete | 11% |
 
 [Source data](roadmap.sexp)
 
@@ -83,6 +93,13 @@
 
 | feature | done |
 |---|:---:|
+| Audit remaining native appearance and input ownership; findings and completion gates in docs/configuration-audit.md | ✅ |
+| Route application pointer, keyboard and modal intents through Starlark and validated native operations; preserve native text editing, IME and terminal delivery | ❌ |
+| Give every exposed UI setting an identified consumer and behavioral qualification; fix scanner decay and prevent inert settings | ❌ |
+| Move remaining presentation defaults from native structs into the shipped profile and generate compatible fallback records from one source | ❌ |
+| Make public transcript grouping, compact work previews, details, warning widths and labels configurable while retaining mandatory native privacy redaction | ❌ |
+| Move application gesture thresholds and intent precedence into documented policy; test customized profiles through real client input | ❌ |
+| Stage and verify a binary and policy from one immutable commit; support compatible live previews and close them with warning-free matching packages | ❌ |
 | Fork-owned configuration and Starlark in the client and server. Both native hosts run editable rules with shared modules and preview/apply. The window and conversation applications now implement keyboard routing, panel composition, tab registration, message plans and session defaults (docs/policy.md, docs/plugins.md). Continue moving application behavior behind the native host primitives | ❌ |
 | Client config as data: ~/.nexus/client becomes documented, versioned, human-editable JSON in git, with the same verbs and apply report as the server's (docs/accounts.md); a person's AI changes it through the server, which relays the change to the client that asked and never stores, caches or syncs it: each machine's config is its own. Tab layout is client config too: a tab per AI or a tab per instance of an AI (the server sends every session's AI and instance names, and keeps no tabs of its own) | ❌ |
 | A client-config template on the server, kept up to date: any change to the template becomes a pending update that each client applies at its next connect; config stays local to each machine, with no live sync. Open question: how a machine's local edits survive an update (proposal: an update replaces only the fields the template change touched) | ❌ |
@@ -93,7 +110,7 @@
 | The sprint tab shown only when a board is configured (AGENTS.md, Installing). Two requirements learned in a first try: nothing a person has vanishes on upgrade (a window that had the tab keeps it, and the step that keeps it runs in the real window, never only on a test board, and is marked done only once it has run); and any value discovered for the config, such as the board's address, is validated before it is written (an http:// or https:// address, one line, no control bytes), so nothing can add a line to the config (later) | ❌ |
 | Rename an AI as one change in ais.json: its sessions, the window's tab, the tab's place in the saved order and its draft go to the new name. Today a rename is a remove of the old name and an add of the new (docs/accounts.md) (later) | ❌ |
 | Question: does the config repository's history ever need pruning, and if so how, without rewriting what was pushed (later) | ❌ |
-| complete | 0% |
+| complete | 5% |
 
 [Source data](roadmap.sexp)
 

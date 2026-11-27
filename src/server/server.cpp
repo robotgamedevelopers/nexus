@@ -503,6 +503,10 @@ bool Server::restoreAll(std::string* why) {
                                                                   verifiedHelper_, authClaude_});
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get(),
         [this] { return dirNow("policy.bundle.json"); });
+    hub_->goalsWith([] {
+        return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    });
     drivers_->attach(*hub_);
     // The dashboards every window shows a tab for, from this server's config (home.h).
     hub_->setDashboards(settings_.dashboards);
@@ -1337,7 +1341,8 @@ PassOrder::Outcome Server::apply(std::string* why) {
             }
             // An opened or a callback counts only from the link that claimed by its token: no other window speaks
             // for a flow (the state never shows one window's token to another, sync/signin.h kSignInHeldBy).
-            if ((a.kind == sync::ActionKind::SignInOpened || a.kind == sync::ActionKind::SignInCallback) &&
+            if ((a.kind == sync::ActionKind::SignInOpened || a.kind == sync::ActionKind::SignInCallback ||
+                    a.kind == sync::ActionKind::SignInCancel) &&
                     a.text != s.signIn) {
                 sync::Action named = a;
                 named.text = s.signIn;
@@ -1359,6 +1364,8 @@ PassOrder::Outcome Server::apply(std::string* why) {
         if (hub_->failed())
             break;
     }
+    // Process explicit goal cancellation above before admitting reminders in this same pass.
+    if (!hub_->failed() && !drain_.draining() && !stopping_ && hub_->serveGoals()) changed = true;
     if (hub_->failed()) {
         // What reached the disk is unknown: stop before acknowledging anything more. A restart reopens the store from
         // what is durable, and the windows reconnect.

@@ -25,6 +25,7 @@
 #pragma once
 
 #include <functional>
+#include "ui_settings.h"
 
 namespace nexus {
 
@@ -55,20 +56,20 @@ constexpr double kSpringMaxSeconds = 1;
 // --- The curves -----------------------------------------------------------------------------------------------------
 
 // k, the coast's rate per second: -ln(kCoastDecayPerMs) * 1000.
-double coastRate();
+double coastRate(const UiScroll& tuning = {});
 // A coast from y0 toward `target`, `t` s after it began: where it is and how fast it moves (px/s).
-double coastPosition(double y0, double target, double t);
-double coastSpeed(double y0, double target, double t);
+double coastPosition(double y0, double target, double t, const UiScroll& tuning = {});
+double coastSpeed(double y0, double target, double t, const UiScroll& tuning = {});
 // A hold from y0 whose target stands at `base` (the first line) through kHoldTapSeconds, and then runs at `speed`
 // px/s (signed): where the target is, where the page is and how fast it moves.
-double holdGoal(double base, double speed, double t);
-double holdPosition(double y0, double base, double speed, double t);
-double holdSpeed(double y0, double base, double speed, double t);
+double holdGoal(double base, double speed, double t, const UiScroll& tuning = {});
+double holdPosition(double y0, double base, double speed, double t, const UiScroll& tuning = {});
+double holdSpeed(double y0, double base, double speed, double t, const UiScroll& tuning = {});
 // A critically damped spring from e0 past its rest at speed v0: how far past rest, and how fast.
-double springOffset(double e0, double v0, double t);
-double springSpeed(double e0, double v0, double t);
+double springOffset(double e0, double v0, double t, const UiScroll& tuning = {});
+double springSpeed(double e0, double v0, double t, const UiScroll& tuning = {});
 // Apple's rubber band: how far past an end the page is drawn when it is `x` (signed) past it, in a view `d` high.
-double rubberBand(double x, double d);
+double rubberBand(double x, double d, const UiScroll& tuning = {});
 
 // --- The motion -----------------------------------------------------------------------------------------------------
 
@@ -90,8 +91,8 @@ struct Glide {
 };
 
 // Where the motion has the page at `now`, and how fast it moves. A pending motion is at its start.
-double glidePosition(const Glide& g, double now);
-double glideSpeed(const Glide& g, double now);
+double glidePosition(const Glide& g, double now, const UiScroll& tuning = {});
+double glideSpeed(const Glide& g, double now, const UiScroll& tuning = {});
 
 // --- The scroller ---------------------------------------------------------------------------------------------------
 
@@ -112,6 +113,7 @@ public:
 // Prax's view so keeps deciding what a key does (its listeners, a form control, a line, a page, an end).
 class GlideScroller {
 public:
+    UiScroll tuning;
     // A key's press. `arrow` is -1 or 1 for Up or Down with no Command, Control or Option, else 0; `dir` is which way
     // the key scrolls (0 for a key that does not). Returns false for an arrow's repeat, which the page must not see:
     // a held arrow scrolls by itself. Any other key ends a hold first.

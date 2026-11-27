@@ -111,7 +111,7 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
         OverlayAct a = OverlayAct::None;
         // The OS answers a show with the keyboard three times in four.
         const bool granted = rng.below(4) != 0;
-        switch (rng.below(10)) {
+        switch (rng.below(11)) {
         case 0:
         case 1:
             op = "hotkey";
@@ -140,6 +140,12 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
                 continue;
             op = "lose";
             w.active = false;
+            break;
+        case 9:
+            if (w.active || !nexus::overlayMayRestoreFocus(true, w.visible, rules.real.keyed(), false))
+                continue;
+            op = "restore";
+            w.active = granted;
             break;
         default:
             if (!w.visible || w.active)

@@ -229,6 +229,13 @@ The sign-in card names the selected account and shows its configured email. Ente
 Nexus keeps the account's login in its private server directory. The browser URL, callback code and credential
 stay outside the conversation, logs and fork configuration.
 
+When a remote client explicitly starts signing in to a different account, it declines the previous account's
+unfinished browser callback and releases its listener. It sends the existing state-matched denial callback;
+the server handles it as a cancelled login. A callback already received is forwarded first and is never replaced
+by a denial. Choosing the same account again reopens its waiting page, including after the browser was closed.
+Merely changing tabs or hiding the overlay does not cancel sign-in. `SignIn.tla`'s `Cancel` action and the
+implementation trace cover the handoff; `frame_host_unit` covers switching accounts and reopening the browser.
+
 ### Verified Claude sign-in
 
 When a Claude account has an `email`, the server starts its trusted `nexus-claude-auth` helper for that account.
@@ -316,8 +323,10 @@ The state machine is `models/SignIn.tla`, bound to the code by `tests/sync/signi
    name is the window's own), Claude Code's own listener takes the browser's redirect, and the window binds nothing.
    On another machine, the window first binds a gate on 127.0.0.1 (and ::1 where it can) at the redirect's port, on a
    thread of its own. The gate takes exactly one GET on the redirect's path whose `state` matches the URL's and that
-   carries a `code` or an `error`; it answers that one with a plain page ("signed in, you can close this tab"), sends
-   its query up in one action, keeps nothing, and closes. Any other request is answered "not found" and changes
+   carries a `code` or an `error`; it answers that one with a plain page ("Sign-in response received. Return to Nexus."), sends
+   its query up in one action, keeps nothing, and closes. Receiving a callback wakes the app; it forwards the
+   response and applies the server’s result even when the overlay is hidden behind the browser. The page confirms
+   receipt only: the server still has to verify and save the login. Any other request is answered "not found" and changes
    nothing. The gate compares the state in constant time, refuses a query with a control byte (CR, LF or any other
    byte outside 0x21 to 0x7e), holds at most 8 connections at once and drops each one 10 s after it opened (both
    guesses, not measurements). Where [::1] exists but its port is taken by another program, the gate fails with one

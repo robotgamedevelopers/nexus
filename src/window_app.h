@@ -9,11 +9,12 @@
 #include "model.h"
 #include "policy/host.h"
 #include "style.h"
+#include "ui_settings.h"
 #include "pr/app_input.h"
 
 namespace nexus {
 
-enum class WindowCommand { ScrollTranscript, ClearComposer, ReplaceDraft, SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit, AccountMenu };
+enum class WindowCommand { ScrollTranscript, ClearComposer, ReplaceDraft, SelectPrompt, SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit, AccountMenu };
 struct Shortcut {
     PrAppKey key;
     PrAppModifierFlags modifiers;
@@ -61,6 +62,8 @@ struct PromptStyle {
     bool operator==(const PromptStyle&) const = default;
 };
 
+bool uiChord(std::string_view name, PrAppKey& key, PrAppModifierFlags& modifiers);
+
 PrAppHotkey overlayBinding(policy::Host& host, std::string& why);
 
 // The client lock's idle timeout in seconds (client_lock.h), from the client policy's `lock` event: {"idle_minutes": N},
@@ -78,6 +81,14 @@ struct Chirp {
 };
 
 struct AccountSurface {
+    UiMetrics ui;
+    UiColors colors;
+    UiText words;
+    UiKeys keys;
+    UiFlags flags;
+    UiFonts fonts;
+    UiScroll scroll;
+    std::string clockText;
     Chirp copyChirp{1600, 480, 32, 0.04f};
     Chirp tabChirp, confirmChirp, openChirp, closeChirp, dialogChirp, cancelChirp, readyChirp, holdChirp, discardChirp, sendChirp, stepChirp, startupChirp;
     std::optional<std::vector<AccountItem>> items;
@@ -112,15 +123,31 @@ struct TranscriptStyle {
     float codePadding = 6, codeRadius = 7, codeSizeOffset = 2;
     bool codeBackground = true;
     unsigned switchEmailInk = 0x86c5ff;
-    unsigned noticeInk = 0xffb4b4;
+    unsigned noticeInk = 0xffffff;
     unsigned statusInk = 0xd8d8d8;
     float radius = style::kBubbleRadius;
     float pendingOutlineWidth = 3, sentOutlineWidth = 0, pendingDashSeconds = 2;
     float pendingTextPulse = 0.10f, pendingTextSeconds = 2.8f;
+    bool idleAnimations = true;
+    float batteryAnimationIdleSeconds = 0;
+    std::string goalLabel;
+    float goalOutlineWidth = 4, goalGap = 8, goalMaxHeightPercent = 25, goalMinHeight = 100;
+    float captionPaddingX = style::kBubblePadX / 2, captionPaddingY = style::kToolGap, toolGap = style::kToolGap;
+    bool toolChevron = false;
+    float toolChevronSize = 16, toolChevronGap = 8;
+    unsigned toolChevronInk = 0xd8d8d8;
     unsigned sentOutlineInk = 0xffffff;
     bool showNotices = true;
+    std::vector<std::string> hiddenNoticeFragments;
+    bool showsNotice(std::string_view text) const {
+        if (!showNotices) return false;
+        for (const auto& fragment : hiddenNoticeFragments)
+            if (text.find(fragment) != text.npos) return false;
+        return true;
+    }
     bool showTools = true;
     std::map<std::string, std::string, std::less<>> toolPrompts;
+    std::map<std::string, unsigned, std::less<>> toolInks;
     bool personBold = false;
     float glyphPeak = 1, glyphSeconds = 0.4f, glyphStagger = 0.055f;
     float personFlashPeak = 1, personFlashSeconds = 0.45f;

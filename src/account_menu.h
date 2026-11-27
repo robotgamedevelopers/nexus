@@ -63,11 +63,11 @@ inline std::vector<AccountMenuRow> accountMenuRows(const sync::ServerAI& roster,
     return rows;
 }
 
-// The /login dialog's rows: the AI's linked accounts that need signing in, in the server's order.
+// The /login card shows every linked account in server order, including saved logins that can be switched to.
 inline std::vector<AccountMenuRow> accountLoginRows(const sync::ServerAI& roster) {
     std::vector<AccountMenuRow> rows;
     for (const auto& a : roster.accounts) {
-        if (pickable(a) && a.needsSignIn) rows.push_back({a.name, accountShownAs(a), false, false});
+        if (pickable(a)) rows.push_back({a.name, accountShownAs(a), false, false});
     }
     return rows;
 }
@@ -155,6 +155,7 @@ inline AccountMenuLayout layoutAccountMenu(const MenuBox& highlight, std::size_t
 inline std::string ellipsize(const std::string& text, float room, const std::function<float(std::string_view)>& measure) {
     if (measure(text) <= room) return text;
     static constexpr std::string_view kDots = "\xE2\x80\xA6";
+    if (measure(kDots) > room) return {};
     std::vector<std::size_t> cuts;     // the byte offsets that start a character, past the first
     for (std::size_t i = 1; i < text.size(); ++i) {
         if ((static_cast<unsigned char>(text[i]) & 0xC0) != 0x80) cuts.push_back(i);

@@ -19,7 +19,7 @@
 //   group          the program leaves a process of its own running: stopped, or exiting, its whole group is ended
 //   declined       the person declines on the page: the program exits 1, and its end is reported
 //   api_key        the program prints an API key: the scanner passes it over, and the program's end is reported
-//   stopped        the flow ends before any URL: the process is ended, its end not reported, its directory removed
+//   stopped        the flow ends before any URL: the process is ended, its drain reported, its directory removed
 //   unguarded      a wrong request straight to the program's listener ends the login: why the gate refuses them
 //   gate_in_use    the gate's port is taken: the gate says so, and takes nothing
 //   gate_v6_in_use the gate's port is free on 127.0.0.1 but held on [::1]: the gate fails, and listens on neither
@@ -32,6 +32,7 @@
 // Each case also checks that the runner's log lines hold no byte of the URL's state, the code or the token, and that
 // the program saw none of the test's own API key variables (the fake exits 3 if it did).
 
+#include <atomic>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -290,16 +291,19 @@ void forwarded(const std::string& family) {
     sync::SignInTarget t;
     CHECK(startAndUrl(r, &t));
     CHECK(t.port != listener);
-    SignInGate gate(t);
+    std::atomic<int> wakes{0};
+    SignInGate gate(t, [&] { ++wakes; });
     sync::SecretValue query;
     // A stray request and a wrong state: each "not found", and nothing taken.
     CHECK(browserGet(t.port, "/favicon.ico").rfind("HTTP/1.1 404", 0) == 0);
     CHECK(browserGet(t.port, callback("fakeWrongStateXq", std::string("code=") + fake_claude::kCode))
               .rfind("HTTP/1.1 404", 0) == 0);
     CHECK(!gate.take(&query));
+    CHECK(wakes == 0);
     const std::string answer = browserGet(t.port, callback(t.state, std::string("code=") + fake_claude::kCode));
     CHECK(answer.rfind("HTTP/1.1 200", 0) == 0);
-    CHECK(answer.find("signed in, you can close this tab") != std::string::npos);
+    CHECK(wakes == 1); // the hidden app can service the callback without a render tick
+    CHECK(answer.find("Sign-in response received. Return to Nexus.") != std::string::npos);
     CHECK(answer.find(fake_claude::kCode) == std::string::npos);
     const std::uint64_t until = nowMs() + 5000;
     bool took = false;
@@ -441,7 +445,7 @@ void caseStopped() {
     CHECK(std::filesystem::exists(r.accounts + "/claude-main/.signin"));
     r.runner->stop("claude-main");
     CHECK(pump(r, [&] { return !r.runner->running("claude-main"); }));
-    CHECK(!r.exited);   // the flow ended first: its process's end is not news
+    CHECK(r.exited);    // the stopped process released its lock; the desk can now finish cancellation
     CHECK(!r.gotUrl);
     checkClean(r);
 }
@@ -486,7 +490,8 @@ void caseGateInUse() {
     t.port = ntohs(a.sin_port);
     t.path = "/callback";
     t.state = fake_claude::kState;
-    SignInGate gate(t);
+    std::atomic<int> wakes{0};
+    SignInGate gate(t, [&] { ++wakes; });
     std::string why;
     const std::uint64_t until = nowMs() + 5000;
     bool failed = false;
@@ -495,6 +500,7 @@ void caseGateInUse() {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     CHECK(failed);
+    CHECK(wakes == 1);
     CHECK(why.find("cannot be received on this machine") != std::string::npos);
     sync::SecretValue query;
     CHECK(!gate.take(&query));
@@ -708,8 +714,8 @@ void enrollment(const std::string& provider, const std::string& mode) {
               r.enrolledAccount == account && !r.exited);
     } else {
         CHECK(r.enrollmentCount == 0);
-        CHECK(r.exited == (mode == "failure"));
-        if (r.exited) {
+        CHECK(r.exited); // cancelled children also report that their credential lock was released
+        if (mode == "failure") {
             CHECK(r.why == "it exited 8");
         }
     }
@@ -759,6 +765,25 @@ void caseEnrollmentFailure() {
     enrollment("muse", "cancel");
 }
 
+void caseGateCancel() {
+    for (bool delivered : {false, true}) {
+        sync::SignInTarget target{freePort(), "/callback", "fakeCancelState", "localhost"};
+        SignInGate gate(target);
+        CHECK(browserGet(target.port, "/favicon.ico").rfind("HTTP/1.1 404", 0) == 0);
+        if (delivered) {
+            CHECK(browserGet(target.port, callback(target.state, "code=fakeCompletedCode"))
+                      .rfind("HTTP/1.1 200", 0) == 0);
+        }
+        sync::SecretValue query;
+        CHECK(gate.stopAndTake(&query) == delivered);
+        if (delivered) CHECK(sync::queryValue(query.bytes(), "code") == "fakeCompletedCode");
+        CHECK(!gate.stopAndTake(&query));
+        const auto late = browserGet(target.port, callback(target.state, "code=fakeLateCode"), 300);
+        CHECK(late.empty() || late.rfind("HTTP/1.1 410", 0) == 0);
+        CHECK(!gate.take(&query));
+    }
+}
+
 struct Case {
     const char* name;
     void (*run)();
@@ -770,7 +795,7 @@ const Case kCases[] = {
     {"unguarded", caseUnguarded},      {"gate_in_use", caseGateInUse},  {"late", caseLate},
     {"gate_v6_in_use", caseGateV6InUse}, {"crashed", caseCrashed}, {"forwarded_v6", caseForwardedV6},
     {"account_spelling", caseAccountSpelling}, {"enrollment", caseEnrollment},    {"enrollment_failure", caseEnrollmentFailure},
-    {"quick_exit", caseQuickExit},     {"group", caseGroup},
+    {"quick_exit", caseQuickExit},     {"group", caseGroup}, {"gate_cancel", caseGateCancel},
 };
 
 } // namespace

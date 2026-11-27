@@ -282,13 +282,14 @@ const char* signInStateName(SignInState state) {
         case SignInState::Cancelled: return "cancelled";
         case SignInState::Expired: return "expired";
         case SignInState::Dropped: return "dropped";
+        case SignInState::Cancelling: return "cancelling";
     }
     return "unknown";
 }
 
 bool signInRunning(SignInState state) {
     return state == SignInState::Started || state == SignInState::UrlSent || state == SignInState::Waiting ||
-        state == SignInState::CallbackForwarded;
+        state == SignInState::CallbackForwarded || state == SignInState::Cancelling;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -480,6 +481,22 @@ SignInEffects SignInDesk::callback(std::uint64_t id, const std::string& opener, 
     return out;
 }
 
+SignInEffects SignInDesk::cancel(std::uint64_t id, const std::string& opener) {
+    SignInEffects out;
+    auto* f = byId(id);
+    if (!f || opener.empty() || f->opener != opener || !signInRunning(f->state) ||
+            f->state == SignInState::CallbackForwarded || f->state == SignInState::Cancelling) return out;
+    // Keep the account occupied until the runner releases its process and credential lock. Otherwise the next
+    // sign-out races the stopped child and fails, or a replacement enrollment races its late credential write.
+    f->state = SignInState::Cancelling;
+    f->denied = true;
+    f->url.clear();
+    out.stop.push_back(f->account);
+    out.changed = true;
+    out.log.push_back(line(f->id, f->account, "cancelling"));
+    return out;
+}
+
 std::uint64_t SignInDesk::printed(const std::string& account, SignInEffects* out) {
     const auto it = flows_.find(account);
     if (it == flows_.end() || !signInRunning(it->second.state)) {
@@ -517,7 +534,7 @@ SignInEffects SignInDesk::expire(std::uint64_t now) {
     SignInEffects out;
     std::vector<std::string> due;
     for (const auto& [account, f] : flows_) {
-        if (signInRunning(f.state) && dueAt(f) <= now) {
+        if (signInRunning(f.state) && f.state != SignInState::Cancelling && dueAt(f) <= now) {
             due.push_back(account);
         }
     }
@@ -580,7 +597,7 @@ SignInEffects SignInDesk::drop() {
 std::vector<SignInOffer> SignInDesk::offers() const {
     std::vector<SignInOffer> out;
     for (const auto& [account, f] : flows_) {
-        SignInOffer o{f.id, f.account, f.provider, f.opener, host_, {}};
+        SignInOffer o{f.id, f.account, f.provider, f.opener, host_, {}, true};
         if (!f.opener.empty() && signInRunning(f.state) && f.state != SignInState::Started) {
             o.url = f.url;
         }
@@ -593,7 +610,7 @@ std::vector<SignInOffer> SignInDesk::offers() const {
 std::optional<std::uint64_t> SignInDesk::deadline() const {
     std::optional<std::uint64_t> out;
     for (const auto& [account, f] : flows_) {
-        if (signInRunning(f.state) && (!out || dueAt(f) < *out)) {
+        if (signInRunning(f.state) && f.state != SignInState::Cancelling && (!out || dueAt(f) < *out)) {
             out = dueAt(f);
         }
     }
@@ -624,6 +641,26 @@ void SignInOpener::lost() {
     view_.clear();
     gate_ = 0;
     armed_ = false;
+}
+
+std::uint64_t SignInOpener::cancelFor(const std::string& account, SecretValue* query) {
+    for (const auto& offer : view_) {
+        if (!gate_ || offer.id != gate_ || offer.account == account || offer.opener != token_) continue;
+        SignInTarget target;
+        if (!parseSignInUrl(offer.provider, offer.url.bytes(), &target) || target.state.empty()) return 0;
+        std::string denial = "error=access_denied&state=";
+        constexpr char hex[] = "0123456789ABCDEF";
+        for (const unsigned char c : target.state) {
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                c == '-' || c == '_' || c == '.' || c == '~') denial += static_cast<char>(c);
+            else { denial += '%'; denial += hex[c >> 4]; denial += hex[c & 15]; }
+        }
+        *query = SecretValue(denial);
+        const auto id = gate_;
+        gateClosed();
+        return id;
+    }
+    return 0;
 }
 
 SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const void*), const void* context,
@@ -720,7 +757,7 @@ CallbackGate::Verdict CallbackGate::take(std::string_view bytes, SecretValue* qu
     }
     taken_ = true;
     *query = SecretValue(rawQuery);
-    *response = answer(code ? "signed in, you can close this tab\n" :
+    *response = answer(code ? "Sign-in response received. Return to Nexus.\n" :
                               "sign-in was not finished, you can close this tab\n");
     return Verdict::Take;
 }

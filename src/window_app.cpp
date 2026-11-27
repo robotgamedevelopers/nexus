@@ -83,6 +83,11 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
         return prJsonCount(d, row) == 3 && (out.type == "top" || out.type == "bottom" ||
                out.type == "page_up" || out.type == "page_down");
     }
+    if (op == "select_prompt") {
+        out.command = WindowCommand::SelectPrompt;
+        out.type = stringAt(d, prJsonElement(d, row, 2));
+        return prJsonCount(d, row) == 3 && (out.type == "start" || out.type == "end");
+    }
     if (op == "replace_draft") {
         out.command = WindowCommand::ReplaceDraft;
         out.type = stringAt(d, prJsonElement(d, row, 2));
@@ -280,7 +285,7 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
     for (auto i = prJsonFirst(d, obj); i != kPrJsonMissing; i = prJsonAfter(d, obj, i)) {
         const auto key = stringAt(d, i);
         if (key != "fill" && key != "ink" && key != "person_ink" && key != "bus_ink" && key != "message_inks" && key != "notice_ink" && key != "status_ink" && key != "switch_email_ink" &&
-                key != "radius" && key != "show_notices" && key != "show_tools" && key != "reply_width" && key != "markdown" && key != "conversation_panel" && key != "tool_prompts" && key != "list_gap_em" && key != "list_item_gap_lines" &&
+                key != "idle_animations" && key != "battery_animation_idle_seconds" && key != "goal_outline_width" && key != "goal_gap" && key != "goal_max_height_percent" && key != "goal_min_height" && key != "caption_padding_x" && key != "caption_padding_y" && key != "tool_gap" && key != "tool_chevron" && key != "tool_chevron_size" && key != "tool_chevron_gap" && key != "tool_chevron_ink" && key != "goal_label" && key != "radius" && key != "show_notices" && key != "hidden_notice_fragments" && key != "show_tools" && key != "reply_width" && key != "markdown" && key != "conversation_panel" && key != "tool_prompts" && key != "tool_inks" && key != "list_gap_em" && key != "list_item_gap_lines" &&
                 key != "panel_fill" && key != "link_ink" && key != "pending_text_pulse" && key != "pending_text_seconds" && key != "pending_dash_seconds" && key != "pending_outline_width" && key != "sent_outline_width" && key != "sent_outline_ink" && key != "read_path_ink" && key != "command_ink" && key != "code_ink" && key != "code_fill" &&
                 key != "code_background" && key != "code_padding" && key != "code_radius" && key != "code_size_offset" &&
                 key != "glyph_peak" && key != "glyph_seconds" && key != "glyph_stagger" &&
@@ -292,6 +297,27 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
             return false;
         }
     }
+    const auto goalLabel = prJsonMember(d, obj, {"goal_label", 10});
+    if (goalLabel != kPrJsonMissing) {
+        if (prJsonKind(d, goalLabel) != PrJsonKind_String || stringAt(d, goalLabel).size() > 256) {
+            why = "goal_label must be a string of at most 256 bytes";
+            return false;
+        }
+        style.goalLabel = stringAt(d, goalLabel);
+    }
+    const auto hidden = prJsonMember(d, obj, {"hidden_notice_fragments", 23});
+    if (hidden != kPrJsonMissing) {
+        const auto invalid = [&] {
+            why = "hidden_notice_fragments must be an array of at most 32 nonempty strings, each at most 256 bytes";
+            return false;
+        };
+        if (prJsonKind(d, hidden) != PrJsonKind_Array || prJsonCount(d, hidden) > 32) return invalid();
+        for (unsigned i = 0; i < prJsonCount(d, hidden); ++i) {
+            const auto text = stringAt(d, prJsonElement(d, hidden, i));
+            if (text.empty() || text.size() > 256) return invalid();
+            style.hiddenNoticeFragments.emplace_back(text);
+        }
+    }
     const auto messageInks = prJsonMember(d, obj, {"message_inks", 12});
     if (messageInks != kPrJsonMissing) {
         if (prJsonKind(d, messageInks) != PrJsonKind_Object) return false;
@@ -300,6 +326,22 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
             unsigned color{};
             if (!readColor(d, messageInks, {text.data(), text.size()}, color)) return false;
             style.messageInks.emplace(text, color);
+        }
+    }
+    const auto toolInks = prJsonMember(d, obj, {"tool_inks", 9});
+    if (toolInks != kPrJsonMissing) {
+        if (prJsonKind(d, toolInks) != PrJsonKind_Object) {
+            why = "tool_inks must map tool names to #RRGGBB colors";
+            return false;
+        }
+        for (auto i = prJsonFirst(d, toolInks); i != kPrJsonMissing; i = prJsonAfter(d, toolInks, i)) {
+            const auto name = stringAt(d, i);
+            unsigned color{};
+            if (!readColor(d, toolInks, {name.data(), name.size()}, color)) {
+                why = "tool_inks needs #RRGGBB colors";
+                return false;
+            }
+            style.toolInks.emplace(name, color);
         }
     }
     const auto prompts = prJsonMember(d, obj, {"tool_prompts", 12});
@@ -319,6 +361,19 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
         }
     }
     const bool valid =
+        readFlag(d, obj, {"idle_animations", 15}, style.idleAnimations) &&
+        readPoints(d, obj, {"battery_animation_idle_seconds", 30}, style.batteryAnimationIdleSeconds, 0, 3600) &&
+        readPoints(d, obj, {"goal_outline_width", 18}, style.goalOutlineWidth, 0, 16) &&
+        readPoints(d, obj, {"goal_gap", 8}, style.goalGap, 0, 128) &&
+        readPoints(d, obj, {"goal_max_height_percent", 23}, style.goalMaxHeightPercent, 1, 80) &&
+        readPoints(d, obj, {"goal_min_height", 15}, style.goalMinHeight, 0, 1024) &&
+        readPoints(d, obj, {"caption_padding_x", 17}, style.captionPaddingX, 0, 128) &&
+        readPoints(d, obj, {"caption_padding_y", 17}, style.captionPaddingY, 0, 128) &&
+        readPoints(d, obj, {"tool_gap", 8}, style.toolGap, 0, 128) &&
+        readFlag(d, obj, {"tool_chevron", 12}, style.toolChevron) &&
+        readPoints(d, obj, {"tool_chevron_size", 17}, style.toolChevronSize, 4, 64) &&
+        readPoints(d, obj, {"tool_chevron_gap", 16}, style.toolChevronGap, 0, 64) &&
+        readColor(d, obj, {"tool_chevron_ink", 16}, style.toolChevronInk) &&
         readColor(d, obj, {"fill", 4}, style.fill) && readColor(d, obj, {"ink", 3}, style.ink) &&
         readPoints(d, obj, {"glyph_stagger", 13}, style.glyphStagger, 0, 0.3) &&
         readPoints(d, obj, {"glyph_peak", 10}, style.glyphPeak, 1, 8) &&
@@ -430,6 +485,148 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
             menu.mark = std::string(stringAt(doc, mark));
         }
     }
+    const auto palette = prJsonMember(doc, 0, {"ui_palette", 10});
+    if (palette != kPrJsonMissing) {
+        const std::set<std::string_view> slots = {"accent", "accentWeak", "textSelection", "accentText", "accentHover", "accentPress", "success", "warning", "danger", "bg0", "bg1", "bg2", "bg3", "bg4", "bgViewport", "line1", "line2", "line3", "text1", "text2", "text3", "text4", "textInverse", "hudFill", "hudBorder", "axisX", "axisY", "axisZ", "axisW"};
+        if (prJsonKind(doc, palette) != PrJsonKind_Object) return false;
+        for (auto i = prJsonFirst(doc, palette); i != kPrJsonMissing; i = prJsonAfter(doc, palette, i)) {
+            const auto key = stringAt(doc, i);
+            if (!slots.contains(key)) return false;
+            const auto text = stringAt(doc, prJsonMember(doc, palette, {key.data(), key.size()}));
+            if ((text.size() != 7 && text.size() != 9) || text.front() != '#') return false;
+            unsigned color{};
+            const auto end = text.data() + text.size();
+            const auto parsed = std::from_chars(text.data() + 1, end, color, 16);
+            if (parsed.ec != std::errc{} || parsed.ptr != end) return false;
+            if (text.size() == 7) color = (color << 8) | 255;
+            surface.colors.palette.emplace(key, color);
+        }
+    }
+    const auto metrics = prJsonMember(doc, 0, {"ui_style", 8});
+    const auto colors = prJsonMember(doc, 0, {"ui_colors", 9});
+    const auto words = prJsonMember(doc, 0, {"ui_text", 7});
+    const auto keys = prJsonMember(doc, 0, {"ui_keys", 7});
+    const auto flags = prJsonMember(doc, 0, {"ui_flags", 8});
+    const auto fonts = prJsonMember(doc, 0, {"ui_fonts", 8});
+    const auto scroll = prJsonMember(doc, 0, {"ui_scroll", 9});
+    for (const auto obj : {metrics, colors, words, keys, flags, fonts, scroll})
+        if (obj != kPrJsonMissing && prJsonKind(doc, obj) != PrJsonKind_Object) return false;
+    {
+        const std::set<std::string_view> allowed = {
+#define NEXUS_UI_STYLE(key, value) #key,
+#include "nexus_ui_defaults.inc"
+#undef NEXUS_UI_STYLE
+        };
+        for (auto i = prJsonFirst(doc, metrics); i != kPrJsonMissing; i = prJsonAfter(doc, metrics, i))
+            if (!allowed.contains(stringAt(doc, i))) return false;
+    }
+    {
+        const std::set<std::string_view> allowed = {
+#define NEXUS_UI_COLORS(key, value) #key,
+#include "nexus_ui_defaults.inc"
+#undef NEXUS_UI_COLORS
+        };
+        for (auto i = prJsonFirst(doc, colors); i != kPrJsonMissing; i = prJsonAfter(doc, colors, i))
+            if (!allowed.contains(stringAt(doc, i))) return false;
+    }
+    {
+        const std::set<std::string_view> allowed = {
+#define NEXUS_UI_TEXT(key, value) #key,
+#include "nexus_ui_defaults.inc"
+#undef NEXUS_UI_TEXT
+        };
+        for (auto i = prJsonFirst(doc, words); i != kPrJsonMissing; i = prJsonAfter(doc, words, i))
+            if (!allowed.contains(stringAt(doc, i))) return false;
+    }
+    {
+        const std::set<std::string_view> allowed = {
+#define NEXUS_UI_KEYS(key, value) #key,
+#include "nexus_ui_defaults.inc"
+#undef NEXUS_UI_KEYS
+        };
+        for (auto i = prJsonFirst(doc, keys); i != kPrJsonMissing; i = prJsonAfter(doc, keys, i))
+            if (!allowed.contains(stringAt(doc, i))) return false;
+    }
+    {
+        const std::set<std::string_view> allowed = {
+#define NEXUS_UI_FLAGS(key, value) #key,
+#include "nexus_ui_defaults.inc"
+#undef NEXUS_UI_FLAGS
+        };
+        for (auto i = prJsonFirst(doc, flags); i != kPrJsonMissing; i = prJsonAfter(doc, flags, i))
+            if (!allowed.contains(stringAt(doc, i))) return false;
+    }
+    {
+        const std::set<std::string_view> allowed = {
+#define NEXUS_UI_FONTS(key, value) #key,
+#include "nexus_ui_defaults.inc"
+#undef NEXUS_UI_FONTS
+        };
+        for (auto i = prJsonFirst(doc, fonts); i != kPrJsonMissing; i = prJsonAfter(doc, fonts, i))
+            if (!allowed.contains(stringAt(doc, i))) return false;
+    }
+    {
+        const std::set<std::string_view> allowed = {
+#define NEXUS_UI_SCROLL(key, value) #key,
+#include "nexus_ui_defaults.inc"
+#undef NEXUS_UI_SCROLL
+        };
+        for (auto i = prJsonFirst(doc, scroll); i != kPrJsonMissing; i = prJsonAfter(doc, scroll, i))
+            if (!allowed.contains(stringAt(doc, i))) return false;
+    }
+    const auto readText = [&](Index obj, std::string_view key, std::string& target) {
+        const auto item = prJsonMember(doc, obj, {key.data(), key.size()});
+        if (item == kPrJsonMissing) return true;
+        if (prJsonKind(doc, item) != PrJsonKind_String || stringAt(doc, item).size() > 4096) return false;
+        target = stringAt(doc, item);
+        return true;
+    };
+#define NEXUS_UI_STYLE(key, value) if (!readPoints(doc, metrics, {#key, sizeof(#key) - 1}, surface.ui.key, 0, 4096)) return false;
+#define NEXUS_UI_COLORS(key, value) if (!readColor(doc, colors, {#key, sizeof(#key) - 1}, surface.colors.key)) return false;
+#define NEXUS_UI_TEXT(key, value) if (!readText(words, #key, surface.words.key)) return false;
+#define NEXUS_UI_KEYS(key, value) { \
+    if (!readText(keys, #key, surface.keys.key)) return false; \
+    PrAppKey k{}; PrAppModifierFlags mods{}; \
+    if (!surface.keys.key.empty() && !chord(surface.keys.key, k, mods)) return false; \
+}
+#define NEXUS_UI_SCROLL(key, value) { \
+    const auto field = prJsonMember(doc, scroll, {#key, sizeof(#key) - 1}); \
+    if (field != kPrJsonMissing) { \
+        if (prJsonKind(doc, field) != PrJsonKind_Number) return false; \
+        const auto number = prJsonNumber(doc, field, -1); \
+        if (!std::isfinite(number) || number <= 0 || number > 10000) return false; \
+        surface.scroll.key = number; \
+    } \
+}
+#define NEXUS_UI_FLAGS(key, value) if (!readFlag(doc, flags, {#key, sizeof(#key) - 1}, surface.flags.key)) return false;
+#define NEXUS_UI_FONTS(key, value) if (!readText(fonts, #key, surface.fonts.key)) return false;
+#include "nexus_ui_defaults.inc"
+#undef NEXUS_UI_FLAGS
+#undef NEXUS_UI_FONTS
+#undef NEXUS_UI_SCROLL
+#undef NEXUS_UI_STYLE
+#undef NEXUS_UI_COLORS
+#undef NEXUS_UI_TEXT
+#undef NEXUS_UI_KEYS
+    if (surface.scroll.coast_decay_per_ms >= 1) return false;
+    const auto& metricsValue = surface.ui;
+    if (metricsValue.body_size < 1 || metricsValue.line_pitch < 1 || metricsValue.tool_pitch < 1 ||
+        metricsValue.zoom_step < 0.01 || metricsValue.zoom_step > 1 || metricsValue.zoom_min < 0.1 ||
+        metricsValue.zoom_min > 1 || metricsValue.zoom_max < 1 || metricsValue.zoom_max > 8 ||
+        metricsValue.bubble_max_percent < 1 || metricsValue.bubble_max_percent > 100 ||
+        metricsValue.person_bubble_max_percent < 1 || metricsValue.person_bubble_max_percent > 100 ||
+        metricsValue.action_width < 1 || metricsValue.action_width > 100 ||
+        metricsValue.selection_opacity > 1 || metricsValue.transcript_selection_opacity > 1 ||
+        metricsValue.scanner_spread < 0.01 || metricsValue.window_width < 100 || metricsValue.window_height < 100 ||
+        metricsValue.regular_width_column < 0.1 || metricsValue.regular_width_column > 1 ||
+        metricsValue.caret_floor > 1 || metricsValue.selection_pulse_amplitude > 1 ||
+        metricsValue.default_zoom_desktop < metricsValue.zoom_min || metricsValue.default_zoom_desktop > metricsValue.zoom_max ||
+        metricsValue.default_zoom_mobile < metricsValue.zoom_min || metricsValue.default_zoom_mobile > metricsValue.zoom_max) return false;
+    const auto clockText = prJsonMember(doc, 0, {"clock_text", 10});
+    if (clockText != kPrJsonMissing) {
+        if (prJsonKind(doc, clockText) != PrJsonKind_String || stringAt(doc, clockText).size() > 256) return false;
+        surface.clockText = stringAt(doc, clockText);
+    }
     auto& prompt = surface.prompt;
     const auto box = prJsonMember(doc, 0, {"prompt_style", 12});
     if (box != kPrJsonMissing && (prJsonKind(doc, box) != PrJsonKind_Object ||
@@ -499,7 +696,7 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
     const auto title = stringAt(d, prJsonMember(d, 0, {"sign_in_heading", 15}));
     heading = title.empty() ? "Please sign in" : title;
     if (!readSurface(d, surface)) {
-        why = "invalid tab_style, prompt_style, window flag, tab_titles or account_items; check the client window contract in docs/policy.md";
+        why = "invalid UI settings, key chord, tab_style, prompt_style, window flag, tab_titles or account_items; check the client window contract in docs/policy.md";
         return false;
     }
     centered = signInOnSelect = false;
@@ -646,6 +843,10 @@ double lockIdleSecondsFrom(const std::string& answer, std::string& why) {
     why = "app.lock needs {\"idle_minutes\": N}, N a whole number of minutes from 1 to 240 (the lock cannot be turned "
         "off); using 10";
     return kLockIdleMinutesDefault * 60;
+}
+
+bool uiChord(std::string_view name, PrAppKey& key, PrAppModifierFlags& modifiers) {
+    return !name.empty() && chord(name, key, modifiers);
 }
 
 void WindowApplication::update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen,

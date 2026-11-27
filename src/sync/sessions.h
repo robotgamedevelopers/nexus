@@ -70,6 +70,8 @@ struct SessionInfo {
     std::uint64_t contextEpoch = 0;
     std::string catalog{}; // server-advertised harness model and effort choices in JSON
     std::optional<AccountChoice> primaryAccount{}; // current bound account status, projected for windows only
+    std::string goal{};
+    std::uint64_t goalNextMs = 0; // server wall-clock deadline, persisted with the goal and accepted turn
     bool operator==(const SessionInfo&) const = default;
 };
 

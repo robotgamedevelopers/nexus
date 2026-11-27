@@ -6,6 +6,11 @@
     <string>com.robotgamedevelopers.nexus-client</string>
     <key>LimitLoadToSessionType</key>
     <string>Aqua</string>
+    <!-- Give the interactive client priority over background builds. Editable deployment policy. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>Nice</key>
+    <integer>-20</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>ProgramArguments</key>

@@ -102,6 +102,16 @@
    :rows (
      ("screen-observation" "Let an AI see a display or window the human chooses with Screen Recording permission" :later t)
      ("desktop-input" "Let an AI click and type in other apps with separate Accessibility permission and a human stop control" :later t)
+     ("point-release-024" "Finish v0.2.4: verify the remaining platform gates, deploy the matching client and policy, merge the release PR, then publish the source archive and checksums")
+     ("work-preview-details" "Compact work groups: keep only the latest three unwrapped lines; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup")
+     ("ai-paragraph-selection" "AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text")
+     ("quoted-ai-paste" "Enter from a focused AI-output selection, or paste a copied AI selection, inserts a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble")
+     ("scanner-afterglow" "Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering")
+     ("output-panel-outline" "Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color")
+     ("native-markdown-tables" "Render Markdown tables with native Prax table layout, aligned columns, readable headers and preserved inline formatting and links")
+     ("compact-header" "Reduce the header height by six points while preserving notch avoidance, clock alignment and tab hit targets")
+     ("mobile-full-width-replies" "Use full-width conversation bubbles and warnings on both phones and tablets")
+     ("terminal-hdr-cursor" "Prax cursor-rendering hook: match the prompt HDR pulse while preserving shell and editor cursor behavior")
      ("terminal-tabs" "Terminal tabs: a shell per tab, after the AIs; added with Cmd-T, closed with Cmd-W")
      ("sprint-tab" "Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; the page opaque, as nova-sprint serves it")
      ("upload" "The plus button uploads a picked file to the server, into the selected AI's incoming/ directory; an image is also posted to the chat (needs layers 2 and 3)" :later t)
@@ -122,6 +132,16 @@
      ("screen-observation" "done" "t-screen-observation")
      ("desktop-input" "done" "t-desktop-input")
      ("terminal-tabs" "done" "t-terminal-tabs")
+     ("point-release-024" "done" "t-point-release-024")
+     ("work-preview-details" "done" "t-work-preview-details")
+     ("ai-paragraph-selection" "done" "t-ai-paragraph-selection")
+     ("quoted-ai-paste" "done" "t-quoted-ai-paste")
+     ("scanner-afterglow" "done" "t-scanner-afterglow")
+     ("output-panel-outline" "done" "t-output-panel-outline")
+     ("native-markdown-tables" "done" "t-native-markdown-tables")
+     ("compact-header" "done" "t-compact-header")
+     ("mobile-full-width-replies" "done" "t-mobile-full-width-replies")
+     ("terminal-hdr-cursor" "done" "t-terminal-hdr-cursor")
      ("sprint-tab" "done" "t-sprint-tab")
      ("upload" "done" "t-upload")
      ("upload-store" "done" "t-upload-store")
@@ -138,6 +158,13 @@
      ))
   (:id "configuration" :type :roadmap :title "Configuration through your AI"
    :rows (
+     ("config-ownership-audit" "Audit remaining native appearance and input ownership; findings and completion gates in docs/configuration-audit.md")
+     ("input-policy-events" "Route application pointer, keyboard and modal intents through Starlark and validated native operations; preserve native text editing, IME and terminal delivery")
+     ("ui-setting-consumers" "Give every exposed UI setting an identified consumer and behavioral qualification; fix scanner decay and prevent inert settings")
+     ("ui-defaults-source" "Move remaining presentation defaults from native structs into the shipped profile and generate compatible fallback records from one source")
+     ("transcript-presentation-policy" "Make public transcript grouping, compact work previews, details, warning widths and labels configurable while retaining mandatory native privacy redaction")
+     ("input-policy-tuning" "Move application gesture thresholds and intent precedence into documented policy; test customized profiles through real client input")
+     ("policy-deployment-identity" "Stage and verify a binary and policy from one immutable commit; support compatible live previews and close them with warning-free matching packages")
      ("personal-policy" "Fork-owned configuration and Starlark in the client and server. Both native hosts run editable rules with shared modules and preview/apply. The window and conversation applications now implement keyboard routing, panel composition, tab registration, message plans and session defaults (docs/policy.md, docs/plugins.md). Continue moving application behavior behind the native host primitives")
      ("client-config" "Client config as data: ~/.nexus/client becomes documented, versioned, human-editable JSON in git, with the same verbs and apply report as the server's (docs/accounts.md); a person's AI changes it through the server, which relays the change to the client that asked and never stores, caches or syncs it: each machine's config is its own. Tab layout is client config too: a tab per AI or a tab per instance of an AI (the server sends every session's AI and instance names, and keeps no tabs of its own)")
      ("client-template" "A client-config template on the server, kept up to date: any change to the template becomes a pending update that each client applies at its next connect; config stays local to each machine, with no live sync. Open question: how a machine's local edits survive an update (proposal: an update replaces only the fields the template change touched)")
@@ -151,6 +178,13 @@
      )
    :columns (("done" "done"))
    :cells (
+     ("config-ownership-audit" "done" "t-config-ownership-audit")
+     ("input-policy-events" "done" "t-input-policy-events")
+     ("ui-setting-consumers" "done" "t-ui-setting-consumers")
+     ("ui-defaults-source" "done" "t-ui-defaults-source")
+     ("transcript-presentation-policy" "done" "t-transcript-presentation-policy")
+     ("input-policy-tuning" "done" "t-input-policy-tuning")
+     ("policy-deployment-identity" "done" "t-policy-deployment-identity")
      ("personal-policy" "done" "t-personal-policy")
      ("client-config" "done" "t-client-config")
      ("client-template" "done" "t-client-template")
@@ -281,6 +315,33 @@
   (:id "t-ts-mosh" :type :task :title "Tailscale 5. mosh over tsnet through a loopback relay, its latency measured in ms" :state :todo)
   (:id "t-ts-discovery" :type :task :title "Tailscale 6. Discovery of nexus servers among the tailnet's peers" :state :todo)
   (:id "t-ts-expiry" :type :task :title "Tailscale 7. Expiry and recovery in the app; ssh retired once 4 to 6 are secured" :state :todo)
+  (:id "t-config-ownership-audit" :type :task :title "Audit remaining native appearance and input ownership; findings and completion gates in docs/configuration-audit.md" :state :done :evidence ("docs/configuration-audit.md: 2026-11-27 source audit and six remaining workstreams"))
+  (:id "t-input-policy-events" :type :task :title "Route application pointer, keyboard and modal intents through Starlark and validated native operations; preserve native text editing, IME and terminal delivery" :state :todo)
+  (:id "t-ui-setting-consumers" :type :task :title "Give every exposed UI setting an identified consumer and behavioral qualification; fix scanner decay and prevent inert settings" :state :todo)
+  (:id "t-ui-defaults-source" :type :task :title "Move remaining presentation defaults from native structs into the shipped profile and generate compatible fallback records from one source" :state :todo)
+  (:id "t-transcript-presentation-policy" :type :task :title "Make public transcript grouping, compact work previews, details, warning widths and labels configurable while retaining mandatory native privacy redaction" :state :todo)
+  (:id "t-input-policy-tuning" :type :task :title "Move application gesture thresholds and intent precedence into documented policy; test customized profiles through real client input" :state :todo)
+  (:id "t-point-release-024" :type :task :title "Finish and publish Nexus v0.2.4" :state :doing
+   :note "Release PR #149. Native window, goal-layout and policy-match checks passed on the fleet Mac; Windows and Linux passed for the frozen product code. Remaining Apple CI results, final client installation, merge, tag and publication must be verified before claiming release completion. The source-only roadmap changes do not implement the deferred UI behavior.")
+  (:id "t-work-preview-details" :type :task :title "Compact work groups: keep only the latest three unwrapped lines; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Keep desktop previews left-aligned at two-thirds width, whole-character truncation and no chevron. Preserve private-event filtering, scrolling and modal precedence. Qualify implementation traces and negative witnesses before delivery.")
+  (:id "t-ai-paragraph-selection" :type :task :title "AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Selecting AI text gives the output window keyboard focus, not the prompt. Enter inserts that selection into the prompt as a quote and moves focus there without sending. Escape clears the output selection and returns focus to the prompt without quoting or hiding Nexus. Clicking the prompt also clears the output selection and focuses the prompt. Preserve the existing draft. Keep selection stable across virtualized history and streaming. Copy faithful Markdown for paragraphs, lists, headings, quotes, code and tables. Exercise keyboard, pointer and clipboard paths together.")
+  (:id "t-quoted-ai-paste" :type :task :title "Enter from a focused AI-output selection, or paste a copied AI selection, inserts a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Retain literal double-quote delimiters in the submitted text, with Markdown-aware visual treatment. After transferring the quote, focus the prompt and place the caret after the two newlines, ready for a response. The transfer itself never sends the message. Preserve formatting, editing and the prompt-focused Enter-Enter and Command-Enter submission behavior.")
+  (:id "t-scanner-afterglow" :type :task :title "Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Compare different decay settings at the same timestamps; preserve reduced-motion handling and independence from the prompt cursor pulse.")
+  (:id "t-output-panel-outline" :type :task :title "Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Keep output border width and color configurable, and preserve the separate output and prompt fills.")
+  (:id "t-native-markdown-tables" :type :task :title "Render Markdown tables with native Prax table layout, aligned columns, readable headers and preserved inline formatting and links" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Handle narrow displays and horizontal overflow; preserve selection and Markdown copying. Do not fork or patch Prax.")
+  (:id "t-compact-header" :type :task :title "Reduce the header height by six points while preserving notch avoidance, clock alignment and tab hit targets" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Verify the smaller header on desktop and laptop display layouts and at different text scales.")
+  (:id "t-mobile-full-width-replies" :type :task :title "Use full-width conversation bubbles and warnings on both phones and tablets" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Preserve the desktop two-thirds rule. Verify mobile wrapping, scrolling, work-detail sizing and animation scheduling without perpetual layout invalidation.")
+  (:id "t-terminal-hdr-cursor" :type :task :title "Prax feedback: expose terminal cursor painting with HDR color and host-controlled pulse timing" :state :todo
+   :note "The pinned terminal exposes its cursor color as PrColor8 and applies an internal on/off blink. Matching the prompt cursor requires a native rendering hook that preserves cursor visibility, shape, wide cells, composition, focus and scrollback. Do not patch the Prax dependency or mutate the shell cursor state to imitate a rendering hook.")
+  (:id "t-policy-deployment-identity" :type :task :title "Stage and verify a binary and policy from one immutable commit; support compatible live previews and close them with warning-free matching packages" :state :todo)
   (:id "t-personal-policy" :type :task :title "Move further client and server decisions into fork-owned Starlark" :state :todo)
   (:id "t-client-config" :type :task :title "Client config as documented, versioned JSON in git, relayed by the server, never stored by it" :state :todo)
   (:id "t-client-template" :type :task :title "Client-config template on the server: pending updates applied at each client's next connect" :state :todo)
