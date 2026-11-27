@@ -53,6 +53,9 @@ jobs:
         run: bash .github/hosted-runners-check.sh --selftest
       - name: Only fleet runners
         run: bash .github/hosted-runners-check.sh
+      # A build directory sees the shared checkout's sources with the times it last saw them (fleet-build).
+      - name: Source times, as planted
+        run: bash .github/source-times.sh --selftest
 
   # macOS Debug with the link (no LTO: Prax turns ThinLTO on for Release only; asserts on), built in the runner's own
   # build directory on the fleet Mac (Xcode, with its Metal toolchain for Prax's shaders), then the tier_pr tests. The
@@ -133,8 +136,6 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64_32 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_BUILD_TYPE=Release
           cmake --build "$NEXUS_BUILD/device" --parallel "$JOBS"
           cmake "-DAPP=$NEXUS_BUILD/device/watch/nexus.app/nexus" -P watch/tests/no_test_options.cmake
-      - name: Record the sources the builds were made from
-        run: bash .github/source-times.sh record "$NEXUS_BUILD/.nexus-ci-sources"
 
   server-policy:
     runs-on: [self-hosted, nexus-pr, Linux, X64]
