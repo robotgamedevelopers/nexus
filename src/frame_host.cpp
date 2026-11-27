@@ -1035,6 +1035,22 @@ void FrameHost::wire() {
     };
     view->activeAgents = [this](std::size_t id) { return mirror.activeAgents(id); };
     view->cursor = [this](std::size_t id) { return sync::cursorOf(phase, heardMsAgo, mirror, id); };
+    view->goal = [this](std::size_t id) {
+        const auto* session = accountState_.find(mirror.session(id));
+        return session ? session->info.goal : std::string();
+    };
+    view->cancelGoal = [this] {
+        if (!model->tab_count() || view->goal(model->tab(model->active()).id).empty()) return;
+        if (!link || phase != sync::LinkPhase::Connected) {
+            view->problem = "Reconnect to the server to stop this goal. It may still be running.";
+            return;
+        }
+        sync::Action action;
+        action.kind = sync::ActionKind::Send;
+        action.session = mirror.session(model->tab(model->active()).id);
+        action.text = "/goal off";
+        link->send(std::move(action));
+    };
 }
 
 void FrameHost::connect(LinkPort* port, const std::string& serverHost) {

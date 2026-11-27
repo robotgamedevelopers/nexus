@@ -25,14 +25,17 @@ def _transcript_style(config):
 
 # Forks can extend this ordered command reference in their client config.
 _COMMAND_HELP = {
-    "/help": "Show this command list.",
+    "/help": "Show all commands and keyboard actions.",
     "/model": "Open the model selector. Use /model <model> [effort] to switch directly.",
     "/effort": "Open the effort selector. Use /effort <level> to switch directly.",
     "/info": "Show the AI, account, model, effort, repository and working directories.",
     "/clear": "Clear the conversation and its context. When signed out, clear the local conversation.",
+    "/goal": "Show the active goal for this session.",
+    "/goal <text>": "Send the text now, then repeat every five minutes across any harness. Replaces the previous goal.",
+    "/goal off": "Stop future goal repetitions and remove its orange bubble. Command–Delete does this too.",
     "/compact": "Compact the current conversation context.",
     "/account": "Choose this AI's account: its signed-in accounts, and signing in to another.",
-    "/login": "Sign this AI in to another account, then switch to it. It stays on its account until then.",
+    "/login": "Sign out the current account before signing in to the selected account. A failed login does not restore the old account.",
     "/logout": "Sign out of this AI's account and delete its saved login, after a confirm that names the email.",
     "/quiet": "Mute nexus sounds.",
     "/quiet off": "Turn sounds back on.",
@@ -310,24 +313,62 @@ def handle(event, state, config):
                 window["account_items"] = []
             else:
                 window["panels"] = ["spacer" if p == "transcript" else p for p in window["panels"]]
+        if state["tab"] == "ai" and state.get("ui", {}).get("goal_active"):
+            for chord in config.get("clear_draft_keys", ["Command+Backspace", "Command+Delete"]):
+                window["shortcuts"] = _bind(window["shortcuts"], chord, ["clear_composer"])
         return window
     if event == "prompt_key":
         if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() == "/help":
             commands = dict(_COMMAND_HELP)
             commands.update(config.get("command_help", {}))
             shortcuts = [
-                "Keyboard shortcuts",
-                "⌘ + backtick (the ~ key)   Open the Nexus overlay",
-                "⌘T / ⌘W   Open a terminal tab / close the current terminal",
-                "⌘+ / ⌘−   Increase / decrease font size (⌘= also increases it).",
-                "⌘1, ⌘2, ⌘3, ⌘4 …   Select a tab by position",
-                "⌘← / ⌘→   Move to the previous / next tab",
-                "⌘↑ / ⌘↓   Choose an account for the current AI, including among multiple Claude accounts",
-                "Esc   Hide the overlay and return to the previous app. In a picker, Esc closes the picker first.",
+                "Keyboard actions (Command means ⌘ on macOS/iPad, Alt on Windows/Linux)",
+                config.get("overlay_hotkey", {"modifiers": "Command"}).get("modifiers", "Command") + "+" + config.get("overlay_hotkey", {"code": "Backquote"}).get("code", "Backquote") + " (~ key by default)   Show or hide the overlay; bring it forward when another app has focus.",
+                "Command+1 … Command+9, Command+0   Select tabs 1–10.",
+                "Command+T / Command+W   Open a terminal / close a closable tab.",
+                "⌘Q (macOS overlay)   Hide Nexus and keep its connection running.",
+                "Command+= / Command+Shift++ / Command+- (⌘+ / ⌘−)   Increase / decrease text size.",
+                "Command+Escape   Stop the current AI turn. Use /goal off to stop future goal reminders.",
+                "Escape   Close the current picker/dialog first; otherwise hide the overlay. Terminals receive Escape.",
+                "Shift+Enter   Insert a newline in the prompt.",
+                "Enter / Command+Enter   Return to the newest messages when holding or sending from history.",
+                "ArrowUp / ArrowDown, Enter   Move through a picker, then confirm; Escape cancels.",
+                "Tab   Complete /model and /effort choices in the prompt.",
+                "⌘/Control+A / C / X / V   Select all / copy / cut / paste in the prompt. Nexus also accepts its Command+V paste shortcut.",
+                "Arrow keys, Home / End, Shift+arrows   Move the editing cursor / extend its selection.",
+                "Backspace / Delete   Delete text at the editing cursor.",
+                "Option/Control+Left / Right   Move by words where not claimed by a Nexus tab shortcut; add Shift to select.",
+                "Option/Control+Backspace / Delete   Delete the previous / next word.",
+                "⌘/Control+Home / End   Move to the start / end of the prompt; add Shift to select.",
+                "Terminal tabs   Ordinary typing and terminal control keys go to the terminal; Nexus shortcuts remain available.",
             ]
-            return [{"op": "draft", "text": ""}, {"op": "notice", "text": "\n".join(shortcuts)}, {"op": "notice", "text": "\nSlash commands"}] + [
-                {"op": "notice", "text": cmd + "  " + description} for cmd, description in commands.items()
+            if config.get("hold_on_enter", False):
+                shortcuts += ["Enter   Hold the current message. Enter on an empty prompt sends held messages.",
+                              "Command+Enter   Send held messages and the current draft immediately."]
+            else:
+                shortcuts += ["Enter   Send the current prompt.", "Command+Enter   Queue the current prompt."]
+            references = [
+                ("tab_navigation", {"Command+ArrowLeft": -1, "Command+ArrowRight": 1}, "Select previous / next tab"),
+                ("tab_reorder", {"Command+Shift+ArrowLeft": -1, "Command+Shift+ArrowRight": 1}, "Move the current tab left / right"),
+                ("account_picker_shortcuts", {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"}, "Open / navigate the account picker (⌘↑ / ⌘↓ on Mac)"),
+                ("transcript_scroll_keys", {"Control+ArrowUp": "top", "Control+ArrowDown": "bottom", "PageUp": "page_up", "PageDown": "page_down"}, "Scroll the transcript"),
+                ("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}, "Navigate / confirm / close the open account picker"),
+                ("clear_draft_keys", ["Command+Backspace", "Command+Delete"], "Clear the draft and held message, and stop the active goal"),
+                ("limit_choice_keys", {"account": "Command+Shift+A", "model": "Command+Shift+O"}, "Choose another account / model when a usage-limit choice is shown"),
             ]
+            for name, defaults, description in references:
+                value = config.get(name, defaults)
+                keys = value.values() if name == "limit_choice_keys" else value
+                shortcuts += [" / ".join(keys) + "   " + description + "."]
+            for chord, command in config.get("account_shortcuts", {}).items():
+                shortcuts += [chord + "   Account command: " + command]
+            for plugin in config.get("tab_types", []):
+                for key, description in [("open", "Open"), ("close", "Close"), ("invoke", "Invoke service for")]:
+                    if plugin.get(key):
+                        shortcuts += [plugin[key] + "   " + description + " " + plugin.get("title", plugin["id"]) + "."]
+            return [{"op": "draft", "text": ""}] + [{"op": "notice", "text": line} for line in shortcuts] + [
+                {"op": "notice", "text": "Slash commands (run directly, without holding)"}
+            ] + [{"op": "notice", "text": cmd + "  " + description} for cmd, description in commands.items()]
         if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() in ["/quiet", "/quiet off", "/loud"]:
             return [{"op": "quiet" if state["text"].strip() == "/quiet" else "loud"}]
         if state["key"] == "Enter" and state.get("signed_out") and state["text"].strip() == "/clear":

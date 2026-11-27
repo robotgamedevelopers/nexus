@@ -286,7 +286,11 @@ messages their own text color. Omitting it uses `ink` for both speakers. `notice
 `switch_email_ink` sets the address color in that notice. Colors accept six hexadecimal digits after `#`. The corner radius
 accepts 0–64 logical points before keyboard zoom. All fields are optional. Set `show_notices` or `show_tools`
 to `false` to hide those transcript entries in the client. Their history stays available when you enable them
-again. In `transcript_style`, `"tool_prompts": {"Bash": "$ "}` displays Bash activity as a selectable monospace command. Each key matches the tool name exactly. An empty map preserves the original tool labels. Apply the client policy to see the changes in a running window.
+again. `hidden_notice_fragments` hides only notices containing one of its case-sensitive strings (at most 32
+nonempty strings of at most 256 bytes). It never hides user messages, AI replies or tools. The shipped profile hides
+routine authentication and account-switch history, including expired sign-in attempts, and uses neutral notice text.
+Other failures and command responses remain visible; `/help` remains available. Setting the list to `[]` restores the
+hidden history. In `transcript_style`, `"tool_prompts": {"Bash": "$ "}` displays Bash activity as a selectable monospace command. Each key matches the tool name exactly. An empty map preserves the original tool labels. Apply the client policy to see the changes in a running window.
 
 The Starlark `window` result accepts these color settings, also available in the client JSON profile:
 
@@ -337,9 +341,9 @@ echo '{"ai":"reviewer","intent":"send","text":"hello","model":"","queued":0,"bus
 | Server `message` | Receives the same text and session fields with `intent` (`send` or `queue`) and server-side `busy` (an open turn). Returns a command list. |
 | Server `new_session` | Receives `ai`, driver `defaults`, an optional `source` session, and an optional `roster` with `linked`, `preferred`, `instances` and `can_auto_account`. Returns optional boolean `auto_account` (default false) and string fields `account`, `instance`, `model` and `effort`. The host validates these before creating the session. |
 
-Message command lists accept up to 16 operations. Each operation is a dictionary with an `op` field. A `notice`
+Server message command lists accept up to 16 operations; client lists accept up to 128 so `/help` can document the complete command and keyboard reference. Each operation is a dictionary with an `op` field. A `notice`
 carries `text`. A client `draft` replaces the current draft. A final `send` or `queue` can supply replacement
-`text` or use the input. A final server `native` names a registered service in `name` and can supply input
+`text` or use the input. A final server `goal` with text starts or replaces a five-minute session goal and sends it immediately; empty text stops it, and omitted text reports its status (see `docs/goals.md`). A final server `native` names a registered service in `name` and can supply input
 `text`. An empty list consumes the input. The server validates the entire plan before acting and commits its
 changes together with the request acknowledgement. The client accepts a single `sign_out` operation for Enter on
 the exact draft `/logout`. It targets the account the server confirmed for this conversation. The command stays in the

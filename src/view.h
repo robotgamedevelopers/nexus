@@ -276,6 +276,8 @@ struct View {
     std::function<const std::string*(std::size_t id)> growing;
     // With a server: the state cursor of an AI's tab (by Tab::id), under its last text (cursor.h). Unset: none.
     std::function<CursorState(std::size_t id)> cursor;
+    std::function<std::string(std::size_t id)> goal;
+    std::function<void()> cancelGoal;
     std::function<unsigned(std::size_t)> activeAgents;
     std::string choiceKind, choiceValue;
     std::size_t choiceTab = SIZE_MAX;
@@ -347,6 +349,7 @@ struct View {
     // its newest entry, where it follows what arrives.
     static constexpr float kAtEnd = -1;
     std::vector<float> scrolls;
+    std::optional<std::size_t> followEndTab; // a prompt action requests the newest transcript before the next layout
     std::vector<TranscriptItems> items;         // each AI's transcript as laid out, by Tab::id
     std::size_t shown = ~std::size_t(0);        // the AI (Tab::id) the transcript showed last round
     std::size_t prompted = ~std::size_t(0);     // the AI (Tab::id) whose draft the prompt edited last round

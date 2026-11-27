@@ -119,6 +119,13 @@ struct TranscriptStyle {
     float pendingTextPulse = 0.10f, pendingTextSeconds = 2.8f;
     unsigned sentOutlineInk = 0xffffff;
     bool showNotices = true;
+    std::vector<std::string> hiddenNoticeFragments;
+    bool showsNotice(std::string_view text) const {
+        if (!showNotices) return false;
+        for (const auto& fragment : hiddenNoticeFragments)
+            if (text.find(fragment) != text.npos) return false;
+        return true;
+    }
     bool showTools = true;
     std::map<std::string, std::string, std::less<>> toolPrompts;
     bool personBold = false;

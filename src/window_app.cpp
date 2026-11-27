@@ -280,7 +280,7 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
     for (auto i = prJsonFirst(d, obj); i != kPrJsonMissing; i = prJsonAfter(d, obj, i)) {
         const auto key = stringAt(d, i);
         if (key != "fill" && key != "ink" && key != "person_ink" && key != "bus_ink" && key != "message_inks" && key != "notice_ink" && key != "status_ink" && key != "switch_email_ink" &&
-                key != "radius" && key != "show_notices" && key != "show_tools" && key != "reply_width" && key != "markdown" && key != "conversation_panel" && key != "tool_prompts" && key != "list_gap_em" && key != "list_item_gap_lines" &&
+                key != "radius" && key != "show_notices" && key != "hidden_notice_fragments" && key != "show_tools" && key != "reply_width" && key != "markdown" && key != "conversation_panel" && key != "tool_prompts" && key != "list_gap_em" && key != "list_item_gap_lines" &&
                 key != "panel_fill" && key != "link_ink" && key != "pending_text_pulse" && key != "pending_text_seconds" && key != "pending_dash_seconds" && key != "pending_outline_width" && key != "sent_outline_width" && key != "sent_outline_ink" && key != "read_path_ink" && key != "command_ink" && key != "code_ink" && key != "code_fill" &&
                 key != "code_background" && key != "code_padding" && key != "code_radius" && key != "code_size_offset" &&
                 key != "glyph_peak" && key != "glyph_seconds" && key != "glyph_stagger" &&
@@ -290,6 +290,19 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
                 key != "scanner_ink" && key != "scanner_seconds" && key != "scanner_peak" && key != "scanner_pulse_floor" && key != "highlight_energy") {
             why = "unknown transcript_style field: " + std::string(key);
             return false;
+        }
+    }
+    const auto hidden = prJsonMember(d, obj, {"hidden_notice_fragments", 23});
+    if (hidden != kPrJsonMissing) {
+        const auto invalid = [&] {
+            why = "hidden_notice_fragments must be an array of at most 32 nonempty strings, each at most 256 bytes";
+            return false;
+        };
+        if (prJsonKind(d, hidden) != PrJsonKind_Array || prJsonCount(d, hidden) > 32) return invalid();
+        for (unsigned i = 0; i < prJsonCount(d, hidden); ++i) {
+            const auto text = stringAt(d, prJsonElement(d, hidden, i));
+            if (text.empty() || text.size() > 256) return invalid();
+            style.hiddenNoticeFragments.emplace_back(text);
         }
     }
     const auto messageInks = prJsonMember(d, obj, {"message_inks", 12});

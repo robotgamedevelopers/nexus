@@ -1335,7 +1335,7 @@ struct Builder {
                     e.text.starts_with("Agent:") || e.text.starts_with("SendMessage:") ||
                     e.text.starts_with("mcp__nexus__nexus_bus_send:") ||
                     e.text.starts_with("nexus_bus_send:"))) ||
-                    (e.kind == EntryKind::Notice && !look.transcriptStyle.showNotices))
+                    (e.kind == EntryKind::Notice && !look.transcriptStyle.showsNotice(e.text)))
                 continue;
             uint32_t lines = 1;
             for (char c : e.text)
@@ -1760,13 +1760,14 @@ struct Builder {
             view.conversation = column = element(column, Part::Conversation);
         const bool switched = view.shown != tab.id;
         // Text was just cut to fit this tab's prompt: the transcript goes to its end, where the line saying so shows.
-        const bool toCut = view.cutFollow && view.cutTab == tab.id;
+        const bool toCut = (view.cutFollow && view.cutTab == tab.id) || view.followEndTab == tab.id;
         if (keepScroll(scroller, tab.id))
             prUiFollowEnd(ui, scroller);
         if (toCut) {
             // Past the end, which layout clamps to the end of the content this round makes (as keepScroll goes there).
             prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0), PrLayoutUnit{INT32_MAX}});
-            view.cutFollow = false;
+            if (view.cutTab == tab.id) view.cutFollow = false;
+            if (view.followEndTab == tab.id) view.followEndTab.reset();
         }
         view.transcript = scroller;
         // The kit's labels and text area wrap, breaking inside a word that fits no line (PrKitWrap_Wrap, kit_theme.h
@@ -1980,6 +1981,7 @@ struct Builder {
 
     void promptKey(std::size_t active, const char* key) {
         const Tab& tab = model.tab(active);
+        if (!tab.draft.empty() || !tab.held.empty()) view.followEndTab = tab.id;
         const bool logout = tab.draft == "/logout";
         const auto first = tab.draft.find_first_not_of(" \t\r\n");
         const bool help = first != std::string::npos &&
@@ -2160,12 +2162,42 @@ struct Builder {
     }
 
     // `composing`: an input method was composing in the prompt before this round's events (read in build).
+    void goalBubble(PrLayoutNode footer) {
+        if (!model.tab_count() || model.tab(model.active()).kind != TabKind::AI) return;
+        const auto active = model.active();
+        const auto goal = view.goal ? view.goal(model.tab(active).id) : std::string();
+        if (!goal.empty()) {
+            const auto row = element(footer, Part::Entry, 0, prHashString(sv("active-goal"), 0));
+            PrKitPlace place{};
+            place.margin.bottom = 8 * k();
+            prKitPlace(kit, row, place);
+            const auto bubble = element(row, Part::PendingBubble);
+            auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, bubble));
+            auto box = prLayoutBoxStyleRecord(tree, record.groups[PrLayoutGroup_Box]);
+            auto decoration = prLayoutDecorationStyleRecord(tree, record.groups[PrLayoutGroup_Decoration]);
+            const auto orange = prColor16FromColor(promptPulse(true, 1.0));
+            for (int side = 0; side < PrRectSide_Count; ++side) {
+                box.border[side] = prLayoutUnitFromPx(4 * k());
+                decoration.borderStyle[side] = PrDrawBorderStyle_Solid;
+                decoration.borderColor[side] = orange;
+            }
+            box.maxHeight = px(std::max(100.f, view.extent.y * 0.25f));
+            box.overflowY = PrLayoutOverflow_Scroll;
+            record.groups[PrLayoutGroup_Box] = prLayoutBoxStyleIntern(tree, &box);
+            record.groups[PrLayoutGroup_Decoration] = prLayoutDecorationStyleIntern(tree, &decoration);
+            prLayoutTreeFrameSetStyle(tree, bubble, prLayoutStyleIntern(tree, &record));
+            caption(bubble, "Active goal · every 5 minutes", textStyle(PrKitTextRole_Meta, kStatusTone));
+            caption(bubble, goal, textStyle(PrKitTextRole_Body, kPersonTone));
+        }
+    }
+
     void prompt(PrLayoutNode footer, bool composing) {
-        std::size_t active = model.active();
+        const auto active = model.active();
+        goalBubble(footer);
         // The prompt's rounded box, holding the plus and the text area: the kit has no rounded text area and no slot
         // for an icon inside one (frameless). Enter sends and Command-Enter queues, captured on the box, so the area
         // never sees them; every other Enter (Shift-Enter among them) goes to the area, which breaks the line (pr/ui.h).
-        PrLayoutNode box = element(footer, Part::Prompt);
+        PrLayoutNode box = element(footer, Part::Prompt, 0, prHashString(sv("prompt-box"), 0));
         view.promptBox = box;
         bool send = !pickerInput && prUiKeyCaptured(ui, box, PrAppKey_Enter, 0);
         bool queue = !pickerInput && prUiKeyCaptured(ui, box, PrAppKey_Enter, style::kCommand);
@@ -2780,6 +2812,8 @@ struct Builder {
         prJsonWriterEndArray(w);
         prJsonWriterKey(w, sv("dismissed"));
         prJsonWriterBool(w, view.dismissedSignIn.has_value());
+        prJsonWriterKey(w, sv("goal_active"));
+        prJsonWriterBool(w, active && view.goal && !view.goal(active->id).empty());
         prJsonWriterKey(w, sv("help_visible"));
         prJsonWriterBool(w, active && view.helpTab == active->id);
         field("draft", active ? active->draft : std::string_view{});
@@ -2867,6 +2901,7 @@ struct Builder {
                 break;
             }
             case WindowCommand::ClearComposer:
+                if (view.cancelGoal) view.cancelGoal();
                 if (model.tab_count() && (!model.tab(model.active()).draft.empty() || !model.tab(model.active()).held.empty()))
                     view.chirp(view.windowApp.surface.discardChirp);
                 model.clear_composer(model.active());
@@ -3036,7 +3071,7 @@ struct Builder {
                         if (service.kind == TabKind::AI && service.name == type->second.service &&
                                 !service.transcript.empty()) {
                             const auto& result = service.transcript.back();
-                            if (result.kind == EntryKind::AI || (result.kind == EntryKind::Notice && look.transcriptStyle.showNotices))
+                            if (result.kind == EntryKind::AI || (result.kind == EntryKind::Notice && look.transcriptStyle.showsNotice(result.text)))
                                 caption(element(window, Part::ReplyRow), result.text, textStyle(PrKitTextRole_Body,
                                     static_cast<PrKitTone>(result.kind == EntryKind::Notice ? kNoticeTone : kChatTone)));
                             break;
@@ -3058,6 +3093,10 @@ struct Builder {
                     break;
             }
         }
+        if (std::find(panels.begin(), panels.end(), Panel::Prompt) == panels.end() && model.tab_count() &&
+                model.tab(model.active()).kind == TabKind::AI && view.goal &&
+                !view.goal(model.tab(model.active()).id).empty())
+            goalBubble(element(window, Part::Footer));
         if (!view.extensionProblem.empty() && model.tab_count() && model.tab(model.active()).kind == TabKind::Extension)
             caption(element(window, Part::ReplyRow), view.extensionProblem, textStyle(PrKitTextRole_BodySmall, kNoticeTone));
     }
@@ -3140,6 +3179,7 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     if (scaleChanged || cardChanged) view.tabWidths.clear();
     if (opacityChanged || cardChanged || transcriptChanged) {
         if (look.transcriptStyle.showNotices != askedTranscript.showNotices ||
+            look.transcriptStyle.hiddenNoticeFragments != askedTranscript.hiddenNoticeFragments ||
             look.transcriptStyle.showTools != askedTranscript.showTools ||
             look.transcriptStyle.codeSizeOffset != askedTranscript.codeSizeOffset ||
             look.transcriptStyle.listItemGapLines != askedTranscript.listItemGapLines ||

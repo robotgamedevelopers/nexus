@@ -161,6 +161,12 @@ if(NEXUS_WINDOW)
         -P "${PROJECT_SOURCE_DIR}/tests/policy/group_close.cmake")
     set_tests_properties(window_group_close PROPERTIES LABELS functional TIMEOUT 30)
     add_test(NAME window_input COMMAND nexus_input_tests)
+    add_test(NAME window_functional_goal COMMAND nexus_input_tests --goal)
+    set_tests_properties(window_functional_goal PROPERTIES LABELS functional TIMEOUT 30)
+    add_test(NAME window_functional_clean_notices COMMAND nexus_input_tests --clean-notices)
+    set_tests_properties(window_functional_clean_notices PROPERTIES LABELS functional TIMEOUT 30)
+    add_test(NAME window_functional_prompt_follow COMMAND nexus_input_tests --prompt-follow)
+    set_tests_properties(window_functional_prompt_follow PROPERTIES LABELS functional TIMEOUT 30)
     set_tests_properties(window_input PROPERTIES LABELS functional TIMEOUT 60)
 
     # A terminal tab with a real shell on a pseudoterminal: a functional test (a process, real time). Its working directory

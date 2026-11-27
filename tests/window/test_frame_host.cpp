@@ -448,6 +448,35 @@ void remoteLoginSwitchAndRetry(bool cancelSupported) {
     CHECK(w.model.tab(w.model.active()).draft == "keep my draft");
 }
 
+void goalCancellationWaitsForServer() {
+    Window w("chat");
+    auto session = std::make_shared<sync::SessionView>();
+    session->id = 37;
+    session->info = {"chat", "claude", "first", "", ""};
+    session->info.goal = "keep going";
+    auto publish = [&] {
+        w.link.state.phase = sync::LinkPhase::Connected;
+        w.link.state.sessions = sync::Sessions({std::make_shared<sync::SessionView>(*session)});
+        w.link.state.sessions.setAIs({{"chat", {{"first", "First", false}}}});
+        w.link.changed = true;
+        w.host.pollBackground();
+    };
+    publish();
+    const auto tab = w.model.tab(w.model.active()).id;
+    CHECK(w.view.goal(tab) == "keep going");
+    w.view.cancelGoal();
+    CHECK(w.link.sent.back().kind == sync::ActionKind::Send && w.link.sent.back().text == "/goal off");
+    CHECK(w.link.sent.back().session == 37 && w.view.goal(tab) == "keep going");
+    session->info.goal.clear(); publish();
+    CHECK(w.view.goal(tab).empty());
+    session->info.goal = "another goal"; publish();
+    const auto count = w.link.sent.size();
+    w.host.phase = sync::LinkPhase::Failed;
+    w.view.cancelGoal();
+    CHECK(w.link.sent.size() == count && w.view.goal(tab) == "another goal");
+    CHECK(w.view.problem.find("Reconnect") != std::string::npos);
+}
+
 void explicitSignInKeepsTheDraft() {
     Window w("chat");
     auto session = std::make_shared<sync::SessionView>();
@@ -582,6 +611,7 @@ int main() {
     accountCommandsUseTheActiveConversation();
     automaticAccountIsASelectionMode();
     accountPickerRechecksTheServerRoster();
+    goalCancellationWaitsForServer();
     explicitSignInKeepsTheDraft();
     remoteLoginSwitchAndRetry(false);
     remoteLoginSwitchAndRetry(true);

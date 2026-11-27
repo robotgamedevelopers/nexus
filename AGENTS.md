@@ -162,7 +162,7 @@ Sign-in (`models/SignIn.tla`, `docs/secrets.md` "Sign-in")
 - Overlay dialogs stay inside the overlay’s native window, using Prax’s embedded portals. Opening a dialog must not transfer native keyboard focus and trigger hiding.
 - `/login` and the account menu’s sign-in entry use the same centered account-card appearance as automatic sign-in, including the configured `message_card` typography, spacing and highlight. It lists every linked account, including saved logins. Its keys take precedence over the page underneath. Up/Down selects, Enter signs in, and Escape dismisses without hiding Nexus.
 - The selected account’s sign-in action appears in a centered opaque rounded white card in the AI tab. When an email is configured, it appears in light blue between the account title and the activation hint. Enter in the prompt or clicking the card opens sign-in for that account and keeps the draft. The window opens the browser off its frame thread (`window_frame_budget`).
-- The default overlay darkens the desktop at 60% opacity. The person’s messages and the AI’s replies use dark bubbles. The fork can set outgoing text color independently using `transcript_style.person_ink`. Transcript notices use light red text on a dark bubble. Tool output and status labels use light neutral text on a dark bubble. The centered sign-in action alone uses the white card with large black text. The fork can change `transcript_style`, `overlay_opacity` and `message_card` through the client application without rebuilding either binary.
+- The default overlay darkens the desktop at 60% opacity. The person’s messages and the AI’s replies use dark bubbles. The fork can set outgoing text color independently using `transcript_style.person_ink`. Routine authentication notices are hidden; remaining transcript notices use neutral text. Tool output and status labels use light neutral text on a dark bubble. The centered sign-in action alone uses the white card with large black text. The fork can change `transcript_style`, `overlay_opacity` and `message_card` through the client application without rebuilding either binary.
 
 The sprint tab
 - It keeps nova-sprint's original branding and logo. The app itself is called "nexus" (its bundle display name), but the board is not rebranded.
@@ -278,3 +278,19 @@ Tabs
 - Commits use the shared agent identity, whose email is `305107455+rowan-claude@users.noreply.github.com`, set with repo-local `git config` only.
 - No personal names anywhere in the repository: code, comments, docs or commit messages.
 - License: GNU AGPL v3, permanently.
+
+## Session goals and help (2026-11-27)
+
+- `/goal <text>` sends immediately and repeats every five minutes in this session, for every harness. `/goal` reports
+  it; `/goal off` and Command–Delete stop future reminders. Command–Delete also clears the composer and held message.
+- The server persists and schedules goals, including on headless Linux and while the client is disconnected. Missed
+  intervals never cause catch-up bursts, and an identical waiting goal is not duplicated. New sessions inherit no goal.
+- The active goal is pinned below the held message and above the prompt, with a thick solid orange outline using the
+  cursor's pulse and HDR behavior. The server confirms removal; disconnected clients cannot claim a goal is stopped.
+- All shipped commands and keyboard actions are documented in `/help`. Changes to commands or bindings update that
+  reference in the same change. Contracts and qualification: `docs/goals.md`, `models/SessionGoal.tla`.
+- Keep the conversation clean: hide routine sign-in and account-switch history in the shipped client profile,
+  including old sign-in timeouts and harness-account reset notices. Keep the durable history, actionable failures
+  and requested command responses. Remaining notices use neutral text, not red (owner, 2026-11-27).
+- Enter or Command–Enter on a prepared message returns the transcript immediately to its newest content, including
+  when Enter holds the message. Shift–Enter inserts a newline without changing the transcript position.

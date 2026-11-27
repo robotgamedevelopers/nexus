@@ -4,9 +4,14 @@ load("server/sessions.star", "new_session")
 
 def _command(state):
     words = state["text"].split()
-    if not words or words[0] not in ["/clear", "/compact", "/model", "/effort", "/info"]:
+    if not words or words[0] not in ["/clear", "/compact", "/model", "/effort", "/info", "/goal"]:
         return None
     cmd = words[0]
+    if cmd == "/goal":
+        text = state["text"].strip()[len(cmd):].strip()
+        if not text:
+            return [{"op": "goal"}]
+        return [{"op": "goal", "text": "" if text == "off" else text}]
     if cmd in ["/clear", "/compact"]:
         if len(words) == 1:
             return [{"op": "clear_context" if cmd == "/clear" else "compact_context"}]

@@ -1235,6 +1235,8 @@ PrLayoutNode checkTextPaint(const Harness& h, const std::string& text, unsigned 
 // the prompt box, its border, the bubbles (the queued one too) and all text are opaque.
 void switchNoticeBubble() {
     Harness h;
+    // Forks can still opt into the detailed account history.
+    h.view.windowApp.transcriptStyle.hiddenNoticeFragments.clear();
     const std::string prefix(kAccountSwitchPrefix);
     const std::string email = "subscriber@example.test";
     const std::string suffix = " (work)";
@@ -1451,8 +1453,8 @@ void conversationBubblesAndSignInCard() {
     checkTextPaint(h, live, shipped.ink, h.look.tabs.fill);
     // The shipped transcript_style (policy/rules/config.json) is what the window draws with.
     CHECK(shipped.ink == 0xffffff && shipped.personInk == 0xffffff && shipped.fill == 0x252525);
-    CHECK(shipped.noticeInk == 0xff4455 && shipped.statusInk == 0xd8d8d8 && shipped.busInk == 0x86c5ff);
-    CHECK(shipped.ink != shipped.noticeInk && shipped.statusInk != shipped.noticeInk);
+    CHECK(shipped.noticeInk == 0xd8d8d8 && shipped.statusInk == 0xd8d8d8 && shipped.busInk == 0x86c5ff);
+    CHECK(shipped.ink != shipped.noticeInk);
 
 }
 
@@ -2506,7 +2508,7 @@ bool anyTextHas(const std::vector<std::string>& texts, const std::string& part) 
 // terminals and the board are serviced unseen. Typing reaches nothing; Return asks the system, Escape hides. Unlocked
 // again, the same window shows the AIs' names and the draft, so the checks above can see them when they are there.
 void lockedWindowDrawsOnlyTheLockScreen() {
-    Harness h(std::vector<AIInfo>{AIInfo{"alex", "m1"}, AIInfo{"emma", "m2"}}, true, true);
+    Harness h(std::vector<AIInfo>{AIInfo{"first", "m1"}, AIInfo{"second", "m2"}}, true, true);
     h.commandT();
     const std::size_t terminal = h.active().id;
     CHECK(h.active().kind == TabKind::Terminal);
@@ -2518,7 +2520,7 @@ void lockedWindowDrawsOnlyTheLockScreen() {
     CHECK(draft == "secret plan");
     // Shown unlocked: the names and the draft are drawn.
     auto texts = allTexts(h);
-    CHECK(anyTextHas(texts, "alex") && anyTextHas(texts, "emma") && anyTextHas(texts, "secret plan"));
+    CHECK(anyTextHas(texts, "First") && anyTextHas(texts, "Second") && anyTextHas(texts, "secret plan"));
 
     int unlocks = 0;
     h.view.unlock = [&] { ++unlocks; };
@@ -2535,7 +2537,7 @@ void lockedWindowDrawsOnlyTheLockScreen() {
     CHECK(anyTextHas(texts, "Touch ID"));
     for (const auto& t : texts)
         CHECK(t == "nexus is locked" || t == "Press Return or click here to unlock with Touch ID.");
-    CHECK(!anyTextHas(texts, "alex") && !anyTextHas(texts, "emma") && !anyTextHas(texts, "secret"));
+    CHECK(!anyTextHas(texts, "First") && !anyTextHas(texts, "Second") && !anyTextHas(texts, "secret"));
     CHECK(h.view.prompt == kPrLayoutNodeNone && h.view.promptBox == kPrLayoutNodeNone);
     CHECK(h.view.transcript == kPrLayoutNodeNone && h.view.boardBox == kPrLayoutNodeNone);
     CHECK(h.terminals.shown.size() == shown);           // no terminal drawn
@@ -2560,7 +2562,7 @@ void lockedWindowDrawsOnlyTheLockScreen() {
     h.frame();
     h.frame();
     texts = allTexts(h);
-    CHECK(anyTextHas(texts, "alex") && anyTextHas(texts, "emma") && anyTextHas(texts, "secret plan"));
+    CHECK(anyTextHas(texts, "First") && anyTextHas(texts, "Second") && anyTextHas(texts, "secret plan"));
 }
 
 // A clipboard file or image whose read finishes after the lock starts, before the next frame takes the prompt away,
@@ -3202,7 +3204,7 @@ void checkTranscriptStyleValidation(nexus::policy::Host& host) {
     nexus::WindowApplication stock;
     stock.update(stockHost, "ai", "", true, false, 0, 1, "validate-style");
     const nexus::TranscriptStyle shipped = stock.transcriptStyle;
-    CHECK(shipped.ink == 0xffffff && shipped.noticeInk == 0xff4455 && shipped.fill == 0x252525);
+    CHECK(shipped.ink == 0xffffff && shipped.noticeInk == 0xd8d8d8 && shipped.fill == 0x252525);
     CHECK(shipped.toolPrompts.count("Bash") == 1);
     for (std::size_t i = 0; i < 14; ++i) {
         window.update(host, "ai", "", true, false, i, 14, "validate-style");
@@ -3218,7 +3220,104 @@ void checkTranscriptStyleValidation(nexus::policy::Host& host) {
     }
 }
 
+void cleanNoticePresentation() {
+    Harness h({AIInfo{"test", "m1"}});
+    const std::vector<std::string> routine = {
+        "work's sign-in was not finished in 10 minutes: show nexus's window to sign in again",
+        "work was signed in in the browser",
+        "Signed in to work as subscriber@example.test.",
+        "Switched to subscriber@example.test (work)",
+        "The previous harness session belongs to a different account. Starting fresh."
+    };
+    for (const auto& text : routine) h.model.append(0, {EntryKind::Notice, text});
+    h.model.append(0, {EntryKind::Person, "Hello"});
+    h.model.append(0, {EntryKind::AI, "Ready."});
+    const std::string failure = "The prompt was not sent. Reconnect to the server and retry.";
+    h.model.append(0, {EntryKind::Notice, failure});
+    h.frame(); h.frame();
+    for (const auto& text : routine) CHECK(!h.hasText(h.window(), text));
+    CHECK(h.hasText(h.window(), "Hello") && h.hasText(h.window(), "Ready."));
+    CHECK(h.hasText(h.window(), failure));
+    CHECK(h.active().transcript.size() == routine.size() + 3);
+    checkTextPaint(h, failure, 0xd8d8d8, h.look.tabs.fill);
+    h.type("/help"); h.enter(); h.frame();
+    CHECK(h.view.helpTab == h.active().id && h.view.helpText.find("/goal <text>") != std::string::npos);
+}
+
+void activeGoalBubble() {
+    Harness h({AIInfo{"test", "m1"}}, true);
+    h.display.headroom = h.display.potentialHeadroom = 4;
+    std::string goal = "Keep improving the client.";
+    int cancels = 0;
+    h.view.goal = [&](std::size_t) { return goal; };
+    h.view.cancelGoal = [&] { ++cancels; goal.clear(); };
+    h.type("held message"); h.enter(); h.type("draft"); h.frame();
+    const auto goalText = h.findText(h.window(), goal);
+    const auto held = h.findText(h.window(), "held message");
+    CHECK(goalText != kPrLayoutNodeNone);
+    CHECK(held != kPrLayoutNodeNone);
+    CHECK(h.hasText(h.window(), "Active goal · every 5 minutes"));
+    if (!goalText || !held) return;
+    CHECK(h.bounds(held).bottom <= h.bounds(goalText).top);
+    CHECK(h.bounds(goalText).bottom <= h.bounds(h.view.promptBox).top);
+    const auto findBubble = [&]() -> PrLayoutNode {
+        const auto text = h.findText(h.window(), goal);
+        auto node = text ? prLayoutNodeParent(h.tree, text) : kPrLayoutNodeNone;
+        while (node != kPrLayoutNodeNone) {
+            const auto r = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, node));
+            const auto d = prLayoutDecorationStyleRecord(h.tree, r.groups[PrLayoutGroup_Decoration]);
+            if (d.borderStyle[0] == PrDrawBorderStyle_Solid) return node;
+            node = prLayoutNodeParent(h.tree, node);
+        }
+        return kPrLayoutNodeNone;
+    };
+    CHECK(findBubble() != kPrLayoutNodeNone);
+    if (!findBubble()) return;
+    auto borderColor = [&] {
+        const auto r = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, findBubble()));
+        const auto b = prLayoutBoxStyleRecord(h.tree, r.groups[PrLayoutGroup_Box]);
+        CHECK(prLayoutUnitToPx(b.border[0]) >= 4);
+        return prColorFromColor16(prLayoutDecorationStyleRecord(h.tree, r.groups[PrLayoutGroup_Decoration]).borderColor[0]);
+    };
+    h.time = -1.0 / 60; h.frame(); const auto low = borderColor();
+    h.time = 0.8 - 1.0 / 60; h.frame(); const auto high = borderColor();
+    CHECK(low.r < 1 && high.r > 1 && high.r > high.g && high.g > high.b);
+    CHECK(std::abs(high.r - fillOf(h, prLayoutNodeNextSibling(h.tree, h.view.prompt)).r) < 0.01);
+    const auto top = h.bounds(findBubble()).top;
+    for (int n = 0; n < 30; ++n) h.model.append(0, {EntryKind::AI, "Another reply."});
+    h.frame();
+    CHECK(near(h.bounds(findBubble()).top, top));
+    h.key(PrAppKey_Backspace, PrAppKeyCode_Backspace, style::kCommand); h.frame();
+    CHECK(cancels == 1 && h.active().held.empty() && h.active().draft.empty());
+    CHECK(!h.hasText(h.window(), "Active goal · every 5 minutes"));
+}
+
+void promptReturnsToLatest() {
+    Harness h({AIInfo{"test", "m1"}});
+    for (int i = 0; i < 100; ++i) h.model.append(0, {EntryKind::AI, "History " + std::to_string(i)});
+    h.frame(); h.frame();
+    for (const auto mods : {PrAppModifierFlags(0), style::kCommand}) {
+        h.type("Continue working.");
+        const auto port = h.bounds(h.view.transcript);
+        const PrVec2 middle{(port.left + port.right) / 2, (port.top + port.bottom) / 2};
+        h.push(pointerEvent(PrAppEventKind_PointerMove, middle));
+        for (int n = 0; n < 8; ++n) { h.push(scrollEvent(middle, {0, -1000000})); h.frame(); }
+        PrLayoutScrollInfo before{};
+        CHECK(prLayoutNodeScrollInfo(h.tree, h.view.transcript, &before));
+        CHECK(before.offset.y.raw < before.range.bottom.raw);
+        h.key(PrAppKey_Enter, PrAppKeyCode_Enter, mods);
+        h.frame(); h.frame();
+        PrLayoutScrollInfo after{};
+        CHECK(prLayoutNodeScrollInfo(h.tree, h.view.transcript, &after));
+        CHECK(after.offset.y.raw == after.range.bottom.raw);
+        CHECK(h.hasText(h.window(), "History 99"));
+    }
+}
+
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--goal") { activeGoalBubble(); return failures ? 1 : 0; }
+    if (argc == 2 && std::string(argv[1]) == "--clean-notices") { cleanNoticePresentation(); return failures ? 1 : 0; }
+    if (argc == 2 && std::string(argv[1]) == "--prompt-follow") { promptReturnsToLatest(); return failures ? 1 : 0; }
     if ((argc == 3 || argc == 4) && std::string(argv[1]) == "--centered-accounts") {
         Harness h = withSprint(1);
         h.view.application->watch(argv[2]);
@@ -3227,16 +3326,18 @@ int main(int argc, char** argv) {
         host.model = &h.model;
         host.view = &h.view;
         host.connect(&link, "localhost");
-        const auto publish = [&](const std::string& name, uint64_t ack) {
+        const auto publish = [&](const std::string& name, uint64_t ack, bool signedOut = false) {
             auto session = std::make_shared<sync::SessionView>();
             session->id = 17;
             session->info = {"f1", "codex", name, "model-a", ""};
             session->info.catalog = R"({"default":"model-a","models":{"model-a":["low","high"],"model-b":["high"]}})";
+            if (signedOut) session->entries.push_back(std::make_shared<sync::SessionEntry>(
+                EntryKind::Notice, "Signed out of b in Nexus."));
             link.state.phase = sync::LinkPhase::Connected;
             link.state.loopback = true;
             link.state.sessions = sync::Sessions({session});
             link.state.sessions.setAIs({{"f1", {{"a", "A", false, "a@example.test"},
-                {"b", "B", false, "b@example.test"}, {"c", "C", true, "c@example.test"}}, true}, {"f2", {}, true}});
+                {"b", "B", signedOut, "b@example.test"}, {"c", "C", true, "c@example.test"}}, true}, {"f2", {}, true}});
             link.state.sessions.setNextAction(ack);
             link.changed = true;
             host.pollLink();
@@ -3338,9 +3439,11 @@ int main(int argc, char** argv) {
         down(style::kCommand);
         h.enter();
         h.frame();
-        CHECK(link.sent.size() == 1 && link.sent[0].kind == sync::ActionKind::SetAccount && link.sent[0].text == "c");
-        publish("c", 2);
-        CHECK(link.sent.size() == 2 && link.sent.back().kind == sync::ActionKind::SignInClaim &&
+        CHECK(link.sent.size() == 1 && link.sent[0].kind == sync::ActionKind::SignOut && link.sent[0].account == "b");
+        publish("b", link.sent.size() + 1, true);
+        CHECK(link.sent.size() == 2 && link.sent.back().kind == sync::ActionKind::SetAccount && link.sent.back().text == "c");
+        publish("c", link.sent.size() + 1, true);
+        CHECK(link.sent.size() == 3 && link.sent.back().kind == sync::ActionKind::SignInClaim &&
               link.sent.back().account == "c" && link.sent.back().session == 17);
         CHECK(!h.view.accountPicker && h.view.accountRows.size() == 3);
         CHECK(h.hasText(h.view.accountMenu, "Please sign in to ChatGPT"));
