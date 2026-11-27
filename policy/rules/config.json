@@ -241,7 +241,7 @@
     "entry_gap": 44.8,
     "bubble_padding_x": 29.96,
     "bubble_padding_y": 21,
-    "bubble_max_percent": 83,
+    "bubble_max_percent": 66.666667,
     "person_bubble_max_percent": 66.666667,
     "plus_size": 36.4,
     "column_inset": 16.8,
