@@ -80,6 +80,35 @@ PrAppEvent event(PrAppEventKind kind) {
     return e;
 }
 
+// A hidden overlay authenticates first, retries only on deliberate input, and never reveals on a stale grant.
+void authenticateBeforeReveal() {
+    Window w(true);
+    CHECK(!w.visible && w.requests.empty());
+    CHECK(!w.lock->requestReveal(0));
+    CHECK(!w.visible && w.reveals == 0 && w.signInShows == 0 && w.requests.size() == 1);
+    CHECK(!w.lock->requestReveal(1));
+    CHECK(w.requests.size() == 1);
+    for (auto answer : {LockAnswer::Cancelled, LockAnswer::Failed, LockAnswer::Unavailable}) {
+        w.lock->notices({LockNotice{LockNotice::Kind::Answer, w.lock->lock().attempt(), answer,
+                                    LockReason::None, "Refused."}}, 2);
+        CHECK(!w.visible && w.reveals == 0 && w.signInShows == 0);
+        const auto count = w.requests.size();
+        CHECK(!w.lock->requestReveal(3));
+        CHECK(w.requests.size() == count + 1);
+    }
+    const auto stale = w.lock->lock().attempt();
+    w.lock->relock(LockReason::Sleep);
+    w.lock->notices({LockNotice{LockNotice::Kind::Answer, stale, LockAnswer::Granted, LockReason::None, ""}}, 4);
+    CHECK(!w.visible && w.reveals == 0);
+    CHECK(!w.lock->requestReveal(5));
+    w.grant(6);
+    CHECK(w.visible && w.reveals == 1 && !w.screen);
+    CHECK(w.lock->requestReveal(7));
+    w.visible = false;
+    CHECK(!w.lock->requestReveal(6 + kIdle));
+    CHECK(!w.visible && w.reveals == 1 && !w.lock->drawsContent());
+}
+
 // Launch: the lock screen and nothing else; one prompt at a time, over it.
 void launchShowsTheLockScreenAndAsksOnce() {
     Window w(true);
@@ -271,6 +300,7 @@ void idleTimeoutLimits() {
 } // namespace
 
 int main() {
+    authenticateBeforeReveal();
     launchShowsTheLockScreenAndAsksOnce();
     refusalWaitsForThePerson();
     grantUnlocksAndShows();

@@ -254,7 +254,7 @@ void carryOut(App& a, OverlayAct act) {
         return;
     PrAppWindow* window = prStudioWindowAppWindow(a.window);
     PrApp* app = prStudioWindowApp(a.window);
-    // The idle check first: a show after the timeout shows the lock screen, and claims no sign-in.
+    // Check idle before any reveal or sign-in claim. macOS authenticates while the overlay stays hidden.
     if (a.lock && act != OverlayAct::Hide) a.lock->tick(lockNow());
 #ifdef __APPLE__
     if ((act == OverlayAct::Hide) == bool(prAppWindowIsVisible(window))) prioritizeOverlayTransition();
@@ -269,6 +269,10 @@ void carryOut(App& a, OverlayAct act) {
         prAppWindowSetVisible(window, false);
         return;
     }
+#if NEXUS_MACOS
+    // LocalAuthentication presents its own UI. Keep the overlay hidden until the current attempt succeeds.
+    if (a.lock && !a.lock->requestReveal(lockNow())) return;
+#endif
     PrSurface surface{};
     if (prAppWindowSurface(window, &surface) != PrStatus_Ok || !coverScreen(surface))
         std::fprintf(stderr, "nexus: the overlay could not be given the whole screen (no native view, window or "
@@ -792,11 +796,12 @@ void trace(void* context, const PrStudioWindowFrameTimes* t) {
                 // without taking the keyboard or asking; Return or a click asks.
                 prAppWindowSetOpacity(window, 1);
             } else {
-                prAppWindowFocus(window);
+                // The completed frame must be visible before AppKit is asked to give the panel the keyboard.
                 prAppWindowSetOpacity(window, 1);
+                prAppWindowFocus(window);
                 a.audio.play(a.view.windowApp.surface.openChirp);
                 prAppTimerSet(prStudioWindowApp(a.window), kKeyCheckTag, kKeyCheckSeconds, 0);
-                // Shown locked: the system is asked now, over the lock screen (after a refusal, on Return or a click).
+                // Platforms that authenticate over a visible window ask here. macOS is already unlocked.
                 if (a.lock) a.lock->shown();
             }
         } else {

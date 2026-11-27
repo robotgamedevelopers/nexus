@@ -166,6 +166,7 @@ struct AccountMenuView {
     std::vector<PrLayoutNode> rowNodes;         // its rows
     std::vector<PrLayoutNode> rowTexts;         // each row's text
     Dialog dialog = Dialog::None;               // the dialog that shows
+    std::size_t loginHighlighted = 0;           // keyboard selection in the centered sign-in card
     bool dialogShown = false;                   // a dialog showed last round
     std::size_t dialogTab = ~std::size_t(0);    // the Tab::id it was opened on
     std::vector<AccountMenuRow> dialogRows;     // its rows

@@ -219,7 +219,8 @@ An AI can keep several accounts signed in at once and move between them without 
   a tab always did. A press on another tab is unchanged: a tap switches to it, a drag moves it. The tab and its
   label look exactly the same throughout.
 - **`/account`** opens the same list as a dialog. Its last row runs `/login`.
-- **`/login`** signs in another of the AI's linked accounts without signing out first. The AI stays on its
+- **`/login`** opens the original centered sign-in card, using the policy’s `message_card` appearance.
+  Up/Down selects an address, Enter signs in, and Escape closes the card. It signs in another of the AI's linked accounts without signing out first. The AI stays on its
   current account while the sign-in runs; a cancelled or failed sign-in leaves everything as it was. When the
   sign-in completes, the AI switches to the new account at once.
 - **`/logout`** asks first, naming the email, then deletes that account's saved login. If the AI was on it, the

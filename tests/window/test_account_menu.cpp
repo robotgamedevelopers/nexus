@@ -526,6 +526,48 @@ void signInRowRunsLogin() {
     CHECK(w.switches().empty());
 }
 
+// The sign-in dialog uses the centered account card and keeps keyboard and pointer selection working.
+void loginCardUsesTheOriginalLayout() {
+    for (const PrVec2 extent : {PrVec2{1376, 1032}, PrVec2{402, 874}}) {
+        Window w(extent);
+        w.rowan[1].needsSignIn = true;
+        w.publish();
+        w.frame();
+        w.command("/login");
+        w.frame();
+        CHECK(w.view.accountMenu != kPrLayoutNodeNone);
+        CHECK(w.view.accountRows.size() == 2);
+        if (w.view.accountRows.size() != 2) continue;
+        const auto card = w.bounds(w.view.accountMenu);
+        CHECK(card.right > card.left && card.left >= 0 && card.right <= extent.x);
+        if (std::abs((card.left + card.right) / 2 - extent.x / 2) >= 2)
+            std::fprintf(stderr, "login card at %.1f, %.1f - %.1f, %.1f in %.1f x %.1f\n",
+                         card.left, card.top, card.right, card.bottom, extent.x, extent.y);
+        CHECK(std::abs((card.left + card.right) / 2 - extent.x / 2) < 2);
+        CHECK(std::abs((card.top + card.bottom) / 2 - extent.y / 2) < 2);
+        const auto first = w.bounds(w.view.accountRows[0]);
+        const auto second = w.bounds(w.view.accountRows[1]);
+        CHECK(first.bottom <= second.top);
+        w.send(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Down, PrAppKeyCode_ArrowDown));
+        w.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Down, PrAppKeyCode_ArrowDown));
+        w.frame();
+        CHECK(w.view.accounts.loginHighlighted == 1);
+        w.enter();
+        CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::None);
+        CHECK((w.switches() == std::vector<std::string>{"7:a3"}));
+    }
+    Window pointer;
+    pointer.command("/login");
+    pointer.frame();
+    CHECK(pointer.view.accountRows.size() == 1);
+    if (pointer.view.accountRows.size() == 1) {
+        const auto at = pointer.centre(pointer.view.accountRows.front());
+        pointer.press(at);
+        pointer.lift(at);
+        CHECK((pointer.switches() == std::vector<std::string>{"7:a3"}));
+    }
+}
+
 // /login of a3: one claim names a3 (token, no request) while rowan's session stays on a1, with no SetAccount first; the
 // server signs a3 in and moves the session, and the window sends nothing more. Plants: SetAccount before the claim; a
 // second claim or a SetAccount after the sign-in.
@@ -638,6 +680,7 @@ int main() {
     stillFramesWhileTheMenuIsOpen();
     accountCommandOpensTheSelector();
     signInRowRunsLogin();
+    loginCardUsesTheOriginalLayout();
     loginSignsInThenSwitches();
     cancelledLoginChangesNothing();
     logoutConfirmsThenMoves();

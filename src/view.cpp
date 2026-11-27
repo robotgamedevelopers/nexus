@@ -691,15 +691,18 @@ struct Builder {
             view.choiceValue.clear();
             updateApplication();
             promptKey(active, "Enter");
+        } else if (action.starts_with("login:") && view.accounts.dialog == AccountMenuView::Dialog::Login) {
+            view.accounts.dialog = AccountMenuView::Dialog::None;
+            if (view.loginAccount) view.loginAccount(action.substr(6));
         } else if (view.accountAction) {
             view.accountAction(action);
         }
     }
 
-    void accountSelector(PrLayoutNode parent, const std::vector<AccountItem>& items) {
+    void accountSelector(PrLayoutNode parent, const std::vector<AccountItem>& items, bool modal = false) {
         if (items.empty()) return;
-        const auto layer = element(parent, Part::SelectorLayer);
-        if (view.windowApp.surface.showTabs) {
+        const auto layer = modal ? parent : element(parent, Part::SelectorLayer);
+        if (!modal && view.windowApp.surface.showTabs) {
             // Balance the strip above the panels while keeping its hit area free.
             auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, layer));
             auto& group = record.groups[PrLayoutGroup_Box];
@@ -708,7 +711,18 @@ struct Builder {
             group = prLayoutBoxStyleIntern(tree, &box);
             prLayoutTreeFrameSetStyle(tree, layer, prLayoutStyleIntern(tree, &record));
         }
-        const auto card = element(layer, Part::SelectorCard);
+        const auto card = modal ? parent : element(layer, Part::SelectorCard);
+        if (modal) {
+            auto record = prLayoutStyleRecord(tree, style(ui, look, Part::SelectorCard));
+            auto& group = record.groups[PrLayoutGroup_Box];
+            auto box = prLayoutBoxStyleRecord(tree, group);
+            // A modal owns a separate viewport: resolve the card's percentage against the window, not itself.
+            const float width = std::min(look.messageCard.selectorWidthEm * kBodySize * k(),
+                view.extent.x / (1 + 2 * look.messageCard.sideExtension / 100));
+            box.width = box.maxWidth = px(width);
+            group = prLayoutBoxStyleIntern(tree, &box);
+            prLayoutTreeFrameSetStyle(tree, card, prLayoutStyleIntern(tree, &record));
+        }
         view.accountMenu = card;
         element(card, Part::SelectorBackground);
         const float lineHeight = kit->theme.types[PrKitTextRole_Body].lineHeight;
@@ -751,7 +765,7 @@ struct Builder {
                 ink.color = prColor16FromColor(rgb(look.messageCard.selectedInk));
                 colors = prLayoutColorStyleIntern(tree, &ink);
                 prLayoutTreeFrameSetStyle(tree, email, prLayoutStyleIntern(tree, &emailStyle));
-                if ((view.accountPicker || !view.choiceKind.empty()) && view.lastHighlightedAccount != item.action) {
+                if ((modal || view.accountPicker || !view.choiceKind.empty()) && view.lastHighlightedAccount != item.action) {
                     prUiSetFocus(ui, row);
                     view.lastHighlightedAccount = item.action;
                 }
@@ -779,6 +793,7 @@ struct Builder {
     }
 
     void accountPanel(PrLayoutNode parent) {
+        if (view.accounts.dialog == AccountMenuView::Dialog::Login) return;
         const auto& selected = view.windowApp.signInAccount;
         if (view.windowApp.surface.items && !asking) {
             accountSelector(parent, *view.windowApp.surface.items);
@@ -2507,7 +2522,9 @@ struct Builder {
         PrKitDialog dialog{};
         dialog.key = prHashString(sv(std::string("account-dialog/") + title), 0);
         dialog.title = sv(std::string_view(title));
-        const PrLayoutNode body = prKitDialog(kit, window, dialog, typedDialogStyle());
+        const PrLayoutNode body = menu.dialog == Dialog::Login ?
+            prKitModal(kit, window, {.key = dialog.key}, typedDialogStyle().modal) :
+            prKitDialog(kit, window, dialog, typedDialogStyle());
         if (body == kPrLayoutNodeNone) {
             if (!fresh) menu.dialog = Dialog::None;
             menu.dialogShown = false;
@@ -2532,10 +2549,26 @@ struct Builder {
             }
             return;
         }
+        if (menu.dialog == Dialog::Login) {
+            const auto count = menu.dialogRows.size();
+            if (count) {
+                menu.loginHighlighted = std::min(menu.loginHighlighted, count - 1);
+                if (prUiKeyPressed(ui, body, PrAppKey_Up, 0))
+                    menu.loginHighlighted = (menu.loginHighlighted + count - 1) % count;
+                if (prUiKeyPressed(ui, body, PrAppKey_Down, 0))
+                    menu.loginHighlighted = (menu.loginHighlighted + 1) % count;
+            }
+            std::vector<AccountItem> items{{view.windowApp.signInHeading, "", false}};
+            if (!count) items.push_back({"Every linked account is signed in.", "", false});
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto& row = menu.dialogRows[i];
+                items.push_back({row.text, "login:" + row.account, i == menu.loginHighlighted});
+            }
+            accountSelector(body, items, true);
+            return;
+        }
         if (menu.dialogRows.empty()) {
-            label(body, menu.dialog == Dialog::Login ?
-                "Every account linked to " + name + " is signed in. To add another, ask your AI to add one (docs/accounts.md)." :
-                name + " has no signed-in account.", about);
+            label(body, name + " has no signed-in account.", about);
             return;
         }
         const auto list = prKitMenu(kit, body, {}, {});
@@ -2557,12 +2590,9 @@ struct Builder {
             if (prKitActivated(kit, item)) chosen = row;
         }
         if (!chosen) return;
-        const auto kind = menu.dialog;
         menu.dialog = Dialog::None;
         if (chosen->signIn) {
             openAccountDialog(view, Dialog::Login);
-        } else if (kind == Dialog::Login) {
-            if (view.loginAccount) view.loginAccount(chosen->account);
         } else if (!chosen->current && view.switchAccount) {
             if (view.playChirp) view.playChirp(view.windowApp.surface.confirmChirp);
             view.switchAccount(chosen->account);
@@ -2653,7 +2683,8 @@ struct Builder {
         if (!dialog) view.energyAccount.clear();
         view.dialogVisible = dialog;
         view.displayedLimit = view.windowApp.limitOffer;
-        if (!view.accountPicker) view.lastHighlightedAccount.clear();
+        if (!view.accountPicker && view.accounts.dialog != AccountMenuView::Dialog::Login)
+            view.lastHighlightedAccount.clear();
         secretDialog(window);
         serverDialog(window);
     }
@@ -3284,6 +3315,8 @@ bool openAccountDialog(View& view, AccountMenuView::Dialog dialog) {
     }
     view.problem.clear();
     menu.dialog = dialog;
+    menu.loginHighlighted = 0;
+    view.lastHighlightedAccount.clear();
     menu.dialogTab = tab.id;
     return true;
 }

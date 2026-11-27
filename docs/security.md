@@ -47,9 +47,11 @@ stays on the screen, is veiled at once (its opacity to 0, which the window serve
 again only with the lock screen's frame, so that no frame of content stays in a capture, the Dock's thumbnail or
 Mission Control.
 
-**It asks** when the window shows locked: the overlay, at the hotkey (launch itself still shows nothing and takes no
-focus, AGENTS.md); the `--windowed` window, as it opens. After a refusal (the check failed, the prompt was cancelled, or
-the system has no way to authenticate) it does not ask again by itself: the lock screen says which, with the system's
+**It asks** on the macOS overlay hotkey while the overlay stays hidden. Only a current successful authentication
+reveals Nexus; cancellation or failure keeps it hidden, and another hotkey retries. Repeated hotkeys during a prompt
+do not start another. Launch itself still shows nothing and takes no focus (AGENTS.md). Other windows ask when
+shown locked; the `--windowed` window asks as it opens. After a refusal (the check failed, the prompt was cancelled, or
+the system has no way to authenticate) it does not ask again by itself. On a visible locked window the lock screen says which, with the system's
 own words, and waits for Return or a click. A system with no way to authenticate the owner (no Windows Hello set up)
 leaves nexus locked, and the lock screen says to set it up.
 
