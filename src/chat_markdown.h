@@ -16,10 +16,16 @@ struct ChatRun {
     bool inlineCode = false;
 };
 
+struct ChatCell {
+    std::vector<ChatRun> runs;
+    PrKitTextAlign align = PrKitTextAlign_Start;
+};
+
 struct ChatParagraph {
     std::vector<ChatRun> runs;
     std::string marker;
     size_t depth = 0, ancestorColumns = 0, markerColumns = 0;
+    std::vector<std::vector<ChatCell>> tableRows;
 };
 using ChatMarkdown = std::vector<ChatParagraph>;
 

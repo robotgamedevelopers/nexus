@@ -320,3 +320,10 @@ if(NEXUS_WINDOW_LOGIC)
     add_test(NAME frame_trace_rotation COMMAND nexus_frame_trace_tests "${CMAKE_CURRENT_BINARY_DIR}/trace-fixture.jsonl")
     set_tests_properties(frame_trace_rotation PROPERTIES LABELS functional TIMEOUT 15)
 endif()
+
+if(TARGET nexus_input_tests AND NEXUS_SERVER_PARTS)
+    add_dependencies(model_checks nexus_input_tests)
+    tlc_test(tlc_work_group_trace WorkGroupTrace WorkGroupTrace.cfg pass WORKGROUPTRACE)
+    tlc_test(tlc_work_group_stuck_rejected WorkGroupTrace WorkGroupTrace.cfg invariant
+        PROPERTY Matches WORKGROUPTRACE FAULTY stuck)
+endif()

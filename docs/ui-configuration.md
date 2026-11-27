@@ -356,4 +356,6 @@ plain Up/Down continue to navigate the account selector. Both are documented in 
 
 The shipped outer canvas below the opaque black header is `#0c0f13` at 100% opacity. `opaque_history_backdrop` is disabled so history margins use that same transparency. The prompt fill is `#272728`; the conversation-panel fill is `#15171b`. They remain independently configurable.
 
-Shell-command and per-tool text colors default independently to `#86c5ff`, the scanner's bright blue without HDR gain.
+Work groups start collapsed. Their Prax button chevron expands and collapses the group by click, Enter or Space; visually adjacent work entries combine even across hidden notices. Shell and per-tool inks default independently to `#86c5ff`, the scanner's bright blue without HDR gain. The header is six points shorter, and the cursor retains a slow rise, faster fall and equal short holds. Mobile conversation bubbles use full width on phones and tablets.
+
+Markdown tables preserve rows, cells, headers and column alignment and use the native Prax table. Wide tables scroll horizontally within the conversation; cells keep inline emphasis, code font, safe links and selectable text.

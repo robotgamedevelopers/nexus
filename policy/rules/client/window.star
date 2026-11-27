@@ -370,6 +370,7 @@ def handle(event, state, config):
                 "Command+Escape   Stop the current AI turn. Use /goal off to stop future goal reminders.",
                 "Escape   Close the current picker/dialog first; otherwise hide the overlay. Terminals receive Escape.",
                 "Shift+Enter   Insert a newline in the prompt.",
+                "Work chevron   Click to expand or collapse adjacent work entries; Enter or Space toggles the focused chevron.",
                 submit + " / " + queue + "   Return to the newest messages when holding or sending from history.",
                 "ArrowUp / ArrowDown, Enter   Move through a picker, then confirm; Escape cancels.",
                 "Tab   Complete /model and /effort choices in the prompt.",

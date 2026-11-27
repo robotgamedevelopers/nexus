@@ -1441,6 +1441,12 @@ struct Builder {
 
     // The AI's transcript as laid out (TranscriptItems), with the entries that arrived since grouped into items:
     // an entry each, and a run of tool lines one item.
+    bool visibleTool(const Entry& e) const {
+        return e.kind == EntryKind::Tool && look.transcriptStyle.showTools &&
+            !e.text.starts_with("Agent:") && !e.text.starts_with("SendMessage:") &&
+            !e.text.starts_with("mcp__nexus__nexus_bus_send:") && !e.text.starts_with("nexus_bus_send:");
+    }
+
     TranscriptItems& itemsOf(const Tab& tab) {
         if (view.items.size() <= tab.id)
             view.items.resize(tab.id + 1);
@@ -1452,21 +1458,18 @@ struct Builder {
         const std::vector<Entry>& entries = tab.transcript;
         for (std::size_t i = items.entries; i < entries.size(); ++i) {
             const Entry& e = entries[i];
-            if ((e.kind == EntryKind::Tool && (!look.transcriptStyle.showTools ||
-                    e.text.starts_with("Agent:") || e.text.starts_with("SendMessage:") ||
-                    e.text.starts_with("mcp__nexus__nexus_bus_send:") ||
-                    e.text.starts_with("nexus_bus_send:"))) ||
+            if ((e.kind == EntryKind::Tool && !visibleTool(e)) ||
                     (e.kind == EntryKind::Notice && !look.transcriptStyle.showsNotice(e.text)))
                 continue;
             uint32_t lines = 1;
             for (char c : e.text)
                 lines += c == '\n' ? 1 : 0;
-            const bool joins = e.kind == EntryKind::Tool && i != 0 && entries[i - 1].kind == EntryKind::Tool &&
-                !items.first.empty() && items.first.back() + items.count.back() == i;
+            const bool joins = e.kind == EntryKind::Tool && !items.first.empty() &&
+                entries[items.first.back()].kind == EntryKind::Tool;
             if (joins) {
                 items.lines.back() += 1;
                 items.chars.back() += uint32_t(e.text.size());
-                items.count.back() += 1;
+                items.count.back() = uint32_t(i) - items.first.back() + 1;
                 items.height.back() = 0;    // it grew: laid out again before its height is known
                 continue;
             }
@@ -1475,6 +1478,7 @@ struct Builder {
             items.chars.push_back(uint32_t(e.text.size()));
             items.count.push_back(1);
             items.height.push_back(0);
+            items.expanded.push_back(false);
         }
         items.entries = entries.size();
         return items;
@@ -1509,8 +1513,10 @@ struct Builder {
         const float s = k();
         const float gap = look.ui.entry_gap * s;
         const EntryKind kind = tab.transcript[items.first[i]].kind;
-        if (kind == EntryKind::Tool)
-            return float(items.count[i]) * look.ui.tool_pitch * s + (float(items.count[i] - 1) * look.transcriptStyle.toolGap + 2 * look.transcriptStyle.captionPaddingY) * s + gap;
+        if (kind == EntryKind::Tool) {
+            const auto lines = look.transcriptStyle.toolChevron && !items.expanded[i] ? 1u : items.lines[i];
+            return float(lines) * look.ui.tool_pitch * s + (float(lines - 1) * look.transcriptStyle.toolGap + 2 * look.transcriptStyle.captionPaddingY) * s + gap;
+        }
         // Characters of the body face are about half its size wide.
         const float perChar = 0.5f * look.ui.body_size * s;
         const float maxPercent = kind == EntryKind::Person ? look.ui.person_bubble_max_percent : look.ui.bubble_max_percent;
@@ -1642,6 +1648,72 @@ struct Builder {
         });
     }
 
+    void markdownTable(PrLayoutNode parent, const ChatParagraph& paragraph) {
+        const auto& rows = paragraph.tableRows;
+        if (rows.empty() || rows.front().empty()) return;
+        auto& frame = view.tableFrames.emplace_back();
+        const auto count = rows.front().size();
+        frame.headings.resize(count);
+        frame.columns.resize(count);
+        const float inset = look.transcriptStyle.captionPaddingX * k();
+        for (size_t c = 0; c < count; ++c) {
+            for (const auto& run : rows.front()[c].runs) frame.headings[c] += run.text;
+            float width = menuTextWidth(frame.headings[c], PrKitTextRole_Caption);
+            for (const auto& row : rows) {
+                if (c >= row.size()) continue;
+                float measured = 0;
+                for (const auto& run : row[c].runs) measured += menuTextWidth(run.text, run.role);
+                width = std::max(width, measured);
+            }
+            frame.columns[c] = {.label = sv(frame.headings[c]), .width = width + 2 * inset,
+                .flex = PrKitFlex_Fill, .weight = 1, .align = rows.front()[c].align};
+        }
+        const float rowHeight = look.ui.line_pitch * k() + 2 * look.transcriptStyle.captionPaddingY * k();
+        PrKitListViewStyle layout{};
+        layout.rowHeight = rowHeight;
+        layout.place.height = prKitPx(rowHeight * static_cast<float>(rows.size()));
+        layout.place.width = prKitPercent(100);
+        const auto table = prKitTable(kit, parent,
+            {.count = static_cast<uint32_t>(rows.size() - 1), .columns = frame.columns.data(),
+             .columnCount = static_cast<uint32_t>(count)}, layout);
+        // The kit's compact default header is shorter than conversation text. Give its native header the same
+        // configured height as the body rows, without changing its column layout or horizontal scrolling.
+        const auto header = prLayoutNodeFirstChild(tree, table);
+        PrKitPlace headerPlace{};
+        headerPlace.height = prKitPx(rowHeight);
+        headerPlace.flex = PrKitFlex_Fixed;
+        prKitPlace(kit, header, headerPlace);
+        prKitPlace(kit, prLayoutNodeFirstChild(tree, header), headerPlace);
+        ink(header, look.transcriptStyle.ink);
+        textNodes(tree, header, [&](auto leaf) {
+            view.selection.paragraph(leaf, prColor16FromColor(faded(rgb(look.prompt.selection), look.ui.transcript_selection_opacity)));
+        });
+        const auto visible = prKitListWindow(kit, table);
+        for (uint32_t r = visible.first; r < visible.first + visible.count; ++r) {
+            const auto row = prKitTableRow(kit, table, {.index = r, .item = r + 1});
+            for (uint32_t c = 0; c < count; ++c) {
+                const auto cell = prKitTableCell(kit, row, {.column = c});
+                if (c >= rows[r + 1].size()) continue;
+                const auto& source = rows[r + 1][c];
+                auto body = textStyle(PrKitTextRole_Body, kChatTone);
+                body.align = source.align;
+                body.wrap = PrKitWrap_Nowrap;
+                const auto text = prKitText(kit, cell, {}, body);
+                for (const auto& run : source.runs) {
+                    auto style = textStyle(run.role, kChatTone);
+                    style.wrap = PrKitWrap_Nowrap;
+                    const auto span = prKitText(kit, text, {}, style);
+                    const auto color = run.href.empty() ? look.transcriptStyle.ink :
+                        look.transcriptStyle.linkInk.value_or(look.tabs.selectedFill);
+                    ink(span, color);
+                    const auto leaf = prLayoutTreeFrameText(tree, span, 0, sv(run.text));
+                    if (!run.href.empty()) view.selection.link(leaf, run.href);
+                }
+                view.selection.paragraph(text, prColor16FromColor(faded(rgb(look.prompt.selection), look.ui.transcript_selection_opacity)));
+            }
+        }
+    }
+
     void message(PrLayoutNode parent, std::string_view source, EntryKind speaker, double gain = 1,
             const View::GlyphTrail* trail = nullptr) {
         const auto& style = look.transcriptStyle;
@@ -1677,6 +1749,11 @@ struct Builder {
         PrLayoutNode list = kPrLayoutNodeNone;
         size_t sourceOffset = 0;
         for (const auto& paragraph : paragraphs) {
+            if (!paragraph.tableRows.empty()) {
+                list = kPrLayoutNodeNone;
+                markdownTable(column, paragraph);
+                continue;
+            }
             const auto em = kit->theme.types[PrKitTextRole_Body].size;
             auto row = column;
             if (paragraph.depth) {
@@ -1793,7 +1870,7 @@ struct Builder {
     }
 
     // One item, keyed by its tab and place, so that it keeps its node and its set text as the items in sight change.
-    PrLayoutNode declareItem(PrLayoutNode column, const Tab& tab, const TranscriptItems& items, std::size_t i,
+    PrLayoutNode declareItem(PrLayoutNode column, const Tab& tab, TranscriptItems& items, std::size_t i,
             uint64_t base) {
         const PrUiKey key = prHashMixKeys(base | 2, items.first[i]);
         const Entry& e = tab.transcript[items.first[i]];
@@ -1849,13 +1926,19 @@ struct Builder {
         PrLayoutNode tools = element(column, Part::Tools, 0, key);
         if (look.transcriptStyle.toolChevron) {
             const auto& settings = look.transcriptStyle;
-            const auto chevron = prKitPathIcon(kit, tools,
-                {.key = prHashString(sv("tool-chevron"), 0), .path = prKitIconPath(kit, PrStudioIconKind_ChevronRight),
-                 .color = rgb(settings.toolChevronInk), .stroked = true},
-                {.size = settings.toolChevronSize * k(), .tone = kStatusTone, ._pad = {}});
+            const auto chevron = prKitButton(kit, tools,
+                {.key = prHashString(sv("tool-chevron"), 0),
+                 .icon = items.expanded[i] ? PrStudioIconKind_ChevronDown : PrStudioIconKind_ChevronRight},
+                {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Sm});
+            if (prKitActivated(kit, chevron)) {
+                items.expanded[i] = !items.expanded[i];
+                items.height[i] = 0;
+            }
+            ink(chevron, settings.toolChevronInk);
             auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, chevron));
             auto box = prLayoutBoxStyleRecord(tree, record.groups[PrLayoutGroup_Box]);
             box.position = PrLayoutPosition_Absolute;
+            box.width = box.height = px(settings.toolChevronSize * k());
             box.inset[PrRectSide_Left] = px(settings.captionPaddingX * k());
             box.inset[PrRectSide_Top] = px(settings.captionPaddingY * k());
             record.groups[PrLayoutGroup_Box] = prLayoutBoxStyleIntern(tree, &box);
@@ -1864,7 +1947,9 @@ struct Builder {
         PrKitTextStyle line = textStyle(PrKitTextRole_Mono, kStatusTone);
         line.wrap = PrKitWrap_Clip;
         for (std::uint32_t t = 0; t < items.count[i]; ++t) {
-            const std::string_view summary = tab.transcript[items.first[i] + t].text;
+            const auto& entry = tab.transcript[items.first[i] + t];
+            if (!visibleTool(entry)) continue;
+            const std::string_view summary = entry.text;
             const auto separator = summary.find(": ");
             const auto& prompts = look.transcriptStyle.toolPrompts;
             const auto tool = summary.substr(0, separator);
@@ -1880,6 +1965,7 @@ struct Builder {
                 readPath ? style.readPathInk.value_or(style.linkInk.value_or(look.tabs.selectedFill)) :
                 style.commandInk.value_or(customPrompt ? style.ink : style.statusInk));
             view.selection.paragraph(node, prColor16FromColor(faded(rgb(look.prompt.selection), look.ui.transcript_selection_opacity)));
+            if (look.transcriptStyle.toolChevron && !items.expanded[i]) break;
         }
         return tools;
     }
@@ -2793,6 +2879,7 @@ struct Builder {
     }
 
     void build(PrLayoutNode parent) {
+        view.tableFrames.clear();
         if (view.lockScreen) {
             lockScreen(parent);
             return;
@@ -3377,8 +3464,13 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
         view.board->setScrollStyle(surface.scroll);
         view.board->setBackgroundUpdates(surface.flags.dashboard_background_updates);
     }
-    const bool uiChanged = look.ui != surface.ui || look.colors != surface.colors || look.words != surface.words || look.fonts != surface.fonts || look.flags != surface.flags;
-    const bool scaleChanged = look.textSteps != view.askedTextSteps || look.ui != surface.ui;
+    auto askedUi = surface.ui;
+    if (view.fullWidthReplies) {
+        askedUi.bubble_max_percent = 100;
+        askedUi.person_bubble_max_percent = 100;
+    }
+    const bool uiChanged = look.ui != askedUi || look.colors != surface.colors || look.words != surface.words || look.fonts != surface.fonts || look.flags != surface.flags;
+    const bool scaleChanged = look.textSteps != view.askedTextSteps || look.ui != askedUi;
     const bool opacityChanged = look.overlay && look.overlayOpacity != view.windowApp.overlayOpacity;
     // The prompt as the policy gives it, at the share of its width this screen takes (View::columnScale).
     PromptStyle askedPrompt = view.windowApp.surface.prompt;
@@ -3393,7 +3485,7 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     if (scaleChanged || cardChanged) view.tabWidths.clear();
     if (opacityChanged || cardChanged || transcriptChanged || uiChanged) {
         if (uiChanged || transcriptChanged) view.items.clear();
-        look.ui = surface.ui;
+        look.ui = askedUi;
         look.colors = surface.colors;
         look.words = surface.words;
         if (look.fonts != surface.fonts) view.clockFont.reset();

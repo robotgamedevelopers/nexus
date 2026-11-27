@@ -225,12 +225,12 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     a.hitch.begin();
     a.safeArea = f->safeArea;
     a.keyboardRoom = roomAboveKeyboard(f->extent, f->safeArea, f->keyboard);
-    // An iPad's regular width takes a narrower prompt and column than the policy's (style.h kRegularWidthColumn); an
-    // iPhone's compact width gives the replies the column's whole width (View::fullWidthReplies).
+    // The mobile profile gives both phone and tablet conversation bubbles the full column width.
+    // A fork can still narrow a regular-width column or disable full-width replies.
     PrSurface surface{};
     const bool known = prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok;
     a.view.columnScale = known && regularWidth(surface) ? a.view.windowApp.surface.ui.regular_width_column : 1;
-    a.view.fullWidthReplies = known && !regularWidth(surface) && a.view.windowApp.surface.flags.mobile_full_width_replies;
+    a.view.fullWidthReplies = a.view.windowApp.surface.flags.mobile_full_width_replies;
     a.view.dialogsAtTop = a.view.windowApp.surface.flags.mobile_top_dialogs;
     a.view.tapEndsEditing = a.view.windowApp.surface.flags.mobile_tap_ends_editing;
     a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);

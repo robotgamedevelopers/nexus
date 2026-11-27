@@ -17,11 +17,11 @@ struct Writer {
     unsigned heading = 0;
     bool preserveBreaks = false;
     bool newParagraph = true;
-    unsigned cells = 0;
+    bool inTable = false;
 
     void put(std::string_view text) {
         if (text.empty()) return;
-        if (newParagraph) {
+        if (newParagraph && !inTable) {
             paragraphs.emplace_back();
             newParagraph = false;
             auto& paragraph = paragraphs.back();
@@ -33,7 +33,7 @@ struct Writer {
         const auto role = code || codeBlock ? PrKitTextRole_Mono : heading == 1 ? PrKitTextRole_Title :
             heading ? PrKitTextRole_Heading : strong ? PrKitTextRole_Strong :
             emphasis ? PrKitTextRole_BodyItalic : PrKitTextRole_Body;
-        auto& runs = paragraphs.back().runs;
+        auto& runs = inTable ? paragraphs.back().tableRows.back().back().runs : paragraphs.back().runs;
         if (!runs.empty() && runs.back().role == role && runs.back().href == href && runs.back().inlineCode == (code > 0)) runs.back().text.append(text);
         else runs.push_back({std::string(text), static_cast<PrKitTextRole>(role), href, code > 0});
     }
@@ -84,9 +84,20 @@ struct Writer {
                 list.columns = std::max(list.columns, columns);
             } else marker.clear();
             break;
-        case PrMarkdownNodeKind_TableRow: newParagraph = true; cells = 0; break;
+        case PrMarkdownNodeKind_Table:
+            if (enter) paragraphs.emplace_back();
+            inTable = enter;
+            newParagraph = true;
+            break;
+        case PrMarkdownNodeKind_TableRow:
+            if (enter) paragraphs.back().tableRows.emplace_back();
+            break;
         case PrMarkdownNodeKind_TableCell:
-            if (enter && cells++) put("   │   ");
+            if (enter) {
+                auto& cell = paragraphs.back().tableRows.back().emplace_back();
+                cell.align = s.alignment == PrMarkdownAlignment_Right ? PrKitTextAlign_End :
+                    s.alignment == PrMarkdownAlignment_Center ? PrKitTextAlign_Center : PrKitTextAlign_Start;
+            }
             if (s.header) strong += delta;
             break;
         case PrMarkdownNodeKind_SoftBreak: if (enter) put(preserveBreaks ? "\n" : " "); break;

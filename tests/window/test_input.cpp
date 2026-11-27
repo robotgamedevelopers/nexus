@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <thread>
 #include <initializer_list>
 #include <map>
@@ -1360,6 +1361,29 @@ void namedBusBubbles() {
     CHECK(h.bounds(h.findText(h.window(), "sage")).bottom <= h.bounds(h.findText(h.window(), "Build passed")).top + 1);
 }
 
+void markdownTablesKeepColumns() {
+    Harness h;
+    const std::string table = "Before\n\n| Name | State |\n| :--- | ---: |\n| Alpha | **Ready** |\n| Beta | `Waiting` |\n\nAfter";
+    ChatMarkdownCache cache;
+    const auto& blocks = cache.get(table);
+    CHECK(blocks.size() == 3 && blocks[1].tableRows.size() == 3);
+    if (blocks.size() != 3 || blocks[1].tableRows.size() != 3) return;
+    CHECK(blocks[1].tableRows[0][1].align == PrKitTextAlign_End);
+    CHECK(blocks[1].tableRows[2][1].runs.front().inlineCode);
+    h.model.append(0, {EntryKind::AI, table});
+    h.frame(); h.frame(); h.frame();
+    const auto alpha = h.findText(h.window(), "Alpha"), beta = h.findText(h.window(), "Beta");
+    const auto ready = h.findText(h.window(), "Ready"), waiting = h.findText(h.window(), "Waiting");
+    CHECK(alpha && beta && ready && waiting);
+    CHECK(h.hasText(h.window(), "Name") && h.hasText(h.window(), "State"));
+    CHECK(h.hasText(h.window(), "Before") && h.hasText(h.window(), "After"));
+    if (!alpha || !beta || !ready || !waiting) return;
+    CHECK(near(h.bounds(alpha).left, h.bounds(beta).left));
+    CHECK(h.bounds(beta).top > h.bounds(alpha).top);
+    CHECK(h.bounds(ready).left > h.bounds(alpha).right);
+    CHECK(near(h.bounds(ready).right, h.bounds(waiting).right));
+}
+
 void markdownListsAndLinks() {
     Harness h;
     const std::string words = "First line wraps onto the next when several more words fill the available width and force it to wrap across the column.";
@@ -1784,6 +1808,38 @@ void longUnbrokenTextWraps() {
 
 // Each tool call is one compact line: tool lines in a row stand together in one item of the column, each one line
 // high however long its summary (cut at the column's edge, never wrapped), and close together.
+void workGroupTrace(const std::string& path, bool stuck) {
+    Harness h;
+    h.model.append(0, {EntryKind::Tool, "Read: first"});
+    h.model.append(0, {EntryKind::Tool, "Read: second"});
+    h.frame(); h.frame();
+    std::ofstream out(path);
+    out << "---- MODULE WorkGroupTraceData ----\nTrace == <<\n";
+    const auto record = [&](const char* event, bool last = false) {
+        const bool expanded = h.view.items[h.active().id].expanded.front();
+        out << "[event |-> \"" << event << "\", expanded |-> " << (expanded ? "TRUE" : "FALSE")
+            << ", details |-> " << (h.hasText(h.window(), "second") ? "TRUE" : "FALSE") << "]" << (last ? "\n" : ",\n");
+    };
+    record("init");
+    for (int i = 0; i < 2; ++i) {
+        const auto arrow = prLayoutNodeFirstChild(h.tree, h.entries().front());
+        const auto point = h.centre(arrow);
+        if (!stuck) {
+            h.pointer(PrAppEventKind_PointerDown, point);
+            h.pointer(PrAppEventKind_PointerUp, point);
+        }
+        h.frame(); h.frame();
+        record("toggle");
+    }
+    h.model.clear_transcript(0);
+    h.model.append(0, {EntryKind::Tool, "Read: first"});
+    h.model.append(0, {EntryKind::Tool, "Read: second"});
+    h.frame(); h.frame();
+    record("reset", true);
+    out << ">>\n====\n";
+    CHECK(out.good());
+}
+
 void toolLinesAreOneCompactLine() {
     Harness h;
     h.model.append(0, Entry{EntryKind::AI, "Let me look."});
@@ -1797,6 +1853,14 @@ void toolLinesAreOneCompactLine() {
     if (e.size() != 3) {
         return;
     }
+    CHECK(h.hasText(h.window(), "$ ls src"));
+    CHECK(!h.hasText(h.window(), std::string(400, 'x')));
+    const auto chevron = prLayoutNodeFirstChild(h.tree, e[1]);
+    const auto point = h.centre(chevron);
+    h.pointer(PrAppEventKind_PointerDown, point);
+    h.pointer(PrAppEventKind_PointerUp, point);
+    h.frame(); h.frame();
+    CHECK(h.view.items[h.active().id].expanded[1]);
     const TranscriptStyle& shipped = h.look.transcriptStyle;
     // The shipped tool_prompts and command_ink: a Bash line reads as a shell command, in the command ink.
     CHECK(shipped.toolPrompts.count("Bash") == 1 && shipped.toolPrompts.at("Bash") == "$ ");
@@ -1821,6 +1885,11 @@ void toolLinesAreOneCompactLine() {
     if (lines.size() == 2) {
         CHECK(near(h.bounds(lines[1]).top - h.bounds(lines[0]).bottom, style::kToolGap));
     }
+    h.pointer(PrAppEventKind_PointerDown, point);
+    h.pointer(PrAppEventKind_PointerUp, point);
+    h.frame(); h.frame();
+    CHECK(!h.view.items[h.active().id].expanded[1]);
+    CHECK(!h.hasText(h.window(), std::string(400, 'x')));
 }
 
 // The AI's text still growing shows after the transcript, as it grows, and goes when it closes (the transcript
@@ -1950,7 +2019,14 @@ void nativeBusSendIsPrivateInHistory() {
     h.model.append(0, Entry{EntryKind::Tool, "Agent: child launch description"});
     h.model.append(0, Entry{EntryKind::Tool, "Read: after"});
     h.frame();
-    CHECK(h.entries().size() == 2);
+    CHECK(h.entries().size() == 1);
+    CHECK(h.view.items[h.active().id].count.front() == 5);
+    const auto chevron = prLayoutNodeFirstChild(h.tree, h.entries().front());
+    const auto point = h.centre(chevron);
+    h.pointer(PrAppEventKind_PointerDown, point);
+    h.pointer(PrAppEventKind_PointerUp, point);
+    h.frame(); h.frame();
+    CHECK(h.hasText(h.window(), "before") && h.hasText(h.window(), "after"));
     CHECK(!h.hasText(h.window(), "Agent: child launch description"));
     CHECK(!h.hasText(h.window(), "SendMessage: private child message"));
     CHECK(!h.hasText(h.window(), "mcp__nexus__nexus_bus_send: private body"));
@@ -3334,7 +3410,7 @@ void cleanNoticePresentation() {
     CHECK(h.bounds(infoBubble).left < h.bounds(personBubble).left);
     CHECK(h.bounds(infoBubble).right - h.bounds(infoBubble).left < h.extent.x / 2);
     checkTextPaint(h, "Edit: /tmp/example.cpp", 0x86c5ff, h.look.transcriptStyle.fill);
-    checkTextPaint(h, "$ build", 0x86c5ff, h.look.transcriptStyle.fill);
+    CHECK(!h.hasText(h.window(), "$ build"));
     h.type("/help"); h.enter(); h.frame();
     CHECK(h.view.helpTab == h.active().id && h.view.helpText.find("/goal <text>") != std::string::npos);
 }
@@ -3534,6 +3610,10 @@ void idlePulseAndConfiguration(const char* active, const char* disabled) {
 }
 
 int main(int argc, char** argv) {
+    if (argc == 4 && std::string(argv[1]) == "--work-group-trace") {
+        workGroupTrace(argv[2], std::string(argv[3]) == "stuck");
+        return failures ? 1 : 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "--bubble-widths") { personBubblesWrapFromTheRight(); return failures ? 1 : 0; }
     if (argc == 2 && std::string(argv[1]) == "--notch") { notchAwareHeader(); return failures ? 1 : 0; }
     if (argc == 4 && std::string(argv[1]) == "--ui-config") { idlePulseAndConfiguration(argv[2], argv[3]); return failures ? 1 : 0; }
@@ -4055,6 +4135,7 @@ int main(int argc, char** argv) {
     switchNoticeBubble();
     namedBusBubbles();
     copyMarkdownConversation();
+    markdownTablesKeepColumns();
     markdownListsAndLinks();
     longInlineCommandWrapsInTheReply();
     personBubblesWrapFromTheRight();
