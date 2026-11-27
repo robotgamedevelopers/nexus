@@ -57,6 +57,14 @@
 |---|:---:|
 | Let an AI see a display or window the human chooses with Screen Recording permission (later) | ❌ |
 | Let an AI click and type in other apps with separate Accessibility permission and a human stop control (later) | ❌ |
+| Compact work groups: keep only the latest three unwrapped lines; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup | ❌ |
+| AI-only selection: double-click a whole paragraph, then Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text | ❌ |
+| Paste copied AI selections as a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble | ❌ |
+| Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering | ❌ |
+| Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color | ❌ |
+| Render Markdown tables with native Prax table layout, aligned columns, readable headers and preserved inline formatting and links | ❌ |
+| Reduce the header height by six points while preserving notch avoidance, clock alignment and tab hit targets | ❌ |
+| Use full-width conversation bubbles and warnings on both phones and tablets | ❌ |
 | Prax cursor-rendering hook: match the prompt HDR pulse while preserving shell and editor cursor behavior | ❌ |
 | Terminal tabs: a shell per tab, after the AIs; added with Cmd-T, closed with Cmd-W | ✅ |
 | Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; the page opaque, as nova-sprint serves it | ❌ |
@@ -72,7 +80,7 @@
 | Windows depth: close the trace binding gaps (ten of seventeen review plants escaped the trace): constrain ranWell by the relay's run time (RelayLife.tla:171); model the tells as a sequence with a no-repeat invariant; unit tests for the acked_+1 re-cut, acked going down, and ended() after stop(); widen the CI seeds | ❌ |
 | Windows depth: a watchdog for a hung relay; keep the NEXUS_WSL_RELAY test hook out of shipping builds; show a notice when history requests are dropped; show a bubble for a message sent when nextAction()==0 (frame_host.cpp:779-783) | ❌ |
 | Linux desktop window: waits on Prax's Wayland backend (asked of Patrick); until then the Linux build is the server only | ❌ |
-| complete | 17% |
+| complete | 12% |
 
 [Source data](roadmap.sexp)
 

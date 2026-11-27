@@ -102,6 +102,14 @@
    :rows (
      ("screen-observation" "Let an AI see a display or window the human chooses with Screen Recording permission" :later t)
      ("desktop-input" "Let an AI click and type in other apps with separate Accessibility permission and a human stop control" :later t)
+     ("work-preview-details" "Compact work groups: keep only the latest three unwrapped lines; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup")
+     ("ai-paragraph-selection" "AI-only selection: double-click a whole paragraph, then Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text")
+     ("quoted-ai-paste" "Paste copied AI selections as a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble")
+     ("scanner-afterglow" "Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering")
+     ("output-panel-outline" "Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color")
+     ("native-markdown-tables" "Render Markdown tables with native Prax table layout, aligned columns, readable headers and preserved inline formatting and links")
+     ("compact-header" "Reduce the header height by six points while preserving notch avoidance, clock alignment and tab hit targets")
+     ("mobile-full-width-replies" "Use full-width conversation bubbles and warnings on both phones and tablets")
      ("terminal-hdr-cursor" "Prax cursor-rendering hook: match the prompt HDR pulse while preserving shell and editor cursor behavior")
      ("terminal-tabs" "Terminal tabs: a shell per tab, after the AIs; added with Cmd-T, closed with Cmd-W")
      ("sprint-tab" "Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; the page opaque, as nova-sprint serves it")
@@ -123,6 +131,14 @@
      ("screen-observation" "done" "t-screen-observation")
      ("desktop-input" "done" "t-desktop-input")
      ("terminal-tabs" "done" "t-terminal-tabs")
+     ("work-preview-details" "done" "t-work-preview-details")
+     ("ai-paragraph-selection" "done" "t-ai-paragraph-selection")
+     ("quoted-ai-paste" "done" "t-quoted-ai-paste")
+     ("scanner-afterglow" "done" "t-scanner-afterglow")
+     ("output-panel-outline" "done" "t-output-panel-outline")
+     ("native-markdown-tables" "done" "t-native-markdown-tables")
+     ("compact-header" "done" "t-compact-header")
+     ("mobile-full-width-replies" "done" "t-mobile-full-width-replies")
      ("terminal-hdr-cursor" "done" "t-terminal-hdr-cursor")
      ("sprint-tab" "done" "t-sprint-tab")
      ("upload" "done" "t-upload")
@@ -303,6 +319,22 @@
   (:id "t-ui-defaults-source" :type :task :title "Move remaining presentation defaults from native structs into the shipped profile and generate compatible fallback records from one source" :state :todo)
   (:id "t-transcript-presentation-policy" :type :task :title "Make public transcript grouping, compact work previews, details, warning widths and labels configurable while retaining mandatory native privacy redaction" :state :todo)
   (:id "t-input-policy-tuning" :type :task :title "Move application gesture thresholds and intent precedence into documented policy; test customized profiles through real client input" :state :todo)
+  (:id "t-work-preview-details" :type :task :title "Compact work groups: keep only the latest three unwrapped lines; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Keep desktop previews left-aligned at two-thirds width, whole-character truncation and no chevron. Preserve private-event filtering, scrolling and modal precedence. Qualify implementation traces and negative witnesses before delivery.")
+  (:id "t-ai-paragraph-selection" :type :task :title "AI-only selection: double-click a whole paragraph, then Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Keep selection stable across virtualized history and streaming. Copy faithful Markdown for paragraphs, lists, headings, quotes, code and tables. Exercise keyboard, pointer and clipboard paths together.")
+  (:id "t-quoted-ai-paste" :type :task :title "Paste copied AI selections as a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Retain literal double-quote delimiters in the submitted text, with Markdown-aware visual treatment. Preserve formatting, caret placement, editing and both Enter-Enter and Command-Enter submission.")
+  (:id "t-scanner-afterglow" :type :task :title "Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Compare different decay settings at the same timestamps; preserve reduced-motion handling and independence from the prompt cursor pulse.")
+  (:id "t-output-panel-outline" :type :task :title "Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Keep output border width and color configurable, and preserve the separate output and prompt fills.")
+  (:id "t-native-markdown-tables" :type :task :title "Render Markdown tables with native Prax table layout, aligned columns, readable headers and preserved inline formatting and links" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Handle narrow displays and horizontal overflow; preserve selection and Markdown copying. Do not fork or patch Prax.")
+  (:id "t-compact-header" :type :task :title "Reduce the header height by six points while preserving notch avoidance, clock alignment and tab hit targets" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Verify the smaller header on desktop and laptop display layouts and at different text scales.")
+  (:id "t-mobile-full-width-replies" :type :task :title "Use full-width conversation bubbles and warnings on both phones and tablets" :state :todo
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Preserve the desktop two-thirds rule. Verify mobile wrapping, scrolling, work-detail sizing and animation scheduling without perpetual layout invalidation.")
   (:id "t-terminal-hdr-cursor" :type :task :title "Prax feedback: expose terminal cursor painting with HDR color and host-controlled pulse timing" :state :todo
    :note "The pinned terminal exposes its cursor color as PrColor8 and applies an internal on/off blink. Matching the prompt cursor requires a native rendering hook that preserves cursor visibility, shape, wide cells, composition, focus and scrollback. Do not patch the Prax dependency or mutate the shell cursor state to imitate a rendering hook.")
   (:id "t-policy-deployment-identity" :type :task :title "Stage and verify a binary and policy from one immutable commit; support compatible live previews and close them with warning-free matching packages" :state :todo)
