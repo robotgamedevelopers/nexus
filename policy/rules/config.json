@@ -227,7 +227,7 @@
     "caption_padding_x": 14.98,
     "caption_padding_y": 8.4,
     "tool_gap": 8.4,
-    "tool_chevron": true,
+    "tool_chevron": false,
     "tool_chevron_size": 16,
     "tool_chevron_gap": 8,
     "tool_chevron_ink": "#d8d8d8"
