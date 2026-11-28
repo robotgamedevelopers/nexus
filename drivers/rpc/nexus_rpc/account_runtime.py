@@ -71,6 +71,7 @@ def process_env(provider, home):
         env["CODEX_HOME"] = str(home / ".codex")
     if provider == "antigravity":
         env["TMPDIR"] = str(home / "tmp")
+        env["AGY_CLI_FORCE_FILE_TOKEN_STORAGE"] = "1"
     if provider == "muse":
         env["TBH_CREDENTIAL_BACKEND"] = "file"
     if provider == "grok":

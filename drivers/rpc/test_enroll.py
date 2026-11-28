@@ -413,12 +413,12 @@ store.mkdir(parents=True)
 class PastedCodeFlow(unittest.TestCase):
     """run_paste: the vendor's URL and the ask for its code go to the runner; the runner's one line is the code."""
 
-    def start(self, home):
+    def start(self, home, peer=PASTE_PEER):
         login = Login(
             "antigravity",
             "remote-fixture",
             home,
-            [sys.executable, "-c", PASTE_PEER],
+            [sys.executable, "-c", peer],
             process_env("antigravity", home),
         )
         self.addCleanup(login.close)
@@ -465,8 +465,20 @@ class PastedCodeFlow(unittest.TestCase):
             self.assertEqual(until(2), [GOOGLE, CODE_ASK])
             os.write(writer, b"wrong-answer\n")
             worker.join(4)
-            self.assertEqual(result, [1])
+            self.assertEqual(result, [24])
             self.assertEqual(until(2), [GOOGLE, CODE_ASK])
+            self.assertIsNone(enrolled(home, "antigravity"))
+
+    def test_rejected_exchange_has_a_safe_exit_status(self):
+        peer = PASTE_PEER.replace("print('That code was not accepted.')",
+                                  "print('oauth2: invalid_grant'); sys.exit(1)")
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            _, writer, worker, result, until = self.start(home, peer)
+            until(2)
+            os.write(writer, b"fixture\n")
+            worker.join(4)
+            self.assertEqual(result, [21])
             self.assertIsNone(enrolled(home, "antigravity"))
 
     def test_the_runner_ending_its_terminal_ends_the_enrollment(self):

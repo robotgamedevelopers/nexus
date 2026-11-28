@@ -452,6 +452,14 @@ class Login:
         self.drain()
         self.url = self.code = ""
         self.prompt = False
+        if self.provider == "antigravity":
+            # Only a fixed exit status leaves the helper. Vendor output can contain credentials.
+            if status == 0:
+                self.result = 23  # Vendor finished but Nexus could not commit its private grant.
+            elif b"invalid_grant" in self.tail:
+                self.result = 21  # Google rejected the authorization code.
+            else:
+                self.result = 22  # Vendor login failed.
         self.tail.clear()
         if status == 0 or (
             self.login_home != self.home and hasattr(self.module, "check_grant")
@@ -721,7 +729,7 @@ def run_paste(login, stdin=0, *, notify=None, deadline_s=600, clock=time.monoton
                 notify(login.url)
                 url_sent = True
             if login.prompt and code_sent:
-                return 1
+                return 24  # Vendor asked again after receiving the code.
             if url_sent and login.prompt and not asked:
                 notify(CODE_ASK)
                 asked = True
