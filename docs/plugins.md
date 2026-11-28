@@ -8,6 +8,16 @@ The [plugin test fixtures](../tests/policy/fixtures/plugins) exercise both regis
 Each open tab has its own buffer. Submitting to a service uses the existing conversation transport and requires
 the target AI in the server roster. Tabs targeting the same conversation share its latest result.
 
+## Built-in tools for every AI (planned)
+
+A person installs Nexus, adds their AIs, and can ask any of them to send a message, recall a project decision, or pick up a Sprint card. Nexus owns the AI roster, working directories, sessions and service lifetime. Each driver attaches the same server-owned tool catalog when it starts or resumes. MCP provides tool discovery and calls. A harness with a different tool protocol needs an adapter to that same catalog. See the [MCP tool contract](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
+
+The server binds the calling AI, session, workspace and grants when it opens the connection. A message tool takes the recipient and message. A Sprint tool takes the card and the requested change. Nexus supplies the sender and checks the role. The dashboard reads the same Sprint state the tools change. Credentials stay with the service that uses them. Existing Nova implementations can run behind these operations while each capability moves into the installer.
+
+**First acceptance test.** Give Emma two open sessions. Send her a message from Rowan, confirm that only her designated Nexus conversation receives it, and reply from that conversation. Restart the server between acceptance and delivery, then repeat with a different harness. Check the durable receipt and the transcript for one delivery. An external process holding Emma’s old bus lease must be surfaced during handoff. MCP carries the tool call. Nexus retains the inbox, receipt and pending delivery across harness restarts.
+
+The remaining work covers the upstream [Nova tools](https://github.com/mas-bandwidth/nova-tools/tree/07c6fed583b731a8b2c285d771136d761da68002/cmd) and [Sprint workflows](https://github.com/mas-bandwidth/nova-sprint/tree/7bfde6cbd3ab7a786706181470f25cbfeb019206/docs). The [roadmap](ROADMAP.md) tracks harness coverage, inbox migration, work tools, Sprint and the one-install check.
+
 ## Registering another type
 
 Each record in `config.json`'s `tab_types` has a unique `id`, a `title`, and a `group`. Opening the first
