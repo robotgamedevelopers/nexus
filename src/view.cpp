@@ -1757,13 +1757,11 @@ struct Builder {
         auto& group = record.groups[PrLayoutGroup_Decoration];
         auto decoration = prLayoutDecorationStyleRecord(tree, group);
         decoration.background = prColor16FromColor(rgb(look.transcriptStyle.codeFill));
+        decoration.outlineStyle = PrDrawBorderStyle_Solid;
+        decoration.outlineColor = prColor16FromColor(rgb(look.transcriptStyle.linkInk.value_or(look.tabs.selectedFill)));
+        decoration.outlineWidth = prLayoutUnitFromPx(look.transcriptStyle.pendingOutlineWidth * k());
+        decoration.outlineOffset = -decoration.outlineWidth;
         radius(decoration, std::min(look.transcriptStyle.radius, look.ui.bubble_padding_x) * k());
-        decoration.borderStyle[PrRectSide_Left] = PrDrawBorderStyle_Solid;
-        auto& boxGroup = record.groups[PrLayoutGroup_Box];
-        auto box = prLayoutBoxStyleRecord(tree, boxGroup);
-        box.border[PrRectSide_Left] = prLayoutUnitFromPx(look.transcriptStyle.codePadding * k());
-        boxGroup = prLayoutBoxStyleIntern(tree, &box);
-        decoration.borderColor[PrRectSide_Left] = prColor16FromColor(rgb(look.tabs.selectedFill));
         group = prLayoutDecorationStyleIntern(tree, &decoration);
         prLayoutTreeFrameSetStyle(tree, node, prLayoutStyleIntern(tree, &record));
         return node;
@@ -1816,11 +1814,20 @@ struct Builder {
         PrLayoutNode list = kPrLayoutNodeNone;
         size_t sourceOffset = 0;
         const bool hasQuote = source.find('>') != source.npos;
+        const auto isQuote = [&](size_t i) {
+            if (!hasQuote || i >= classified->size()) return false;
+            const auto& runs = (*classified)[i].runs;
+            return !runs.empty() && runs.front().role == PrKitTextRole_Body && runs.front().text.starts_with(quoteMark);
+        };
+        const auto punctuation = [&](PrLayoutNode text, std::string_view mark) {
+            const auto span = prKitText(kit, text, {}, textStyle(PrKitTextRole_Heading, tone));
+            ink(span, style.linkInk.value_or(look.tabs.selectedFill), true, gain);
+            prLayoutTreeFrameText(tree, span, 0, sv(mark));
+        };
         for (size_t i = 0; i < paragraphs.size(); ++i) {
             const auto& paragraph = paragraphs[i];
-            const auto& runs = (*classified)[i].runs;
-            const bool quoted = hasQuote && !runs.empty() && runs.front().role == PrKitTextRole_Body &&
-                                runs.front().text.starts_with(quoteMark);
+            const bool quoted = isQuote(i);
+            const bool opening = quoted && quote == kPrLayoutNodeNone;
             if (quoted != (quote != kPrLayoutNodeNone)) {
                 list = kPrLayoutNodeNone;
                 quote = quoted ? quoteBubble(column) : kPrLayoutNodeNone;
@@ -1844,6 +1851,7 @@ struct Builder {
                 list = kPrLayoutNodeNone;
             }
             const auto text = prKitText(kit, row, {}, body);
+            if (opening) punctuation(text, "“");
             const auto plain = sourceInk.value_or(tone == kPersonTone ? style.personInk : style.ink);
             for (const auto& run : paragraph.runs) {
                 std::string_view content = run.text;
@@ -1898,6 +1906,7 @@ struct Builder {
                 }
                 if (!run.href.empty()) view.selection.link(leaf, run.href);
             }
+            if (quoted && !isQuote(i + 1)) punctuation(text, "”");
             if (paragraph.depth) {
                 PrKitPlace content{};
                 content.minWidth = prKitPx(0);

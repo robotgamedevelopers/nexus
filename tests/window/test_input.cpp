@@ -1377,6 +1377,10 @@ void markdownQuoteBubble() {
         return prLayoutNodeParent(h.tree, prLayoutNodeParent(h.tree, span));
     };
     const auto bubble = container(first);
+    CHECK(h.hasText(bubble, "“") && h.hasText(bubble, "”"));
+    const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, bubble));
+    const auto decoration = prLayoutDecorationStyleRecord(h.tree, record.groups[PrLayoutGroup_Decoration]);
+    CHECK(decoration.outlineStyle == PrDrawBorderStyle_Solid && prLayoutUnitToPx(decoration.outlineWidth) > 0);
     CHECK(bubble == container(second) && bubble != container(literal));
     CHECK(h.bounds(bubble).left < h.bounds(first).left);
     PrLayoutRect narrow{}, wide{}, lines[16]{};
