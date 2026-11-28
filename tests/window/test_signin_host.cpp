@@ -214,6 +214,9 @@ void pastedCodeAnywhere() {
     CHECK(secrets.showing() == nullptr && f.signIn.codeAsk() == nullptr);
     f.signIn.received(offering("tokWindowA1", google, "studio", "antigravity", true));
     // Another tab's account: no ask there.
+    f.signIn.claimSessions[tab.second] = tab.first;
+    tab = {4, "antigravity-main"};
+    CHECK(secrets.showing() == nullptr);
     tab = {4, "claude-main"};
     CHECK(secrets.showing() == nullptr);
     tab = {9, "antigravity-main"};
@@ -292,6 +295,21 @@ void pastedCodeAnywhere() {
     CHECK(lost.signIn.typedCode().bytes() == code);
     lost.signIn.lost();
     CHECK(lost.signIn.typedCode().empty() && lost.signIn.codeAsk() == nullptr);
+}
+
+void unrelatedSessionCannotCancelEnrollment() {
+    Fixture f("studio", "macbook");
+    const std::string account = "antigravity-main";
+    f.signIn.claimSessions[account] = 10;
+    f.signIn.activeTab = [] { return std::pair<sync::SessionId, std::string>{11, "other"}; };
+    auto state = offering("tokWindowA1", "", "studio", "antigravity");
+    auto offers = state.offers();
+    offers.front().cancelSupported = true;
+    state.setOffers(offers);
+    f.signIn.received(state);
+    f.signIn.choose("other");
+    CHECK(f.port.sent.empty());
+    CHECK(!f.signIn.reopen(offers.front()).empty() && f.opened.empty());
 }
 
 void privateSignInPages() {
@@ -422,6 +440,7 @@ int main() {
     lostForgetsTheView();
     refusesALookalike();
     pastedCodeAnywhere();
+    unrelatedSessionCannotCancelEnrollment();
     privateSignInPages();
     deliberateSwitchOnly();
     if (failures != 0) {

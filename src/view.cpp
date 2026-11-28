@@ -838,11 +838,12 @@ struct Builder {
     }
 
     void signInFailure(PrLayoutNode parent, const SignInAccount& account) {
-        if (account.name.empty()) return;
-        if (!view.problem.empty()) {
+        if (account.name.empty() || !model.tab_count()) return;
+        const auto feedback = view.signInFeedback ? view.signInFeedback(model.tab(model.active()).id) : std::string_view{};
+        if (!feedback.empty()) {
             auto appearance = textStyle(PrKitTextRole_BodySmall, kNoticeTone, PrKitTextAlign_Center);
             appearance.wrap = PrKitWrap_Wrap;
-            caption(parent, view.problem, appearance);
+            caption(parent, feedback, appearance);
             return;
         }
         if (account.email.empty() || !model.tab_count()) return;
@@ -2021,6 +2022,10 @@ struct Builder {
             message(element(element(column, Part::ReplyRow), Part::CaptionBubble), view.helpText, EntryKind::Notice);
         if (!view.problem.empty()) {
             message(element(element(column, Part::ReplyRow), Part::CaptionBubble), view.problem, EntryKind::Notice);
+        }
+        if (view.signInFeedback && view.windowApp.signInAccount.name.empty()) {
+            const auto feedback = view.signInFeedback(tab.id);
+            if (!feedback.empty()) message(element(element(column, Part::ReplyRow), Part::CaptionBubble), feedback, EntryKind::Notice);
         }
         // How much text was cut to fit the prompt, on the tab it was cut on, there too: the transcript went to its end
         // to show it, so it stands just above the prompt.

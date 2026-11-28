@@ -309,6 +309,7 @@ struct View {
     bool energyAnimating = false;
     unsigned pendingDashStep = 0;
     bool breathing = false;                     // the last round drew a busy cursor: frames go on while it shows
+    std::function<std::string_view(std::size_t)> signInFeedback;
     std::optional<std::size_t> helpTab;
     std::string helpText;
     std::string problem;                        // why the last prompt was not sent, until one is: a dim line at the

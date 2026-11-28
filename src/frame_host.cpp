@@ -152,11 +152,12 @@ void FrameHost::takeAIs(const sync::Sessions& state) {
 void LinkSignIn::lost() {
     activeAccount.reset();
     loopback = false;
-    closeForward();
+    forwards_.clear();
     wipeCode();
     codeSent_.clear();
     codePutAway_.clear();
-    acknowledgedForward_ = 0;
+    claimSessions.clear();
+    problemAccount.clear();
     opener.lost();
     gate_.reset();
     gateFlow_ = 0;
@@ -172,7 +173,7 @@ const sync::SignInOffer* LinkSignIn::codeAsk() const {
     }
     // models/SignInPaste.tla Paste: held by this window, opened here, a code wanted, not sent from here before.
     for (const sync::SignInOffer& o : opener.view()) {
-        if (o.account == account && o.opener == opener.token() && o.codeWanted &&
+        if (ownsActiveSession(o.account) && o.account == account && o.opener == opener.token() && o.codeWanted &&
                 sync::vendorCodePage(o.provider, o.url.bytes()) && opener.opened().contains(o.id) && !codeSent_.contains(o.id) &&
                 !codePutAway_.contains(o.id)) {
             return &o;
@@ -219,6 +220,7 @@ void LinkSignIn::submitCode() {
     // byte) is never sent, and the ask stays open for the right one.
     if (!sync::isSignInCode(action.secret)) {
         wipeCode();
+        problemAccount = ask->account;
         problem = "That is not a sign-in code. Paste the code the sign-in page shows, on one line.";
         return;
     }
@@ -294,6 +296,8 @@ void LinkSignIn::pollGate() {
             opener.gateClosed();
         } else if (gate_->failed(&why)) {
             // The flow stays where it is and ends at its deadline; the window says why its browser cannot finish.
+            for (const auto& offer : opener.view())
+                if (offer.id == gateFlow_) problemAccount = offer.account;
             problem = why;
             gate_.reset();
             gateFlow_ = 0;
@@ -306,7 +310,7 @@ void LinkSignIn::choose(const std::string& account) {
     if (!port || locked) return;
     pollGate(); // A callback already received belongs to its account; never replace it with a denial.
     if (gate_ && std::any_of(opener.view().begin(), opener.view().end(), [&](const auto& o) {
-            return o.id == gateFlow_ && o.account != account;
+            return o.id == gateFlow_ && o.account != account && ownsActiveSession(o.account);
         })) {
         sync::Action received;
         if (gate_->stopAndTake(&received.secret)) {
@@ -320,7 +324,7 @@ void LinkSignIn::choose(const std::string& account) {
         gateFlow_ = 0;
     }
     for (const auto& offer : opener.view()) {
-        if (offer.cancelSupported && offer.account != account && offer.opener == opener.token()) {
+        if (ownsActiveSession(offer.account) && offer.cancelSupported && offer.account != account && offer.opener == opener.token()) {
             sync::Action cancel;
             cancel.kind = sync::ActionKind::SignInCancel;
             cancel.request = offer.id;
@@ -334,7 +338,10 @@ void LinkSignIn::choose(const std::string& account) {
         }
     }
     sync::Action action;
-    action.request = opener.cancelFor(account, &action.secret);
+    const bool otherSessionGate = std::any_of(opener.view().begin(), opener.view().end(), [&](const auto& o) {
+        return o.id == opener.gate() && !ownsActiveSession(o.account);
+    });
+    if (!otherSessionGate) action.request = opener.cancelFor(account, &action.secret);
     if (action.request) {
         action.kind = sync::ActionKind::SignInCallback;
         action.text = opener.token();
@@ -342,14 +349,14 @@ void LinkSignIn::choose(const std::string& account) {
         gate_.reset();
         gateFlow_ = 0;
     }
-    if (forward_ && std::none_of(opener.view().begin(), opener.view().end(), [&](const auto& offer) {
-            return offer.id == forwardFlow_ && offer.account == account;
-        })) closeForward();
+    for (const auto& offer : opener.view())
+        if (offer.account != account && ownsActiveSession(offer.account)) forwards_.erase(offer.id);
     activeAccount = account;
 }
 
 std::string LinkSignIn::reopen(const sync::SignInOffer& offer) {
     if (locked) return "Unlock Nexus to sign in.";
+    if (!ownsActiveSession(offer.account)) return "Continue this sign-in in the tab that started it.";
     askCodeAgain(offer.id);
     if (offer.opener != opener.token()) return "This sign-in is open in another nexus window.";
     if (offer.url.empty() || !opener.opened().contains(offer.id)) return "Opening the sign-in page…";
@@ -359,11 +366,10 @@ std::string LinkSignIn::reopen(const sync::SignInOffer& offer) {
     if (sync::usesLocalSignInPage(offer.provider) && target.port && !loopback) {
         if (!canOpenPage(offer.provider)) return "Open Nexus on the server machine to sign in.";
         problem.clear();
-        if (!forward_ || forwardFlow_ != offer.id || forward_->poll() == SignInForward::State::Failed)
-            forward_ = forwardPage(serverArg, target.port, wake);
-        forwardFlow_ = offer.id;
-        forwardUrl_ = offer.url;
-        openWhenReady_ = true;
+        auto& page = forwards_[offer.id];
+        if (!page.connection || page.connection->poll() == SignInForward::State::Failed)
+            page.connection = forwardPage(serverArg, target.port, wake);
+        page.pendingUrl = offer.url;
         pollForward();
         return problem;
     }
@@ -373,36 +379,35 @@ std::string LinkSignIn::reopen(const sync::SignInOffer& offer) {
     return {};
 }
 
-void LinkSignIn::closeForward() {
-    forward_.reset();
-    forwardUrl_.clear();
-    forwardFlow_ = 0;
-    openWhenReady_ = false;
-}
-
 void LinkSignIn::pollForward() {
-    if (!forward_) return;
     const auto& offers = opener.view();
-    const auto offer = std::find_if(offers.begin(), offers.end(), [&](const auto& o) {
-        return o.id == forwardFlow_ && o.opener == opener.token();
+    std::erase_if(forwards_, [&](auto& entry) {
+        const auto offer = std::find_if(offers.begin(), offers.end(), [&](const auto& o) {
+            return o.id == entry.first && o.opener == opener.token();
+        });
+        return offer == offers.end();
     });
-    if (offer == offers.end()) { closeForward(); return; }
-    const auto state = forward_->poll();
-    if (state == SignInForward::State::Failed) {
-        closeForward();
-        problem = "Nexus could not connect to the private sign-in page over SSH. Click the account to retry.";
-    } else if (state == SignInForward::State::Ready && openWhenReady_ &&
-               (!activeAccount || *activeAccount == offer->account)) {
-        openWhenReady_ = false;
-        if (openUrl) openUrl(forwardUrl_.bytes());
-        forwardUrl_.clear();
-        if (acknowledgedForward_ == offer->id) return;
-        acknowledgedForward_ = offer->id;
-        sync::Action action;
-        action.kind = sync::ActionKind::SignInOpened;
-        action.request = offer->id;
-        action.text = opener.token();
-        port->send(std::move(action));
+    for (auto& [id, page] : forwards_) {
+        if (!page.connection) continue;
+        const auto& offer = *std::find_if(offers.begin(), offers.end(), [&](const auto& o) { return o.id == id; });
+        const auto state = page.connection->poll();
+        if (state == SignInForward::State::Failed) {
+            page.connection.reset();
+            page.pendingUrl.clear();
+            problemAccount = offer.account;
+            problem = "Nexus could not connect to the private sign-in page over SSH. Click the account to retry.";
+        } else if (state == SignInForward::State::Ready && !page.pendingUrl.empty() &&
+                   ownsActiveSession(offer.account) && (!activeAccount || *activeAccount == offer.account)) {
+            if (openUrl) openUrl(page.pendingUrl.bytes());
+            page.pendingUrl.clear();
+            if (page.acknowledged) continue;
+            page.acknowledged = true;
+            sync::Action action;
+            action.kind = sync::ActionKind::SignInOpened;
+            action.request = id;
+            action.text = opener.token();
+            port->send(std::move(action));
+        }
     }
 }
 
@@ -410,6 +415,7 @@ void LinkSignIn::step() {
     if (port == nullptr || locked) return;
     pollGate();
     pollForward();
+    if (activeAccount && !ownsActiveSession(*activeAccount)) return;
     sync::SignInOpener::Step next = opener.next(browserCanReachPage, this, activeAccount ? &*activeAccount : nullptr);
     if (next.kind == sync::SignInOpener::Step::Kind::Claim) {
         sync::Action action;
@@ -417,17 +423,18 @@ void LinkSignIn::step() {
         action.pastesCode = true;
         action.request = next.id;
         action.text = opener.token();
+        if (activeTab) claimSessions[next.account] = activeTab().first;
         port->send(std::move(action));
     } else if (next.kind == sync::SignInOpener::Step::Kind::Refused) {
         // The window's own check of the page's host (sync::parseSignInUrl): nothing is opened, and the flow ends at its
         // deadline. The URL is never shown.
+        problemAccount = next.account;
         problem = next.account + "'s sign-in address failed validation. Restart sign-in on the server.";
     } else if (next.kind == sync::SignInOpener::Step::Kind::Open) {
         if (!loopback && next.privatePage) {
-            forwardFlow_ = next.id;
-            forwardUrl_ = std::move(next.url);
-            openWhenReady_ = true;
-            forward_ = forwardPage(serverArg, next.target.port, wake);
+            auto& page = forwards_[next.id];
+            page.pendingUrl = std::move(next.url);
+            page.connection = forwardPage(serverArg, next.target.port, wake);
             pollForward();
             return;
         }
@@ -509,8 +516,11 @@ void FrameHost::pollLink() {
                         if (choice.name == name) return choice.needsSignIn;
                 return {};
             };
-            if (needed(accountState_) == true && needed(s.sessions) == false)
+            if (needed(accountState_) == true && needed(s.sessions) == false) {
+                const auto owner = signIn.claimSessions.find(name);
+                if (owner != signIn.claimSessions.end()) signInFeedback_.erase(owner->second);
                 view->chirp(view->windowApp.surface.readyChirp);
+            }
         }
         if (phase == sync::LinkPhase::Connected) {
             for (const auto& session : s.sessions.sessions()) {
@@ -565,6 +575,7 @@ void FrameHost::pollLink() {
             }
         } else {
             pendingClaims_.clear();
+            signInFeedback_.clear();
             signIn.lost();
         }
     }
@@ -602,6 +613,7 @@ const SecretAsk* LinkSecrets::showing() {
     if (const sync::SignInOffer* ask = signIn != nullptr ? signIn->codeAsk() : nullptr) {
         code_ = true;
         if (shown_.id != (ask->id | kCodeAsk)) {
+            signIn->typeCode({});
             shown_ = SecretAsk{ask->id | kCodeAsk, ask->account, "sign-in code", std::string(),
                                "Paste the code the sign-in page showed after you signed in, then press Enter."};
         }
@@ -709,15 +721,19 @@ std::optional<std::string> FrameHost::signInTarget() const {
     return choice->name;
 }
 
+sync::SessionId FrameHost::selectedSession() const {
+    return model->tab_count() ? mirror.session(model->tab(model->active()).id) : 0;
+}
+
 bool FrameHost::activateSignIn() {
     if (loginPreparation_) {
-        view->problem = "Finish or cancel the account switch before signing in.";
+        signInFeedback_[selectedSession()] = "Finish or cancel the account switch before signing in.";
         return true;
     }
     if (view->accountPicker) return true;
     if (!link) return false;
     if (model->tab_count() && accountSelections_.contains(mirror.session(model->tab(model->active()).id))) {
-        view->problem = "Switching accounts. Your draft is kept. Press Enter when the selected account appears.";
+        signInFeedback_[selectedSession()] = "Switching accounts. Your draft is kept. Press Enter when the selected account appears.";
         return true;
     }
     const auto* choice = activeChoice();
@@ -725,31 +741,35 @@ bool FrameHost::activateSignIn() {
     const auto* offer = offerFor(choice->name);
     if (!choice->needsSignIn && !offer) return false;
     if (phase != sync::LinkPhase::Connected) {
-        view->problem = "Reconnect to the Nexus server to sign in. Your draft is kept.";
+        signInFeedback_[selectedSession()] = "Reconnect to the Nexus server to sign in. Your draft is kept.";
         return true;
     }
     const auto session = mirror.session(model->tab(model->active()).id);
     const auto* current = accountState_.find(session);
     if (!current) return false;
     if (sync::usesLocalSignInPage(current->info.harness) && !signIn.canOpenPage(current->info.harness)) {
-        view->problem = "Open Nexus on the server machine to sign in to " + choice->name + ". Your draft is kept.";
+        signInFeedback_[selectedSession()] = "Open Nexus on the server machine to sign in to " + choice->name + ". Your draft is kept.";
         return true;
     }
     if (offer && !offer->opener.empty()) {
         if (offer->opener != signIn.opener.token()) {
-            view->problem = "This sign-in is open in another nexus window.";
+            signInFeedback_[selectedSession()] = "This sign-in is open in another nexus window.";
+            return true;
+        }
+        if (!signIn.ownsActiveSession(choice->name)) {
+            signInFeedback_[session] = "Continue this sign-in in the tab that started it.";
             return true;
         }
         signIn.choose(choice->name);
-        view->problem = signIn.reopen(*offer);
+        signInFeedback_[selectedSession()] = signIn.reopen(*offer);
         return true;
     }
     signIn.choose(choice->name);
     if (pendingClaims_.contains(choice->name)) {
-        view->problem = "Waiting for the server to open sign-in…";
+        signInFeedback_[selectedSession()] = "Waiting for the server to open sign-in…";
         return true;
     }
-    view->problem.clear();
+    signInFeedback_[selectedSession()].clear();
     sync::Action action;
     action.kind = sync::ActionKind::SignInClaim;
     action.pastesCode = true;
@@ -758,6 +778,7 @@ bool FrameHost::activateSignIn() {
     action.request = offer ? offer->id : 0;
     action.text = signIn.opener.token();
     const auto flow = action.request;
+    signIn.claimSessions[choice->name] = session;
     pendingClaims_[choice->name] = {flow, link->send(std::move(action))};
     return true;
 }
@@ -858,17 +879,18 @@ std::uint64_t FrameHost::claimAccount(sync::SessionId session, const std::string
     action.session = session;
     action.request = 0;
     action.text = signIn.opener.token();
+    signIn.claimSessions[account] = session;
     return link->send(std::move(action));
 }
 
 // An explicit /login retires the previous saved login before selecting and enrolling the requested account.
 void FrameHost::startLogin(const std::string& account) {
     if (!link || phase != sync::LinkPhase::Connected || !model->tab_count()) {
-        view->problem = "Reconnect to the Nexus server to sign in.";
+        signInFeedback_[selectedSession()] = "Reconnect to the Nexus server to sign in.";
         return;
     }
     if (loginPreparation_) {
-        view->problem = "Finish or cancel the current account switch first.";
+        signInFeedback_[selectedSession()] = "Finish or cancel the current account switch first.";
         return;
     }
     const auto session = mirror.session(model->tab(model->active()).id);
@@ -883,21 +905,21 @@ void FrameHost::startLogin(const std::string& account) {
         return;
     }
     if (!accountState_.nextAction()) {
-        view->problem = "Update the Nexus server before switching logins; this server cannot confirm account actions.";
+        signInFeedback_[selectedSession()] = "Update the Nexus server before switching logins; this server cannot confirm account actions.";
         return;
     }
     if (sync::usesLocalSignInPage(current->info.harness) && !signIn.canOpenPage(current->info.harness)) {
-        view->problem = "Open Nexus on the server machine to sign in to " + accountShownAs(*target) + ".";
+        signInFeedback_[selectedSession()] = "Open Nexus on the server machine to sign in to " + accountShownAs(*target) + ".";
         return;
     }
     for (const auto& name : {current->info.account, account}) {
         const auto* offer = offerFor(name);
         if (offer && !offer->opener.empty() && offer->opener != signIn.opener.token()) {
-            view->problem = "Finish this account's sign-in in the other Nexus window first.";
+            signInFeedback_[selectedSession()] = "Finish this account's sign-in in the other Nexus window first.";
             return;
         }
         if (offer && !offer->opener.empty() && offer->id != signIn.opener.gate() && !offer->cancelSupported) {
-            view->problem = "A sign-in is still starting or finishing. Wait for its result, then retry /login.";
+            signInFeedback_[selectedSession()] = "A sign-in is still starting or finishing. Wait for its result, then retry /login.";
             return;
         }
     }
@@ -906,7 +928,7 @@ void FrameHost::startLogin(const std::string& account) {
     signIn.choose(""); // Preserve an accepted callback; otherwise cancel the previous browser flow.
     loginPreparation_.emplace(LoginPreparationState{session, current->info.account, account,
         LoginPreparation(current->info.harness == "claude")});
-    view->problem = "Signing out before switching accounts…";
+    signInFeedback_[selectedSession()] = "Signing out before switching accounts…";
     prepareLogin();
 }
 
@@ -966,7 +988,7 @@ void FrameHost::prepareLogin(bool browserConfirmed) {
         p.action = link->send(std::move(action));
         accountSelections_[p.session] = p.action;
     } else if (after == Phase::Browser) {
-        view->problem.clear();
+        signInFeedback_[p.session].clear();
         view->accounts.dialog = AccountMenuView::Dialog::BrowserLogout;
         view->accounts.dialogTab = model->tab(model->active()).id;
         view->accounts.dialogShown = false;
@@ -977,16 +999,17 @@ void FrameHost::prepareLogin(bool browserConfirmed) {
         view->accounts.dialog = AccountMenuView::Dialog::None;
         enrollSelected(account);
     } else if (after == Phase::Failed) {
+        const auto owner = p.session;
         loginPreparation_.reset();
         view->accounts.dialog = AccountMenuView::Dialog::None;
-        view->problem = "The account switch stopped because the server did not confirm it or the selection changed. "
+        signInFeedback_[owner] = "The account switch stopped because the server did not confirm it or the selection changed. "
                         "Check the latest notice, then retry /login.";
     }
 }
 
 void FrameHost::enrollSelected(const std::string& account) {
     if (!link || phase != sync::LinkPhase::Connected || !model->tab_count()) {
-        view->problem = "Reconnect to the Nexus server to sign in.";
+        signInFeedback_[selectedSession()] = "Reconnect to the Nexus server to sign in.";
         return;
     }
     const auto session = mirror.session(model->tab(model->active()).id);
@@ -996,22 +1019,22 @@ void FrameHost::enrollSelected(const std::string& account) {
     const auto it = std::find_if(roster->accounts.begin(), roster->accounts.end(),
                                  [&](const auto& a) { return a.name == account; });
     if (it == roster->accounts.end() || !pickable(*it)) return;
-    if (!it->needsSignIn) { view->problem.clear(); return; }
+    if (!it->needsSignIn) { signInFeedback_[selectedSession()].clear(); return; }
     if (current->info.account != account) return;
     if (sync::usesLocalSignInPage(current->info.harness) && !signIn.canOpenPage(current->info.harness)) {
-        view->problem = "Open Nexus on the server machine to sign in to " + accountShownAs(*it) + ".";
+        signInFeedback_[selectedSession()] = "Open Nexus on the server machine to sign in to " + accountShownAs(*it) + ".";
         return;
     }
     const auto* offer = offerFor(account);
     if (offer && !offer->opener.empty() && offer->opener != signIn.opener.token()) {
-        view->problem = "This sign-in is open in another nexus window.";
+        signInFeedback_[selectedSession()] = "This sign-in is open in another nexus window.";
         return;
     }
     pendingLogin_ = std::make_pair(session, account);
     signIn.choose(account);
-    view->problem = "Signing in to " + accountShownAs(*it) + "…";
+    signInFeedback_[selectedSession()] = "Signing in to " + accountShownAs(*it) + "…";
     if (offer && offer->opener == signIn.opener.token()) {
-        view->problem = signIn.reopen(*offer);
+        signInFeedback_[selectedSession()] = signIn.reopen(*offer);
         return;
     }
     if (pendingClaims_.contains(account)) return;
@@ -1037,7 +1060,7 @@ void FrameHost::settleLogin() {
     }
     if (session->info.account == account && !choice->needsSignIn) {
         pendingLogin_.reset();
-        view->problem.clear();
+        signInFeedback_[id].clear();
         return;
     }
     const auto* offer = offerFor(account);
@@ -1045,7 +1068,7 @@ void FrameHost::settleLogin() {
             (!offer || offer->opener != signIn.opener.token())) {
         pendingClaims_.erase(account);
         pendingLogin_.reset();
-        view->problem = "The sign-in to " + accountShownAs(*choice) + " did not finish. This account remains selected; retry /login.";
+        signInFeedback_[id] = "The sign-in to " + accountShownAs(*choice) + " did not finish. This account remains selected; retry /login.";
     }
 }
 
@@ -1078,12 +1101,13 @@ void FrameHost::wireAccountMenu() {
     view->browserLogoutConfirmed = [this] { prepareLogin(true); };
     view->cancelLoginPreparation = [this] {
         if (!loginPreparation_) return;
+        const auto owner = loginPreparation_->session;
         loginPreparation_.reset();
-        view->problem = "Sign-in cancelled. The previous saved login is not restored.";
+        signInFeedback_[owner] = "Sign-in cancelled. The previous saved login is not restored.";
     };
     view->openBrowserLogout = [this] {
         if (signIn.openUrl) signIn.openUrl("https://claude.ai/");
-        else view->problem = "Open claude.ai in your browser and sign out before continuing.";
+        else signInFeedback_[selectedSession()] = "Open claude.ai in your browser and sign out before continuing.";
     };
     view->logoutTarget = [this](std::string& account, std::string& shown, std::string& next) {
         if (!link || phase != sync::LinkPhase::Connected) {
@@ -1188,6 +1212,10 @@ void FrameHost::wire() {
             if (!saveKeptChange(*keptStore, KeptChange{host, {{tab.name, tab.draft}}, {}}, &error))
                 std::fprintf(stderr, "nexus: %s\n", error.c_str());
         }
+    };
+    view->signInFeedback = [this](std::size_t tab) -> std::string_view {
+        const auto found = signInFeedback_.find(mirror.session(tab));
+        return found == signInFeedback_.end() ? std::string_view{} : std::string_view(found->second);
     };
     view->activateSignIn = [this]() { return activateSignIn(); };
     view->clearOpen = [this](std::size_t tab) { mirror.clearOpen(tab); };
@@ -1454,7 +1482,9 @@ void FrameHost::pollBackground() {
     else if (!view->lockScreen) signIn.unlock();
     signIn.step();
     if (!signIn.problem.empty()) {
-        view->problem = std::move(signIn.problem);
+        const auto owner = signIn.claimSessions.find(signIn.problemAccount);
+        if (owner != signIn.claimSessions.end()) signInFeedback_[owner->second] = std::move(signIn.problem);
+        signIn.problemAccount.clear();
         signIn.problem.clear();
     }
 }

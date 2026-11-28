@@ -101,6 +101,12 @@ public:
     std::function<void()> wake;         // post an app wake when the browser callback arrives, even while hidden
     // Where the gate comes from: a test seam; empty: a SignInGate.
     std::function<std::unique_ptr<SignInGate>(const sync::SignInTarget&)> openGate;
+    std::map<std::string, sync::SessionId> claimSessions;
+    std::string problemAccount;
+    bool ownsActiveSession(const std::string& account) const {
+        const auto found = claimSessions.find(account);
+        return found == claimSessions.end() || (activeTab && found->second == activeTab().first);
+    }
     std::string problem;                // the last gate's failure, for the view's problem line; cleared when shown
 
     // The state's offers as the link last brought them, or the link lost.
@@ -114,7 +120,7 @@ public:
     void shown() { opener.shown(); }
     // The client lock locked the window (client_lock.h): the claim a show allowed is taken back, and no step runs (no
     // claim, no URL opened, no callback sent up) until it is unlocked; the owner's next show allows one again.
-    void lock() { locked = true; opener.hidden(); closeForward(); wipeCode(); }
+    void lock() { locked = true; opener.hidden(); forwards_.clear(); wipeCode(); }
     void unlock() { locked = false; }
     bool locked = false;
     // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open. None
@@ -144,12 +150,12 @@ private:
                                                         // after the server refused it (received)
     std::set<std::uint64_t> codePutAway_;
     void pollForward();
-    void closeForward();
-    sync::SecretValue forwardUrl_;
-    std::unique_ptr<SignInForward> forward_;
-    std::uint64_t forwardFlow_ = 0;
-    std::uint64_t acknowledgedForward_ = 0;
-    bool openWhenReady_ = false;
+    struct ForwardedPage {
+        std::unique_ptr<SignInForward> connection;
+        sync::SecretValue pendingUrl;
+        bool acknowledged = false;
+    };
+    std::map<std::uint64_t, ForwardedPage> forwards_;
     std::unique_ptr<SignInGate> gate_;
     std::uint64_t gateFlow_ = 0;
 };
@@ -281,6 +287,8 @@ private:
     LimitOffer currentLimit() const;
     std::optional<std::pair<sync::SessionId, std::string>> signInSelection_;
     struct PendingClaim { std::uint64_t flow, action; };
+    sync::SessionId selectedSession() const;
+    std::map<sync::SessionId, std::string> signInFeedback_;
     std::map<std::string, PendingClaim> pendingClaims_; // until the offer changes or this link ends
     // /login after preparation: the selected session/account waiting for verified enrollment.
     std::optional<std::pair<sync::SessionId, std::string>> pendingLogin_;

@@ -373,6 +373,30 @@ void remoteSignInCardClaimsTheSelectedAccount() {
     }
 }
 
+void signInFeedbackStaysInItsSession() {
+    Window w("emma");
+    auto emma = std::make_shared<sync::SessionView>();
+    emma->id = 10;
+    emma->info = {"emma", "antigravity", "personal", "", ""};
+    auto rowan = std::make_shared<sync::SessionView>();
+    rowan->id = 11;
+    rowan->info = {"rowan", "claude", "other", "", ""};
+    w.link.state.phase = sync::LinkPhase::Connected;
+    w.link.state.loopback = true;
+    w.link.state.sessions = sync::Sessions({emma, rowan});
+    w.link.state.sessions.setAIs({{"emma", {{"personal", "", true}}}, {"rowan", {{"other", "", false}}}});
+    w.link.changed = true;
+    w.host.pollLink();
+    w.view.accountAction("sign_in:personal");
+    w.view.accountAction("sign_in:personal");
+    const auto owner = w.model.tab(w.tabOf("emma")).id;
+    CHECK(w.view.signInFeedback(owner).find("Waiting") != std::string_view::npos);
+    CHECK(w.model.select_tab(w.tabOf("rowan")));
+    w.round();
+    CHECK(w.view.signInFeedback(w.model.tab(w.model.active()).id).empty() && w.view.problem.empty());
+    CHECK(w.view.signInFeedback(owner).find("Waiting") != std::string_view::npos);
+}
+
 void enterDuringAccountSwitchWaitsForServerState() {
     Window w("chat");
     auto session = std::make_shared<sync::SessionView>();
@@ -647,6 +671,7 @@ int main() {
     remoteLoginSwitchAndRetry(false);
     remoteLoginSwitchAndRetry(true);
     remoteSignInCardClaimsTheSelectedAccount();
+    signInFeedbackStaysInItsSession();
     enterDuringAccountSwitchWaitsForServerState();
     logoutUsesTheConfirmedAccountAndReturnsToSignIn();
     savedStateShowsTheSelectedEmailWithoutStartingSignIn();
