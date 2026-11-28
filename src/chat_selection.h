@@ -20,6 +20,7 @@ template<class F> void textNodes(PrLayoutTree* tree, PrLayoutNode root, const F&
 
 class ChatSelection {
 public:
+    void clear();
     void begin(PrLayoutTree* tree, size_t tab);
     void paragraph(PrLayoutNode root, PrColor16 ink);
     void link(PrLayoutNode leaf, const std::string& url);

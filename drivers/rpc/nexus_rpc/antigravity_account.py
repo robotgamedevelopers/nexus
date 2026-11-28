@@ -34,7 +34,8 @@ Reply to the conversation using the AI's supplied standing instructions.
 
 # This private CLI settings file also guards file access if a saved session used another agent.
 _SETTINGS = json.dumps({"permissions": {"deny": [
-    "read_file(*)", "write_file(*)", "command(*)", "mcp(*)", "read_url(*)", "execute_url(*)",
+    "read_file(*)", "write_file(*)", "command(*)", "read_url(*)", "execute_url(*)",
+    "mcp(*)",
 ]}}) + "\n"
 
 # system.sb supplies dyld, system frameworks and certificate trust. No generic subprocess,
@@ -100,7 +101,7 @@ def _write_config(fd, name, content):
             pass
 
 
-def _command(binary, home: Path, *, login):
+def _command(binary, home: Path, *, login, project_socket=None, cwd=None):
     if not SUPPORTS_LIMIT:
         raise ValueError("Isolated Antigravity accounts require the macOS sandbox on Studio.")
     executable = Path(binary).resolve(strict=True)
@@ -114,22 +115,28 @@ def _command(binary, home: Path, *, login):
     data = home / ".gemini"
     paths = {"ACCOUNT": home, "BINARY": executable, "DATA": data, "ROOM": home / "room",
              "TMP": home / "tmp"}
+    profile = _PROFILE
+    if project_socket:
+        paths["ROOM"] = Path(cwd)
+        paths["SOCKET"] = project_socket
+        profile += '\n(allow process-exec file-read* file-map-executable (literal "/usr/bin/nc"))\n'
+        profile += '(allow network-outbound (literal (param "SOCKET")))\n'
     command = ["/usr/bin/sandbox-exec"]
     for key, path in paths.items():
         command.extend(["-D", f"{key}={path}"])
-    command.extend(["-p", _PROFILE, str(executable), "acp", "--disable-telemetry",
+    command.extend(["-p", profile, str(executable), "acp", "--disable-telemetry",
                     "--gemini-dir", str(data)])
     if login:
         return [*command, "--login"]
-    return [*command, "--agent", "nexus-dialogue", "--sandbox"]
+    return [*command, "--agent", "nexus-project" if project_socket else "nexus-dialogue", "--sandbox"]
 
 
 def login_command(binary, home: Path) -> list[str]:
     return _command(binary, home, login=True)
 
 
-def chat_command(binary, home: Path, cwd: str) -> list[str]:
-    return _command(binary, home, login=False)
+def chat_command(binary, home: Path, cwd: str, *, project_socket=None) -> list[str]:
+    return _command(binary, home, login=False, project_socket=project_socket, cwd=cwd)
 
 
 _MAX_GRANT = 1024 * 1024
@@ -151,6 +158,9 @@ def _grant(directory, *, seal=False):
             record = json.loads(raw)
         except (ValueError, UnicodeError, RecursionError):
             raise ValueError("Antigravity did not finish writing the Google login.") from None
+        # Current agy stores the OAuth token inside an envelope. Older versions wrote it directly.
+        if isinstance(record, dict) and "token" in record:
+            record = record["token"]
         token = record.get("access_token") if isinstance(record, dict) else None
         if not isinstance(token, str) or not token:
             raise ValueError("Antigravity did not finish writing the Google login.")

@@ -12,6 +12,8 @@
 // thread (tab_order.h asyncStore). The client runs at 120 Hz with an 8.3 ms budget (AGENTS.md).
 
 #pragma once
+
+#include "signin_forward.h"
 #include <future>
 
 #include <cstdint>
@@ -58,19 +60,27 @@ std::string loggable(std::string_view text);
 // alone while it is typed, then in the one action that carries it to the server, which the link's thread hands to mosh
 // and which is wiped once the server has acknowledged it. Nothing here waits: submit and cancel hand the action to the
 // port.
+class LinkSignIn;
+
 class LinkSecrets : public Secrets {
 public:
     LinkPort* port = nullptr;
     sync::SecretPrompt prompt;
+    LinkSignIn* signIn = nullptr;       // its code ask, when it has one, shows first
 
     const SecretAsk* showing() override;
-    std::string_view typed() override { return prompt.typed().bytes(); }
-    void type(std::string_view text) override { prompt.type(text); }
+    std::string_view typed() override;
+    void type(std::string_view text) override;
     void submit() override;
     void cancel() override;
 
+    // The bit a code ask's SecretAsk::id carries, so that it never equals a secret request's id (the dialog opens afresh
+    // on a new id).
+    static constexpr std::uint64_t kCodeAsk = std::uint64_t{1} << 63;
+
 private:
     SecretAsk shown_;
+    bool code_ = false;                 // what showing() last gave is the sign-in code's ask
 };
 
 // In-app sign-in over the link (docs/secrets.md "Sign-in"): the server offers each account that needs signing in, and a
@@ -91,16 +101,26 @@ public:
     std::function<void()> wake;         // post an app wake when the browser callback arrives, even while hidden
     // Where the gate comes from: a test seam; empty: a SignInGate.
     std::function<std::unique_ptr<SignInGate>(const sync::SignInTarget&)> openGate;
+    std::map<std::string, sync::SessionId> claimSessions;
+    std::string problemAccount;
+    bool ownsActiveSession(const std::string& account) const {
+        const auto found = claimSessions.find(account);
+        return found == claimSessions.end() || (activeTab && found->second == activeTab().first);
+    }
     std::string problem;                // the last gate's failure, for the view's problem line; cleared when shown
 
     // The state's offers as the link last brought them, or the link lost.
-    void received(const sync::Sessions& state) { opener.received(state.offers()); }
+    void received(const sync::Sessions& state);
     void lost();
+    std::function<std::unique_ptr<SignInForward>(const std::string&, std::uint16_t, bool, std::function<void()>)> forwardPage;
+    bool canOpenPage(std::string_view provider) const {
+        return loopback || (forwardPage && (provider == "codex" || provider == "antigravity"));
+    }
     // The overlay was shown: the window may claim one flow.
     void shown() { opener.shown(); }
     // The client lock locked the window (client_lock.h): the claim a show allowed is taken back, and no step runs (no
     // claim, no URL opened, no callback sent up) until it is unlocked; the owner's next show allows one again.
-    void lock() { locked = true; opener.hidden(); }
+    void lock() { locked = true; opener.hidden(); forwards_.clear(); wipeCode(); }
     void unlock() { locked = false; }
     bool locked = false;
     // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open. None
@@ -110,10 +130,32 @@ public:
     void choose(const std::string& account);
     // Reopen an owned page on explicit retry. A page not opened yet is handled by step().
     std::string reopen(const sync::SignInOffer& offer);
+    const sync::SignInOffer* codeAsk() const;
+    const sync::SecretValue& typedCode() const { return typed_; }
+    void typeCode(std::string_view text);
+    void submitCode();
+    void dismissCode();
+    void askCodeAgain(std::uint64_t id);
+    bool codeSent(std::uint64_t id) const { return codeSent_.contains(id); }
+
+    std::function<std::pair<sync::SessionId, std::string>()> activeTab;
     bool gateOpen() const { return gate_ != nullptr; }
 
 private:
     void pollGate();
+    void wipeCode();
+    sync::SecretValue typed_;
+    std::uint64_t typedFor_ = 0;        // the flow the field's text was typed for
+    std::map<std::uint64_t, std::uint64_t> codeSent_;   // flow -> the action that sent its code; asked again only
+                                                        // after the server refused it (received)
+    std::set<std::uint64_t> codePutAway_;
+    void pollForward();
+    struct ForwardedPage {
+        std::unique_ptr<SignInForward> connection;
+        sync::SecretValue pendingUrl;
+        bool acknowledged = false;
+    };
+    std::map<std::uint64_t, ForwardedPage> forwards_;
     std::unique_ptr<SignInGate> gate_;
     std::uint64_t gateFlow_ = 0;
 };
@@ -243,11 +285,17 @@ private:
     struct LimitSelection { uint64_t request, action; };
     std::map<sync::SessionId, LimitSelection> limitSelections_;
     LimitOffer currentLimit() const;
-    std::optional<std::pair<sync::SessionId, std::string>> signInSelection_;
-    std::map<std::string, std::uint64_t> pendingClaims_; // until the offer changes or this link ends
+    std::map<sync::SessionId, std::string> signInSelections_;
+    struct PendingClaim { std::uint64_t flow, action; };
+    sync::SessionId selectedSession() const;
+    std::map<sync::SessionId, std::string> signInFeedback_;
+    std::map<std::string, PendingClaim> pendingClaims_; // until the offer changes or this link ends
     // /login after preparation: the selected session/account waiting for verified enrollment.
-    std::optional<std::pair<sync::SessionId, std::string>> pendingLogin_;
-    std::uint64_t pendingLoginAction_ = 0;
+    struct PendingLogin {
+        std::string account;
+        std::uint64_t action = 0;
+    };
+    std::map<sync::SessionId, PendingLogin> pendingLogins_;
     struct LoginPreparationState {
         sync::SessionId session;
         std::string previous, target;
@@ -255,7 +303,7 @@ private:
         std::uint64_t action = 0, noticeFrom = 0;
         bool signedOut = false;
     };
-    std::optional<LoginPreparationState> loginPreparation_;
+    std::map<sync::SessionId, LoginPreparationState> loginPreparations_;
     void prepareLogin(bool browserConfirmed = false);
     void enrollSelected(const std::string& account);
     std::string logoutNext_;    // /logout: the account the AI moves to after, chosen as the dialog opened

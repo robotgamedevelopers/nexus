@@ -144,6 +144,7 @@ table SignInOffer
     host     *string
     url      *bytes
     cancel_supported bool
+    code_wanted bool
 }
 
 // A dashboard the server offers (sync/dashboards.h): the tab's name and the page's address.
@@ -199,7 +200,8 @@ enum ActionKind
     SignInCallback,
     SignOut,
     ResolveLimit
-    SignInCancel
+    SignInCancel,
+    SignInCode
     Rename
 }
 
@@ -217,6 +219,7 @@ table Action
     account     *string
     request     uint64
     secret      *bytes
+    pastes_code bool
     note        *string
 }
 

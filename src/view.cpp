@@ -33,6 +33,53 @@ namespace {
 
 using namespace style;
 
+std::string_view lastPathComponent(std::string_view path) {
+    auto end = path.find_last_not_of("/\\");
+    if (end == path.npos || path.empty() || path.front() == '{' || path.front() == '[') return {};
+    path = path.substr(0, end + 1);
+    return path.substr(path.find_last_of("/\\") + 1);
+}
+
+// Read the filename from a simple tail command for display. Never interpret or run the command.
+std::string tailFilename(std::string_view command) {
+    if (!command.starts_with("tail ")) return {};
+    std::string word, file;
+    char quote = 0;
+    bool skipCount = false;
+    for (std::size_t i = 5; i <= command.size(); ++i) {
+        const char c = i < command.size() ? command[i] : ' ';
+        if (quote && c == quote) { quote = 0; continue; }
+        if (!quote && (c == '\'' || c == '"')) { quote = c; continue; }
+        if (c == '\\' && quote != '\'' && i + 1 < command.size()) { word += command[++i]; continue; }
+        const bool stop = !quote && (c == '|' || c == ';' || c == '&');
+        if (quote || (!stop && c != ' ' && c != '\t')) { word += c; continue; }
+        if (!word.empty()) {
+            if (skipCount) skipCount = false;
+            else if (word == "-n" || word == "-c") skipCount = true;
+            else if (word[0] != '-') {
+                if (!file.empty()) return {};
+                file = lastPathComponent(word);
+            }
+            word.clear();
+        }
+        if (stop) break;
+    }
+    return quote ? std::string{} : file;
+}
+
+std::string compactToolLabel(std::string_view format, std::string_view detail) {
+    const auto start = format.find('{');
+    if (start == format.npos) return std::string(format);
+    const auto field = format.substr(start);
+    std::string value;
+    if (field == "{filename}") value = lastPathComponent(detail);
+    else if (field == "{tail_file}") value = tailFilename(detail);
+    else if (field == "{selection}" && detail.starts_with("select:")) value = detail.substr(7);
+    auto label = std::string(format.substr(0, start));
+    if (value.empty() && label.ends_with(' ')) label.pop_back();
+    return label + value;
+}
+
 // Dedicated theme slots for independently configurable app text. Each uses the kit's UI font.
 constexpr PrKitTextRole kSelectedTabRole = PrKitTextRole_MonoStrong;
 constexpr PrKitTextRole kTabRole = PrKitTextRole_MonoNum;
@@ -144,6 +191,7 @@ struct BoxRecipe {
     static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
     Part part;
     int16_t steps;
+    bool flushTop = false;
 
     void make(const Look& look, PrLayoutBoxStyle& box) const {
         const float k = look.ui.scale(steps);
@@ -162,6 +210,7 @@ struct BoxRecipe {
                 box.overflowY = PrLayoutOverflow_Scroll;
                 if (look.transcriptStyle.conversationPanel) {
                     box.width = prLayoutLengthPercent(look.prompt.width);
+                    if (!flushTop) box.margin[PrRectSide_Top] = px(look.ui.footer_padding * k);
                     box.margin[PrRectSide_Left] = box.margin[PrRectSide_Right] = prLayoutLengthAuto();
                 }
                 // At the end, the transcript follows it (prUiFollowEnd), and the items in sight slide as entries arrive:
@@ -177,7 +226,8 @@ struct BoxRecipe {
                 box.minHeight = prLayoutLengthPercent(100);
                 box.margin[PrRectSide_Left] = prLayoutLengthAuto();
                 box.margin[PrRectSide_Right] = prLayoutLengthAuto();
-                padding(box, look.ui.column_inset * k, 0, 0, 0);
+                if (part == Part::Column) padding(box, look.ui.column_inset * k, 0, 0, 0);
+                if (flushTop) padding(box, look.ui.footer_padding * k, 0, 0, 0);
                 break;
             case Part::AssistantMessage:
                 box.display = PrLayoutDisplay_Block;
@@ -324,6 +374,7 @@ struct DecorationRecipe {
     static constexpr PrLayoutGroup kKind = PrLayoutGroup_Decoration;
     Part part;
     int16_t steps;
+    bool flushTop = false;
 
     void make(const Look& look, PrLayoutDecorationStyle& d) const {
         const float k = look.ui.scale(steps);
@@ -335,15 +386,16 @@ struct DecorationRecipe {
             case Part::TranscriptAtEnd:
                 if (look.flags.opaque_history_backdrop)
                     d.background = prColor16FromColor(rgb(look.colors.background));
-                // The lower edge stays in place while the top of the conversation scrolls with history.
+                // The viewport owns the border so all four edges stay visible while history scrolls.
                 if (look.transcriptStyle.conversationPanel) {
-                    for (const auto corner : {PrRectCorner_BottomLeft, PrRectCorner_BottomRight})
-                        d.radii[2 * corner] = d.radii[2 * corner + 1] = px(look.transcriptStyle.radius * k);
+                    d.background = prColor16FromColor(rgb(look.transcriptStyle.panelFill.value_or(look.tabs.fill)));
+                    d.outlineStyle = PrDrawBorderStyle_Solid;
+                    d.outlineColor = prColor16FromColor(rgb(look.colors.output_border));
+                    d.outlineWidth = prLayoutUnitFromPx(look.ui.output_border_width);
+                    d.outlineOffset = prLayoutUnitFromPx(-look.ui.output_border_width);
+                    radius(d, look.transcriptStyle.radius * k);
+                    if (flushTop) std::fill_n(d.radii, 4, px(0)); // Both axes of the two upper corners.
                 }
-                break;
-            case Part::Conversation:
-                d.background = prColor16FromColor(rgb(look.transcriptStyle.panelFill.value_or(look.tabs.fill)));
-                radius(d, look.transcriptStyle.radius * k);
                 break;
             case Part::TabDivider:
                 d.background = prColor16FromColor(rgb(look.tabs.divider));
@@ -413,6 +465,8 @@ struct FlexRecipe {
                 flex.basis = px(0);
                 break;
             case Part::Conversation:
+                flex.grow = 1;
+                [[fallthrough]];
             case Part::PanelColumn:
             case Part::Column:
                 flex.direction = PrLayoutFlexDirection_Column;
@@ -500,7 +554,7 @@ struct StackLevel {
     void make(const Look&, PrLayoutEffectStyle& effect) const { effect.zIndex = level; }
 };
 
-PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
+PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p, bool flushTop = false) {
     int16_t s = static_cast<int16_t>(look.textSteps);
     if (p == Part::SelectorLayer)
         return pr::uiStyle(ui, look, BoxRecipe{p, s}, FlexRecipe{p, s}, StackLevel{2});
@@ -508,7 +562,7 @@ PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
         return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, StackLevel{-1});
     if (p == Part::PendingBubble || p == Part::Bubble || p == Part::PersonBubble)
         return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, StackLevel{1});
-    return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, FlexRecipe{p, s});
+    return pr::uiStyle(ui, look, BoxRecipe{p, s, flushTop}, DecorationRecipe{p, s, flushTop}, FlexRecipe{p, s});
 }
 
 // The state cursor's fill: its state's OKLCH colour (cursor.h) at a breath level, in sRGB for the layout. One record
@@ -633,6 +687,24 @@ struct Builder {
         return prUiElement(ui, parent, key, style(ui, look, p), flags);
     }
 
+    PrLayoutNode personBubble(PrLayoutNode row, Part part) {
+        const auto bubble = element(row, part);
+#if NEXUS_PROCESSES  // Desktop clients, including windowed mode.
+        const PrLayoutCalcNode cap[] = {
+            prLayoutCalcOperation(PrLayoutCalcOp_Min, 2),
+            prLayoutCalcLeaf(PrLayoutCalcLeaf_Percent, look.ui.person_bubble_max_percent),
+            prLayoutCalcLeaf(PrLayoutCalcLeaf_Px, view.extent.x * look.ui.desktop_person_viewport_percent / 100),
+        };
+        auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, bubble));
+        auto& group = record.groups[PrLayoutGroup_Box];
+        auto box = prLayoutBoxStyleRecord(tree, group);
+        box.maxWidth = prLayoutLengthIntern(tree, cap, 3);
+        group = prLayoutBoxStyleIntern(tree, &box);
+        prLayoutTreeFrameSetStyle(tree, bubble, prLayoutStyleIntern(tree, &record));
+#endif
+        return bubble;
+    }
+
     PrLayoutNode label(PrLayoutNode parent, std::string_view text, PrKitTextStyle s) {
         return prKitLabel(kit, parent, PrKitLabel{.key = 0, .text = sv(text)}, s);
     }
@@ -737,9 +809,32 @@ struct Builder {
         }
     }
 
+    void dimBackdrop(PrLayoutNode node) {
+        auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, node));
+        auto& group = record.groups[PrLayoutGroup_Decoration];
+        auto decoration = prLayoutDecorationStyleRecord(tree, group);
+        decoration.background = prColor16FromColor(faded(rgb(0), look.messageCard.backdropOpacity));
+        group = prLayoutDecorationStyleIntern(tree, &decoration);
+        prLayoutTreeFrameSetStyle(tree, node, prLayoutStyleIntern(tree, &record));
+    }
+
+    // Prax places an embedded dialog immediately after its input-blocking cover in the overlay.
+    void dimDialogBackdrop(PrLayoutNode body) {
+        if (body == kPrLayoutNodeNone || prUiNodeViewport(ui, body) != kPrUiViewportMain) return;
+        const auto overlay = prUiOverlay(ui);
+        auto portal = body;
+        while (portal != kPrLayoutNodeNone && prLayoutNodeParent(tree, portal) != overlay)
+            portal = prLayoutNodeParent(tree, portal);
+        if (portal != kPrLayoutNodeNone) {
+            const auto cover = prLayoutNodePreviousSibling(tree, portal);
+            if (cover != kPrLayoutNodeNone) dimBackdrop(cover);
+        }
+    }
+
     void accountSelector(PrLayoutNode parent, const std::vector<AccountItem>& items, bool modal = false) {
         if (items.empty()) return;
         const auto layer = modal ? parent : element(parent, Part::SelectorLayer);
+        if (!modal) dimBackdrop(layer);
         if (!modal && view.windowApp.surface.showTabs) {
             // Balance the strip above the panels while keeping its hit area free.
             auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, layer));
@@ -803,7 +898,7 @@ struct Builder {
                 ink.color = prColor16FromColor(rgb(look.messageCard.selectedInk));
                 colors = prLayoutColorStyleIntern(tree, &ink);
                 prLayoutTreeFrameSetStyle(tree, email, prLayoutStyleIntern(tree, &emailStyle));
-                if ((modal || view.accountPicker || !view.choiceKind.empty()) && view.lastHighlightedAccount != item.action) {
+                if (prUiFocus(ui) != row) {
                     prUiSetFocus(ui, row);
                     view.lastHighlightedAccount = item.action;
                 }
@@ -813,7 +908,8 @@ struct Builder {
     }
 
     void signInFailure(PrLayoutNode parent, const SignInAccount& account) {
-        if (account.email.empty() || !model.tab_count()) return;
+        if (account.name.empty() || !model.tab_count()) return;
+        std::string_view message = view.signInFeedback ? view.signInFeedback(model.tab(model.active()).id) : std::string_view{};
         const auto& entries = model.tab(model.active()).transcript;
         const auto needed = account.name + " needs signing in:";
         const auto failure = "Could not sign in to " + account.email + ". ";
@@ -821,12 +917,13 @@ struct Builder {
         for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
             if (it->kind != EntryKind::Notice) break;
             if (it->text.starts_with(needed)) continue;
-            if (it->text.starts_with(failure)) {
-                auto appearance = textStyle(PrKitTextRole_BodySmall, kNoticeTone, PrKitTextAlign_Center);
-                appearance.wrap = PrKitWrap_Wrap;
-                caption(parent, it->text, appearance);
-            }
+            if (!account.email.empty() && it->text.starts_with(failure)) message = it->text;
             break;
+        }
+        if (!message.empty()) {
+            auto appearance = textStyle(PrKitTextRole_BodySmall, kNoticeTone, PrKitTextAlign_Center);
+            appearance.wrap = PrKitWrap_Wrap;
+            caption(parent, message, appearance);
         }
     }
 
@@ -1117,18 +1214,22 @@ struct Builder {
         for (std::size_t i = first; i < end; ++i) {
             PrLayoutNode tab = prKitTab(kit, row, PrKitTab{.id = kitId(model.tab(i)), .disabled = false});
             const bool active = i == model.active();
-            if (active) {
+            if (active || view.keyboardTabSelection) {
                 auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, tab));
                 auto& decorationGroup = record.groups[PrLayoutGroup_Decoration];
                 auto decoration = prLayoutDecorationStyleRecord(tree, decorationGroup);
-                if (view.energyTab != model.tab(i).id) {
-                    view.tabEnergyTime = view.time;
-                    view.energyTab = model.tab(i).id;
-                    view.energyAccount.clear();
+                if (active) {
+                    if (view.energyTab != model.tab(i).id) {
+                        view.tabEnergyTime = view.time;
+                        view.energyTab = model.tab(i).id;
+                        view.energyAccount.clear();
+                    }
+                    decoration.background = prColor16FromColor(highlight(look.tabs.selectedFill, look.tabs.selectedOpacity, view.tabEnergyTime));
+                    radius(decoration, look.tabs.selectedRadius * k());
+                } else {
+                    decoration.background = {};
                 }
-                decoration.background = prColor16FromColor(highlight(look.tabs.selectedFill, look.tabs.selectedOpacity, view.tabEnergyTime));
                 decoration.borderStyle[PrRectSide_Bottom] = PrDrawBorderStyle_None;
-                radius(decoration, look.tabs.selectedRadius * k());
                 decorationGroup = prLayoutDecorationStyleIntern(tree, &decoration);
                 prLayoutTreeFrameSetStyle(tree, tab, prLayoutStyleIntern(tree, &record));
             }
@@ -1518,7 +1619,12 @@ struct Builder {
         // Characters of the body face are about half its size wide.
         const float perChar = 0.5f * look.ui.body_size * s;
         const float maxPercent = kind == EntryKind::Person ? look.ui.person_bubble_max_percent : look.ui.bubble_max_percent;
-        const float width = std::max(items.width * maxPercent / 100 - 2 * look.ui.bubble_padding_x * s, 1.0f);
+        float maxWidth = items.width * maxPercent / 100;
+#if NEXUS_PROCESSES
+        if (kind == EntryKind::Person)
+            maxWidth = std::min(maxWidth, view.extent.x * look.ui.desktop_person_viewport_percent / 100);
+#endif
+        const float width = std::max(maxWidth - 2 * look.ui.bubble_padding_x * s, 1.0f);
         const float pad = 2 * look.ui.bubble_padding_y * s;
         const float rows = float(items.lines[i]) + std::floor(float(items.chars[i]) * perChar / width);
         return rows * look.ui.line_pitch * s + pad + gap;
@@ -1526,8 +1632,8 @@ struct Builder {
 
     // Declares the items from the scroll's `offset` (or the end) a screen either side of the `viewport`, the spacers
     // for the items before and after them, and keeps which items it declared for the next round to measure.
-    void declareItems(PrLayoutNode scroller, PrLayoutNode column, const Tab& tab, TranscriptItems& items, bool atEnd,
-            float offset, float viewport) {
+    void declareItems(PrLayoutNode column, const Tab& tab, TranscriptItems& items, bool atEnd,
+            float offset, float viewport, float columnInset) {
         const std::size_t n = items.first.size();
         if (n == 0)
             return;
@@ -1548,7 +1654,7 @@ struct Builder {
         } else {
             const float top = offset - viewport;
             const float bottom = offset + 2 * viewport;
-            float y = look.ui.column_inset * k();
+            float y = columnInset;
             first = n;
             end = n;
             for (std::size_t i = 0; i < n; ++i) {
@@ -1574,11 +1680,6 @@ struct Builder {
             for (std::size_t i = end; i < n; ++i)
                 below += heightOf(items, i, tab);
         }
-        // At the end, the items in sight slide as entries arrive, and the spacer above grows by what left them: the
-        // transcript follows its end there with scroll anchoring off (Part::TranscriptAtEnd), which would hold the view
-        // on what showed instead.
-        if (atEnd)
-            prLayoutTreeFrameSetStyle(tree, scroller, style(ui, look, Part::TranscriptAtEnd));
         const uint64_t base = uint64_t(tab.id) << 8;
         // A spacer is followed by the column's gap, as an item is: its own height leaves that out.
         if (first != 0)
@@ -1821,7 +1922,7 @@ struct Builder {
             case EntryKind::Notice: {
                 PrLayoutNode entry = element(column, e.kind == EntryKind::Person ? Part::Entry : Part::ReplyRow, 0, key);
                 PrLayoutNode bubble = e.kind == EntryKind::AI ? assistantMessage(entry, tab) :
-                    e.kind == EntryKind::Person ? element(entry, Part::PersonBubble) : element(entry, Part::CaptionBubble);
+                    e.kind == EntryKind::Person ? personBubble(entry, Part::PersonBubble) : element(entry, Part::CaptionBubble);
                 if (e.kind == EntryKind::Notice && e.accountEmailEnd) {
                     switchLabel(bubble, e);
                 } else if (e.kind == EntryKind::Notice) {
@@ -1877,13 +1978,17 @@ struct Builder {
             const bool readPath = tool == "Read" && separator != summary.npos;
             auto shown = summary;
             if (customPrompt) shown.remove_prefix(separator + 2);
-            const auto full = customPrompt ? prompt->second + std::string(shown) : std::string(shown);
+            const auto& previews = look.transcriptStyle.toolPreviews;
+            const auto format = previews.find(tool);
+            const auto full = format != previews.end() && separator != summary.npos
+                ? compactToolLabel(format->second, summary.substr(separator + 2))
+                : customPrompt ? prompt->second + std::string(shown) : std::string(shown);
             const float panelPadding = look.transcriptStyle.conversationPanel ? 2 * look.ui.bubble_padding_x * k() : 0;
             const float chevron = look.transcriptStyle.toolChevron ?
                 (look.transcriptStyle.toolChevronSize + look.transcriptStyle.toolChevronGap) * k() : 0;
             const float room = std::max(0.f, (items.width - panelPadding) * look.transcriptStyle.replyWidth / 100 -
                 2 * look.transcriptStyle.captionPaddingX * k() - chevron - 2);
-            const auto preview = ellipsize(full, room, [&](std::string_view text) { return menuTextWidth(text, PrKitTextRole_Mono); });
+            const auto preview = ellipsize(full, room, [&](std::string_view text) { return menuTextWidth(text, PrKitTextRole_Mono); }, "");
             const auto node = label(tools, preview, line);
             const auto& style = look.transcriptStyle;
             const auto toolInk = style.toolInks.find(tool);
@@ -1898,6 +2003,19 @@ struct Builder {
     void transcript(PrLayoutNode window) {
         PrLayoutNode scroller = element(window, Part::Transcript, PrUiFlag_Scrollable);
         PrLayoutNode column = element(scroller, look.transcriptStyle.conversationPanel ? Part::PanelColumn : Part::Column);
+        bool flushTop = false;
+        if (look.transcriptStyle.conversationPanel) {
+            // Prax repeats the round when either height changes. Moving the gap inside the scrolling
+            // column on overflow keeps the threshold stable and lets history reach the divider.
+            PrVec2 content{}, viewport{};
+            prUiExtent(ui, column, PrUiAxisFlag_Y, &content);
+            prUiExtent(ui, scroller, PrUiAxisFlag_Y, &viewport);
+            flushTop = content.y > viewport.y;
+            if (flushTop) {
+                prLayoutTreeFrameSetStyle(tree, scroller, style(ui, look, Part::Transcript, true));
+                prLayoutTreeFrameSetStyle(tree, column, style(ui, look, Part::PanelColumn, true));
+            }
+        }
         if (model.tab_count() == 0) {
             PrLayoutNode centered = element(column, Part::Centered);
             caption(centered, view.notice, textStyle(PrKitTextRole_Body, kStatusTone, PrKitTextAlign_Center));
@@ -1907,7 +2025,7 @@ struct Builder {
         const Tab& tab = model.tab(model.active());
         const std::string* growing = view.growing ? view.growing(tab.id) : nullptr;
         const bool sending = std::any_of(view.outgoing.begin(), view.outgoing.end(), [&](const auto& bubble) { return bubble.tab == tab.id; });
-        if (look.transcriptStyle.conversationPanel && (sending || !tab.transcript.empty() || !tab.held.empty() || !tab.queue.empty() || (growing && !growing->empty())))
+        if (look.transcriptStyle.conversationPanel)
             view.conversation = column = element(column, Part::Conversation);
         const bool switched = view.shown != tab.id;
         // Text was just cut to fit this tab's prompt: the transcript goes to its end, where the line saying so shows.
@@ -1952,7 +2070,11 @@ struct Builder {
             reply.entry = tab.transcript.size();
             reply.bytes = growing ? growing->size() : 0;
         }
-        declareItems(scroller, column, tab, items, atEnd, offset, viewport);
+        if (atEnd)
+            prLayoutTreeFrameSetStyle(tree, scroller, style(ui, look, Part::TranscriptAtEnd, flushTop));
+        const float columnInset = look.transcriptStyle.conversationPanel ?
+            (flushTop ? look.ui.footer_padding * k() : 0) : look.ui.column_inset * k();
+        declareItems(column, tab, items, atEnd, offset, viewport, columnInset);
         // The AI's text still growing (the open entry), after the transcript, a label a paragraph: only its last
         // paragraph is set again as it grows. It joins the transcript, closed, when its block ends.
         if (growing != nullptr && !growing->empty()) {
@@ -1972,6 +2094,10 @@ struct Builder {
             message(element(element(column, Part::ReplyRow), Part::CaptionBubble), view.helpText, EntryKind::Notice);
         if (!view.problem.empty()) {
             message(element(element(column, Part::ReplyRow), Part::CaptionBubble), view.problem, EntryKind::Notice);
+        }
+        if (view.signInFeedback && view.windowApp.signInAccount.name.empty()) {
+            const auto feedback = view.signInFeedback(tab.id);
+            if (!feedback.empty()) message(element(element(column, Part::ReplyRow), Part::CaptionBubble), feedback, EntryKind::Notice);
         }
         // How much text was cut to fit the prompt, on the tab it was cut on, there too: the transcript went to its end
         // to show it, so it stands just above the prompt.
@@ -2074,7 +2200,7 @@ struct Builder {
         }
         const auto pendingBubble = [&](const std::string& text) {
             const auto row = element(column, Part::Entry);
-            const auto bubble = element(row, Part::PendingBubble);
+            const auto bubble = personBubble(row, Part::PendingBubble);
             const auto& settings = look.transcriptStyle;
             const bool animate = idleAnimation(view.lastInput);
             const double wave = 0.5 - 0.5 * std::cos(view.time * 6.283185307179586 / settings.pendingTextSeconds);
@@ -2106,11 +2232,11 @@ struct Builder {
         };
         for (const auto& text : tab.queue) {
             const auto compact = view.attachmentLabels.find({tab.id, text});
-            message(element(element(column, Part::Entry), Part::PersonBubble),
+            message(personBubble(element(column, Part::Entry), Part::PersonBubble),
                 compact == view.attachmentLabels.end() ? text : compact->second, EntryKind::Person);
         }
         for (const auto& sendingBubble : view.outgoing)
-            if (sendingBubble.tab == tab.id) message(element(element(column, Part::Entry), Part::PersonBubble), sendingBubble.text, EntryKind::Person);
+            if (sendingBubble.tab == tab.id) message(personBubble(element(column, Part::Entry), Part::PersonBubble), sendingBubble.text, EntryKind::Person);
         if (!tab.held.empty()) pendingBubble(tab.held);
     }
 
@@ -2505,6 +2631,7 @@ struct Builder {
         const std::string title = asking->account + ": " + asking->what;
         dialog.title = sv(title);
         const PrLayoutNode body = prKitDialog(kit, window, dialog, typedDialogStyle());
+        dimDialogBackdrop(body);
         if (body == kPrLayoutNodeNone) {
             // The person closed it (Escape, the close button, a press outside): the request is cancelled.
             view.secretField = kPrLayoutNodeNone;
@@ -2542,9 +2669,13 @@ struct Builder {
     void captureShortcuts(PrLayoutNode keys) {
         // A modal owns its keys. The signed-out page underneath also binds arrows, Enter and Escape;
         // capturing those first would move its hidden picker instead of the visible sign-in card.
-        if (view.accounts.dialog != AccountMenuView::Dialog::None) return;
+        if (view.accounts.dialog != AccountMenuView::Dialog::None || asking ||
+                (view.serverChoice && view.serverChoice->asking())) return;
         std::vector<Shortcut> pressed;
         for (const auto& binding : view.windowApp.shortcuts) {
+            if (view.selectorVisible() && binding.command != WindowCommand::SelectTab &&
+                    binding.command != WindowCommand::AccountAction && binding.command != WindowCommand::AccountPicker)
+                continue;
             if ((!view.secrets || !view.secrets->showing()) && prUiKeyCaptured(ui, keys, binding.key, binding.modifiers))
                 pressed.push_back(binding);
         }
@@ -2738,8 +2869,12 @@ struct Builder {
         const PrLayoutNode body = menu.dialog == Dialog::Login ?
             prKitModal(kit, window, {.key = dialog.key}, typedDialogStyle().modal) :
             prKitDialog(kit, window, dialog, typedDialogStyle());
+        dimDialogBackdrop(body);
         if (body == kPrLayoutNodeNone) {
-            if (!fresh) menu.dialog = Dialog::None;
+            if (!fresh) {
+                if (menu.dialog == Dialog::BrowserLogout && view.cancelLoginPreparation) view.cancelLoginPreparation();
+                menu.dialog = Dialog::None;
+            }
             menu.dialogShown = false;
             return;
         }
@@ -2782,13 +2917,7 @@ struct Builder {
         }
         if (menu.dialog == Dialog::Login) {
             const auto count = menu.dialogRows.size();
-            if (count) {
-                menu.loginHighlighted = std::min(menu.loginHighlighted, count - 1);
-                if (uiKey(body, view.windowApp.surface.keys.previous, false))
-                    menu.loginHighlighted = (menu.loginHighlighted + count - 1) % count;
-                if (uiKey(body, view.windowApp.surface.keys.next, false))
-                    menu.loginHighlighted = (menu.loginHighlighted + 1) % count;
-            }
+            if (count) menu.loginHighlighted = std::min(menu.loginHighlighted, count - 1);
             std::vector<AccountItem> items{{view.windowApp.signInHeading, "", false}};
             if (!count) items.push_back({look.words.no_linked_accounts, "", false});
             for (std::size_t i = 0; i < count; ++i) {
@@ -2857,10 +2986,11 @@ struct Builder {
         // prUiKeyCaptured), so they win in every tab, a terminal's included. That matters off macOS, where Command is
         // Alt and Prax's terminal claims every Alt chord for its shell (terminal.cpp claimKeys), which keeps Alt as
         // Meta for every other key. Inside the overlay nexus takes its keys (AGENTS.md).
+        asking = view.secrets ? view.secrets->showing() : nullptr;
         updateApplication();
-        pickerInput = view.accountPicker.has_value() || !view.choiceKind.empty();
+        pickerInput = view.selectorVisible() || view.accountPicker.has_value() || !view.choiceKind.empty();
         captureShortcuts(keys);
-        pickerInput = pickerInput || view.accountPicker.has_value() || !view.choiceKind.empty();
+        pickerInput = pickerInput || view.selectorVisible() || view.accountPicker.has_value() || !view.choiceKind.empty();
         serviceTerminals();
         // On a terminal tab Escape is not claimed: the terminal claims it for its shell. Command-Escape does nothing
         // there or on the sprint tab (it is captured below all the same). On the sprint tab Escape hides.
@@ -2874,7 +3004,6 @@ struct Builder {
         // routeKey), so during a drag Escape cancels it and hides nothing. While composing it is the input method's.
         // While the secret dialog shows, Escape is the dialog's (it cancels the request) and hides nothing.
         // So is it the account dialog's while that shows: Escape closes it, changes nothing and hides nothing.
-        asking = view.secrets != nullptr ? view.secrets->showing() : nullptr;
         if (hides && !pickerInput && asking == nullptr && view.accounts.dialog == AccountMenuView::Dialog::None &&
                 prUiDragging(ui) == nullptr &&
                 uiKey(keys, view.windowApp.surface.keys.dismiss, false) && !composing && view.hide)
@@ -2942,6 +3071,7 @@ struct Builder {
         dialog.key = prHashString(sv("server"), 0);
         dialog.title = sv(look.words.server_title);
         const PrLayoutNode body = prKitDialog(kit, window, dialog, typedDialogStyle());
+        dimDialogBackdrop(body);
         if (body == kPrLayoutNodeNone) {
             if (!fresh) choice->cancel();
             view.serverShown = false;
@@ -3121,6 +3251,7 @@ struct Builder {
             }
             case WindowCommand::SelectTab: {
                 const auto index = static_cast<std::size_t>(key.argument);
+                if (index < model.tab_count() && index != model.active()) view.keyboardTabSelection = true;
                 select(index);
                 break;
             }
@@ -3239,6 +3370,11 @@ struct Builder {
         }
         if (std::find(panels.begin(), panels.end(), Panel::Prompt) == panels.end())
             promptGone();
+        if (view.selectorVisible() || asking || (view.serverChoice && view.serverChoice->asking()) ||
+                view.accounts.dialog != AccountMenuView::Dialog::None) {
+            view.selection.clear();
+            pickerInput = true;
+        }
         if (view.windowApp.surface.items && !asking) window = element(window, Part::AIPanels);
         for (const auto panel : panels) {
             switch (panel) {

@@ -34,8 +34,9 @@ struct Recorder : LinkPort {
 };
 
 sync::Sessions offering(const std::string& opener, const std::string& url, const std::string& host,
-                        const std::string& provider = "claude") {
+                        const std::string& provider = "claude", bool codeWanted = false) {
     sync::SignInOffer o;
+    o.codeWanted = codeWanted;
     o.id = 3;
     o.account = provider + "-main";
     o.provider = provider;
@@ -191,6 +192,126 @@ void deliberateSwitchOnly() {
     CHECK(f.port.sent.size() == sent + 1);
 }
 
+void pastedCodeAnywhere() {
+    const std::string google = "https://accounts.google.com/o/oauth2/auth?client_id=fake-client&state=fakeStHostXq7wP2";
+    const std::string code = "4/0AfakeHostCodeQx7wP2mZ";
+    Fixture f("studio.local", "ipad");
+    std::pair<sync::SessionId, std::string> tab{9, "antigravity-main"};
+    f.signIn.forwardPage = [](auto&&...) -> std::unique_ptr<SignInForward> { CHECK(false); return {}; };
+    f.signIn.activeTab = [&] { return tab; };
+    LinkSecrets secrets;
+    secrets.port = &f.port;
+    secrets.signIn = &f.signIn;
+    f.signIn.opener.showAccount("antigravity-main");
+    f.signIn.received(offering("", "", "studio", "antigravity"));
+    f.signIn.step();
+    CHECK(f.port.sent.size() == 1 && f.port.sent.back().kind == sync::ActionKind::SignInClaim && f.port.sent.back().pastesCode);
+    f.signIn.received(offering("tokWindowA1", google, "studio", "antigravity"));
+    f.signIn.step();
+    CHECK(f.opened.size() == 1 && f.opened.front() == google && f.gates.empty());
+    CHECK(f.port.sent.size() == 2 && f.port.sent.back().kind == sync::ActionKind::SignInOpened);
+    // No code wanted yet: no ask.
+    CHECK(secrets.showing() == nullptr && f.signIn.codeAsk() == nullptr);
+    f.signIn.received(offering("tokWindowA1", google, "studio", "antigravity", true));
+    // Another tab's account: no ask there.
+    f.signIn.claimSessions[tab.second] = tab.first;
+    tab = {4, "antigravity-main"};
+    CHECK(secrets.showing() == nullptr);
+    tab = {4, "claude-main"};
+    CHECK(secrets.showing() == nullptr);
+    tab = {9, "antigravity-main"};
+    const SecretAsk* ask = secrets.showing();
+    CHECK(ask != nullptr && (ask->id & LinkSecrets::kCodeAsk) != 0 && ask->what == "sign-in code" &&
+          ask->account == "antigravity-main");
+    if (ask == nullptr) return;
+    // Escape puts it away; Sign in in the tab asks again; what was typed is wiped.
+    secrets.type("partial");
+    secrets.cancel();
+    CHECK(secrets.showing() == nullptr && f.signIn.typedCode().empty() && f.port.sent.size() == 2);
+    f.signIn.askCodeAgain(3);
+    CHECK(secrets.showing() != nullptr && secrets.typed().empty());
+    // Pasted with the line break and spaces a paste brings: sent trimmed, once, and the field wiped.
+    secrets.type("  " + code + "\r\n");
+    CHECK(secrets.typed() == "  " + code + "\r\n");
+    secrets.submit();
+    CHECK(f.port.sent.size() == 3);
+    const sync::Action& sent = f.port.sent.back();
+    CHECK(sent.kind == sync::ActionKind::SignInCode && sent.request == 3 && sent.text == "tokWindowA1" &&
+          sent.session == 9 && sent.secret.bytes() == code);
+    CHECK(f.signIn.typedCode().empty() && secrets.showing() == nullptr);
+    // The flow still says a code is wanted (the server has not answered yet): this window sends no second.
+    secrets.submit();
+    CHECK(f.port.sent.size() == 3 && secrets.showing() == nullptr && sent.account == "antigravity-main");
+    CHECK(f.port.sent.front().pastesCode);      // its claim says it takes a pasted code
+    // A state from before the server applied it (action 3 not yet acknowledged) still wanting a code: no ask.
+    sync::Sessions pending = offering("tokWindowA1", google, "studio", "antigravity", true);
+    pending.setNextAction(3);
+    f.signIn.received(pending);
+    CHECK(secrets.showing() == nullptr && f.signIn.codeSent(3));
+    // The server applied it and the flow still wants a code: it was refused (the refusal's line is in the tab), and
+    // the ask opens again, so the person can paste the right one.
+    sync::Sessions refused = offering("tokWindowA1", google, "studio", "antigravity", true);
+    refused.setNextAction(4);
+    f.signIn.received(refused);
+    CHECK(!f.signIn.codeSent(3) && secrets.showing() != nullptr);
+    // A paste that is no code (two words, a line break inside) is never sent; the window says why, the ask stays.
+    secrets.type("Paste this code\ninto your application");
+    secrets.submit();
+    CHECK(f.port.sent.size() == 3 && f.signIn.typedCode().empty() && secrets.showing() != nullptr);
+    CHECK(f.signIn.problem.find("not a sign-in code") != std::string::npos);
+    f.signIn.problem.clear();
+    secrets.type(code);
+    secrets.submit();
+    CHECK(f.port.sent.size() == 4 && f.port.sent.back().secret.bytes() == code && f.signIn.codeSent(3));
+    // Taken: the state that acknowledges it no longer wants a code, and nothing asks again.
+    sync::Sessions taken = offering("tokWindowA1", google, "studio", "antigravity", false);
+    taken.setNextAction(5);
+    f.signIn.received(taken);
+    CHECK(f.signIn.codeSent(3) && secrets.showing() == nullptr);
+    // A server that reports nothing applied (nextAction 0): a code sent stays sent.
+    Fixture silent("studio.local", "ipad");
+    silent.signIn.activeTab = [&] { return tab; };
+    silent.signIn.opener.showAccount("antigravity-main");
+    silent.signIn.received(offering("tokWindowA1", google, "studio", "antigravity", true));
+    silent.signIn.step();
+    silent.signIn.typeCode(code);
+    silent.signIn.submitCode();
+    silent.signIn.received(offering("tokWindowA1", google, "studio", "antigravity", true));
+    CHECK(silent.port.sent.size() == 2 && silent.signIn.codeSent(3) && silent.signIn.codeAsk() == nullptr);
+    // A flow another window holds never asks here.
+    Fixture other("studio.local", "laptop");
+    other.signIn.activeTab = [&] { return tab; };
+    other.signIn.opener.showAccount("antigravity-main");
+    other.signIn.received(offering(sync::kSignInHeldBy, "", "studio", "antigravity", true));
+    other.signIn.step();
+    CHECK(other.signIn.codeAsk() == nullptr && other.port.sent.empty());
+    // Its link lost: the field is wiped.
+    Fixture lost("studio.local", "ipad");
+    lost.signIn.activeTab = [&] { return tab; };
+    lost.signIn.opener.showAccount("antigravity-main");
+    lost.signIn.received(offering("tokWindowA1", google, "studio", "antigravity", true));
+    lost.signIn.step();
+    lost.signIn.typeCode(code);
+    CHECK(lost.signIn.typedCode().bytes() == code);
+    lost.signIn.lost();
+    CHECK(lost.signIn.typedCode().empty() && lost.signIn.codeAsk() == nullptr);
+}
+
+void unrelatedSessionCannotCancelEnrollment() {
+    Fixture f("studio", "macbook");
+    const std::string account = "antigravity-main";
+    f.signIn.claimSessions[account] = 10;
+    f.signIn.activeTab = [] { return std::pair<sync::SessionId, std::string>{11, "other"}; };
+    auto state = offering("tokWindowA1", "", "studio", "antigravity");
+    auto offers = state.offers();
+    offers.front().cancelSupported = true;
+    state.setOffers(offers);
+    f.signIn.received(state);
+    f.signIn.choose("other");
+    CHECK(f.port.sent.empty());
+    CHECK(!f.signIn.reopen(offers.front()).empty() && f.opened.empty());
+}
+
 void privateSignInPages() {
     const std::string nonce(64, 'a');
     const std::string path = "/nexus-signin/" + nonce;
@@ -223,6 +344,38 @@ void privateSignInPages() {
         remote.signIn.step();
         CHECK(remote.port.sent.empty() && remote.opened.empty() && remote.gates.empty());
 
+        if (std::string_view(provider) == "codex" || std::string_view(provider) == "antigravity") {
+            struct Forward : SignInForward {
+                State state = State::Starting;
+                State poll() override { return state; }
+            };
+            Forward* tunnel = nullptr;
+            remote.signIn.forwardPage = [&](const std::string& host, std::uint16_t port, bool codexCallback, std::function<void()>) {
+                CHECK(codexCallback == (std::string_view(provider) == "codex"));
+                CHECK(host == "localhost" && port == 54321);
+                auto result = std::make_unique<Forward>();
+                tunnel = result.get();
+                return result;
+            };
+            remote.signIn.step();
+            CHECK(tunnel && remote.opened.empty() && remote.port.sent.empty());
+            if (tunnel) tunnel->state = SignInForward::State::Failed;
+            remote.signIn.step();
+            CHECK(!remote.signIn.problem.empty() && remote.opened.empty() && remote.port.sent.empty());
+            remote.signIn.problem.clear();
+            const auto offer = remote.signIn.opener.view().front();
+            CHECK(remote.signIn.reopen(offer).empty());
+            if (tunnel) tunnel->state = SignInForward::State::Ready;
+            remote.signIn.step();
+            CHECK(remote.opened.size() == 1 && remote.opened.front() == url);
+            CHECK(remote.port.sent.size() == 1 && remote.port.sent.back().kind == sync::ActionKind::SignInOpened);
+            remote.signIn.step();
+            CHECK(remote.opened.size() == 1);
+            CHECK(remote.signIn.reopen(offer).empty() && remote.opened.size() == 2);
+            CHECK(remote.port.sent.size() == 1);
+            remote.signIn.lost();
+        }
+
         sync::SignInDesk desk;
         desk.need(1, "test-account", provider);
         desk.claim(1, "w1", 1000);
@@ -233,7 +386,7 @@ void privateSignInPages() {
     }
     sync::SignInTarget target;
     CHECK(sync::parseSignInUrl("claude", kUrl, &target));
-    CHECK(sync::parseSignInUrl("codex", url, &target) && target == sync::SignInTarget{});
+    CHECK(sync::parseSignInUrl("codex", url, &target) && target.port == 54321 && target.state.empty());
     CHECK(!sync::parseSignInUrl("claude", url, &target));
     CHECK(!sync::hasSignIn("unknown") && !sync::parseSignInUrl("unknown", url, &target));
     for (const std::string& bad : {
@@ -287,6 +440,8 @@ int main() {
     leavesAnotherWindowsFlow();
     lostForgetsTheView();
     refusesALookalike();
+    pastedCodeAnywhere();
+    unrelatedSessionCannotCancelEnrollment();
     privateSignInPages();
     deliberateSwitchOnly();
     if (failures != 0) {

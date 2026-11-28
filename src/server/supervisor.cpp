@@ -33,6 +33,8 @@ std::string kindOf(const DriverMessage& message) {
             return "text";
         } else if constexpr (std::is_same_v<M, TextEnd>) {
             return "text-end";
+        } else if constexpr (std::is_same_v<M, Quota>) {
+            return "quota";
         } else if constexpr (std::is_same_v<M, ChildAgents>) {
             return "child-agents";
         } else if constexpr (std::is_same_v<M, Tool>) {
@@ -473,6 +475,10 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
     }
     if (std::holds_alternative<Hello>(message)) {
         end(brokeProtocol("wrote a second hello"), now);
+    } else if (const auto* q = std::get_if<Quota>(&message)) {
+        out_.account = driverAccount_;
+        if (out_.quota.size() < 16 || out_.quota.contains(q->minutes))
+            out_.quota[q->minutes] = q->usedPercent;
     } else if (const Credential* c = std::get_if<Credential>(&message)) {
         out_.account = driverAccount_;
         out_.signedIn = c->billing == Billing::Subscription;

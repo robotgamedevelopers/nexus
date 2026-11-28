@@ -24,6 +24,13 @@ native permission profile on both start and resume. Antigravity, Grok and Muse
 use dialogue sessions in a private working directory. The deployment must use a
 vendor version and operating system supported by that adapter.
 
+On macOS, add `--project-root /absolute/project` to an Antigravity driver to
+enable project work for a session with `--limit cwd` and that exact working
+directory. Install `nova-sandbox` in the server user's `~/.local/bin`.
+The `project_shell` tool can read and edit project files, run Git, build, and
+test. Each command runs with the project and private scratch space as its
+writable directories. The Google login stays in the separate harness process.
+
 | Harness | Program and transport | Startup instructions | Subscription evidence before sending |
 | --- | --- | --- | --- |
 | Codex | `codex app-server --stdio` | Developer instructions on thread start and resume | ChatGPT account and plan from `account/read` |
@@ -45,9 +52,10 @@ press **Enter** or click **Sign in to** to open that account’s browser flow. I
 
 The local Nexus window opens a private page for that account. Complete the vendor's
 browser authorization there. Antigravity asks you to paste Google's return code
-into that page. A remote window can keep chatting on an enrolled account. Initial
-enrollment for these four providers needs a window connected to the server over
-loopback. The server probes the account-specific enrollment receipt on restart.
+into that page. On macOS and Linux, Codex and Antigravity can also enroll from a desktop
+connected to a remote server over SSH. The window forwards the account’s private
+page to the same loopback port on the desktop. Other clients and providers use
+a window connected to the server over loopback for initial enrollment. The server probes the account-specific enrollment receipt on restart.
 The driver checks the actual subscription before sending the prompt.
 
 Run `python3 .github/python-tests.py --tier pr --start drivers/rpc` from the repository

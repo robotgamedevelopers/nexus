@@ -342,6 +342,90 @@ void logoutUsesTheConfirmedAccountAndReturnsToSignIn() {
     CHECK(!w.view.signOut() && w.link.sent.size() == 5);
 }
 
+void remoteSignInCardClaimsTheSelectedAccount() {
+    for (const std::string harness : {"codex", "antigravity"}) {
+        Window w("chat");
+        auto session = std::make_shared<sync::SessionView>();
+        session->id = 10;
+        session->info = {"chat", harness, "personal", "", ""};
+        w.link.state.phase = sync::LinkPhase::Connected;
+        w.link.state.sessions = sync::Sessions({session});
+        w.link.state.sessions.setAIs({{"chat", {{"personal", "Personal", true}}}});
+        w.link.state.sessions.setNextAction(1);
+        w.link.changed = true;
+        w.host.pollLink();
+        w.host.signIn.forwardPage = [](const auto&, auto, bool, auto) -> std::unique_ptr<SignInForward> {
+            CHECK(false); // A claim has no page or port yet.
+            return {};
+        };
+        w.model.set_draft(w.model.active(), "keep my draft");
+        w.link.sent.clear();
+        w.view.accountAction("sign_in:personal");
+        CHECK(w.link.sent.size() == 1 && w.link.sent.back().kind == sync::ActionKind::SignInClaim &&
+              w.link.sent.back().pastesCode && w.link.sent.back().account == "personal" && w.link.sent.back().session == 10);
+        CHECK(w.model.tab(w.model.active()).draft == "keep my draft");
+        // The server counted the claim without granting it. A second click must reach it.
+        w.link.state.sessions.setNextAction(w.link.sent.size() + 1);
+        w.link.changed = true;
+        w.host.pollLink();
+        w.view.accountAction("sign_in:personal");
+        CHECK(w.link.sent.size() == 2 && w.link.sent.back().kind == sync::ActionKind::SignInClaim);
+    }
+}
+
+void signInFeedbackStaysInItsSession() {
+    Window w("emma");
+    auto emma = std::make_shared<sync::SessionView>();
+    emma->id = 10;
+    emma->info = {"emma", "antigravity", "personal", "", ""};
+    auto rowan = std::make_shared<sync::SessionView>();
+    rowan->id = 11;
+    rowan->info = {"rowan", "claude", "other", "", ""};
+    w.link.state.phase = sync::LinkPhase::Connected;
+    w.link.state.loopback = true;
+    w.link.state.sessions = sync::Sessions({emma, rowan});
+    w.link.state.sessions.setAIs({{"emma", {{"personal", "", true}}}, {"rowan", {{"other", "", false}}}});
+    w.link.changed = true;
+    w.host.pollLink();
+    w.view.accountAction("sign_in:personal");
+    w.view.accountAction("sign_in:personal");
+    const auto owner = w.model.tab(w.tabOf("emma")).id;
+    CHECK(w.view.signInFeedback(owner).find("Waiting") != std::string_view::npos);
+    CHECK(w.model.select_tab(w.tabOf("rowan")));
+    w.round();
+    CHECK(w.view.signInFeedback(w.model.tab(w.model.active()).id).empty() && w.view.problem.empty());
+    CHECK(w.view.signInFeedback(owner).find("Waiting") != std::string_view::npos);
+
+    w.model.select_tab(w.tabOf("emma"));
+    auto& state = w.link.state.sessions;
+    const auto token = w.host.signIn.opener.token();
+    w.host.signIn.openUrl = [](const auto&) {};
+    state.setOffers({sync::SignInOffer{.id = 33, .account = "personal", .provider = "antigravity",
+        .opener = token, .host = "studio", .url = sync::SecretValue("https://accounts.google.com/o/oauth2/auth?test=1"),
+        .codeWanted = true}});
+    w.link.changed = true;
+    w.host.pollBackground();
+    CHECK(w.host.secrets.showing() != nullptr);
+    w.host.secrets.type("4/fixture-only");
+    w.host.secrets.submit();
+    w.host.pollBackground();
+    CHECK(w.view.signInFeedback(owner).find("Code submitted") != std::string_view::npos);
+    w.model.select_tab(w.tabOf("rowan"));
+    state.setOffers({sync::SignInOffer{.id = 34, .account = "personal", .provider = "antigravity"}});
+    w.link.changed = true;
+    w.host.pollBackground();
+    CHECK(w.view.signInFeedback(owner).find("fresh Google sign-in") != std::string_view::npos);
+    CHECK(w.view.signInFeedback(w.model.tab(w.model.active()).id).empty());
+
+    // Recovery may finish on another link after the original claim has already ended.
+    state.setAIs({{"emma", {{"personal", "", false}}}, {"rowan", {{"other", "", false}}}});
+    state.setOffers({});
+    w.link.changed = true;
+    w.host.pollBackground();
+    CHECK(w.view.signInFeedback(owner).empty());
+
+}
+
 void enterDuringAccountSwitchWaitsForServerState() {
     Window w("chat");
     auto session = std::make_shared<sync::SessionView>();
@@ -615,6 +699,8 @@ int main() {
     explicitSignInKeepsTheDraft();
     remoteLoginSwitchAndRetry(false);
     remoteLoginSwitchAndRetry(true);
+    remoteSignInCardClaimsTheSelectedAccount();
+    signInFeedbackStaysInItsSession();
     enterDuringAccountSwitchWaitsForServerState();
     logoutUsesTheConfirmedAccountAndReturnsToSignIn();
     savedStateShowsTheSelectedEmailWithoutStartingSignIn();

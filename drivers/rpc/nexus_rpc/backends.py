@@ -7,6 +7,7 @@ import uuid
 import logging
 
 from .catalog import acp_catalog, discover
+from .codex_account import PERSONAL_PAID_PLANS
 from pathlib import Path
 
 
@@ -59,7 +60,7 @@ def turn_quota(provider, error):
 
 # Keep unknown or newly introduced plans out of the prompt path until their billing is known.
 PAID_PLANS = {
-    "codex": {"go", "plus", "pro", "prolite", "team", "selfservebusinessprolite", "business",
+    "codex": PERSONAL_PAID_PLANS | {"team", "selfservebusinessprolite", "business",
               "enterprise", "edu", "eduplus", "edupro"},
     "antigravity": {"googleaipro", "googleaiultra"},
     "grok": {"supergrok", "supergrokheavy", "supergrokpro", "premium", "xpremium+"},
@@ -116,6 +117,14 @@ async def refresh_choices(rpc, provider):
         logging.warning("%s did not provide a new model catalog", provider)
 
 
+def codex_quota(turn, limits):
+    if isinstance(limits, dict) and limits.get("limitId") in (None, "codex"):
+        for key in ("primary", "secondary"):
+            window = limits.get(key)
+            if isinstance(window, dict):
+                turn.quota(window.get("windowDurationMins"), window.get("usedPercent"))
+
+
 async def codex(rpc, turn):
     await rpc.call("initialize", {
         "clientInfo": {"name": "nexus", "version": "1"}, "capabilities": {"experimentalApi": True},
@@ -133,6 +142,10 @@ async def codex(rpc, turn):
     if expected and not matches_personal(expected, auth.get("email"), auth.get("planType")):
         raise Failure("Sign in to the Personal workspace for the selected ChatGPT email.", "no-credential", revoked=True)
     turn.credential(subscription("codex", auth.get("planType")))
+    # Older app servers can decline the optional quota method. They can still serve the turn.
+    snapshot = await rpc.call("account/rateLimits/read", {}, optional=True)
+    if isinstance(snapshot, dict):
+        codex_quota(turn, snapshot.get("rateLimits"))
     cwd = str(Path(turn.cwd).resolve(strict=True))
     options = {
         "cwd": cwd,
@@ -169,6 +182,9 @@ async def codex(rpc, turn):
     failure_notice = None
     while True:
         method, params = await rpc.event()
+        if method == "account/rateLimits/updated":
+            codex_quota(turn, params.get("rateLimits"))
+            continue
         thread = params.get("threadId")
         if thread != sid:
             if thread in children and (method == "turn/completed" or method == "thread/closed"):
@@ -208,6 +224,9 @@ async def acp(rpc, turn):
     if turn.harness == "antigravity":
         if not caps.get("_meta", {}).get("antigravity", {}).get("systemPrompt", {}).get("append"):
             raise Failure("This Antigravity version cannot append AI instructions.")
+        if getattr(turn, "project_socket", None):
+            options["mcpServers"] = [{"name": "nexus_project", "command": "/usr/bin/nc",
+                                      "args": ["-U", str(turn.project_socket)], "env": []}]
         options["_meta"] = {"antigravity": {"systemPrompt": {"append": turn.instructions}}}
     else:
         methods = {m["id"] for m in init["authMethods"]}
@@ -239,6 +258,12 @@ async def acp(rpc, turn):
         billing = await rpc.call("_x.ai/billing", {})
         turn.credential(subscription("grok", billing.get("subscription_tier")))
     sid = turn.session(result.get("sessionId") or turn.resume)
+    if getattr(turn, "project_socket", None):
+        from . import bus_tool, project_tools
+        rpc.project_methods = {project_tools.COMMAND}
+        if turn.bus_sender:
+            rpc.project_methods.add(bus_tool.TOOL)
+        rpc.project_session = sid
     if turn.model:
         choice = next(
             (
@@ -315,6 +340,17 @@ async def acp(rpc, turn):
         raise Failure("The ACP harness ended the turn before completion.")
 
 
+def muse_quota(turn, usage):
+    if not isinstance(usage, dict):
+        return
+    window = usage.get("window")
+    if isinstance(window, dict):
+        turn.quota(window.get("windowDurationMins"), window.get("usedPercent"))
+    weekly = usage.get("weekly")
+    if isinstance(weekly, dict):
+        turn.quota(10080, weekly.get("usedPercent"))
+
+
 async def muse(rpc, turn):
     await rpc.call("initialize", {
         "clientInfo": {"name": "nexus", "version": "1"}, "capabilities": {"experimentalApi": True},
@@ -322,7 +358,7 @@ async def muse(rpc, turn):
     await rpc.notify("initialized", {})
     first = await refresh_choices(rpc, "muse")
     turn.model = turn.model or first
-    turn.credential(await turn.provider.subscription_tier(rpc))
+    turn.credential(await turn.provider.subscription_tier(rpc, lambda usage: muse_quota(turn, usage)))
     opts = {"commandId": uuid7(), "workspaceRoot": turn.cwd, "approvalMode": "denyUnmatched"}
     if turn.model:
         opts["modelId"] = turn.model
@@ -354,6 +390,9 @@ async def muse(rpc, turn):
     }
     while True:
         method, params = await rpc.event()
+        if method == "usage/changed":
+            muse_quota(turn, params.get("usage"))
+            continue
         if params.get("sessionId") != sid:
             continue
         if method == "item/completed":

@@ -38,7 +38,8 @@ const UnitViewInfo * UnitView()
         { 20, "SignOut", 0x5cdb26887b48e1e8ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 21, "ResolveLimit", 0x0610706c3ede743eull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 22, "SignInCancel", 0xcfdd8cdcbd2e9d1dull, NULL, NULL, NULL, TableDocNone, 0, NULL },
-        { 23, "Rename", 0x60320a18282b2b33ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 23, "SignInCode", 0x40a17ec4a8d3cb42ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 24, "Rename", 0x60320a18282b2b33ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
     };
     static const ViewVariant Activity_view_variants[] = {
         { 0, "None", 0, NULL, NULL, NULL, TableDocNone, 0, NULL },
@@ -71,7 +72,7 @@ const UnitViewInfo * UnitView()
         { 6, "set_title", 0x2bbef72c13124e22ull, "*string", NULL, &Change_view_arm_fields[1], TableDocNone, 0, NULL },
     };
     static const ViewVocabulary enums[] = {
-        { "ActionKind", "NexusNext.schema", 23, 8, 24, ActionKind_view_variants, TableDocNone, 0, NULL },
+        { "ActionKind", "NexusNext.schema", 24, 8, 25, ActionKind_view_variants, TableDocNone, 0, NULL },
         { "Activity", "NexusNext.schema", 5, 8, 6, Activity_view_variants, TableDocNone, 0, NULL },
         { "EntryKind", "NexusNext.schema", 6, 8, 7, EntryKind_view_variants, TableDocNone, 0, NULL },
     };

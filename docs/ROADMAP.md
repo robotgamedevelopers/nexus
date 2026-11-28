@@ -16,7 +16,12 @@
 | The fleet's machine list from the server, as the AIs are: the server sends the machines it knows in its state, and the window stops reading nova-config for the terminal tabs' machine labels, its last outside tool | ❌ |
 | 6. Sprint: see and deal cards without leaving the window | ❌ |
 | 7. Panels: AIs add UI elements when asked; a panel is data (what to show, which tool's output feeds it, what each button sends) rendered by nexus, never code loaded into it | ❌ |
-| One install: nexus-server on macOS, Linux or Windows (WSL2) starts and supervises the configured nova-tools and nova-sprint services as child processes, including Redis, message bus listeners, Sprint scheduling and workers. The host starts nexus-server at boot. Closing a client leaves the services running. iPad and iPhone connect as clients. | ❌ |
+| One self-contained Nexus installation per host. Nexus is the sole required resident application process. Its server embeds durable storage, message delivery, the MCP endpoint, and Sprint scheduling and worker coordination. Closing every client leaves this work running. iPad and iPhone connect as clients. | ❌ |
+| One Nexus tool catalog for Claude, Codex, Antigravity, Grok and Muse. Attach it on new and resumed sessions through MCP or the harness tool protocol. Verify discovery and execution from each real harness. | ❌ |
+| Nexus owns each AI inbox and its designated receiving session. Prove a message and reply across harnesses, with two sessions for the same AI and a server restart. Preserve existing inboxes and explicitly hand off each external listener. | ❌ |
+| Expose shared memory, roadmaps, reservations, registry, fleet, sandboxed work and credential-backed operations through the catalog, scoped to the calling AI and workspace. | ❌ |
+| Run the Sprint card lifecycle from Nexus, including dependencies, reviews, merges, coordinator decisions, scheduling, monitoring and recovery. The dashboard and AI tools read the same card state. | ❌ |
+| Verify on a clean host with only Nexus installed and started: send a message, schedule and complete a Sprint card, close the clients, restart Nexus and check the receipt and card. Inspect startup registrations and running processes during the workflow and after it. Verify migration preserves messages, memory, credentials, reservations and active cards. | ❌ |
 | Writer thread: the store's write and flush run off the server loop's thread, and the loop keeps sending state to the windows while a flush runs, holding back only the acknowledgement until it is durable. mosh cannot hold that back: unmodified, it sends as ack_num the newest remote state it has received, on any tick, so the acknowledgement is bound to received state, and modifying mosh is out (AGENTS.md). So the acknowledgement moves up into nexus: the server's state carries each window's durable applied counter (the number the store has flushed), and the window trims its held actions by that counter, not by mosh's ack, and sends them again after a reconnect as it does now; the state shown is the durable state, or marks what is not yet durable. Changes the Link model (the window's held list, ExactlyOnce across a crash), the Applier, the window's trimming, and their trace binding | ❌ |
 | Server loop bound to a model: a spec of one pass of nexus-server's loop (the batch applied with the drivers held, its one flush, the drivers released, the state set, the links' ticks at the next pass, and a crash anywhere in it), and the real loop's trace (hold, flush, release, tick, with the fs seam's crashes) checked against it in CI, with reversed witnesses for a release, a state or a tick before the flush | ✅ |
 | iPhone depth: a TLA+ layout model and trace check for the momentum list scroll (finger_scroll), as the rules for index arithmetic ask | ❌ |
@@ -25,7 +30,7 @@
 | iOS client (one universal app for iPhone and iPad), a second client of the server: builds, draws and links in the simulator and on an iPad (docs/ios.md); next the phone's own form, voice, and the iPhone's side of the watch's relay (docs/watch.md) | ❌ |
 | Install through AI, no installer: a person in their own AI, on their own subscription, points it at this repo; the AI builds nexus from source by README, installs nexus-server as a login item, and sets nexus up with one AI, its own harness and account. No sprint, no fleet. README is the installer and is proven by a cold run on a clean Mac. After the AIs layer. (later) | ❌ |
 | Real isolation, for people who need it: everything on the fleet (AIs, fleet workers on API billing, and CI workers) runs inside a sandboxed VM or container, so nothing it runs can reach the machine's own files, logins or services. The token wall today is best effort (docs/secrets.md). Candidates to try, none chosen, by host, in docs/secrets.md "Real isolation: candidates": on Mac hosts Tart (a separate program only: source-available, never taken in), Apple's containerization and container tool, Lima, lume, vfkit, Podman's VM mode; on Linux and WSL2 libkrun through BoxLite or microsandbox, Firecracker with Fireactions for CI runners, Cloud Hypervisor, gVisor, Kata Containers, Podman, Incus; on any host Kubernetes (agent-sandbox, a runner controller) or VMs on GCP or AWS; bubblewrap and nsjail as the process-level baseline. Day-to-day AIs on a Mac stay on the process sandbox (GPU and Xcode natively). (later) | ❌ |
-| complete | 5% |
+| complete | 4% |
 
 [Source data](roadmap.sexp)
 
@@ -57,12 +62,13 @@
 |---|:---:|
 | Let an AI see a display or window the human chooses with Screen Recording permission (later) | ❌ |
 | Let an AI click and type in other apps with separate Accessibility permission and a human stop control (later) | ❌ |
+| Audit session isolation across the client and server. Exercise two simultaneous sessions, including sessions on one account, and verify that messages, drafts, errors, prompts, actions and delayed replies stay with their originating session through tab switches and reconnects. | ❌ |
 | Finish v0.2.5: verify the remaining platform gates, deploy the matching client and policy, merge the release PR, then publish the source archive and checksums | ❌ |
 | Compact work groups: keep only the latest three unwrapped lines, cut at the last whole character with no ellipsis; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup | ❌ |
 | AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text | ❌ |
 | Enter from a focused AI-output selection, or paste a copied AI selection, inserts a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble | ❌ |
 | Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering | ❌ |
-| Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color | ❌ |
+| Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color | ✅ |
 | Render Markdown tables with native Prax table layout, aligned columns, readable headers and preserved inline formatting and links | ❌ |
 | Reduce the header height by six points while preserving notch avoidance, clock alignment and tab hit targets | ❌ |
 | Use full-width conversation bubbles and warnings on both phones and tablets | ❌ |
@@ -81,7 +87,7 @@
 | Windows depth: close the trace binding gaps (ten of seventeen review plants escaped the trace): constrain ranWell by the relay's run time (RelayLife.tla:171); model the tells as a sequence with a no-repeat invariant; unit tests for the acked_+1 re-cut, acked going down, and ended() after stop(); widen the CI seeds | ❌ |
 | Windows depth: a watchdog for a hung relay; keep the NEXUS_WSL_RELAY test hook out of shipping builds; show a notice when history requests are dropped; show a bubble for a message sent when nextAction()==0 (frame_host.cpp:779-783) | ❌ |
 | Linux desktop window: waits on Prax's Wayland backend (asked of Patrick); until then the Linux build is the server only | ❌ |
-| complete | 11% |
+| complete | 14% |
 
 [Source data](roadmap.sexp)
 

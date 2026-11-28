@@ -925,7 +925,8 @@ void draftAndScrollStayWithTheirAI() {
     h.frame();
     const float scrolled = prLayoutUnitToPx(prLayoutNodeScroll(h.tree, h.view.transcript).y);
     CHECK(scrolled < -100 || scrolled > 100);
-    // In mid-history the content extends past both edges. The viewport clips just the two bottom corners.
+    // Overflow reaches the divider, including both upper corners. The bottom corners stay rounded.
+    CHECK(near(port.top, h.bounds(prLayoutNodeParent(h.tree, h.view.transcript)).top));
     auto hitsConversation = [&](float x, float y) {
         PrLayoutNode hits[64]{};
         auto count = prLayoutTreeHitTest(h.tree, {prLayoutUnitFromPx(x), prLayoutUnitFromPx(y)}, hits, 64);
@@ -1465,7 +1466,7 @@ void personBubblesWrapFromTheRight() {
         const auto row = h.bounds(entries.front());
         const auto bubble = h.bounds(prLayoutNodeFirstChild(h.tree, entries.front()));
         CHECK(near(bubble.right, row.right));
-        CHECK(std::abs((bubble.right - bubble.left) / (row.right - row.left) - 2.0f / 3.0f) < 0.01f);
+        CHECK(near(bubble.right - bubble.left, std::min(viewport / 2, (row.right - row.left) * 2 / 3)));
         CHECK(bubble.bottom - bubble.top > h.look.ui.line_pitch * 2);
         h.model.set_draft(0, text);
         h.model.hold_draft(0);
@@ -1473,7 +1474,7 @@ void personBubblesWrapFromTheRight() {
         const auto heldRow = h.bounds(h.entries().back());
         const auto held = h.bounds(prLayoutNodeFirstChild(h.tree, h.entries().back()));
         CHECK(near(held.right, heldRow.right));
-        CHECK(std::abs((held.right - held.left) / (heldRow.right - heldRow.left) - 2.0f / 3.0f) < 0.01f);
+        CHECK(near(held.right - held.left, std::min(viewport / 2, (heldRow.right - heldRow.left) * 2 / 3)));
     }
 }
 
@@ -1498,8 +1499,8 @@ void workLinesClipAtReplyWidth() {
         if (!leaf) continue;
         const auto raw = prLayoutNodeText(h.tree, leaf);
         const std::string preview(raw.data, raw.size);
-        CHECK(preview.ends_with("…"));
-        CHECK(("$ " + command).starts_with(preview.substr(0, preview.size() - 3)));
+        CHECK(!preview.empty() && !preview.ends_with("…"));
+        CHECK(("$ " + command).starts_with(preview));
         const auto text = h.bounds(leaf);
         const float padding = h.look.transcriptStyle.captionPaddingX * h.look.ui.scale(h.look.textSteps);
         CHECK(text.right <= bubble.right - padding + 1);
@@ -1528,9 +1529,30 @@ void warningsUseReplyWidthFromTheLeft() {
 
 void conversationBubblesAndSignInCard() {
     Harness h;
+    h.frame();
+    h.frame();
+    const auto viewport = h.bounds(h.view.transcript);
+    const auto panels = h.bounds(prLayoutNodeParent(h.tree, h.view.transcript));
+    CHECK(near(viewport.top - panels.top, h.bounds(h.view.promptBox).top - viewport.bottom));
+    const auto emptyPanel = h.bounds(h.view.conversation);
+    CHECK(emptyPanel.top < viewport.top + (viewport.bottom - viewport.top) * 0.1f);
+    CHECK(near(emptyPanel.bottom, viewport.bottom));
+    const auto style = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, h.view.transcript));
+    const auto frame = prLayoutDecorationStyleRecord(h.tree, style.groups[PrLayoutGroup_Decoration]);
+    CHECK(frame.outlineStyle == PrDrawBorderStyle_Solid);
+    CHECK(colorMatches(prColorFromColor16(frame.outlineColor), h.look.colors.output_border));
+    CHECK(frame.outlineWidth.raw == prLayoutUnitFromPx(h.look.ui.output_border_width).raw);
+    CHECK(frame.outlineOffset.raw == -frame.outlineWidth.raw);
+    h.model.append(0, Entry{EntryKind::Person, "Hello"});
+    h.frame();
+    h.frame();
+    CHECK(h.entries().size() == 1);
+    if (h.entries().size() == 1) {
+        const auto first = h.bounds(h.entries().front());
+        CHECK(first.bottom > viewport.bottom - (viewport.bottom - viewport.top) / 5);
+    }
     const std::string live = "Streaming reply";
     h.view.growing = [&](std::size_t) { return &live; };
-    h.model.append(0, Entry{EntryKind::Person, "Hello"});
     h.model.append(0, Entry{EntryKind::AI, "A reply."});
     h.model.append(0, Entry{EntryKind::Notice, "Usage limit reached."});
     h.frame();
@@ -1538,9 +1560,10 @@ void conversationBubblesAndSignInCard() {
     const auto entries = h.entries();
     CHECK(entries.size() == 4);
     if (entries.size() != 4) return;
+    CHECK(near(emptyPanel.top, h.bounds(h.view.conversation).top));
     const auto bubble = [&](std::size_t i) { return prLayoutNodeFirstChild(h.tree, entries[i]); };
     CHECK(colorMatches(fillOf(h, bubble(0)), h.look.transcriptStyle.fill));
-    CHECK(colorMatches(fillOf(h, h.view.conversation), *h.look.transcriptStyle.panelFill));
+    CHECK(colorMatches(fillOf(h, h.view.transcript), *h.look.transcriptStyle.panelFill));
     CHECK(fillOf(h, bubble(1)).a == 0 && fillOf(h, bubble(3)).a == 0);
     CHECK(h.bounds(bubble(0)).left > h.bounds(bubble(1)).left);
     CHECK(near(h.bounds(bubble(1)).left, h.bounds(bubble(3)).left));
@@ -1587,7 +1610,7 @@ void signInCardInTheShippedMenu() {
     publish(true);
     h.commandDigit(2);
     h.frame();
-    CHECK(h.view.transcript == kPrLayoutNodeNone && !h.hasText(h.window(), "A reply."));
+    CHECK(h.view.transcript != kPrLayoutNodeNone);
     CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.view.accountAnchor == kPrLayoutNodeNone);
     if (h.view.accountMenu == kPrLayoutNodeNone) return;
     CHECK(h.hasText(h.view.accountMenu, "Please sign in to codex") && h.hasText(h.view.accountMenu, email));
@@ -1608,6 +1631,13 @@ void signInCardInTheShippedMenu() {
     CHECK(h.bounds(address).left >= narrow.left - 0.5f && h.bounds(address).right <= narrow.right + 0.5f);
     PrLayoutRect lines[8]{};
     CHECK(prLayoutNodeTextRangeBoxes(h.tree, address, 0, uint32_t(email.size()), PrLayoutCoordinates_Viewport, lines, 8) > 1);
+    h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown);
+    h.frame();
+    CHECK(h.view.accountPicker && h.view.accountPicker->options[h.view.accountPicker->highlighted].name == "home");
+    h.key(PrAppKey_Up, PrAppKeyCode_ArrowUp);
+    h.frame();
+    CHECK(h.view.accountPicker && h.view.accountPicker->options[h.view.accountPicker->highlighted].name == "work");
+    CHECK(link.sent.empty());
     // Enter, on the account in use, starts its sign-in: the window claims it from the server.
     h.enter();
     h.frame();
@@ -1827,7 +1857,7 @@ void toolLinesAreOneCompactLine() {
     if (readLeaf) {
         const auto raw = prLayoutNodeText(h.tree, readLeaf);
         const std::string preview(raw.data, raw.size);
-        CHECK(preview.ends_with("…"));
+        CHECK(!preview.empty() && !preview.ends_with("…"));
         checkTextPaint(h, preview, shipped.toolInks.at("Read"), shipped.fill);
     }
     checkTextPaint(h, "Let me look.", shipped.ink, *shipped.panelFill);
@@ -1966,6 +1996,22 @@ void stateCursorUnderTheLastText() {
     h.view.cursor = nullptr;
     h.frame();
     CHECK(h.entries().size() == 2 && !h.view.breathing);
+}
+
+void compactToolLabelsKeepTheirSourceEntries() {
+    for (const auto& [entry, label] : std::vector<std::pair<std::string, std::string>>{
+             {"Write: /Users/glenn/project/My Notes.md", "Write My Notes.md"},
+             {"ToolSearch: select:TaskStop", "Find tool TaskStop"},
+             {"TaskStop: {\"task_id\":\"b3462ejpk\"}", "Stop task"},
+             {"Monitor: tail -n 0 -F /Volumes/nova/rowan/bus-inbox/inbox.log | grep --line-buf", "Monitor inbox.log"},
+             {"Monitor: tail -F '/project/logs/build one.log' | grep done", "Monitor build one.log"},
+             {"Monitor: some-command --verbose", "Monitor"}}) {
+        Harness h;
+        h.model.append(0, {EntryKind::Tool, entry});
+        h.frame(); h.frame();
+        CHECK(h.hasText(h.window(), label));
+        CHECK(h.active().transcript.back().text == entry);
+    }
 }
 
 void nativeBusSendIsPrivateInHistory() {
@@ -2185,8 +2231,8 @@ void scrollPastTheEndCountsTheLastItemOnce() {
     }
     h.frame();
     h.frame();
-    PrLayoutNode column = prLayoutNodeFirstChild(h.tree, h.view.transcript);
-    const float whole = h.height(column);
+    // Measure the messages themselves. The outer column also holds the collapsible divider gap.
+    const float whole = h.height(h.view.conversation);
     CHECK(h.entries().size() == 8);        // every item declared, and measured
     h.commandDigit(2);
     h.frame();
@@ -2194,10 +2240,9 @@ void scrollPastTheEndCountsTheLastItemOnce() {
     h.rounds = 1;                           // the one round that declares from that scroll
     h.commandDigit(1);
     h.rounds = 8;
-    column = prLayoutNodeFirstChild(h.tree, h.view.transcript);
     std::vector<PrLayoutNode> e = h.entries();
     CHECK(e.size() == 2 && h.hasText(e.back(), "line 7"));     // the spacer, and the last item
-    const float shown = h.height(column);
+    const float shown = h.height(h.view.conversation);
     if (shown < whole - 0.5f || shown > whole + 0.5f) {
         std::fprintf(stderr, "  column %.1f px with every item, %.1f px from past the end\n", double(whole),
             double(shown));
@@ -2398,9 +2443,27 @@ void accountPickerIsAnExplicitChoice() {
         return p.tab == tabId && p.session == 17 && p.current == current && p.highlighted < p.options.size() &&
                p.options[p.highlighted].name == wanted;
     };
-    // An opening chord (Down) opens the menu on the account in use, centred over the window and anchored to no
-    // tab; it sends nothing and keeps the draft.
+    // One paragraph spans several visual lines. Both arrows stay in the editor.
+    h.key(PrAppKey('A'), PrAppKeyCode_KeyA, style::kCommand);
+    std::string paragraph;
+    for (int i = 0; i < 40; ++i) paragraph += "wrapped prompt ";
+    h.type(paragraph.c_str());
+    h.frame();
+    CHECK(h.view.promptRows > 1 && h.active().draft == paragraph);
+    const auto end = prUiTextEditSelection(h.ui, h.view.prompt).caret;
+    arrow(false, 0);
+    const auto above = prUiTextEditSelection(h.ui, h.view.prompt).caret;
+    CHECK(above > 0 && above < end && !h.view.accountPicker);
     arrow(true, 0);
+    CHECK(prUiTextEditSelection(h.ui, h.view.prompt).caret == end && !h.view.accountPicker);
+    h.enter(PrAppModifierFlag_Shift);
+    h.type("next line");
+    CHECK(h.active().draft == paragraph + "\nnext line" && link.sent.empty());
+    h.key(PrAppKey('A'), PrAppKeyCode_KeyA, style::kCommand);
+    h.type("keep my draft");
+    // An opening chord (Command–Down) opens the menu on the account in use, centred over the window and anchored to no
+    // tab; it sends nothing and keeps the draft.
+    arrow(true, style::kCommand);
     CHECK(preview("b", "b"));
     CHECK(link.sent.empty() && signIns == 0 && h.active().id == tabId && h.active().draft == "keep my draft");
     CHECK(h.view.accountAnchor == kPrLayoutNodeNone && h.view.accountMenu != kPrLayoutNodeNone);
@@ -2410,23 +2473,23 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(menu.top >= h.bounds(h.tabs()[h.model.active()]).bottom);
     CHECK(h.view.accountRows.size() == 3);
     for (const char* label : {"Personal", "Work", "Archive"}) CHECK(h.hasText(h.view.accountMenu, label));
-    // Open, the plain arrows move the highlight, and only that.
-    arrow(true, 0);
+    // Open, the Command arrows move the highlight, and only that.
+    arrow(true, style::kCommand);
     CHECK(preview("c", "b"));
-    arrow(false, 0);
+    arrow(false, style::kCommand);
     CHECK(preview("b", "b"));
-    arrow(false, 0);
+    arrow(false, style::kCommand);
     CHECK(preview("a", "b") && link.sent.empty());
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     h.frame();
     CHECK(!h.view.accountPicker && h.view.accountMenu == kPrLayoutNodeNone && h.hides == 0);
     CHECK(h.active().draft == "keep my draft" && link.sent.empty());
 
-    // Down alone opens it too (account_picker_shortcuts); Enter chooses the highlighted account, and only then is
+    // Command–Down opens it again (account_picker_shortcuts); Enter chooses the highlighted account, and only then is
     // anything sent.
-    arrow(true, 0);
+    arrow(true, style::kCommand);
     CHECK(preview("b", "b") && link.sent.empty());
-    arrow(true, 0);
+    arrow(true, style::kCommand);
     CHECK(preview("c", "b") && link.sent.empty());
     h.enter();
     h.frame();
@@ -2443,7 +2506,7 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(link.sent.size() == 3 && link.sent[2].kind == sync::ActionKind::SignInClaim && link.sent[2].account == "c" &&
           link.sent[2].session == 17);
     CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.view.accountRows.size() == 3);
-    arrow(false, 0);
+    arrow(false, style::kCommand);
     CHECK(preview("b", "c"));
     h.commandDigit(3);
     h.frame();
@@ -2451,7 +2514,7 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(link.sent.size() == 3);
     h.commandDigit(2);
     CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.active().draft == "keep my draft");
-    arrow(true, 0);
+    arrow(true, style::kCommand);
     CHECK(preview("a", "c"));
     CHECK(h.view.accountRows.size() == 3);
     if (h.view.accountRows.size() != 3) return;
@@ -2471,7 +2534,7 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(h.view.accountMenu == kPrLayoutNodeNone && link.sent.size() == 6);
     // The shipped menu lists the linked accounts only: automatic choice is the server's (auto_accounts), never a row.
     publish("a", true, true);
-    arrow(false, 0);
+    arrow(false, style::kCommand);
     CHECK(preview("a", "a") && h.view.accountRows.size() == 3);
     for (const auto row : h.view.accountRows) CHECK(!h.hasText(row, "auto"));
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
@@ -3082,6 +3145,12 @@ void onlyTheActiveTabShowsSelected() {
     h.commandDigit(2);
     h.frame();
     CHECK(inks() == "-x-");
+    CHECK(h.view.keyboardTabSelection);
+    for (const auto node : {h.tabs().front(), h.tabs().back()}) {
+        auto style = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, node));
+        auto decoration = prLayoutDecorationStyleRecord(h.tree, style.groups[PrLayoutGroup_Decoration]);
+        CHECK(prColorFromColor16(decoration.background).a == 0);
+    }
     h.commandDigit(3);
     h.frame();
     CHECK(inks() == "--x");
@@ -3388,7 +3457,7 @@ void cleanNoticePresentation() {
     checkTextPaint(h, "model-a", 0xffffff, h.look.transcriptStyle.codeFill);
     CHECK(h.bounds(infoBubble).left < h.bounds(personBubble).left);
     CHECK(h.bounds(infoBubble).right - h.bounds(infoBubble).left < h.extent.x / 2);
-    checkTextPaint(h, "Edit: /tmp/example.cpp", 0x86c5ff, h.look.transcriptStyle.fill);
+    checkTextPaint(h, "Edit example.cpp", 0x86c5ff, h.look.transcriptStyle.fill);
     checkTextPaint(h, "$ build", 0x86c5ff, h.look.transcriptStyle.fill);
     h.type("/help"); h.enter(); h.frame();
     CHECK(h.view.helpTab == h.active().id && h.view.helpText.find("/goal <text>") != std::string::npos);
@@ -3565,7 +3634,7 @@ void idlePulseAndConfiguration(const char* active, const char* disabled) {
     CHECK(h.look.colors.background == 0x102030 && h.look.transcriptStyle.panelFill == 0x304050);
     auto canvas = fillOf(h, h.window()); canvas.a = 1;
     CHECK(colorMatches(canvas, 0x102030));
-    CHECK(colorMatches(fillOf(h, h.view.conversation), 0x304050));
+    CHECK(colorMatches(fillOf(h, h.view.transcript), 0x304050));
     CHECK(near(fillOf(h, h.window()).a, 0.9f));
     CHECK(near(h.kit->theme.types[PrKitTextRole_Body].size, 30));
     CHECK(h.look.ui.bubble_padding_x == 12 && h.look.ui.entry_gap == 22);
@@ -3627,6 +3696,10 @@ int main(int argc, char** argv) {
         h.enter();
         h.frame();
         CHECK(h.view.choiceKind == "model" && h.view.accountRows.size() == 2 && link.sent.size() == beforeChoices);
+        CHECK(near(fillOf(h, prLayoutNodeParent(h.tree, h.view.accountMenu)).a, 0.5f));
+        CHECK(prUiFocus(h.ui) == h.view.accountRows.front());
+        CHECK(host.event(textEvent(PrAppEventKind_Paste, {"stray text", 10})));
+        CHECK(h.active().draft.empty());
         h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown);
         h.frame();
         CHECK(h.view.choiceValue == "model-b");
@@ -3637,6 +3710,10 @@ int main(int argc, char** argv) {
         h.enter();
         h.frame();
         CHECK(h.view.choiceKind == "effort" && h.view.accountRows.size() == 2);
+        CHECK(near(fillOf(h, prLayoutNodeParent(h.tree, h.view.accountMenu)).a, 0.5f));
+        CHECK(prUiFocus(h.ui) == h.view.accountRows.front());
+        CHECK(host.event(textEvent(PrAppEventKind_Paste, {"stray text", 10})));
+        CHECK(h.active().draft.empty());
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
         h.frame();
         CHECK(h.view.choiceKind.empty() && h.hides == 0 && prUiFocus(h.ui) == h.view.prompt);
@@ -3694,7 +3771,7 @@ int main(int argc, char** argv) {
             h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown, mods);
             h.frame();
         };
-        down(0);
+        down(style::kCommand);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 1);
         CHECK(h.hasText(h.tabs()[h.model.active()], "F1") && h.view.accountAnchor == kPrLayoutNodeNone);
         CHECK(h.view.accountRows.size() == 3);
@@ -3705,7 +3782,7 @@ int main(int argc, char** argv) {
         CHECK(std::abs((menu.left + menu.right) / 2 - h.extent.x / 2) < 2);
         CHECK(std::abs((menu.top + menu.bottom - h.extent.y) / 2) < 2);
         CHECK(colorMatches(fillOf(h, h.view.accountMenu), h.look.messageCard.fill));
-        down(0);
+        down(style::kCommand);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 2 && link.sent.empty());
         CHECK(near(h.bounds(h.view.accountMenu).left, menu.left) && near(h.bounds(h.view.accountMenu).right, menu.right));
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
@@ -3724,7 +3801,7 @@ int main(int argc, char** argv) {
               link.sent.back().account == "c" && link.sent.back().session == 17);
         CHECK(!h.view.accountPicker && h.view.accountRows.size() == 3);
         CHECK(h.hasText(h.view.accountMenu, "Please sign in to ChatGPT"));
-        CHECK(h.view.transcript == kPrLayoutNodeNone);
+        CHECK(h.view.transcript != kPrLayoutNodeNone);
         CHECK(h.hasText(h.view.accountMenu, "c@example.test"));
         h.view.askedTextSteps = 3;
         h.frame();
@@ -3769,7 +3846,7 @@ int main(int argc, char** argv) {
         h.enter();
         h.frame();
         CHECK(h.hasText(h.view.accountMenu, "Please sign in to ChatGPT"));
-        CHECK(h.view.transcript == kPrLayoutNodeNone);
+        CHECK(h.view.transcript != kPrLayoutNodeNone);
         CHECK(link.sent.size() == sent && h.active().draft == "draft kept again");
         const std::string failure = "Could not sign in to c@example.test. The signed-in email differs.";
         h.model.append(h.model.active(), {EntryKind::Notice, failure});
@@ -3778,8 +3855,10 @@ int main(int argc, char** argv) {
         CHECK(h.hasText(h.view.accountMenu, failure));
         h.key(PrAppKey_Backspace, PrAppKeyCode_Backspace, style::kCommand);
         h.frame();
-        CHECK(h.active().draft.empty() && h.view.accountMenu != kPrLayoutNodeNone);
+        CHECK(h.active().draft == "draft kept again" && h.view.accountMenu != kPrLayoutNodeNone);
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+        h.frame();
+        h.key(PrAppKey_Backspace, PrAppKeyCode_Backspace, style::kCommand);
         h.frame();
         h.type("/login");
         h.enter();
@@ -3810,7 +3889,7 @@ int main(int argc, char** argv) {
         h.frame();
         CHECK(link.sent.size() == sent && h.active().draft.empty() && h.active().transcript.empty());
         CHECK(h.view.accountMenu == kPrLayoutNodeNone && prUiFocus(h.ui) == h.view.prompt);
-        down(0);
+        down(style::kCommand);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 2);
         if (argc == 4) {
             std::filesystem::copy_file(argv[3], argv[2], std::filesystem::copy_options::overwrite_existing);
@@ -4133,6 +4212,7 @@ int main(int argc, char** argv) {
     toolLinesAreOneCompactLine();
     growingTextShowsAfterTheTranscript();
     stateCursorUnderTheLastText();
+    compactToolLabelsKeepTheirSourceEntries();
     nativeBusSendIsPrivateInHistory();
     scannerHasPromptPadding();
     sendingKeepsBubbleOnScannerRow();

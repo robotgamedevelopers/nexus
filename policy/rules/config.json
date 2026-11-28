@@ -16,13 +16,14 @@
     "tab_move_threshold": 12
   },
   "account_picker_shortcuts": {
-    "ArrowDown": "next",
-    "ArrowUp": "previous"
+    "Command+ArrowDown": "next",
+    "Command+ArrowUp": "previous"
   },
   "auto_accounts": true,
   "centered_account_menu": true,
   "hold_on_enter": true,
   "message_card": {
+    "backdrop_opacity": 0.5,
     "email_ink": "#477fba",
     "email_weight": 700,
     "fill": "#303030",
@@ -213,6 +214,26 @@
       "delete_file": "#86c5ff",
       "create_directory": "#86c5ff"
     },
+    "tool_previews": {
+      "Read": "Read {filename}",
+      "read_file": "Read {filename}",
+      "Write": "Write {filename}",
+      "write_file": "Write {filename}",
+      "Edit": "Edit {filename}",
+      "MultiEdit": "Edit {filename}",
+      "NotebookEdit": "Edit {filename}",
+      "edit_file": "Edit {filename}",
+      "delete_file": "Delete {filename}",
+      "create_directory": "Create {filename}",
+      "ToolSearch": "Find tool {selection}",
+      "TaskStop": "Stop task",
+      "TaskGet": "Get task",
+      "TaskList": "List tasks",
+      "TaskOutput": "Read task output",
+      "TaskUpdate": "Update task",
+      "TaskCreate": "Create task",
+      "Monitor": "Monitor {tail_file}"
+    },
     "tool_prompts": {
       "Bash": "$ ",
       "Read": ""
@@ -244,6 +265,7 @@
     "bubble_padding_y": 21,
     "bubble_max_percent": 66.666667,
     "person_bubble_max_percent": 66.666667,
+    "desktop_person_viewport_percent": 50,
     "plus_size": 36.4,
     "column_inset": 16.8,
     "tool_size": 21.84,
@@ -268,6 +290,7 @@
     "list_column_em": 0.7,
     "code_line_height": 1.3,
     "prompt_border_width": 1,
+    "output_border_width": 1,
     "insertion_caret_width": 2.5,
     "insertion_caret_min_width": 2,
     "caret_floor": 0.48,
@@ -327,6 +350,7 @@
   },
   "ui_colors": {
     "background": "#0c0f13",
+    "output_border": "#282a2e",
     "control_hover": "#303030",
     "control_divider": "#373737",
     "control_ink": "#f3f3f3",

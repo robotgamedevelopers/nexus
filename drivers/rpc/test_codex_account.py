@@ -1,14 +1,15 @@
 import asyncio
 import base64
-import http.server
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
-import threading
+import time
+import urllib.parse
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -52,10 +53,10 @@ class Accounts(unittest.TestCase):
         ]:
             (server / directory).mkdir(exist_ok=True)
             (server / directory / (name + ".json")).write_text(json.dumps(config))
-        for email, plan, accept in [("me@example.com", "plus", True), ("me@example.com", "business", False),
-                                    ("someone@example.com", "pro", False)]:
+        for email, plan, accept in [("me@example.com", "plus", True), ("me@example.com", "promax", True), ("me@example.com", "business", False),
+                                    ("someone@example.com", "pro", False), ("me@example.com", "free", False)]:
             with staged_login(self.home) as (stage, promote):
-                data = {"email": email, "https://api.openai.com/auth": {"chatgpt_plan_type": plan, "chatgpt_account_id": "example"}}
+                data = {"https://api.openai.com/profile": {"email": email}, "https://api.openai.com/auth": {"chatgpt_plan_type": plan, "chatgpt_account_id": "example"}}
                 token = "x." + base64.urlsafe_b64encode(json.dumps(data).encode()).decode() + ".x"
                 file = self.write_login(stage, token)
                 record = json.loads(file.read_text())
@@ -68,6 +69,10 @@ class Accounts(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "Personal workspace"):
                         promote()
                     self.assertEqual(grant_stamp(self.home), before)
+
+    def test_pro_max_qualifies_for_the_first_turn(self):
+        from nexus_rpc.backends import subscription
+        self.assertEqual(subscription("codex", "promax"), "promax")
 
     def test_grant_stamp_requires_a_complete_private_chatgpt_login(self):
         self.assertIsNone(grant_stamp(self.home))
@@ -246,74 +251,28 @@ class Accounts(unittest.TestCase):
         asyncio.run(asyncio.wait_for(run(), 15))
 
     @unittest.skipUnless(BINARY, "requires native Codex")
-    def test_real_device_login_with_local_issuer(self):
-        paths = []
-
-        def encode(obj):
-            return base64.urlsafe_b64encode(json.dumps(obj).encode()).decode().rstrip("=")
-
-        token = ".".join((encode({"alg": "none"}), encode({"sub": "fixture"}), "fixture"))
-
-        class Issuer(http.server.BaseHTTPRequestHandler):
-            def log_message(self, *args):
-                pass
-
-            def do_POST(self):
-                self.rfile.read(int(self.headers.get("Content-Length", "0")))
-                paths.append(self.path)
-                replies = {
-                    "/api/accounts/deviceauth/usercode": {
-                        "device_auth_id": "local",
-                        "user_code": "TEST-ONLY",
-                        "interval": "1",
-                    },
-                    "/api/accounts/deviceauth/token": {
-                        "authorization_code": "local",
-                        "code_challenge": "local",
-                        "code_verifier": "local",
-                    },
-                    "/oauth/token": {
-                        "id_token": token,
-                        "access_token": "local-only",
-                        "refresh_token": "local-only",
-                    },
-                }
-                payload = json.dumps(replies.get(self.path, {})).encode()
-                self.send_response(200 if self.path in replies else 404)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
-        with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Issuer) as service:
-            thread = threading.Thread(target=service.serve_forever, daemon=True)
-            thread.start()
-            try:
-                with staged_login(self.home) as (stage, promote):
-                    base = f"http://127.0.0.1:{service.server_port}"
-                    run = subprocess.run(
-                        [*login_command(BINARY, stage), "--experimental_issuer", base],
-                        env=process_env("codex", stage),
-                        cwd=stage,
-                        check=False,
-                        capture_output=True,
-                        timeout=12,
-                    )
-                    self.assertEqual(run.returncode, 0)
-                    self.assertIn(b"TEST-ONLY", run.stdout)
-                    self.assertIn((base + "/codex/device").encode(), run.stdout)
-                    approved = grant_stamp(stage)
-                    self.assertIsNotNone(approved)
-                    promote()
-                    promote()
-                    self.assertEqual(grant_stamp(self.home), approved)
-            finally:
-                service.shutdown()
-                thread.join()
-        self.assertEqual(
-            paths, ["/api/accounts/deviceauth/usercode", "/api/accounts/deviceauth/token", "/oauth/token"]
-        )
-        credential = self.home / ".codex/auth.json"
-        self.assertEqual(stat.S_IMODE(credential.stat().st_mode), 0o600)
-        self.assertFalse(stage.exists())
-        self.assertFalse((self.operator / ".codex/auth.json").exists())
+    def test_real_browser_login_advertises_the_forwarded_callback(self):
+        with staged_login(self.home) as (stage, _):
+            env = process_env("codex", stage)
+            (stage / "open").symlink_to("/usr/bin/false")
+            env["PATH"] = str(stage) + ":" + os.defpath
+            with tempfile.TemporaryFile() as transcript, subprocess.Popen(
+                login_command(BINARY, stage), env=env, cwd=stage, stdout=transcript, stderr=transcript
+            ) as proc:
+                try:
+                    deadline = time.monotonic() + 6
+                    while time.monotonic() < deadline:
+                        output = os.pread(transcript.fileno(), 32768, 0).decode()
+                        match = re.search(r"https://auth\.openai\.com/oauth/authorize\?([^\s]+)", output)
+                        if match:
+                            break
+                        time.sleep(0.03)
+                    self.assertIsNotNone(match, "Codex did not offer browser login")
+                    query = urllib.parse.parse_qs(match[1])
+                    self.assertIn(query["redirect_uri"], (["http://127.0.0.1:1455/auth/callback"],
+                                                          ["http://localhost:1455/auth/callback"]))
+                    self.assertEqual(query["code_challenge_method"], ["S256"])
+                    self.assertTrue(query["state"] and query["code_challenge"])
+                    self.assertIsNone(grant_stamp(stage))
+                finally:
+                    proc.kill()

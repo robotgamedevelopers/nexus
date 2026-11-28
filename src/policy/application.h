@@ -2,6 +2,7 @@
 // driver operation share the same durable commit and acknowledgement.
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,6 +16,11 @@ struct MessagePlan {
     std::string service;
     std::vector<std::string> notices;
 };
+struct UsageRow {
+    std::string harness, account;
+    int minutes, percent;
+    std::uint64_t ageMinutes;
+};
 struct MessageState {
     const std::string& text;
     const std::string& aiName;
@@ -24,5 +30,6 @@ struct MessageState {
     std::string effort{}, harness{}, catalog{};
     bool signedOut = false;
     std::string accountEmail{}, loginState{}, aiInfo{};
+    std::vector<UsageRow> usage{};
 };
 } // namespace nexus::policy

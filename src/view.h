@@ -257,6 +257,7 @@ struct View {
     PrTextShaper* windowShaper = nullptr; // borrowed from the window for measuring tab titles
     std::vector<TabWidth> tabWidths;
     std::vector<PrLayoutNode> tabNodes;
+    bool keyboardTabSelection = false; // suppress the stationary pointer highlight until it moves
     PrLayoutNode accountAnchor = kPrLayoutNodeNone;
     PrLayoutNode accountMenu = kPrLayoutNodeNone;
     std::vector<PrLayoutNode> accountRows;
@@ -309,6 +310,7 @@ struct View {
     bool energyAnimating = false;
     unsigned pendingDashStep = 0;
     bool breathing = false;                     // the last round drew a busy cursor: frames go on while it shows
+    std::function<std::string_view(std::size_t)> signInFeedback;
     std::optional<std::size_t> helpTab;
     std::string helpText;
     std::string problem;                        // why the last prompt was not sent, until one is: a dim line at the
@@ -321,6 +323,9 @@ struct View {
     std::function<LimitOffer()> limitOffer;
     std::function<void(const LimitOffer&, const std::string&)> resolveLimit;
     LimitOffer displayedLimit;
+    bool selectorVisible() const {
+        return windowApp.surface.items && !windowApp.surface.items->empty();
+    }
     std::optional<AccountPicker> accountPicker;
     std::optional<std::pair<std::size_t, std::string>> dismissedSignIn;
     std::function<std::optional<AccountPicker>(int)> previewAccounts;

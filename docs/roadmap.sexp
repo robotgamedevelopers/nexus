@@ -68,7 +68,12 @@
      ("machines-from-server" "The fleet's machine list from the server, as the AIs are: the server sends the machines it knows in its state, and the window stops reading nova-config for the terminal tabs' machine labels, its last outside tool")
      ("sprint" "6. Sprint: see and deal cards without leaving the window")
      ("panels" "7. Panels: AIs add UI elements when asked; a panel is data (what to show, which tool's output feeds it, what each button sends) rendered by nexus, never code loaded into it")
-     ("one-app" "One install: nexus-server on macOS, Linux or Windows (WSL2) starts and supervises the configured nova-tools and nova-sprint services as child processes, including Redis, message bus listeners, Sprint scheduling and workers. The host starts nexus-server at boot. Closing a client leaves the services running. iPad and iPhone connect as clients.")
+     ("one-app" "One self-contained Nexus installation per host. Nexus is the sole required resident application process. Its server embeds durable storage, message delivery, the MCP endpoint, and Sprint scheduling and worker coordination. Closing every client leaves this work running. iPad and iPhone connect as clients.")
+     ("nexus-ai-tools" "One Nexus tool catalog for Claude, Codex, Antigravity, Grok and Muse. Attach it on new and resumed sessions through MCP or the harness tool protocol. Verify discovery and execution from each real harness.")
+     ("nexus-ai-inbox" "Nexus owns each AI inbox and its designated receiving session. Prove a message and reply across harnesses, with two sessions for the same AI and a server restart. Preserve existing inboxes and explicitly hand off each external listener.")
+     ("nexus-ai-work" "Expose shared memory, roadmaps, reservations, registry, fleet, sandboxed work and credential-backed operations through the catalog, scoped to the calling AI and workspace.")
+     ("nexus-ai-sprint" "Run the Sprint card lifecycle from Nexus, including dependencies, reviews, merges, coordinator decisions, scheduling, monitoring and recovery. The dashboard and AI tools read the same card state.")
+     ("nexus-ai-install" "Verify on a clean host with only Nexus installed and started: send a message, schedule and complete a Sprint card, close the clients, restart Nexus and check the receipt and card. Inspect startup registrations and running processes during the workflow and after it. Verify migration preserves messages, memory, credentials, reservations and active cards.")
      ("writer-thread" "Writer thread: the store's write and flush run off the server loop's thread, and the loop keeps sending state to the windows while a flush runs, holding back only the acknowledgement until it is durable. mosh cannot hold that back: unmodified, it sends as ack_num the newest remote state it has received, on any tick, so the acknowledgement is bound to received state, and modifying mosh is out (AGENTS.md). So the acknowledgement moves up into nexus: the server's state carries each window's durable applied counter (the number the store has flushed), and the window trims its held actions by that counter, not by mosh's ack, and sends them again after a reconnect as it does now; the state shown is the durable state, or marks what is not yet durable. Changes the Link model (the window's held list, ExactlyOnce across a crash), the Applier, the window's trimming, and their trace binding")
      ("loop-trace" "Server loop bound to a model: a spec of one pass of nexus-server's loop (the batch applied with the drivers held, its one flush, the drivers released, the state set, the links' ticks at the next pass, and a crash anywhere in it), and the real loop's trace (hold, flush, release, tick, with the fs seam's crashes) checked against it in CI, with reversed witnesses for a release, a state or a tick before the flush")
      ("iphone-scroll-model" "iPhone depth: a TLA+ layout model and trace check for the momentum list scroll (finger_scroll), as the rules for index arithmetic ask")
@@ -89,6 +94,11 @@
      ("sprint" "done" "t-sprint")
      ("panels" "done" "t-panels")
      ("one-app" "done" "t-one-app")
+     ("nexus-ai-tools" "done" "t-nexus-ai-tools")
+     ("nexus-ai-inbox" "done" "t-nexus-ai-inbox")
+     ("nexus-ai-work" "done" "t-nexus-ai-work")
+     ("nexus-ai-sprint" "done" "t-nexus-ai-sprint")
+     ("nexus-ai-install" "done" "t-nexus-ai-install")
      ("writer-thread" "done" "t-writer-thread")
      ("loop-trace" "done" "t-loop-trace")
      ("ios-client" "done" "t-ios-client")
@@ -102,6 +112,7 @@
    :rows (
      ("screen-observation" "Let an AI see a display or window the human chooses with Screen Recording permission" :later t)
      ("desktop-input" "Let an AI click and type in other apps with separate Accessibility permission and a human stop control" :later t)
+     ("session-isolation" "Audit session isolation across the client and server. Exercise two simultaneous sessions, including sessions on one account, and verify that messages, drafts, errors, prompts, actions and delayed replies stay with their originating session through tab switches and reconnects.")
      ("point-release-025" "Finish v0.2.5: verify the remaining platform gates, deploy the matching client and policy, merge the release PR, then publish the source archive and checksums")
      ("work-preview-details" "Compact work groups: keep only the latest three unwrapped lines, cut at the last whole character with no ellipsis; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup")
      ("ai-paragraph-selection" "AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text")
@@ -132,6 +143,7 @@
      ("screen-observation" "done" "t-screen-observation")
      ("desktop-input" "done" "t-desktop-input")
      ("terminal-tabs" "done" "t-terminal-tabs")
+     ("session-isolation" "done" "t-session-isolation")
      ("point-release-025" "done" "t-point-release-025")
      ("work-preview-details" "done" "t-work-preview-details")
      ("ai-paragraph-selection" "done" "t-ai-paragraph-selection")
@@ -323,16 +335,17 @@
   (:id "t-input-policy-tuning" :type :task :title "Move application gesture thresholds and intent precedence into documented policy; test customized profiles through real client input" :state :todo)
   (:id "t-point-release-025" :type :task :title "Finish and publish Nexus v0.2.5" :state :doing
    :note "Release PR #149 merged after all platform checks passed, and the matching client and policy are installed. v0.2.4 was published independently before that merge; this batch ships as v0.2.5. The version bump, tag and publication remain to be completed. The source-only roadmap changes do not implement the deferred UI behavior.")
+  (:id "t-session-isolation" :type :task :title "Audit session isolation across the client and server. Exercise two simultaneous sessions, including sessions on one account, and verify that messages, drafts, errors, prompts, actions and delayed replies stay with their originating session through tab switches and reconnects." :state :todo)
   (:id "t-work-preview-details" :type :task :title "Compact work groups: keep only the latest three unwrapped lines, cut at the last whole character with no ellipsis; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup" :state :todo
-   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Keep desktop previews left-aligned at two-thirds width and no chevron. Remove the ellipsis: cut each unwrapped preview at the last whole character that fits, with no truncation marker; clicking still opens the complete text. Preserve private-event filtering, scrolling and modal precedence. Qualify implementation traces and negative witnesses before delivery.")
+   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Keep desktop previews left-aligned at two-thirds width and no chevron. The preview now ends at the last whole character that fits. The full-text popup and latest-three grouping remain open. Preserve private-event filtering, scrolling and modal precedence. Qualify implementation traces and negative witnesses before delivery.")
   (:id "t-ai-paragraph-selection" :type :task :title "AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text" :state :todo
    :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Selecting AI text gives the output window keyboard focus, not the prompt. Enter inserts that selection into the prompt as a quote and moves focus there without sending. Escape clears the output selection and returns focus to the prompt without quoting or hiding Nexus. Clicking the prompt also clears the output selection and focuses the prompt. Preserve the existing draft. Keep selection stable across virtualized history and streaming. Copy faithful Markdown for paragraphs, lists, headings, quotes, code and tables. Exercise keyboard, pointer and clipboard paths together.")
   (:id "t-quoted-ai-paste" :type :task :title "Enter from a focused AI-output selection, or paste a copied AI selection, inserts a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble" :state :todo
    :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Retain literal double-quote delimiters in the submitted text, with Markdown-aware visual treatment. After transferring the quote, focus the prompt and place the caret after the two newlines, ready for a response. The transfer itself never sends the message. Preserve formatting, editing and the prompt-focused Enter-Enter and Command-Enter submission behavior.")
   (:id "t-scanner-afterglow" :type :task :title "Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering" :state :todo
    :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Compare different decay settings at the same timestamps; preserve reduced-motion handling and independence from the prompt cursor pulse.")
-  (:id "t-output-panel-outline" :type :task :title "Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color" :state :todo
-   :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Keep output border width and color configurable, and preserve the separate output and prompt fills.")
+  (:id "t-output-panel-outline" :type :task :title "Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color" :state :done
+   :evidence ("src/view.cpp: the fixed transcript viewport paints the configured rounded border" "tests/window/test_input.cpp: window_input checks the inset stroke, equal gaps for short history, and square upper corners at the divider on overflow"))
   (:id "t-native-markdown-tables" :type :task :title "Render Markdown tables with native Prax table layout, aligned columns, readable headers and preserved inline formatting and links" :state :todo
    :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Handle narrow displays and horizontal overflow; preserve selection and Markdown copying. Do not fork or patch Prax.")
   (:id "t-compact-header" :type :task :title "Reduce the header height by six points while preserving notch avoidance, clock alignment and tab hit targets" :state :todo
@@ -438,7 +451,12 @@
   (:id "t-machines-from-server" :type :task :title "The fleet's machine list from the server, as the AIs are: the server sends the machines it knows in its state (nova-config an optional source on the server's side), and the window stops reading nova-config for the terminal tabs' machine labels (src/remote.cpp, the client config's nova-config key), its last outside tool" :state :todo)
   (:id "t-sprint" :type :task :title "Sprint: see and deal cards in the window" :state :todo)
   (:id "t-panels" :type :task :title "Panels: data rendered by nexus, never code loaded into it" :state :todo)
-  (:id "t-one-app" :type :task :title "One app: nexus-server starts at boot and runs every tool and AI as its child; permissions granted once" :state :todo)
+  (:id "t-nexus-ai-tools" :type :task :title "One Nexus tool catalog for Claude, Codex, Antigravity, Grok and Muse" :state :todo)
+  (:id "t-nexus-ai-inbox" :type :task :title "Nexus owns each AI inbox and its designated receiving session" :state :todo)
+  (:id "t-nexus-ai-work" :type :task :title "Expose shared memory, roadmaps, reservations, registry, fleet, sandboxed work and credential-backed operations through the catalog, scoped to the calling AI and workspace" :state :todo)
+  (:id "t-nexus-ai-sprint" :type :task :title "Run the Sprint card lifecycle from Nexus, including dependencies, reviews, merges, coordinator decisions, scheduling, monitoring and recovery" :state :todo)
+  (:id "t-nexus-ai-install" :type :task :title "Qualify the standalone Nexus installation and migrate existing data" :state :todo)
+  (:id "t-one-app" :type :task :title "Nexus is the sole required background executable per host" :state :todo)
   (:id "t-ios-client" :type :task :title "iOS client: one universal iPhone and iPad app, a second client of the server (docs/ios.md): the window over Prax's UIKit backend, the link with an in-app ssh, signed for a device by tools/ios-device-run" :state :doing
    :note "Built and tested in CI (.github/workflows/ios.yml): tests/ios (window_ios_state_shot_*, window_ios_status_no_tabs, ios_ssh_unit, ios_ssh_gate, ios_ssh_functional). Next: the iPhone's form (a menu of tabs), voice in and out, and the iPhone's side of the watch's relay (docs/watch.md).")
   (:id "t-install-through-ai" :type :task :title "Install through AI: README as the installer, one AI (the installing AI), proven by a cold run on a clean Mac" :state :todo)

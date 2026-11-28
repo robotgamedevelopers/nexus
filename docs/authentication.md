@@ -38,8 +38,9 @@ This document specifies the target, not delivered support:
 
 - Login preparation currently has a Claude-specific manual browser logout phase. Replace it with the shared
   presenter once an automatically managed authentication session is available.
-- Remote callback forwarding exists for Claude. Codex, Antigravity, Grok and Muse use one-time local helper pages
-  and currently require a loopback connection. They need authenticated forwarding of their helper UI and requests.
+- Claude supports remote callback forwarding. On macOS and Linux, remote Codex and Antigravity enrollment
+  forwards the private helper page over SSH. Grok, Muse and other client platforms still require loopback
+  access to their enrollment pages.
 - Attempt-scoped cancellation now covers all harnesses, including before their URL is available. Both client and
   server need the new protocol capability; older servers retain their callback-based cancellation path.
 - Prax's pinned webview API exposes isolated WebKit and WebView2 views, but no navigation or new-window policy hooks.

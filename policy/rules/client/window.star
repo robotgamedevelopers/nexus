@@ -49,6 +49,7 @@ _COMMAND_HELP = {
     "/help": "Show all commands and keyboard actions.",
     "/model": "Open the model selector. Use /model <model> [effort] to switch directly.",
     "/effort": "Open the effort selector. Use /effort <level> to switch directly.",
+    "/usage": "Show the last reported subscription usage across harnesses and accounts.",
     "/info": "Show the AI, account, model, effort, repository and working directories.",
     "/clear": "Clear the conversation and its context. When signed out, clear the local conversation.",
     "/goal": "Show the active goal for this session.",
@@ -153,7 +154,7 @@ def handle(event, state, config):
                 shortcuts = _bind(shortcuts, chord, ["select_prompt", edge])
             for chord, command in config.get("account_shortcuts", {}).items():
                 shortcuts = _bind(shortcuts, chord, ["account_command", command])
-            default_picker = {} if "account_shortcuts" in config else {"ArrowUp": "previous", "ArrowDown": "next"}
+            default_picker = {} if "account_shortcuts" in config else {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"}
             for chord, command in config.get("account_picker_shortcuts", default_picker).items():
                 if config.get("centered_account_menu", False) and not state.get("account_picker_open") and not state.get("needs_sign_in") and command in ["previous", "next"]:
                     command = "open"
@@ -231,7 +232,7 @@ def handle(event, state, config):
         if state.get("account_picker_open", False):
             if config.get("centered_account_menu", False):
                 panels = ["transcript", "account", "prompt"]
-            for chord, command in config.get("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}).items():
+            for chord, command in config.get("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Command+ArrowUp": "previous", "Command+ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}).items():
                 shortcuts = _bind(shortcuts, chord, ["account_picker", command])
         account = state.get("sign_in_account") or {}
         provider = account.get("provider", "")
@@ -292,7 +293,7 @@ def handle(event, state, config):
             efforts = models.get(model, [])
             kind = ui.get("choice_kind", "")
             lists = {"model": order, "effort": efforts}
-            if not kind and len(words) == 1 and words[0] in ["/model", "/effort"] and not state.get("account_picker_open"):
+            if not kind and len(words) == 1 and words[0] in ["/model", "/effort"] and not window.get("account_items") and not state.get("account_picker_open"):
                 window["shortcuts"] = _bind(window["shortcuts"], "Enter", ["account_action", "picker:" + words[0][1:]])
             if kind in lists:
                 values = lists[kind]
@@ -309,6 +310,7 @@ def handle(event, state, config):
                                   "action": "choose:" + value, "selected": i == index})
                 window["account_items"] = items
                 window["panels"] = ["transcript", "account", "prompt"]
+                window["shortcuts"] = [b for b in window["shortcuts"] if b[1] == "select_tab"]
                 keys = {"Escape": "picker:close"}
                 if values:
                     keys.update({"ArrowUp": "point:" + values[(index-1) % len(values)],
@@ -334,8 +336,9 @@ def handle(event, state, config):
                     "Command+ArrowUp": "top", "Command+ArrowDown": "bottom",
                     "Control+ArrowUp": "top", "Control+ArrowDown": "bottom",
                     "PageUp": "page_up", "PageDown": "page_down"}).items():
-                window["shortcuts"] = _bind(window["shortcuts"], chord, ["scroll_transcript", direction])
-        if state["tab"] == "ai" and state["prompt_open"] and not state.get("account_picker_open") and not state.get("ui", {}).get("choice_kind"):
+                if not any([b[0] == chord and b[1] in ["account_picker", "account_action", "account_command"] for b in window["shortcuts"]]):
+                    window["shortcuts"] = _bind(window["shortcuts"], chord, ["scroll_transcript", direction])
+        if state["tab"] == "ai" and state["prompt_open"] and not state.get("account_picker_open") and not window.get("account_items") and not state.get("ui", {}).get("choice_kind"):
             command = state.get("ui", {}).get("draft", "").strip()
             if command in ["/account", "/login"]:
                 for chord in ["Enter", "Command+Enter"]:
@@ -346,8 +349,6 @@ def handle(event, state, config):
             if state.get("ui", {}).get("help_visible") and state.get("ui", {}).get("dismissed") and not state.get("account_picker_open"):
                 window["panels"] = ["transcript", "prompt"]
                 window["account_items"] = []
-            else:
-                window["panels"] = ["spacer" if p == "transcript" else p for p in window["panels"]]
         if state["tab"] == "ai" and state.get("ui", {}).get("goal_active"):
             for chord in config.get("clear_draft_keys", ["Command+Backspace", "Command+Delete"]):
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["clear_composer"])
@@ -371,10 +372,10 @@ def handle(event, state, config):
                 "Escape   Close the current picker/dialog first; otherwise hide the overlay. Terminals receive Escape.",
                 "Shift+Enter   Insert a newline in the prompt.",
                 submit + " / " + queue + "   Return to the newest messages when holding or sending from history.",
-                "ArrowUp / ArrowDown, Enter   Move through a picker, then confirm; Escape cancels.",
+                "ArrowUp / ArrowDown, Enter   Move through model and effort choices, then confirm. Escape cancels.",
                 "Tab   Complete /model and /effort choices in the prompt.",
                 "⌘/Control+A / C / X / V   Select all / copy / cut / paste in the prompt. Nexus also accepts its Command+V paste shortcut.",
-                "Arrow keys, Home / End, Shift+arrows   Move the editing cursor / extend its selection.",
+                "ArrowUp / ArrowDown   Move the prompt cursor by a displayed line, including wrapped lines. Shift+arrows extend the selection.",
                 "Backspace / Delete   Delete text at the editing cursor.",
                 "Option/Control+Left / Right   Move by words where not claimed by a Nexus tab shortcut; add Shift to select.",
                 "Option/Control+Backspace / Delete   Delete the previous / next word.",
@@ -390,9 +391,9 @@ def handle(event, state, config):
                 ("tab_navigation", {"Command+ArrowLeft": -1, "Command+ArrowRight": 1}, "Select previous / next tab"),
                 ("prompt_selection_shortcuts", {"Command+Shift+ArrowLeft": "start", "Command+Shift+ArrowRight": "end"}, "Select from the prompt cursor to the start / end of the whole prompt"),
                 ("tab_reorder", {"Command+Shift+PageUp": -1, "Command+Shift+PageDown": 1}, "Move the current tab left / right"),
-                ("account_picker_shortcuts", {"ArrowUp": "previous", "ArrowDown": "next"}, "Open / navigate the account picker (plain ↑ / ↓)"),
+                ("account_picker_shortcuts", {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"}, "Open / navigate the account picker (⌘↑ / ⌘↓)"),
                 ("transcript_scroll_keys", {"Command+ArrowUp": "top", "Command+ArrowDown": "bottom", "Control+ArrowUp": "top", "Control+ArrowDown": "bottom", "PageUp": "page_up", "PageDown": "page_down"}, "Scroll the transcript"),
-                ("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}, "Navigate / confirm / close the open account picker"),
+                ("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Command+ArrowUp": "previous", "Command+ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}, "Navigate / confirm / close the open account picker"),
                 ("clear_draft_keys", ["Command+Backspace", "Command+Delete"], "Clear the draft and held message, and stop the active goal"),
                 ("limit_choice_keys", {"account": "Command+Shift+A", "model": "Command+Shift+O"}, "Choose another account / model when a usage-limit choice is shown"),
             ]

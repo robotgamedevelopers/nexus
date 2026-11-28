@@ -236,6 +236,7 @@ struct DriverEncoder {
     void operator()(const Session& m) { w.str("kind", "session").str("id", m.id); }
     void operator()(const Text& m) { w.str("kind", "text").turn(m.turn).str("delta", m.delta); }
     void operator()(const TextEnd& m) { w.str("kind", "text-end").turn(m.turn); }
+    void operator()(const Quota& m) { w.str("kind", "quota").num("minutes", m.minutes).num("used_percent", m.usedPercent); }
     void operator()(const ChildAgents& m) { w.str("kind", "child-agents").num("count", m.count); }
     void operator()(const Tool& m) { w.str("kind", "tool").turn(m.turn).str("name", m.name).str("summary", m.summary); }
     void operator()(const Done& m) {
@@ -654,6 +655,9 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
     }
     if (kind == "text-end")
         return result<DriverMessage>(TextEnd{f.turn()}, f);
+    if (kind == "quota")
+        return result<DriverMessage>(Quota{unsigned(f.integer("minutes", true, 1, 525600).value_or(0)),
+            unsigned(f.integer("used_percent", true, 0, INT32_MAX).value_or(0))}, f);
     if (kind == "child-agents")
         return result<DriverMessage>(ChildAgents{static_cast<std::uint32_t>(f.integer("count", true, 0, UINT32_MAX - 1).value_or(0))}, f);
     if (kind == "tool") {

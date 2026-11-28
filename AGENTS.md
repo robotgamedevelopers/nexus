@@ -25,6 +25,8 @@ The rules for an AI working in this repository. Each one holds on every change.
    way to renew it, and the dialog says which (`docs/accounts.md`, "How long a login lasts"). A person may also
    explicitly sign out. A legacy Claude token needs a verified browser enrollment when the slot requires an email.
 
+The product target is one self-contained Nexus installation per host. Nexus is the sole required background executable. Build durable messaging, storage, scheduling and MCP service into its process. Scope provider and job subprocesses to active sessions and work. Track migration of the current external services in the roadmap.
+
 Implement the Nexus application in fork-owned Starlark and JSON. Keep the client and server processes, connection,
 mosh, durable operations, credential handling, driver I/O, rendering and validated host primitives native. A plugin
 may implement its Prax UI or server capability in native code, or compose available primitives entirely in Starlark.
@@ -161,6 +163,7 @@ Sign-in (`models/SignIn.tla`, `docs/secrets.md` "Sign-in")
 - No AI ever sees the URL, the code or the token: none in a transcript, a log line, a driver event, a state file or a test's output (`NoTokenToWindows`, `NoTokenInLog`; `signin_unit_leak`, `signin_functional_*`, `link_e2e_signin` with its reversed witness `link_e2e_signin_leaky`). nexus never puts the URL in an argv or an environment of its own. An AI's only surface is `nexus-server config sign-in <account>`: `signed in` or `refused: <why>`.
 - Overlay dialogs stay inside the overlay’s native window, using Prax’s embedded portals. Opening a dialog must not transfer native keyboard focus and trigger hiding.
 - `/login` and the account menu’s sign-in entry use the same centered account-card appearance as automatic sign-in, including the configured `message_card` typography, spacing and highlight. It lists every linked account, including saved logins. Its keys take precedence over the page underneath. Up/Down selects, Enter signs in, and Escape dismisses without hiding Nexus.
+- For a MacBook connected to Studio, the Codex and Antigravity sign-in pages open in the MacBook browser. Studio stores the selected account’s login. For a private helper page the desktop forwards its validated loopback port over SSH. For Antigravity’s Google flow it opens the vendor page directly and accepts the return code in the owning tab’s masked field.
 - The selected account’s sign-in action appears in a centered opaque rounded white card in the AI tab. When an email is configured, it appears in light blue between the account title and the activation hint. Enter in the prompt or clicking the card opens sign-in for that account and keeps the draft. The window opens the browser off its frame thread (`window_frame_budget`).
 - The default overlay darkens the desktop at 60% opacity. The person’s messages and the AI’s replies use dark bubbles. The fork can set outgoing text color independently using `transcript_style.person_ink`. Routine authentication notices are hidden; remaining transcript notices use neutral text. Tool output and status labels use light neutral text on a dark bubble. The centered sign-in action alone uses the white card with large black text. The fork can change `transcript_style`, `overlay_opacity` and `message_card` through the client application without rebuilding either binary.
 
@@ -245,7 +248,7 @@ Sessions
 - Command-M opens a pop-up selector of the harness's models and Command-E one of its effort levels. Up/Down move, Enter picks, Escape closes it. Nothing shows the model or effort otherwise.
 
 Tabs
-- Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. Command-Up/Down on an AI tab jump to the top/bottom of history; plain Up/Down navigate its account menu.
+- Command-Left/Right select the tab to the left or right: navigation, on every tab. Command-Up/Down on an AI tab open and navigate its account menu. In the prompt, plain Up/Down move the caret by one displayed line, including soft wraps. Shift-Enter inserts a newline at the caret. Control-Up/Down jump to the top or bottom of history.
 
 ## Tests
 
@@ -324,6 +327,6 @@ Tabs
 
 - Warning and notice bubbles are left-aligned and at most two-thirds of the column on desktop/laptop, using the same reply-width setting as AI text; mobile uses full width.
 
-- Work bubbles shorten long lines at whole UTF-8 character boundaries with an ellipsis, without wrapping, at two-thirds of the column from the left on desktop/laptop. Their text is bright scanner blue `#86c5ff` with no HDR gain.
+- Work bubbles shorten long lines at whole UTF-8 character boundaries without an ellipsis or wrapping, at two-thirds of the column from the left on desktop/laptop. Their text is bright scanner blue `#86c5ff` with no HDR gain.
 
 - While connecting, show one large white "Connecting to nexus" label with the prompt cursor's HDR pulse. Preserve actionable failure diagnostics. Terminal spacing is unchanged.

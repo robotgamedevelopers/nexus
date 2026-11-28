@@ -952,7 +952,7 @@ public:
 void conversation_commands() {
     class CatalogResponder : public RecordingResponder {
         std::string catalog(const SessionInfo&) const override {
-            return R"({"default":"m0","models":{"m0":["low"],"m1":["high"]}})";
+            return R"({"default":"m0","models":{"m0":["low"],"m1":["high"],"x-6.2-astra":["high"],"x-6.10-astra":["high"],"vendor-opus-4-8":["low"]}})";
         }
     } responder;
     MemoryStore store;
@@ -961,6 +961,8 @@ void conversation_commands() {
     const auto send = [&](const char* command) { return hub.apply(act(ActionKind::Send, 1, command)); };
     CHECK(send("/model"));
     CHECK(store.find(1)->transcript.back()->text.find("` m0 ` **(current)**") != std::string::npos);
+    CHECK(send("/model astra high") && store.find(1)->info.model == "x-6.10-astra" && store.find(1)->info.effort == "high");
+    CHECK(send("/model opus low") && store.find(1)->info.model == "vendor-opus-4-8");
     CHECK(send("/model m1 low") && store.find(1)->info.model != "m1");
     CHECK(send("/model m1 high") && store.find(1)->info.model == "m1" && store.find(1)->info.effort == "high");
     CHECK(send("/info") && store.find(1)->transcript.back()->text.find("**AI:** ada") != std::string::npos);
@@ -976,6 +978,16 @@ void conversation_commands() {
     CHECK(store.find(1)->info.contextEpoch == 1 && !store.find(1)->driver.summary);
     CHECK(store.find(1)->info.model == "m1" && store.find(1)->info.effort == "high");
     CHECK(store.find(2)->info.contextEpoch == 0 && store.find(2)->transcript.empty());
+    CHECK(send("/usage") && store.find(1)->transcript.back()->text.find("No subscription accounts") != std::string::npos);
+    nexus::accounts::Registry registry;
+    registry.accounts = {{"one", "codex"}, {"two", "muse"}, {"metered", "claude", nexus::accounts::Billing::Api}};
+    hub.useAccounts(registry, nullptr);
+    hub.reportQuota("one", 300, 27);
+    CHECK(send("/usage"));
+    const auto& summary = store.find(1)->transcript.back()->text;
+    CHECK(summary.find("**codex**") != std::string::npos && summary.find("5-hour window 27% used") != std::string::npos);
+    CHECK(summary.find("**muse**") != std::string::npos && summary.find("usage unreported") != std::string::npos);
+    CHECK(summary.find("metered") == std::string::npos);
 }
 
 void actions_stop_kind() {

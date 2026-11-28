@@ -150,12 +150,12 @@ inline AccountMenuLayout layoutAccountMenu(const MenuBox& highlight, std::size_t
     return out;
 }
 
-// `text` cut to fit `room` points as `measure` measures it, ending in "…" when cut: never wrapped. A cut falls between
+// `text` cut to fit `room` points as `measure` measures it, ending in the chosen marker when cut. A cut falls between
 // whole UTF-8 characters.
-inline std::string ellipsize(const std::string& text, float room, const std::function<float(std::string_view)>& measure) {
+inline std::string ellipsize(const std::string& text, float room, const std::function<float(std::string_view)>& measure,
+                             std::string_view marker = "…") {
     if (measure(text) <= room) return text;
-    static constexpr std::string_view kDots = "\xE2\x80\xA6";
-    if (measure(kDots) > room) return {};
+    if (measure(marker) > room) return {};
     std::vector<std::size_t> cuts;     // the byte offsets that start a character, past the first
     for (std::size_t i = 1; i < text.size(); ++i) {
         if ((static_cast<unsigned char>(text[i]) & 0xC0) != 0x80) cuts.push_back(i);
@@ -165,13 +165,13 @@ inline std::string ellipsize(const std::string& text, float room, const std::fun
     while (lo < hi) {
         const std::size_t mid = (lo + hi) / 2;
         std::string candidate = text.substr(0, cuts[mid]);
-        candidate += kDots;
+        candidate += marker;
         if (measure(candidate) <= room) lo = mid + 1;
         else hi = mid;
     }
-    if (lo == 0) return std::string(kDots);
+    if (lo == 0) return std::string(marker);
     std::string out = text.substr(0, cuts[lo - 1]);
-    out += kDots;
+    out += marker;
     return out;
 }
 

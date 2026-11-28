@@ -206,7 +206,7 @@ bool isSecret(ActionKind kind) {
 // flow it received, which a server sends only on a link of 5 or later.
 bool isSignIn(ActionKind kind) {
     return kind == ActionKind::SignOut || kind == ActionKind::SignInClaim ||
-        kind == ActionKind::SignInOpened || kind == ActionKind::SignInCallback || kind == ActionKind::SignInCancel;
+        kind == ActionKind::SignInOpened || kind == ActionKind::SignInCallback || kind == ActionKind::SignInCancel || kind == ActionKind::SignInCode;
 }
 
 // One action in format 3: its kind, then its fields framed by their length (its session, AI, text, account,

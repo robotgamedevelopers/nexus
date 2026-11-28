@@ -161,7 +161,6 @@ store.mkdir(parents=True)
     def test_device_prompts_publish_only_the_provider_url_and_code(self):
         for provider, url in [
             ("muse", "https://auth.meta.com/fixture/link?code=WXYZ-7890"),
-            ("codex", "https://auth.openai.com/codex/device"),
             ("grok", "https://accounts.x.ai/device?user_code=WXYZ-7890"),
         ]:
             with (
@@ -207,7 +206,7 @@ store.mkdir(parents=True)
                 + """
 import json, os, sys
 from pathlib import Path
-assert sys.argv[1:3] == ['login', '--device-auth']
+assert sys.argv[1] == 'login' and '--device-auth' not in sys.argv
 assert 'OPENAI_API_KEY' not in os.environ
 assert 'NEXUS_SIGNIN_FLOW' not in os.environ
 assert Path.cwd() == Path.home()

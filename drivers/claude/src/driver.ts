@@ -58,7 +58,7 @@ import {
 
 /** What the driver uses of the SDK's Query. */
 export type Harness = Pick<Query, 'interrupt' | 'setModel' | 'applyFlagSettings' | 'accountInfo' | 'close'> &
-    AsyncIterable<SDKMessage> & {catalogReady?: Promise<unknown>};
+    Partial<Pick<Query, 'usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET'>> & AsyncIterable<SDKMessage> & {catalogReady?: Promise<unknown>};
 
 /** How a harness is started: a new session (`sessionId`) or a resumed one (`resume`). */
 export interface HarnessStart {
@@ -678,6 +678,14 @@ export class Driver {
             this.record('refused');
             return;
         }
+        void harness.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.({skipBehaviors: true}).then(usage => {
+            if (generation !== this.generation || this.ended) return;
+            for (const [minutes, percent] of [[300, usage.rate_limits?.five_hour?.utilization],
+                [10080, usage.rate_limits?.seven_day?.utilization]] as const) {
+                if (typeof percent === 'number' && percent >= 0 && percent <= 100)
+                    this.write({kind: 'quota', minutes, used_percent: Math.round(percent)});
+            }
+        }).catch(() => process.stderr.write('Claude subscription usage is unavailable.\n'));
         this.ready = true;
         this.reportSession(sessionId);
         this.record('checked');
@@ -1071,6 +1079,9 @@ export class Driver {
             }
             case 'rate_limit_event': {
                 const info = m.rate_limit_info;
+                const minutes = info.rateLimitType === 'five_hour' ? 300 : info.rateLimitType === 'seven_day' ? 10080 : 0;
+                if (minutes && typeof info.utilization === 'number' && info.utilization >= 0 && info.utilization <= 1)
+                    this.write({kind: 'quota', minutes, used_percent: Math.round(info.utilization * 100)});
                 const turn = this.current();
                 if (turn && info.status === 'rejected') {
                     // Only turn failures consume this observation. Service throttling and quota warnings do not move accounts.

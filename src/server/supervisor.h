@@ -142,6 +142,7 @@ struct Output {
     std::vector<Effect> effects;
     bool durable = false;               // the durable state changed: commit Supervisor::state() with the effects
     std::vector<Command> commands;
+    std::map<unsigned, unsigned> quota{};  // window minutes to latest percentage
     std::optional<driver::Credential> credential;   // the driver reported the credential it uses
     // What the driver said of its account's login, for the hub (Hub::reportSignedIn, Hub::rotate): signed in (a
     // subscription credential), not usable (no credential, or not a subscription), or at its usage limit. `account` is

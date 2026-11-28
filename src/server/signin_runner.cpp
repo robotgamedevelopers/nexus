@@ -611,6 +611,14 @@ void SignInRunner::reap(const std::string& account, Proc& p, bool reported, std:
                     case 13: reason = "Claude sign-in or private credential storage failed; sign in again"; break;
                 }
             }
+            if (provider == "codex" && status && WIFEXITED(st)) {
+                switch (WEXITSTATUS(st)) {
+                    case 11: reason = "The browser email differs from the selected Nexus account."; break;
+                    case 12: reason = "Choose the paid Personal workspace for this ChatGPT account."; break;
+                    case 14: reason = "Codex could not confirm the selected workspace identity."; break;
+                    case 15: reason = "The Personal workspace reports the Free plan. This slot requires a paid ChatGPT subscription."; break;
+                }
+            }
             events_.exited(account, id, reason);
         }
         return;

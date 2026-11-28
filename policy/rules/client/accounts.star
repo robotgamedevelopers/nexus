@@ -58,9 +58,8 @@ def describe(window, state, config):
         for chord, command in opening.items():
             bind(chord, command)
         if visible:
-            for chord, command in config.get("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}).items():
-                if chord != "Enter" or not prompt_command or opened:
-                    bind(chord, command)
+            for chord, command in config.get("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Command+ArrowUp": "previous", "Command+ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}).items():
+                bind(chord, command)
         elif signed_out and not prompt_command:
             bindings["Enter"] = ["account_action", "reveal"]
     window["shortcuts"] = [b for b in window["shortcuts"] if b[1] != "account_picker" and b[0] not in bindings] + [[key] + action for key, action in bindings.items()]

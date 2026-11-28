@@ -399,3 +399,5 @@ wall-clock milliseconds. Old readers skip them and old writers default to no goa
 `0xA4`, a length-prefixed goal string and a uint64 deadline after its existing info extensions, in both framed info
 changes and snapshots. Default inactive goals omit the tail, preserving old bytes. Goal and turn admission commit
 together. Older servers do not execute goals; downgrading and rewriting a session can discard its unknown goal tail.
+
+For Antigravity vendor-page enrollment, a client advertises `pastes_code` on its sign-in claim. The owning window reads `code_wanted` in its offer and returns `SignInCode` with the flow ID, claim token and masked code in the secret field. These optional fields default to false. They are independent of `cancel_supported` and `SignInCancel`.

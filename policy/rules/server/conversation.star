@@ -16,11 +16,52 @@ def _code(value):
     fence = "`" * (longest + 1)
     return fence + " " + value + " " + fence
 
+def _model_parts(name):
+    for sep in [".", "_", "/", ":"]:
+        name = name.replace(sep, "-")
+    return name.lower().split("-")
+
+def _family_model(name, choices, resolved):
+    if name in choices:
+        return name
+    best = None
+    latest = []
+    for candidate in choices:
+        parts = _model_parts(resolved.get(candidate) or candidate)
+        if name.lower() not in parts:
+            continue
+        version = [int(part) for part in parts if part and part.isdigit()]
+        if best == None or version > latest:
+            best = candidate
+            latest = version
+    return best
+
 def _command(state):
     words = state["text"].split()
-    if not words or words[0] not in ["/clear", "/compact", "/model", "/effort", "/info", "/goal"]:
+    if not words or words[0] not in ["/clear", "/compact", "/model", "/effort", "/info", "/goal", "/usage"]:
         return None
     cmd = words[0]
+    if cmd == "/usage":
+        if len(words) != 1:
+            return [{"op": "notice", "text": "Use /usage on its own."}]
+        groups = {}
+        for row in state.get("usage", []):
+            name = row["harness"]
+            if name not in groups:
+                groups[name] = []
+            minutes = row["minutes"]
+            window = {300: "5-hour", 10080: "7-day"}.get(minutes, str(minutes) + "-minute")
+            value = "usage unreported"
+            if row["percent"] >= 0:
+                value = ("%s window %d%% used" % (window, row["percent"])) if minutes else "included usage exhausted"
+                value += " (reported %d min ago)" % row["age"]
+            groups[name].append("- " + _code(row["account"]) + ": " + value)
+        lines = ["**Subscription usage**"]
+        for name in sorted(groups):
+            lines += ["", "**" + _text(name) + "**"] + groups[name]
+        if not groups:
+            lines += ["", "No subscription accounts configured."]
+        return [{"op": "notice", "text": "\n".join(lines)}]
     if cmd == "/goal":
         text = state["text"].strip()[len(cmd):].strip()
         if not text:
@@ -76,6 +117,10 @@ def _command(state):
                 labels.append("- " + label + (" **(current)**" if value == current else ""))
             return [{"op": "notice", "text": "**Models**\n\n" + "\n".join(labels)}]
         return [{"op": "notice", "text": "**Effort levels**\n\n" + "\n".join(["- " + _code(v) + (" **(current)**" if v == current else "") for v in choices])}]
+    if cmd == "/model" and len(words) in [2, 3]:
+        selected = _family_model(words[1], choices, catalog.get("resolved", {}))
+        if selected:
+            words = [cmd, selected] + words[2:]
     if cmd == "/model" and len(words) == 3 and words[1] in models:
         efforts = models[words[1]]
         if words[2] not in efforts:

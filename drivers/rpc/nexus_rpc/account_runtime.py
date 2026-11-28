@@ -15,6 +15,14 @@ PENDING = ".nexus-enrollment-pending"
 DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
+class EnrollmentRefused(ValueError):
+    """A safe, public failure category for a provider enrollment."""
+
+    def __init__(self, code, reason):
+        super().__init__(reason)
+        self.code = code
+
+
 def _open_exact(parent, name, flags):
     # Case-folding filesystems can otherwise open another registered account or receipt.
     fd = os.open(name, flags, dir_fd=parent)

@@ -361,6 +361,7 @@ public:
     // token's shape, or one the provider revoked or that ended with no way to renew it. Otherwise (the file there but
     // not usable as it lies, say its mode) nothing is asked: the account's sessions are told why and the fix. Nothing
     // is asked while a request for the account is open or its value held.
+    void reportQuota(const std::string& account, unsigned minutes, unsigned percent);
     void reportSignedIn(const std::string& account, bool signedIn);
     const std::set<std::string>& signedIn() const { return signedIn_; }
     // Whether a paste would fix an account's lost login, and the words for it (server/login_life.h loginAsk).
@@ -524,6 +525,8 @@ private:
     mutable policy::Host application_{"server"};
     std::function<std::string()> bundlePath_;
     bool needsVerifiedLogin(const accounts::Account& account);
+    struct QuotaSample { unsigned percent; std::uint64_t observedMs; };
+    std::map<std::string, std::map<unsigned, QuotaSample>> quota_;
     std::set<std::string> signedIn_;
     std::function<bool(const accounts::Account&)> probe_;
     std::function<std::string(const accounts::Account&)> signOut_;

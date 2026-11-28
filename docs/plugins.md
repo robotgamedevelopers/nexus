@@ -8,6 +8,20 @@ The [plugin test fixtures](../tests/policy/fixtures/plugins) exercise both regis
 Each open tab has its own buffer. Submitting to a service uses the existing conversation transport and requires
 the target AI in the server roster. Tabs targeting the same conversation share its latest result.
 
+## Built-in tools for every AI (planned)
+
+A person installs Nexus, adds their AIs, and can ask any of them to send a message, recall a project decision, or pick up a Sprint card. Nexus owns the AI roster, working directories, sessions and service lifetime. Each driver attaches the same server-owned tool catalog when it starts or resumes. MCP provides tool discovery and calls. A harness with a different tool protocol needs an adapter to that same catalog. See the [MCP tool contract](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
+
+The server binds the calling AI, session, workspace and grants when it opens the connection. A message tool takes the recipient and message. A Sprint tool takes the card and the requested change. Nexus supplies the sender and checks the role. The dashboard reads the same Sprint state the tools change. Nexus resolves credentials for the operation that needs them.
+
+**Runtime ownership.** Nexus is the only required background executable on each host. Its process hosts the MCP endpoint, durable inbox, embedded storage, scheduler, worker coordination and dashboard service. The operating system starts Nexus at boot. A provider harness, build or test may run as a child for an active session or job. Nexus owns its lifetime and reaps it when the work ends. Reusable Nova code can be linked into Nexus. On existing installations, migration must account for the data and in-flight work held by Redis, PostgreSQL, bus hooks and Sprint services.
+
+**Installation acceptance test.** Start with a clean host and install Nexus. Inspect startup registrations, listeners and processes while two AIs exchange a message and complete a Sprint card. Close the clients, restart Nexus and verify the receipt, card and queued work. Check the process list again after the job ends. This tests both independence from preinstalled services and cleanup of temporary children.
+
+**First acceptance test.** Give Emma two open sessions. Send her a message from Rowan, confirm that only her designated Nexus conversation receives it, and reply from that conversation. Restart the server between acceptance and delivery, then repeat with a different harness. Check the durable receipt and the transcript for one delivery. An external process holding Emma’s old bus lease must be surfaced during handoff. MCP carries the tool call. Nexus retains the inbox, receipt and pending delivery across harness restarts.
+
+The remaining work covers the upstream [Nova tools](https://github.com/mas-bandwidth/nova-tools/tree/07c6fed583b731a8b2c285d771136d761da68002/cmd) and [Sprint workflows](https://github.com/mas-bandwidth/nova-sprint/tree/7bfde6cbd3ab7a786706181470f25cbfeb019206/docs). The [roadmap](ROADMAP.md) tracks harness coverage, inbox migration, work tools, Sprint and the one-install check.
+
 ## Registering another type
 
 Each record in `config.json`'s `tab_types` has a unique `id`, a `title`, and a `group`. Opening the first

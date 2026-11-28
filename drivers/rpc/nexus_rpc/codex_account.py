@@ -1,4 +1,4 @@
-"""Codex's ChatGPT device login and named permission profile for Nexus turns."""
+"""Codex's ChatGPT browser login and named permission profile for Nexus turns."""
 
 import base64
 import errno
@@ -9,6 +9,9 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
+from .account_runtime import EnrollmentRefused
+
+PERSONAL_PAID_PLANS = frozenset({"go", "plus", "pro", "prolite", "promax"})
 PROFILE = "nexus-chat"
 SUPPORTS_LIMIT = sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file()
 _AUTH = (
@@ -21,7 +24,7 @@ _AUTH = (
 
 def login_command(binary, home):
     # The launcher supplies the account's private HOME and CODEX_HOME to both processes.
-    return [binary, "login", "--device-auth", *_AUTH]
+    return [binary, "login", *_AUTH]
 
 
 def chat_command(binary, home, cwd, *, keep_out=(), limited=False, write_dirs=(), bus_sender=None):
@@ -153,7 +156,7 @@ def personal_email(account):
 
 def matches_personal(expected, email, plan):
     return (isinstance(email, str) and email.casefold() == expected.casefold()
-            and isinstance(plan, str) and plan.lower() in {"go", "plus", "pro", "prolite"})
+            and isinstance(plan, str) and plan.lower() in PERSONAL_PAID_PLANS)
 
 
 def _grant(directory, *, sync=False, expected_email=None):
@@ -189,18 +192,25 @@ def _grant(directory, *, sync=False, expected_email=None):
         ):
             raise ValueError("Codex did not finish writing the ChatGPT login.")
         if expected_email:
-            # This is the private grant produced by the device login. The running harness
-            # independently reports its account and workspace before any turn is submitted.
+            # Codex accepts both OIDC email locations when reporting the account.
             try:
                 payload = tokens["id_token"].split(".")[1]
                 claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
                 workspace = claims["https://api.openai.com/auth"]
-                if (not matches_personal(expected_email, claims.get("email"), workspace.get("chatgpt_plan_type"))
-                        or not workspace.get("chatgpt_account_id")
-                        or workspace["chatgpt_account_id"] != tokens.get("account_id")):
+                email = claims.get("email")
+                if email is None:
+                    email = claims.get("https://api.openai.com/profile", {}).get("email")
+                plan = workspace.get("chatgpt_plan_type")
+                if not workspace.get("chatgpt_account_id") or workspace["chatgpt_account_id"] != tokens.get("account_id"):
                     raise ValueError()
             except (ValueError, IndexError, AttributeError, KeyError, TypeError):
-                raise ValueError("Choose the Personal workspace for the configured ChatGPT email.") from None
+                raise EnrollmentRefused(14, "Codex could not confirm the selected workspace identity.") from None
+            if not isinstance(email, str) or expected_email.casefold() != email.casefold():
+                raise EnrollmentRefused(11, "The browser email differs from the configured Personal workspace email.")
+            if not matches_personal(expected_email, email, plan):
+                if isinstance(plan, str) and plan.lower() == "free":
+                    raise EnrollmentRefused(15, "The Personal workspace reports the Free plan. This slot requires a paid ChatGPT subscription.")
+                raise EnrollmentRefused(12, "Choose the paid Personal workspace for this ChatGPT account.")
         if sync:
             os.fsync(fd)
         return _file_stamp(info)

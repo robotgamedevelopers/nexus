@@ -83,6 +83,14 @@ bool usesLocalSignInPage(std::string_view provider) {
     return provider == "codex" || provider == "antigravity" || provider == "grok" || provider == "muse";
 }
 
+bool isSignInCode(const SecretValue& code) {
+    const std::string& b = code.bytes();
+    return !b.empty() && b.size() <= kSignInCodeBytes && std::all_of(b.begin(), b.end(), [](char c) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        return u > 0x20 && u < 0x7f;
+    });
+}
+
 bool hasSignIn(const std::string& provider) {
     return provider == "claude" || usesLocalSignInPage(provider);
 }
@@ -118,7 +126,7 @@ const std::vector<std::string_view>& signInHosts(std::string_view provider) {
     return provider == "claude" ? kClaude : kNone;
 }
 
-bool isLocalSignInUrl(std::string_view url) {
+bool isLocalSignInUrl(std::string_view url, std::uint16_t* pagePort) {
     constexpr std::string_view origin = "http://127.0.0.1:";
     constexpr std::string_view route = "/nexus-signin/";
     if (!url.starts_with(origin)) {
@@ -141,6 +149,7 @@ bool isLocalSignInUrl(std::string_view url) {
         return false;
     }
     url.remove_prefix(route.size());
+    *pagePort = static_cast<std::uint16_t>(port);
     return url.size() == 64 && std::all_of(url.begin(), url.end(), [](char c) {
         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
     });
@@ -181,12 +190,27 @@ bool isQueryBytes(std::string_view query) {
     });
 }
 
+bool vendorCodePage(std::string_view provider, std::string_view url) {
+    return provider == "antigravity" && url.starts_with("https://accounts.google.com/") &&
+        url.size() <= kSignInUrlBytes && isQueryBytes(url) && url.find('\\') == url.npos;
+}
+
+bool parseOfferedSignInUrl(std::string_view provider, std::string_view url, SignInTarget* out) {
+    if (vendorCodePage(provider, url)) {
+        *out = {};
+        return true;
+    }
+    return parseSignInUrl(provider, url, out);
+}
+
 bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarget* out) {
     if (usesLocalSignInPage(provider)) {
-        if (url.size() > kSignInUrlBytes || !isLocalSignInUrl(url)) {
+        std::uint16_t port = 0;
+        if (url.size() > kSignInUrlBytes || !isLocalSignInUrl(url, &port)) {
             return false;
         }
         *out = {};
+        out->port = port;
         return true;
     }
     if (url.size() > kSignInUrlBytes || url.substr(0, 8) != "https://" || !isQueryBytes(url)) {
@@ -686,7 +710,7 @@ SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const voi
         step.id = o.id;
         step.account = o.account;
         step.gate = gate;
-        if (!parseSignInUrl(o.provider, o.url.bytes(), &step.target)) {
+        if (!parseOfferedSignInUrl(o.provider, o.url.bytes(), &step.target)) {
             // Not a sign-in page of the account's provider: nothing is opened, and the window says so; the flow ends
             // at its deadline.
             step.kind = Step::Kind::Refused;
@@ -695,6 +719,8 @@ SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const voi
             return step;
         }
         step.kind = Step::Kind::Open;
+        step.codexCallback = o.provider == "codex";
+        step.privatePage = usesLocalSignInPage(o.provider) && step.target.port != 0;
         step.url = o.url;
         if (step.gate) {
             gate_ = o.id;

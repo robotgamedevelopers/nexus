@@ -26,6 +26,7 @@ from typing import NamedTuple
 from urllib.parse import parse_qs, urlsplit
 
 from .account_runtime import (
+    EnrollmentRefused,
     PENDING,
     enrolled,
     home_for,
@@ -65,6 +66,8 @@ def link_from(text, provider):
         try:
             url = urlsplit(candidate)
         except ValueError:
+            continue
+        if provider == "codex" and url.path != "/oauth/authorize":
             continue
         if url.netloc in PROVIDERS[provider][1] and url.path.startswith("/"):
             return candidate
@@ -272,6 +275,9 @@ def recover(home, provider, module, binary, *, promote=None, expected_pending=No
                     recovered_promote()
             else:
                 promote()
+        except EnrollmentRefused:
+            abandon()
+            raise
         except (ValueError, FileNotFoundError):
             return abandon()
     if module.grant_stamp(home) != record.stamp:
@@ -455,6 +461,8 @@ class Login:
                     self.retry_at = time.monotonic() + RETRY_DELAYS[self.retries]
                     self.retries += 1
                     return
+            except EnrollmentRefused as error:
+                self.result = error.code
             except (ValueError, RuntimeError):
                 pass
         self.finished = time.monotonic()
@@ -536,6 +544,10 @@ async function refresh() {{
   find('link').hidden = !s.url;
   if (s.url) {{
    find('link').href = s.url;
+   if ('{provider}' === 'Codex' && !offeredLink) {{
+    location.replace(s.url);
+    return;
+   }}
    if (!offeredLink && document.activeElement === document.body) find('link').focus();
    offeredLink = true;
   }}

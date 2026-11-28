@@ -28,7 +28,7 @@ bubbles retain independently configurable fills. An ordinary window remains opaq
 App information is a compact left-aligned Markdown bubble with white text. Routine account/sign-in chatter is hidden
 by `transcript_style.hidden_notice_fragments`, without removing durable history. Actionable failures remain visible.
 File tools use `#aa79dd`, with almost the same OKLCH lightness as shell orange `#dc7334` (approximately 0.666).
-Tool names map to colors and prefix replacements through `tool_inks` and `tool_prompts`. Work bubbles have a
+`tool_previews` maps tool names to compact labels. A label can end in `{filename}` for a path, `{selection}` for a tool lookup, or `{tail_file}` for the file watched by a tail command. A literal label omits arguments. Tools without a preview use `tool_prompts` for prefix replacement. `tool_inks` sets their colors. Work bubbles have a
 noninteractive top-left chevron; `tool_chevron` turns it off and the size, gap and ink fields style it.
 
 The active goal has its own pinned bubble below the held message and above the prompt. Its label, outline width,
@@ -126,6 +126,7 @@ canonical, and `docs/policy.md` documents the existing style groups.
 | `bubble_padding_y` | `21` |
 | `bubble_max_percent` | `83` |
 | `person_bubble_max_percent` | `66.666667` |
+| `desktop_person_viewport_percent` | `50` |
 | `plus_size` | `36.4` |
 | `column_inset` | `16.8` |
 | `tool_size` | `21.84` |
@@ -331,7 +332,7 @@ marks a new client run. The last partial batch is flushed on normal shutdown. Re
 reported to inspect the preceding frames, rather than starting a profiler after it has passed. The native limits
 bound diagnostic memory/disk usage. Set the flag to false to stop collecting; existing recordings remain available.
 
-User messages, including held and sending messages, are right aligned and wrap at two-thirds of the conversation width. `ui_style.person_bubble_max_percent` controls this independently of tool and information bubbles. AI replies use `transcript_style.reply_width` from the left.
+User messages, including held and sending messages, are right aligned and wrap at two-thirds of the conversation width. On desktop and laptop their additional maximum is half the window width (`ui_style.desktop_person_viewport_percent`). `ui_style.person_bubble_max_percent` controls this independently of tool and information bubbles. AI replies use `transcript_style.reply_width` from the left.
 
 `ui_flags.protect_overlay_focus` protects an open desktop overlay against unsolicited focus changes. macOS attempts
 keyboard recovery before hide-on-blur; observed Command–Tab, clicks outside the overlay, sleep/session switching and
@@ -349,11 +350,12 @@ The dashboard page owns its polling cadence; no additional poll is triggered by 
 request window frames. Security lock screens retain their protected reveal.
 `opaque_history_backdrop` covers the complete history scroll viewport, including its top inset, so the underlying
 window's title-bar buttons do not show through. The outer margins retain the configured overlay transparency.
-The clock uses 28-point regular text, matching the tab size. Command–Up/Down scroll history to its top/bottom;
-plain Up/Down continue to navigate the account selector. Both are documented in `/help`.
+The clock uses 28-point regular text, matching the tab size. Command–Up/Down open and navigate the account picker. In the prompt, Up/Down move the caret between displayed lines, including soft wraps. Shift–Enter inserts a newline. Control–Up/Down scroll history to the top or bottom.
 
 `prompt_selection_shortcuts` maps chords to `start` or `end`, extending the current prompt selection with its anchor preserved. The shipped bindings are Command–Shift–Left/Right. `tab_reorder` defaults to Command–Shift–PageUp/PageDown.
 
 The shipped outer canvas below the opaque black header is `#0c0f13` at 100% opacity. `opaque_history_backdrop` is disabled so history margins use that same transparency. The prompt fill is `#272728`; the conversation-panel fill is `#15171b`. They remain independently configurable.
 
 Shell-command and per-tool text colors default independently to `#86c5ff`, the scanner's bright blue without HDR gain.
+
+When the conversation fits, the output panel has rounded corners and the gap below the tab divider matches the gap above the prompt (`ui_style.footer_padding`). When the conversation overflows, the panel meets the divider with square top corners. The bottom corners stay rounded. Set `ui_colors.output_border` (default `#282a2e`) and `ui_style.output_border_width` (default one logical point) to customize it. A width of zero hides the border.

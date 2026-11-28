@@ -93,7 +93,7 @@ end by default. Set `tab_navigation_wrap` to `true` in client `config.json` to w
 to signed offsets.
 
 On an AI tab, Command-Up and Command-Down open the linked-account picker and highlight the previous or next
-account. Up and Down continue through the list, wrapping at either end. Enter confirms the highlighted account.
+account. Keep holding Command to navigate the list, wrapping at either end. Enter confirms the highlighted account.
 Clicking a row confirms that account directly. Escape cancels and keeps the overlay and draft open. A change of
 AI, session, current account or connection dismisses the picker. If the server reorders its accounts, the
 highlight follows the same account ID. The server validates an exact account selection before applying it.
@@ -108,7 +108,7 @@ The stock Starlark window program reads two optional maps from the fork’s clie
 ```json
 {
   "account_picker_shortcuts": {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"},
-  "account_picker_keys": {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}
+  "account_picker_keys": {"ArrowUp": "previous", "ArrowDown": "next", "Command+ArrowUp": "previous", "Command+ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}
 }
 ```
 
@@ -181,6 +181,11 @@ window["panels"] = ["account", "prompt"]
 window["account_items"] = [{"text": "Continue", "action": action}]
 window["shortcuts"].append(["Command+K", "account_action", action])
 ```
+
+The account, model and effort selectors take focus within the active tab. The default
+`message_card.backdrop_opacity` is 0.5. Opening a selector clears the output selection
+and hides the prompt caret. Up and Down move the highlight, Enter confirms and Escape
+returns to the draft. The tab strip stays available while a selector is open.
 
 The returned `message_card` controls heading size, card fill, radius, `selected_fill`, `selected_ink`
 and `email_weight`. Set `row_height`, `row_gap` and `heading_gap` in multiples of the active body
@@ -291,7 +296,7 @@ nonempty strings of at most 256 bytes). It never hides user messages, AI replies
 routine authentication and account-switch history, including expired sign-in attempts. Visible app responses use
 left-aligned dark bubbles with white text and the shared Markdown renderer, including `/help`, `/info` and setting confirmations.
 Other failures and command responses remain visible; `/help` remains available. Setting the list to `[]` restores the
-hidden history. In `transcript_style`, `"tool_prompts": {"Bash": "$ "}` displays Bash activity as a selectable monospace command. Each key matches the tool name exactly. An empty map preserves the original tool labels. Apply the client policy to see the changes in a running window.
+hidden history. In `transcript_style`, `"tool_prompts": {"Bash": "$ "}` displays Bash activity as a selectable monospace command. Each key matches the tool name exactly. With both `tool_previews` and `tool_prompts` empty, entries use their original tool labels. Apply the client policy to see the changes in a running window.
 
 `tool_inks` maps exact tool names to `#RRGGBB` colors, overriding `command_ink` for those tools. The shipped profile
 uses dark purple (`#aa79dd`) for Edit, MultiEdit, Write, apply_patch and ApplyPatch; shell commands remain orange.
@@ -493,6 +498,7 @@ When signed out, the stock client clears its own visible messages on `/clear`.
 ### Conversation commands and the activity indicator
 
 The server handles `/info` and `/model [model [effort]]` in the conversation Starlark module.
+A full model ID selects that exact model. A family name such as `astra` selects the highest numbered version in the active harness catalog. For example, `/model astra high` applies high effort to the latest available Astra. Catalog order breaks version ties.
 A combined selection returns one `set_model` operation with `text` and an optional `effort`.
 Both settings share a durable commit. Submitting bare `/model` or `/effort` in the window
 opens the centered selector. Arrow keys move the highlight, Enter applies it and Escape restores
@@ -522,9 +528,7 @@ disables the sweep and collapse. Both the overlay and opaque windows request HDR
 
 Sent bubbles have no outline by default. To add one, set `transcript_style.sent_outline_width` and `transcript_style.sent_outline_ink`. Pending bubbles use a dashed selection-color outline. Set `transcript_style.pending_dash_seconds` to the time for one dash and gap to travel (default 2 seconds, 0 for stationary). Reduced Motion holds the dashes and text still. The unsent text gently dims and brightens over `pending_text_seconds` (2.8 by default). Set `pending_text_pulse` to zero to disable it. The default is 0.10. Set `sounds.discard` to tune the click when Command-Delete clears the composer. Set `transcript_style.pending_outline_width` from 0 to 8 points before text scaling (default 3). `sounds.startup` plays once the overlay hotkey registers. Set `synth` to true for a layered tone that swells and fades. `sounds.step` is the quiet tick when the selected menu row changes. `sounds.hold` plays on staging (silent by default), and `sounds.send` plays when a new outgoing message appears in the live server transcript.
 
-Read tool calls display the path alone through `transcript_style.tool_prompts.Read = ""`. File tools, including Read,
-Edit and Write, use the purple entries in `transcript_style.tool_inks`; this map takes precedence over the legacy
-`read_path_ink` fallback.
+The shipped `transcript_style.tool_previews` displays file operations with an action and filename, tool lookups with the selected name, and task controls with a short label. A tail monitor shows the filename it watches. The stored tool summary keeps the original details.
 
 For a single active cell, `transcript_style.scanner_pulse_floor` sets the dimmest part of the pulse (0–1, default 0.12).
 
@@ -564,7 +568,7 @@ values for the `ui_*` groups are generated from the shipped JSON at build time, 
 not require maintaining a second list in C++.
 
 The server also handles `app.notice`: input `{kind, ...named_fields}` produces a JSON string for command acknowledgements.
-The shipped `client/window.star` formats `/help`; `server/conversation.star` formats `/info`, model/effort lists,
+The shipped `client/window.star` formats `/help`; `server/conversation.star` formats `/info`, `/usage` (last reported included usage by harness and subscription account), model/effort lists,
 setting acknowledgements and goal status as Markdown. Native state changes and validation remain authoritative.
 
 The client window operation `["select_prompt", "start"|"end"]` extends the focused AI prompt selection to the corresponding document edge, retaining its anchor. It does nothing outside a focused AI prompt or during input-method composition.

@@ -82,8 +82,6 @@
   "centered_account_menu": true,
   "sign_in_on_select": true,
   "account_picker_shortcuts": {
-    "ArrowUp": "previous",
-    "ArrowDown": "next",
     "Command+ArrowUp": "previous",
     "Command+ArrowDown": "next"
   }

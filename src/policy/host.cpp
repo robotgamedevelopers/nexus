@@ -101,6 +101,20 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
     if (!client) {
         field("account_email", state.accountEmail);
         field("login_state", state.loginState);
+        prJsonWriterKey(w.get(), pr("usage"));
+        prJsonWriterBeginArray(w.get());
+        for (const auto& row : state.usage) {
+            prJsonWriterBeginObject(w.get());
+            field("harness", row.harness);
+            field("account", row.account);
+            for (const auto& [key, value] : {std::pair{"minutes", double(row.minutes)},
+                    std::pair{"percent", double(row.percent)}, std::pair{"age", double(row.ageMinutes)}}) {
+                prJsonWriterKey(w.get(), pr(key));
+                prJsonWriterNumber(w.get(), value);
+            }
+            prJsonWriterEndObject(w.get());
+        }
+        prJsonWriterEndArray(w.get());
     }
     prJsonWriterKey(w.get(), pr("queued"));
     prJsonWriterNumber(w.get(), static_cast<double>(state.queued));

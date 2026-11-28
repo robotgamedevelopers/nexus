@@ -29,6 +29,7 @@ wire::ActionKind actionOut(ActionKind k) {
         case ActionKind::SecretAnswer: return wire::ActionKind::SecretAnswer;
         case ActionKind::SecretCancel: return wire::ActionKind::SecretCancel;
         case ActionKind::SignInClaim: return wire::ActionKind::SignInClaim;
+        case ActionKind::SignInCode: return wire::ActionKind::SignInCode;
         case ActionKind::SignInCancel: return wire::ActionKind::SignInCancel;
         case ActionKind::SignInOpened: return wire::ActionKind::SignInOpened;
         case ActionKind::SignOut: return wire::ActionKind::SignOut;
@@ -40,7 +41,7 @@ wire::ActionKind actionOut(ActionKind k) {
 
 bool isSignIn(ActionKind k) {
     return k == ActionKind::SignOut || k == ActionKind::SignInClaim ||
-        k == ActionKind::SignInOpened || k == ActionKind::SignInCallback || k == ActionKind::SignInCancel;
+        k == ActionKind::SignInOpened || k == ActionKind::SignInCallback || k == ActionKind::SignInCancel || k == ActionKind::SignInCode;
 }
 
 // A kind this build does not know (None: a later window's) is Unknown, which the server counts and never applies.
@@ -63,6 +64,7 @@ ActionKind actionIn(wire::ActionKind k) {
         case wire::ActionKind::SecretAnswer: return ActionKind::SecretAnswer;
         case wire::ActionKind::SecretCancel: return ActionKind::SecretCancel;
         case wire::ActionKind::SignInClaim: return ActionKind::SignInClaim;
+        case wire::ActionKind::SignInCode: return ActionKind::SignInCode;
         case wire::ActionKind::SignInCancel: return ActionKind::SignInCancel;
         case wire::ActionKind::SignInOpened: return ActionKind::SignInOpened;
         case wire::ActionKind::SignOut: return ActionKind::SignOut;
@@ -99,6 +101,7 @@ std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& h
             continue;
         }
         x->kind = actionOut(a.kind);
+        x->pastes_code = a.pastesCode;
         x->session = a.session;
         putText(b.main, x->ai_name, a.aiName, scratch);
         putText(b.main, x->text, a.text, scratch);
@@ -149,6 +152,7 @@ std::vector<Action> readActionsTables(const std::string& diff, std::uint32_t for
             a.kind = ActionKind::Unknown;     // taken only from a link of 5 or later; nothing of it is kept
         }
         if (a.kind != ActionKind::Unknown) {
+            a.pastesCode = x.pastes_code;
             a.session = x.session;
             a.aiName = textOf(x.ai_name);
             a.text = textOf(x.text);

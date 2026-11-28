@@ -9,9 +9,16 @@
 
 namespace nexus {
 
+void ChatSelection::clear() {
+    ranges_.clear();
+    text_.clear();
+    pressedLink_.clear();
+    dragging_ = false;
+}
+
 void ChatSelection::begin(PrLayoutTree* tree, size_t tab) {
     if (tab_ != tab || tree_ != tree) {
-        ranges_.clear(); text_.clear(); dragging_ = false;
+        clear();
     }
     tree_ = tree;
     tab_ = tab;
