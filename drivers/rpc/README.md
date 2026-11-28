@@ -24,6 +24,13 @@ native permission profile on both start and resume. Antigravity, Grok and Muse
 use dialogue sessions in a private working directory. The deployment must use a
 vendor version and operating system supported by that adapter.
 
+On macOS, add `--project-root /absolute/project` to an Antigravity driver to
+enable project work for a session with `--limit cwd` and that exact working
+directory. Install `nova-sandbox` in the server user's `~/.local/bin`.
+The `project_shell` tool can read and edit project files, run Git, build, and
+test. Each command runs with the project and private scratch space as its
+writable directories. The Google login stays in the separate harness process.
+
 | Harness | Program and transport | Startup instructions | Subscription evidence before sending |
 | --- | --- | --- | --- |
 | Codex | `codex app-server --stdio` | Developer instructions on thread start and resume | ChatGPT account and plan from `account/read` |

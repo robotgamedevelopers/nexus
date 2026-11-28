@@ -223,6 +223,9 @@ async def acp(rpc, turn):
     if turn.harness == "antigravity":
         if not caps.get("_meta", {}).get("antigravity", {}).get("systemPrompt", {}).get("append"):
             raise Failure("This Antigravity version cannot append AI instructions.")
+        if getattr(turn, "project_socket", None):
+            options["mcpServers"] = [{"name": "nexus_project", "command": "/usr/bin/nc",
+                                      "args": ["-U", str(turn.project_socket)], "env": []}]
         options["_meta"] = {"antigravity": {"systemPrompt": {"append": turn.instructions}}}
     else:
         methods = {m["id"] for m in init["authMethods"]}
@@ -254,6 +257,12 @@ async def acp(rpc, turn):
         billing = await rpc.call("_x.ai/billing", {})
         turn.credential(subscription("grok", billing.get("subscription_tier")))
     sid = turn.session(result.get("sessionId") or turn.resume)
+    if getattr(turn, "project_socket", None):
+        from . import bus_tool, project_tools
+        rpc.project_methods = {project_tools.COMMAND}
+        if turn.bus_sender:
+            rpc.project_methods.add(bus_tool.TOOL)
+        rpc.project_session = sid
     if turn.model:
         choice = next(
             (
