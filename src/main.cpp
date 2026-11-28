@@ -556,6 +556,9 @@ bool open(void* context, PrStudioWindow* window) {
     a.view.openLink = openUnlessLocked(openExternal, lockedNow, logLine);
     a.view.playChirp = [&a](const Chirp& cue) { a.audio.play(cue); };
     a.host.signIn.openUrl = openExternal;
+#if NEXUS_LINK && !defined(_WIN32)
+    a.host.signIn.forwardPage = forwardSignInPage;
+#endif
     // Return or a click on the lock screen asks the system again.
     a.view.unlock = [&a] { if (a.lock) a.lock->ask(); };
     if (!a.overlay && (!a.lock || a.lock->drawsContent())) {
@@ -589,6 +592,7 @@ void closeWindow(void* context, PrStudioWindow*, PrStatus) {
     a.window = nullptr;
     a.view.paste = nullptr;
     a.view.openLink = nullptr;
+    a.host.signIn.lost();
     a.host.signIn.openUrl = nullptr;
     a.host.ui = nullptr;
     a.host.board = nullptr;

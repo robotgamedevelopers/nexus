@@ -838,6 +838,13 @@ struct Builder {
     }
 
     void signInFailure(PrLayoutNode parent, const SignInAccount& account) {
+        if (account.name.empty()) return;
+        if (!view.problem.empty()) {
+            auto appearance = textStyle(PrKitTextRole_BodySmall, kNoticeTone, PrKitTextAlign_Center);
+            appearance.wrap = PrKitWrap_Wrap;
+            caption(parent, view.problem, appearance);
+            return;
+        }
         if (account.email.empty() || !model.tab_count()) return;
         const auto& entries = model.tab(model.active()).transcript;
         const auto needed = account.name + " needs signing in:";

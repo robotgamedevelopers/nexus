@@ -118,7 +118,7 @@ const std::vector<std::string_view>& signInHosts(std::string_view provider) {
     return provider == "claude" ? kClaude : kNone;
 }
 
-bool isLocalSignInUrl(std::string_view url) {
+bool isLocalSignInUrl(std::string_view url, std::uint16_t* pagePort) {
     constexpr std::string_view origin = "http://127.0.0.1:";
     constexpr std::string_view route = "/nexus-signin/";
     if (!url.starts_with(origin)) {
@@ -141,6 +141,7 @@ bool isLocalSignInUrl(std::string_view url) {
         return false;
     }
     url.remove_prefix(route.size());
+    *pagePort = static_cast<std::uint16_t>(port);
     return url.size() == 64 && std::all_of(url.begin(), url.end(), [](char c) {
         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
     });
@@ -183,10 +184,12 @@ bool isQueryBytes(std::string_view query) {
 
 bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarget* out) {
     if (usesLocalSignInPage(provider)) {
-        if (url.size() > kSignInUrlBytes || !isLocalSignInUrl(url)) {
+        std::uint16_t port = 0;
+        if (url.size() > kSignInUrlBytes || !isLocalSignInUrl(url, &port)) {
             return false;
         }
         *out = {};
+        out->port = port;
         return true;
     }
     if (url.size() > kSignInUrlBytes || url.substr(0, 8) != "https://" || !isQueryBytes(url)) {
@@ -695,6 +698,7 @@ SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const voi
             return step;
         }
         step.kind = Step::Kind::Open;
+        step.privatePage = usesLocalSignInPage(o.provider);
         step.url = o.url;
         if (step.gate) {
             gate_ = o.id;

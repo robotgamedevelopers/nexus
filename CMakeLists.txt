@@ -452,7 +452,7 @@ if(NEXUS_WINDOW)
 
     # What the window does around the view each frame (src/frame_host.h), and its links opened in the system's browser
     # off the frame thread (src/url_opener.h): built by the app, and driven by the frame-budget test.
-    add_library(nexus_frame STATIC src/frame_host.cpp src/url_opener.cpp src/window_lock.cpp)
+    add_library(nexus_frame STATIC src/frame_host.cpp src/url_opener.cpp src/window_lock.cpp src/signin_forward.cpp)
     target_include_directories(nexus_frame PUBLIC src)
     target_compile_options(nexus_frame PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_frame PUBLIC nexus_view nexus_terminals nexus_board nexus_sync nexus_hitch

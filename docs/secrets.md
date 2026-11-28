@@ -216,6 +216,12 @@ the helper's one-time local page in the user's browser. The provider's device li
 code or pasted response stays in that browser flow. The window claims a flow and
 opens its page through the existing sign-in protocol.
 
+On macOS and Linux, a remote Codex or Antigravity sign-in opens the same private page through SSH.
+The client uses its configured server destination and requires a trusted SSH host key. It binds only
+the matching IPv4 loopback port, waits for SSH to confirm the bind, and then opens the browser.
+The page path stays out of SSH arguments. Ending the flow, losing the connection, or locking the
+client closes the forward. An occupied port produces a retry message on the sign-in card.
+
 The server accepts a successful helper exit for the current flow only after it
 verifies the account's owner-only enrollment receipt. That receipt contains the
 provider name. Each adapter separately checks subscription access before sending

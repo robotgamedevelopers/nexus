@@ -342,6 +342,30 @@ void logoutUsesTheConfirmedAccountAndReturnsToSignIn() {
     CHECK(!w.view.signOut() && w.link.sent.size() == 5);
 }
 
+void remoteSignInCardClaimsTheSelectedAccount() {
+    for (const std::string harness : {"codex", "antigravity"}) {
+        Window w("chat");
+        auto session = std::make_shared<sync::SessionView>();
+        session->id = 10;
+        session->info = {"chat", harness, "personal", "", ""};
+        w.link.state.phase = sync::LinkPhase::Connected;
+        w.link.state.sessions = sync::Sessions({session});
+        w.link.state.sessions.setAIs({{"chat", {{"personal", "Personal", true}}}});
+        w.link.changed = true;
+        w.host.pollLink();
+        w.host.signIn.forwardPage = [](const auto&, auto, auto) -> std::unique_ptr<SignInForward> {
+            CHECK(false); // A claim has no page or port yet.
+            return {};
+        };
+        w.model.set_draft(w.model.active(), "keep my draft");
+        w.link.sent.clear();
+        w.view.accountAction("sign_in:personal");
+        CHECK(w.link.sent.size() == 1 && w.link.sent.back().kind == sync::ActionKind::SignInClaim &&
+              w.link.sent.back().account == "personal" && w.link.sent.back().session == 10);
+        CHECK(w.model.tab(w.model.active()).draft == "keep my draft");
+    }
+}
+
 void enterDuringAccountSwitchWaitsForServerState() {
     Window w("chat");
     auto session = std::make_shared<sync::SessionView>();
@@ -615,6 +639,7 @@ int main() {
     explicitSignInKeepsTheDraft();
     remoteLoginSwitchAndRetry(false);
     remoteLoginSwitchAndRetry(true);
+    remoteSignInCardClaimsTheSelectedAccount();
     enterDuringAccountSwitchWaitsForServerState();
     logoutUsesTheConfirmedAccountAndReturnsToSignIn();
     savedStateShowsTheSelectedEmailWithoutStartingSignIn();

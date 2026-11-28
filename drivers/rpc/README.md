@@ -45,9 +45,10 @@ press **Enter** or click **Sign in to** to open that account’s browser flow. I
 
 The local Nexus window opens a private page for that account. Complete the vendor's
 browser authorization there. Antigravity asks you to paste Google's return code
-into that page. A remote window can keep chatting on an enrolled account. Initial
-enrollment for these four providers needs a window connected to the server over
-loopback. The server probes the account-specific enrollment receipt on restart.
+into that page. On macOS and Linux, Codex and Antigravity can also enroll from a desktop
+connected to a remote server over SSH. The window forwards the account’s private
+page to the same loopback port on the desktop. Other clients and providers use
+a window connected to the server over loopback for initial enrollment. The server probes the account-specific enrollment receipt on restart.
 The driver checks the actual subscription before sending the prompt.
 
 Run `python3 .github/python-tests.py --tier pr --start drivers/rpc` from the repository

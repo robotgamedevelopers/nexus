@@ -12,6 +12,8 @@
 // thread (tab_order.h asyncStore). The client runs at 120 Hz with an 8.3 ms budget (AGENTS.md).
 
 #pragma once
+
+#include "signin_forward.h"
 #include <future>
 
 #include <cstdint>
@@ -96,11 +98,15 @@ public:
     // The state's offers as the link last brought them, or the link lost.
     void received(const sync::Sessions& state) { opener.received(state.offers()); }
     void lost();
+    std::function<std::unique_ptr<SignInForward>(const std::string&, std::uint16_t, std::function<void()>)> forwardPage;
+    bool canOpenPage(std::string_view provider) const {
+        return loopback || (forwardPage && (provider == "codex" || provider == "antigravity"));
+    }
     // The overlay was shown: the window may claim one flow.
     void shown() { opener.shown(); }
     // The client lock locked the window (client_lock.h): the claim a show allowed is taken back, and no step runs (no
     // claim, no URL opened, no callback sent up) until it is unlocked; the owner's next show allows one again.
-    void lock() { locked = true; opener.hidden(); }
+    void lock() { locked = true; opener.hidden(); closeForward(); }
     void unlock() { locked = false; }
     bool locked = false;
     // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open. None
@@ -114,6 +120,13 @@ public:
 
 private:
     void pollGate();
+    void pollForward();
+    void closeForward();
+    sync::SecretValue forwardUrl_;
+    std::unique_ptr<SignInForward> forward_;
+    std::uint64_t forwardFlow_ = 0;
+    std::uint64_t acknowledgedForward_ = 0;
+    bool openWhenReady_ = false;
     std::unique_ptr<SignInGate> gate_;
     std::uint64_t gateFlow_ = 0;
 };

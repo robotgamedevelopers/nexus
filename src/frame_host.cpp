@@ -152,6 +152,8 @@ void FrameHost::takeAIs(const sync::Sessions& state) {
 void LinkSignIn::lost() {
     activeAccount.reset();
     loopback = false;
+    closeForward();
+    acknowledgedForward_ = 0;
     opener.lost();
     gate_.reset();
     gateFlow_ = 0;
@@ -159,10 +161,10 @@ void LinkSignIn::lost() {
 
 namespace {
 
-bool onThisMachine(const sync::SignInOffer& offer, const void* context) {
+bool browserCanReachPage(const sync::SignInOffer& offer, const void* context) {
     const LinkSignIn* s = static_cast<const LinkSignIn*>(context);
     if (sync::usesLocalSignInPage(offer.provider)) {
-        return s->loopback;
+        return s->canOpenPage(offer.provider);
     }
     return sync::sameMachine(s->serverArg, offer.host, s->local);
 }
@@ -236,6 +238,9 @@ void LinkSignIn::choose(const std::string& account) {
         gate_.reset();
         gateFlow_ = 0;
     }
+    if (forward_ && std::none_of(opener.view().begin(), opener.view().end(), [&](const auto& offer) {
+            return offer.id == forwardFlow_ && offer.account == account;
+        })) closeForward();
     activeAccount = account;
 }
 
@@ -246,16 +251,61 @@ std::string LinkSignIn::reopen(const sync::SignInOffer& offer) {
     sync::SignInTarget target;
     if (!sync::parseSignInUrl(offer.provider, offer.url.bytes(), &target))
         return "The sign-in address failed validation.";
-    if (!onThisMachine(offer, this) && opener.gate() != offer.id)
+    if (sync::usesLocalSignInPage(offer.provider) && !loopback) {
+        if (!canOpenPage(offer.provider)) return "Open Nexus on the server machine to sign in.";
+        problem.clear();
+        if (!forward_ || forwardFlow_ != offer.id || forward_->poll() == SignInForward::State::Failed)
+            forward_ = forwardPage(serverArg, target.port, wake);
+        forwardFlow_ = offer.id;
+        forwardUrl_ = offer.url;
+        openWhenReady_ = true;
+        pollForward();
+        return problem;
+    }
+    if (!browserCanReachPage(offer, this) && opener.gate() != offer.id)
         return "The sign-in callback is no longer waiting. Retry when this attempt ends.";
     if (openUrl) openUrl(offer.url.bytes());
     return {};
 }
 
+void LinkSignIn::closeForward() {
+    forward_.reset();
+    forwardUrl_.clear();
+    forwardFlow_ = 0;
+    openWhenReady_ = false;
+}
+
+void LinkSignIn::pollForward() {
+    if (!forward_) return;
+    const auto& offers = opener.view();
+    const auto offer = std::find_if(offers.begin(), offers.end(), [&](const auto& o) {
+        return o.id == forwardFlow_ && o.opener == opener.token();
+    });
+    if (offer == offers.end()) { closeForward(); return; }
+    const auto state = forward_->poll();
+    if (state == SignInForward::State::Failed) {
+        closeForward();
+        problem = "Nexus could not connect to the private sign-in page over SSH. Click the account to retry.";
+    } else if (state == SignInForward::State::Ready && openWhenReady_ &&
+               (!activeAccount || *activeAccount == offer->account)) {
+        openWhenReady_ = false;
+        if (openUrl) openUrl(forwardUrl_.bytes());
+        forwardUrl_.clear();
+        if (acknowledgedForward_ == offer->id) return;
+        acknowledgedForward_ = offer->id;
+        sync::Action action;
+        action.kind = sync::ActionKind::SignInOpened;
+        action.request = offer->id;
+        action.text = opener.token();
+        port->send(std::move(action));
+    }
+}
+
 void LinkSignIn::step() {
     if (port == nullptr || locked) return;
     pollGate();
-    sync::SignInOpener::Step next = opener.next(onThisMachine, this, activeAccount ? &*activeAccount : nullptr);
+    pollForward();
+    sync::SignInOpener::Step next = opener.next(browserCanReachPage, this, activeAccount ? &*activeAccount : nullptr);
     if (next.kind == sync::SignInOpener::Step::Kind::Claim) {
         sync::Action action;
         action.kind = sync::ActionKind::SignInClaim;
@@ -267,6 +317,14 @@ void LinkSignIn::step() {
         // deadline. The URL is never shown.
         problem = next.account + "'s sign-in address failed validation. Restart sign-in on the server.";
     } else if (next.kind == sync::SignInOpener::Step::Kind::Open) {
+        if (!loopback && next.privatePage) {
+            forwardFlow_ = next.id;
+            forwardUrl_ = std::move(next.url);
+            openWhenReady_ = true;
+            forward_ = forwardPage(serverArg, next.target.port, wake);
+            pollForward();
+            return;
+        }
         if (next.gate) {
             gate_ = openGate ? openGate(next.target) : std::make_unique<SignInGate>(next.target, wake);
             gateFlow_ = next.id;
@@ -534,7 +592,7 @@ bool FrameHost::activateSignIn() {
     const auto session = mirror.session(model->tab(model->active()).id);
     const auto* current = accountState_.find(session);
     if (!current) return false;
-    if (sync::usesLocalSignInPage(current->info.harness) && !signIn.loopback) {
+    if (sync::usesLocalSignInPage(current->info.harness) && !signIn.canOpenPage(current->info.harness)) {
         view->problem = "Open Nexus on the server machine to sign in to " + choice->name + ". Your draft is kept.";
         return true;
     }
@@ -687,7 +745,7 @@ void FrameHost::startLogin(const std::string& account) {
         view->problem = "Update the Nexus server before switching logins; this server cannot confirm account actions.";
         return;
     }
-    if (sync::usesLocalSignInPage(current->info.harness) && !signIn.loopback) {
+    if (sync::usesLocalSignInPage(current->info.harness) && !signIn.canOpenPage(current->info.harness)) {
         view->problem = "Open Nexus on the server machine to sign in to " + accountShownAs(*target) + ".";
         return;
     }
@@ -799,7 +857,7 @@ void FrameHost::enrollSelected(const std::string& account) {
     if (it == roster->accounts.end() || !pickable(*it)) return;
     if (!it->needsSignIn) { view->problem.clear(); return; }
     if (current->info.account != account) return;
-    if (sync::usesLocalSignInPage(current->info.harness) && !signIn.loopback) {
+    if (sync::usesLocalSignInPage(current->info.harness) && !signIn.canOpenPage(current->info.harness)) {
         view->problem = "Open Nexus on the server machine to sign in to " + accountShownAs(*it) + ".";
         return;
     }

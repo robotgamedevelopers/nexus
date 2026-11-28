@@ -223,6 +223,37 @@ void privateSignInPages() {
         remote.signIn.step();
         CHECK(remote.port.sent.empty() && remote.opened.empty() && remote.gates.empty());
 
+        if (std::string_view(provider) == "codex" || std::string_view(provider) == "antigravity") {
+            struct Forward : SignInForward {
+                State state = State::Starting;
+                State poll() override { return state; }
+            };
+            Forward* tunnel = nullptr;
+            remote.signIn.forwardPage = [&](const std::string& host, std::uint16_t port, std::function<void()>) {
+                CHECK(host == "localhost" && port == 54321);
+                auto result = std::make_unique<Forward>();
+                tunnel = result.get();
+                return result;
+            };
+            remote.signIn.step();
+            CHECK(tunnel && remote.opened.empty() && remote.port.sent.empty());
+            if (tunnel) tunnel->state = SignInForward::State::Failed;
+            remote.signIn.step();
+            CHECK(!remote.signIn.problem.empty() && remote.opened.empty() && remote.port.sent.empty());
+            remote.signIn.problem.clear();
+            const auto offer = remote.signIn.opener.view().front();
+            CHECK(remote.signIn.reopen(offer).empty());
+            if (tunnel) tunnel->state = SignInForward::State::Ready;
+            remote.signIn.step();
+            CHECK(remote.opened.size() == 1 && remote.opened.front() == url);
+            CHECK(remote.port.sent.size() == 1 && remote.port.sent.back().kind == sync::ActionKind::SignInOpened);
+            remote.signIn.step();
+            CHECK(remote.opened.size() == 1);
+            CHECK(remote.signIn.reopen(offer).empty() && remote.opened.size() == 2);
+            CHECK(remote.port.sent.size() == 1);
+            remote.signIn.lost();
+        }
+
         sync::SignInDesk desk;
         desk.need(1, "test-account", provider);
         desk.claim(1, "w1", 1000);
@@ -233,7 +264,7 @@ void privateSignInPages() {
     }
     sync::SignInTarget target;
     CHECK(sync::parseSignInUrl("claude", kUrl, &target));
-    CHECK(sync::parseSignInUrl("codex", url, &target) && target == sync::SignInTarget{});
+    CHECK(sync::parseSignInUrl("codex", url, &target) && target.port == 54321 && target.state.empty());
     CHECK(!sync::parseSignInUrl("claude", url, &target));
     CHECK(!sync::hasSignIn("unknown") && !sync::parseSignInUrl("unknown", url, &target));
     for (const std::string& bad : {
