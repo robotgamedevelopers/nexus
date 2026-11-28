@@ -564,7 +564,7 @@ values for the `ui_*` groups are generated from the shipped JSON at build time, 
 not require maintaining a second list in C++.
 
 The server also handles `app.notice`: input `{kind, ...named_fields}` produces a JSON string for command acknowledgements.
-The shipped `client/window.star` formats `/help`; `server/conversation.star` formats `/info`, model/effort lists,
+The shipped `client/window.star` formats `/help`; `server/conversation.star` formats `/info`, `/usage` (last reported included usage by harness and subscription account), model/effort lists,
 setting acknowledgements and goal status as Markdown. Native state changes and validation remain authoritative.
 
 The client window operation `["select_prompt", "start"|"end"]` extends the focused AI prompt selection to the corresponding document edge, retaining its anchor. It does nothing outside a focused AI prompt or during input-method composition.

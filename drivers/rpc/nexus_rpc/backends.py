@@ -116,6 +116,14 @@ async def refresh_choices(rpc, provider):
         logging.warning("%s did not provide a new model catalog", provider)
 
 
+def codex_quota(turn, limits):
+    if isinstance(limits, dict) and limits.get("limitId") in (None, "codex"):
+        for key in ("primary", "secondary"):
+            window = limits.get(key)
+            if isinstance(window, dict):
+                turn.quota(window.get("windowDurationMins"), window.get("usedPercent"))
+
+
 async def codex(rpc, turn):
     await rpc.call("initialize", {
         "clientInfo": {"name": "nexus", "version": "1"}, "capabilities": {"experimentalApi": True},
@@ -133,6 +141,10 @@ async def codex(rpc, turn):
     if expected and not matches_personal(expected, auth.get("email"), auth.get("planType")):
         raise Failure("Sign in to the Personal workspace for the selected ChatGPT email.", "no-credential", revoked=True)
     turn.credential(subscription("codex", auth.get("planType")))
+    # Older app servers can decline the optional quota method. They can still serve the turn.
+    snapshot = await rpc.call("account/rateLimits/read", {}, optional=True)
+    if isinstance(snapshot, dict):
+        codex_quota(turn, snapshot.get("rateLimits"))
     cwd = str(Path(turn.cwd).resolve(strict=True))
     options = {
         "cwd": cwd,
@@ -170,12 +182,7 @@ async def codex(rpc, turn):
     while True:
         method, params = await rpc.event()
         if method == "account/rateLimits/updated":
-            limits = params.get("rateLimits")
-            if isinstance(limits, dict) and limits.get("limitId") in (None, "codex"):
-                for key in ("primary", "secondary"):
-                    window = limits.get(key)
-                    if isinstance(window, dict):
-                        turn.quota(window.get("windowDurationMins"), window.get("usedPercent"))
+            codex_quota(turn, params.get("rateLimits"))
             continue
         thread = params.get("threadId")
         if thread != sid:

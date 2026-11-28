@@ -76,7 +76,7 @@ class Rpc:
         msg = await self.read()
         return msg.get("method"), msg.get("params") or {}
 
-    async def call(self, method, params, handle=None, timeout=45, *, quota_provider=None):
+    async def call(self, method, params, handle=None, timeout=45, *, quota_provider=None, optional=False):
         self.seq += 1
         await self.write({"id": self.seq, "method": method, "params": params})
         async with asyncio.timeout(timeout):
@@ -94,6 +94,8 @@ class Rpc:
                 if msg.get("id") != self.seq:
                     raise Failure("The harness returned an unexpected response ID.")
                 if "error" in msg:
+                    if optional:
+                        return None
                     err = msg["error"]
                     detail = str(err.get("message", "")).lower()
                     # Only retry a missing session before any user input was sent.
@@ -143,7 +145,8 @@ class Turn:
         error("session-not-found", "The harness could not find the saved conversation.", turn=self.number)
 
     def quota(self, minutes, percent):
-        if type(minutes) is int and 1 <= minutes <= 525600 and type(percent) in (int, float) and 0 <= percent <= 2147483647:
+        if (type(minutes) is int and 1 <= minutes <= 525600
+                and type(percent) in (int, float) and 0 <= percent <= 2147483647):
             emit("quota", minutes=minutes, used_percent=round(percent))
 
     def child_agents(self, count):

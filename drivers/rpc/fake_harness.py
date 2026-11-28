@@ -64,10 +64,14 @@ for line in sys.stdin:
         result = {"account": {"type": "apiKey" if bad else "chatgpt", "planType": "plus"}}
         if mode == "muse":
             result = {"state": "loggedOut" if bad else "accountLogin", "credentialRequired": True}
+    elif m == "account/rateLimits/read":
+        result = {"rateLimits": {"primary": {"windowDurationMins": 300, "usedPercent": 37}}}
     elif m == "_x.ai/billing":
         result = {"subscription_tier": "free" if bad else "SuperGrok"} if session_open else {"config": {}}
     elif m == "usage/refresh":
         result = {"subscriptionActive": not bad, "tierName": "test-subscription"}
+    elif m == "usage/read":
+        result = {"usage": {"weekly": {"usedPercent": 112}}}
     elif m in {
         "thread/start",
         "thread/resume",

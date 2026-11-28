@@ -56,7 +56,11 @@ async def subscription_tier(rpc, report_usage=None):
     if result.get("subscriptionActive") is not True:
         raise Failure("Muse could not verify an active subscription.")
     if report_usage:
-        report_usage(result.get("usage"))
+        usage = result.get("usage")
+        if not isinstance(usage, dict):
+            snapshot = await rpc.call("usage/read", {}, optional=True)
+            usage = snapshot.get("usage") if isinstance(snapshot, dict) else None
+        report_usage(usage)
     tier = result.get("tierName")
     return tier if isinstance(tier, str) and 0 < len(tier.strip()) <= 128 else "subscription"
 

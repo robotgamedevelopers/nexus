@@ -124,6 +124,9 @@ class Protocol(unittest.TestCase):
                     for n in (10, 11):
                         events = self.reply(p, n)
                         self.assertEqual(events[-1]["outcome"], "ok", events)
+                        if h in ("codex", "muse"):
+                            minutes, percent = (300, 37) if h == "codex" else (10080, 112)
+                            self.assertIn({"kind": "quota", "minutes": minutes, "used_percent": percent}, events)
                         self.assertEqual([e["delta"] for e in events if e["kind"] == "text"], ["Reply ✅"])
                         self.assertEqual(
                             [e["id"] for e in events if e["kind"] == "session"], ["provider-session"]

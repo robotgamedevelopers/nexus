@@ -150,7 +150,7 @@ inline AccountMenuLayout layoutAccountMenu(const MenuBox& highlight, std::size_t
     return out;
 }
 
-// `text` cut to fit `room` points as `measure` measures it, ending in "…" when cut: never wrapped. A cut falls between
+// `text` cut to fit `room` points as `measure` measures it, ending in the chosen marker when cut. A cut falls between
 // whole UTF-8 characters.
 inline std::string ellipsize(const std::string& text, float room, const std::function<float(std::string_view)>& measure,
                              std::string_view marker = "…") {

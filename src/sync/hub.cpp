@@ -1250,6 +1250,7 @@ void Hub::reportSignedIn(const std::string& account, bool signedIn) {
         }
         return;
     }
+    quota_.erase(account);
     if (signedIn_.erase(account) && accounts_) stateAIs();
     // An account whose provider signs in in the app: a flow, one browser sign-in, unless one is live or a login for it
     // is held already.
@@ -1277,6 +1278,7 @@ void Hub::needsSignIn(const std::string& account, const std::string& why) {
     if (accounts_ && accounts_->account(account) == nullptr) {
         return;
     }
+    quota_.erase(account);
     if (signedIn_.erase(account) && accounts_) stateAIs();
     if (signsIn(account)) {
         needSignIn(account);
@@ -1571,6 +1573,7 @@ bool Hub::signOutAction(const Action& action, std::string* why, const std::strin
         error = signOut_(*account);
     }
     if (error.empty()) {
+        quota_.erase(name);
         signedIn_.erase(name);
         stateAIs();
     }
