@@ -498,6 +498,7 @@ When signed out, the stock client clears its own visible messages on `/clear`.
 ### Conversation commands and the activity indicator
 
 The server handles `/info` and `/model [model [effort]]` in the conversation Starlark module.
+A full model ID selects that exact model. A family name such as `astra` selects the highest numbered version in the active harness catalog. For example, `/model astra high` applies high effort to the latest available Astra. Catalog order breaks version ties.
 A combined selection returns one `set_model` operation with `text` and an optional `effort`.
 Both settings share a durable commit. Submitting bare `/model` or `/effort` in the window
 opens the centered selector. Arrow keys move the highlight, Enter applies it and Escape restores

@@ -16,6 +16,26 @@ def _code(value):
     fence = "`" * (longest + 1)
     return fence + " " + value + " " + fence
 
+def _model_parts(name):
+    for sep in [".", "_", "/", ":"]:
+        name = name.replace(sep, "-")
+    return name.lower().split("-")
+
+def _family_model(name, choices, resolved):
+    if name in choices:
+        return name
+    best = None
+    latest = []
+    for candidate in choices:
+        parts = _model_parts(resolved.get(candidate) or candidate)
+        if name.lower() not in parts:
+            continue
+        version = [int(part) for part in parts if part and part.isdigit()]
+        if best == None or version > latest:
+            best = candidate
+            latest = version
+    return best
+
 def _command(state):
     words = state["text"].split()
     if not words or words[0] not in ["/clear", "/compact", "/model", "/effort", "/info", "/goal", "/usage"]:
@@ -97,6 +117,10 @@ def _command(state):
                 labels.append("- " + label + (" **(current)**" if value == current else ""))
             return [{"op": "notice", "text": "**Models**\n\n" + "\n".join(labels)}]
         return [{"op": "notice", "text": "**Effort levels**\n\n" + "\n".join(["- " + _code(v) + (" **(current)**" if v == current else "") for v in choices])}]
+    if cmd == "/model" and len(words) in [2, 3]:
+        selected = _family_model(words[1], choices, catalog.get("resolved", {}))
+        if selected:
+            words = [cmd, selected] + words[2:]
     if cmd == "/model" and len(words) == 3 and words[1] in models:
         efforts = models[words[1]]
         if words[2] not in efforts:
