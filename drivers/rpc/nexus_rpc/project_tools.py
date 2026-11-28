@@ -76,10 +76,10 @@ async def shell(wall, root, scratch, command):
 
 
 @asynccontextmanager
-async def project_tools(home, cwd, keep_out, sender=None):
-    root = workspace_root(cwd, keep_out)
+async def project_tools(home, cwd, keep_out, sender=None, *, native_send=None):
+    root = workspace_root(cwd, keep_out) if cwd else None
     wall = Path.home() / ".local/bin/nova-sandbox"
-    if not os.access(wall, os.X_OK):
+    if root and not os.access(wall, os.X_OK):
         raise ValueError("Project work requires nova-sandbox on Studio")
     # The account room is read-only to the vendor. Only its trusted driver writes the MCP configuration.
     room_base = home / "room"
@@ -107,11 +107,15 @@ async def project_tools(home, cwd, keep_out, sender=None):
                         elif method == "ping":
                             result = {}
                         elif method == "tools/list":
-                            result = {"tools": [TOOL]}
-                            if sender:
+                            result = {"tools": [TOOL] if root else []}
+                            if native_send:
+                                result["tools"].append(bus_tool.NATIVE_TOOL)
+                            elif sender:
                                 result["tools"] += bus_tool.respond(sender, msg)["tools"]
-                        elif method == "tools/call" and params.get("name") == COMMAND:
+                        elif method == "tools/call" and root and params.get("name") == COMMAND:
                             result = await shell(wall, root, scratch, params["arguments"]["command"])
+                        elif method == "tools/call" and native_send and params.get("name") == bus_tool.TOOL:
+                            result = await native_send(params.get("arguments"))
                         elif method == "tools/call" and sender and params.get("name") == bus_tool.TOOL:
                             result = await asyncio.to_thread(bus_tool.respond, sender, msg)
                         else:

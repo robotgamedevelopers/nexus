@@ -6,6 +6,8 @@
 #include <string_view>
 
 namespace nexus::sync {
+// A slash cannot occur in an external bus sender. Keep the two origins distinct in durable history.
+inline constexpr std::string_view kNativeBusPrefix = "nexus/";
 inline constexpr std::size_t kMaxBusPeerBytes = 128;
 inline constexpr std::string_view kBusPeerCharacters =
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-";

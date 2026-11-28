@@ -114,7 +114,7 @@ function startHarness(start: HarnessStart, account: Account): Harness {
         instructions.push('To listen on the message bus use Monitor with "' + join(bin, 'nova-bus') +
             '" hook --as ' + ai + '. Keep the full output for delivery.');
     }
-    if (start.busSender) instructions.push('Peer messages arrive in chat. Use nexus_bus_send to send or reply as yourself. Keep routine sends and their receipts out of the conversation unless the person asks.');
+    if (start.sendMail || start.busSender) instructions.push('Peer messages arrive in chat. Use nexus_bus_send to send or reply as yourself. Keep routine sends and their receipts out of the conversation unless the person asks.');
     const startupContext = instructions.filter(Boolean).join('\n');
     const stream = query({
         prompt: start.prompts,
@@ -139,8 +139,8 @@ function startHarness(start: HarnessStart, account: Account): Harness {
             allowDangerouslySkipPermissions: true,
             canUseTool: (_name, input) => Promise.resolve({ behavior: 'allow', updatedInput: input }),
             includePartialMessages: true,
-            mcpServers: { nexus: secretMcpServer(start.askSecret, start.busSender) },
-            toolAliases: { [kSecretToolName]: kSecretMcpToolName, ...(start.busSender ? {[sendName]: `mcp__nexus__${sendName}`} : {}) },
+            mcpServers: { nexus: secretMcpServer(start.askSecret, start.busSender, start.sendMail, start.supportsNativeMail) },
+            toolAliases: { [kSecretToolName]: kSecretMcpToolName, ...(start.sendMail || start.busSender ? {[sendName]: `mcp__nexus__${sendName}`} : {}) },
             // A limited AI (--limit cwd) reads and writes only its directory (wall.ts limitOf).
             ...(wall ?? {sandbox: {enabled: false}, spawnClaudeCodeProcess: spawnWithToken(account.token, data => process.stderr.write(data))}),
         },

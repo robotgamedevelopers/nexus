@@ -276,6 +276,9 @@ public:
     // entry, pending turn and receipt commit together. The caller acknowledges the bus only after the batch flush.
     bool receiveBus(const std::string& recipient, const std::string& id, const std::string& sender,
                     const std::string& displayBody, const std::string& promptBody, std::string* why = nullptr);
+    std::string sendBus(SessionId from, const std::string& nonce, const std::string& to,
+                        const std::string& subject, const std::string& body, const std::string& replyTo,
+                        std::string& why);
     // Includes receipts admitted in the current batch. The bus acknowledgement still waits for its flush.
     // Record an authoritative non-AI delivery as handled; it creates no session, transcript or driver turn.
     bool ignoreBus(const std::string& recipient, const std::string& id, std::string* why, const std::string& source);
@@ -466,6 +469,9 @@ public:
     void injectSignInCallbackFault() { signIns_.injectCallbackFault(); }
 
 private:
+    bool deliverBus(const std::string& recipient, const std::string& receipt, const std::string& sender,
+                    const std::string& displayBody, const std::string& promptBody, std::string* why,
+                    SessionId target = 0, bool native = false);
     std::vector<SignInOffer> publicOffers() const;
     void needSignIn(const std::string& account);
     void needAll();

@@ -43,6 +43,8 @@ std::string kindOf(const DriverMessage& message) {
             return "done";
         } else if constexpr (std::is_same_v<M, Error>) {
             return "error";
+        } else if constexpr (std::is_same_v<M, BusSend>) {
+            return "bus-send";
         } else if constexpr (std::is_same_v<M, AskSecret>) {
             return "ask-secret";
         } else if constexpr (std::is_same_v<M, Queue>) {

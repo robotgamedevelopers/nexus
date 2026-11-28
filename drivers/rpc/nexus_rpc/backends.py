@@ -220,13 +220,13 @@ async def codex(rpc, turn):
 async def acp(rpc, turn):
     init = await rpc.call("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
     options = {"cwd": turn.cwd, "mcpServers": []}
+    if getattr(turn, "project_socket", None):
+        options["mcpServers"] = [{"name": "nexus_project", "command": "/usr/bin/nc",
+                                  "args": ["-U", str(turn.project_socket)], "env": []}]
     caps = init["agentCapabilities"]
     if turn.harness == "antigravity":
         if not caps.get("_meta", {}).get("antigravity", {}).get("systemPrompt", {}).get("append"):
             raise Failure("This Antigravity version cannot append AI instructions.")
-        if getattr(turn, "project_socket", None):
-            options["mcpServers"] = [{"name": "nexus_project", "command": "/usr/bin/nc",
-                                      "args": ["-U", str(turn.project_socket)], "env": []}]
         options["_meta"] = {"antigravity": {"systemPrompt": {"append": turn.instructions}}}
     else:
         methods = {m["id"] for m in init["authMethods"]}
@@ -260,8 +260,8 @@ async def acp(rpc, turn):
     sid = turn.session(result.get("sessionId") or turn.resume)
     if getattr(turn, "project_socket", None):
         from . import bus_tool, project_tools
-        rpc.project_methods = {project_tools.COMMAND}
-        if turn.bus_sender:
+        rpc.project_methods = {project_tools.COMMAND} if getattr(turn, "project_enabled", False) else set()
+        if getattr(turn, "native_bus", False) or getattr(turn, "bus_sender", None):
             rpc.project_methods.add(bus_tool.TOOL)
         rpc.project_session = sid
     if turn.model:
@@ -360,12 +360,17 @@ async def muse(rpc, turn):
     turn.model = turn.model or first
     turn.credential(await turn.provider.subscription_tier(rpc, lambda usage: muse_quota(turn, usage)))
     opts = {"commandId": uuid7(), "workspaceRoot": turn.cwd, "approvalMode": "denyUnmatched"}
+    resume_opts = {"commandId": uuid7(), "sessionId": turn.resume, "excludeItems": True}
+    if getattr(turn, "project_socket", None):
+        config = {"mcpServers": {"nexus": {"transport": "stdio", "command": "/usr/bin/nc",
+                  "args": ["-U", str(turn.project_socket)], "framing": "lineDelimitedJson"}}}
+        opts["config"] = resume_opts["config"] = config
     if turn.model:
         opts["modelId"] = turn.model
     result = await session(
         rpc.call,
         ("session/start", opts),
-        ("session/resume", {"commandId": uuid7(), "sessionId": turn.resume, "excludeItems": True}),
+        ("session/resume", resume_opts),
         turn.resume,
         turn.missing,
     )

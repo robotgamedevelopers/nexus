@@ -35,7 +35,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { busSendTool } from './bus-sender.js';
+import { busSendTool, nativeBusTool, type NativeSend, type PeerMessage } from './bus-sender.js';
 
 import { isAccountName, kTokenFile } from './account.js';
 import {
@@ -79,6 +79,8 @@ export interface HarnessStart {
     busSender?: string;
     noSandbox?: boolean;
     keepsOut: string[];                 // and kept out of these too (--keep-out <dir>; wall.ts limitOf)
+    sendMail?: NativeSend;
+    supportsNativeMail?: () => boolean;
     askSecret: (account: string, what: string, why: string) => Promise<string>;
 }
 
@@ -388,14 +390,14 @@ export const kSecretMcpToolName = `mcp__nexus__${kSecretToolName}`;
 export const kSecretToolTimeoutMs = 11 * 60 * 1000;
 
 /** The in-process SDK MCP server that gives Claude the nexus_ask_secret(account, what, why) tool (docs/secrets.md). */
-export function secretMcpServer(askSecret: HarnessStart['askSecret'], busSender?: string): McpSdkServerConfigWithInstance {
+export function secretMcpServer(askSecret: HarnessStart['askSecret'], busSender?: string, sendMail?: NativeSend, supportsNativeMail?: () => boolean): McpSdkServerConfigWithInstance {
     return createSdkMcpServer({
         name: 'nexus',
         version: '0.1.0',
         alwaysLoad: true,
         timeout: kSecretToolTimeoutMs,
         tools: [
-            ...(busSender ? [busSendTool(busSender)] : []),
+            ...(sendMail ? [nativeBusTool(sendMail, busSender ? busSendTool(busSender) : undefined, supportsNativeMail)] : busSender ? [busSendTool(busSender)] : []),
             tool(
                 kSecretToolName,
                 'Ask the person, in the nexus window\'s secret dialog, to paste a secret for an account this AI is '
@@ -437,6 +439,8 @@ export class Driver {
     private session = '';
     private cost: number | undefined;
     private plan = '';
+    private nativeBus = false;
+    private mail = new Map<string, (result: {receipt: string; error: string}) => void>();
     private sawServer = false;                   // a server line arrived
     private secrets = false;                     // the server line named "secrets"
     private asks = 0;                            // the last ask-secret number minted
@@ -451,7 +455,7 @@ export class Driver {
 
     /** Writes the hello and starts the harness; nothing reaches it before the credential check passes. */
     start(): void {
-        this.write({ kind: 'hello', protocol: kProtocolVersion, harness: 'claude', features: ['limit'] });
+        this.write({ kind: 'hello', protocol: kProtocolVersion, harness: 'claude', features: ['limit', 'native-bus'] });
         if (this.args.verified) {
             this.starting = this.refreshCredential().then(() => {
                 if (!this.ended) this.launch(this.args.resume);
@@ -528,7 +532,30 @@ export class Driver {
         this.host.exit(code);
     }
 
+    private async sendMail(generation: number, args: PeerMessage) {
+        const t = this.current();
+        if (!this.nativeBus || !t || this.ended || t.stopping || generation !== this.generation)
+            return {receipt: '', error: 'Send from an active turn on a Nexus server with native messaging.'};
+        const nonce = randomUUID().replaceAll('-', '');
+        const msg = {kind: 'bus-send' as const, turn: t.turn, nonce, ...args};
+        if (Buffer.byteLength(encode(msg)) > 1024 * 1024)
+            return {receipt: '', error: 'This message exceeds the Nexus driver line limit.'};
+        return new Promise<{receipt: string; error: string}>(resolve => {
+            const timer = setTimeout(() => {
+                finish({receipt: '', error: 'Nexus did not confirm delivery in time.'});
+            }, 30000);
+            const finish = (result: {receipt: string; error: string}) => {
+                clearTimeout(timer);
+                this.mail.delete(nonce);
+                resolve(result);
+            };
+            this.mail.set(nonce, finish);
+            this.write(msg);
+        });
+    }
+
     private cancelAsk(): void {
+        for (const finish of this.mail.values()) finish({receipt: '', error: 'The sending turn ended.'});
         const open = this.asking;
         if (open !== undefined) {
             this.asking = undefined;
@@ -584,6 +611,8 @@ export class Driver {
         const start: HarnessStart = { prompts: this.prompts, cwd: this.args.cwd, settingSources: this.args.settingSources,
             limited: this.args.limit === 'cwd', ...(this.args.writeDirs ? {writeDirs: this.args.writeDirs} : {}), keepsOut: [...(this.args.keepsOut ?? [])],
             askSecret: (account, what, why) => this.askSecret(generation, account, what, why) };
+        start.sendMail = args => this.sendMail(generation, args);
+        start.supportsNativeMail = () => this.nativeBus;
         if (this.args.noSandbox) start.noSandbox = true;
         if (this.args.busSender) start.busSender = this.args.busSender;
         if (this.args.busListener) start.busListener = this.args.busListener;
@@ -840,11 +869,15 @@ export class Driver {
                     this.refuse(`a server message arrived after turn ${this.lastTurn}'s send; it comes before any send`);
                 } else {
                     this.sawServer = true;
+                    this.nativeBus = m.features.includes('native-bus');
                     if (m.features.includes('secrets')) {
                         this.secrets = true;
                         this.record('server');
                     }
                 }
+                break;
+            case 'bus-result':
+                this.mail.get(m.nonce)?.(m);
                 break;
             case 'secret':
                 this.secret(m);

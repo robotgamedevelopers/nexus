@@ -205,6 +205,9 @@ struct ServerEncoder {
             w.str("effort", m.effort);
     }
     void operator()(const ServerInfo& m) { w.str("kind", "server").strings("features", m.features); }
+    void operator()(const BusResult& m) {
+        w.str("kind", "bus-result").str("nonce", m.nonce).str("receipt", m.receipt).str("error", m.error);
+    }
     void operator()(const SecretAnswer& m) {
         w.str("kind", "secret").num("ask", double(m.ask)).str("outcome", m.stored ? "stored" : "refused");
         if (!m.stored || !m.reason.empty()) {
@@ -257,6 +260,10 @@ struct DriverEncoder {
         if (m.turn)
             w.turn(*m.turn);
         w.str("code", errorCodeName(m.code));
+    }
+    void operator()(const BusSend& m) {
+        w.str("kind", "bus-send").turn(m.turn).str("nonce", m.nonce).str("to", m.to).str("subject", m.subject)
+            .str("body", m.body).str("reply_to", m.replyTo);
     }
     void operator()(const AskSecret& m) {
         w.str("kind", "ask-secret").num("ask", double(m.ask)).str("account", m.account).str("what", m.what)
@@ -589,6 +596,10 @@ Decoded<ServerMessage> decodeServerMessage(std::string_view line) {
     if (p.kind == "server") {
         return result<ServerMessage>(ServerInfo{f.strings("features", true)}, f);
     }
+    if (p.kind == "bus-result") {
+        BusResult m{f.str("nonce", true, true), f.str("receipt", true), f.str("error", true)};
+        return result<ServerMessage>(std::move(m), f);
+    }
     if (p.kind == "secret") {
         SecretAnswer m;
         m.ask = f.integer("ask", true, 1, kMaxInteger).value_or(0);
@@ -704,6 +715,11 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
                  ErrorCode::Harness, ErrorCode::UsageLimit, ErrorCode::ModelLimit})
             if (code == errorCodeName(c))
                 m.code = c;
+        return result<DriverMessage>(std::move(m), f);
+    }
+    if (kind == "bus-send") {
+        BusSend m{f.turn(), f.str("nonce", true, true), f.str("to", true, true), f.str("subject", true, true),
+                  f.str("body", true), f.str("reply_to", false)};
         return result<DriverMessage>(std::move(m), f);
     }
     if (kind == "ask-secret") {

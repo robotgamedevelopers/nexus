@@ -48,7 +48,9 @@ export interface Unknown {
     name: string;
 }
 
-export type ServerMessage = Send | Stop | Settings | ServerInfo | SecretAnswer | Unknown;
+export interface BusResult { kind: 'bus-result'; nonce: string; receipt: string; error: string }
+
+export type ServerMessage = BusResult | Send | Stop | Settings | ServerInfo | SecretAnswer | Unknown;
 
 /** A line read: the message, or why it was refused and the turn it named if that was readable. */
 export type Decoded = { message: ServerMessage } | { error: string; turn?: number };
@@ -77,6 +79,7 @@ export type DriverMessage =
     | { kind: 'tool'; turn: number; name: string; summary: string }
     | { kind: 'done'; turn: number; outcome: Outcome; session_cost_usd?: number; usage?: Usage }
     | { kind: 'error'; cause: string; fix: string; turn?: number; code: ErrorCode }
+    | { kind: 'bus-send'; turn: number; nonce: string; to: string; subject: string; body: string; reply_to?: string | undefined }
     | { kind: 'ask-secret'; ask: number; account: string; what: string; why: string };
 
 // ---- Reading ----
@@ -234,6 +237,12 @@ export function decodeServerLine(bytes: Uint8Array): Decoded {
                 return field('has "features" that is not an array of strings');
             }
             return { message: { kind: 'server', features } };
+        }
+        case 'bus-result': {
+            const nonce = member(value, 'nonce'), receipt = member(value, 'receipt'), error = member(value, 'error');
+            if (typeof nonce !== 'string' || typeof receipt !== 'string' || typeof error !== 'string')
+                return field('has an invalid bus result');
+            return {message: {kind: 'bus-result', nonce, receipt, error}};
         }
         case 'secret': {
             const ask = member(value, 'ask');

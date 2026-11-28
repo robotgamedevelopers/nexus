@@ -395,14 +395,57 @@ bool Hub::hasBusReceipt(const std::string& recipient, const std::string& id) con
 
 bool Hub::receiveBus(const std::string& recipient, const std::string& id, const std::string& sender,
                      const std::string& displayBody, const std::string& promptBody, std::string* why) {
+    return deliverBus(recipient, busReceiptKey(recipient, id), sender, displayBody, promptBody, why);
+}
+
+std::string Hub::sendBus(SessionId from, const std::string& nonce, const std::string& to, const std::string& subject,
+                         const std::string& body, const std::string& replyTo, std::string& why) {
+    const auto* source = store_.find(from);
+    if (!source || !accounts_ || !accounts_->aiNamed(source->info.aiName) ||
+            nonce.size() != 32 || nonce.find_first_not_of("0123456789abcdef") != nonce.npos ||
+            !accounts::isName(to) || blankText(subject) || subject.size() > 4096 ||
+            subject.find_first_of("\r\n") != subject.npos || !codec::tableText(subject) || !codec::tableText(body)) {
+        why = "Use a configured AI, a single-line subject and UTF-8 message text.";
+        return {};
+    }
+    if (source->info.aiName == to) {
+        why = "Choose another Nexus AI as the recipient.";
+        return {};
+    }
+    SessionId target = 0;
+    if (!replyTo.empty()) {
+        const auto dash = replyTo.find('-', 3);
+        if (!replyTo.starts_with("nx-") || dash == replyTo.npos || dash > 23 || replyTo.size() != dash + 33 ||
+                !store_.applied("nexus:mail:" + std::to_string(from) + ":" + replyTo)) {
+            why = "Reply with the message ID received in this conversation.";
+            return {};
+        }
+        const auto parsed = std::from_chars(replyTo.data() + 3, replyTo.data() + dash, target);
+        const auto* original = store_.find(target);
+        if (parsed.ec != std::errc{} || parsed.ptr != replyTo.data() + dash || !original || original->info.aiName != to) {
+            why = "Address the reply to the AI that sent the message.";
+            return {};
+        }
+    }
+    const auto id = "nx-" + std::to_string(from) + "-" + nonce;
+    const auto sender = source->info.aiName;
+    std::string prompt = "Nexus message from " + sender + " (id " + id + ")";
+    if (!replyTo.empty()) prompt += "\nIn reply to: " + replyTo;
+    prompt += "\nSubject: " + subject + "\n\n" + body;
+    return deliverBus(to, id, sender, subject + "\n\n" + body, prompt, &why, target, true) ? id : std::string{};
+}
+
+bool Hub::deliverBus(const std::string& recipient, const std::string& key, const std::string& sender,
+                     const std::string& displayBody, const std::string& promptBody, std::string* why,
+                     SessionId target, bool native) {
     if (why) why->clear();
     const auto refuse = [&](const std::string& problem) {
         if (why) *why = problem;
         return false;
     };
-    const auto receipt = busReceiptKey(recipient, id);
+    auto receipt = key;
     if (receipt.empty()) return refuse("The message bus recipient or message ID is invalid.");
-    if (store_.applied(receipt)) return true;
+    if (!native && store_.applied(receipt)) return true;
     if (!busPeerName(sender)) return refuse("The message bus sender is invalid.");
     if (displayBody.size() > limits_.text || sender.size() + 1 + displayBody.size() > limits_.text ||
             promptBody.size() > limits_.text)
@@ -412,8 +455,9 @@ bool Hub::receiveBus(const std::string& recipient, const std::string& id, const 
 
     const auto* fr = accounts_ ? accounts_->aiNamed(recipient) : nullptr;
     if (!fr || !responder_) return refuse("The recipient has no configured Nexus AI and driver.");
-    SessionId sessionId = 0;
+    SessionId sessionId = target;
     for (const auto& s : state_.sessions()) {
+        if (sessionId) break;
         if (s->info.aiName == recipient && onDefaultInstance(s->info.instance, fr)) {
             sessionId = s->id;
             break;
@@ -422,6 +466,10 @@ bool Hub::receiveBus(const std::string& recipient, const std::string& id, const 
     if (!sessionId) {
         sessionId = store_.nextId();
         if (!createSession(Action{0, ActionKind::Create, 0, recipient, {}, {}}, why, {}, true)) return false;
+    }
+    if (native) {
+        receipt = "nexus:mail:" + std::to_string(sessionId) + ":" + key;
+        if (store_.applied(receipt)) return true;
     }
     const auto& session = *store_.find(sessionId);
     const auto* account = accounts_->account(session.info.account);
@@ -436,7 +484,8 @@ bool Hub::receiveBus(const std::string& recipient, const std::string& id, const 
         responder_->sent(sessionId, false);
         return refuse(problem);
     }
-    changes.insert(changes.begin(), SessionChange{entry(EntryKind::Bus, sender + "\n" + displayBody), promptBody});
+    const auto label = native ? std::string(kNativeBusPrefix) + sender : sender;
+    changes.insert(changes.begin(), SessionChange{entry(EntryKind::Bus, label + "\n" + displayBody), promptBody});
     const bool accepted = store_.commit(sessionId, changes, receipt, 1, &problem);
     responder_->sent(sessionId, accepted);
     if (!accepted) return refuse(problem);
@@ -2171,10 +2220,9 @@ bool Hub::setBusSenders(const std::map<std::string, std::set<std::string>>& name
     for (auto& [id, history] : busHistory_) {
         const auto roster = names.find(store_.find(id)->info.aiName);
         std::vector<std::string> allowed;
-        if (roster != names.end()) {
-            for (const auto& sender : history.senders)
-                if (roster->second.contains(sender)) allowed.push_back(sender);
-        }
+        for (const auto& sender : history.senders)
+            if (sender.starts_with(kNativeBusPrefix) || (roster != names.end() && roster->second.contains(sender)))
+                allowed.push_back(sender);
         if (history.allowed != allowed) {
             history.allowed = std::move(allowed);
             refresh(id);
@@ -2208,7 +2256,7 @@ void Hub::refresh(SessionId id) {
         const auto newline = e.text.find('\n');
         if (newline == 0 || newline == std::string::npos) continue;
         auto [sender, first] = history.senders.insert(e.text.substr(0, newline));
-        if (first && roster != busSenders_.end() && roster->second.contains(*sender))
+        if (first && (sender->starts_with(kNativeBusPrefix) || (roster != busSenders_.end() && roster->second.contains(*sender))))
             history.allowed.insert(std::lower_bound(history.allowed.begin(), history.allowed.end(), *sender), *sender);
     }
     auto open = open_.find(id);

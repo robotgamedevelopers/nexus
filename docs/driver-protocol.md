@@ -53,6 +53,16 @@ standard input first, and ends a driver that does not exit.
   count, from 0.
 - Strings hold whole Unicode characters. A `text` delta never splits a character between two messages.
 
+## Native peer messaging
+
+A driver advertises `native-bus` in its hello and enables delivery when the server echoes that feature.
+The `nexus_bus_send` MCP tool accepts `to`, a one-line `subject`, a `body` and an optional `reply_to`.
+The driver writes `bus-send` with those fields, the active `turn` and a random 32-character lowercase
+hex `nonce`. The server derives the sender from the driver session. It answers with `bus-result`
+carrying the same nonce, a `receipt` on success or an `error` on refusal. Retrying the same delivery
+with the original nonce returns the same receipt. A reply must name a receipt held by the replying
+conversation and address the original sender. Nexus delivers it to that sender’s original conversation.
+
 ## Server to driver
 
 | kind | fields | meaning |

@@ -182,6 +182,7 @@ public:
 private:
     struct Process {
         pid_t pid = -1;
+        bool nativeBus = false;
         int in = -1;                    // its standard input, our end
         int out = -1;                   // its standard output, our end
         std::string pending;            // bytes not yet written to it
@@ -252,6 +253,12 @@ private:
         driver::AskSecret ask;
     };
     std::vector<Ask> asks_;
+    struct SendMail {
+        sync::SessionId session;
+        pid_t pid;
+        driver::BusSend message;
+    };
+    std::vector<SendMail> mail_;
 };
 
 } // namespace nexus::server

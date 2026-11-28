@@ -15,6 +15,12 @@ SCHEMA = {"type": "object", "properties": {
     "required": ["to", "subject", "body"], "additionalProperties": False}
 
 
+NATIVE_SCHEMA = {**SCHEMA, "properties": {**SCHEMA["properties"],
+    "reply_to": {"type": "string", "pattern": "^nx-[1-9][0-9]*-[0-9a-f]{32}$"}}}
+NATIVE_TOOL = {"name": TOOL, "description": "Send to another Nexus AI. To reply in the original chat, include its message ID.",
+               "inputSchema": NATIVE_SCHEMA}
+
+
 def validate(grant):
     ai, _, endpoint = grant.partition("@")
     if not re.fullmatch(NAME, ai) or not re.fullmatch(r"127\.0\.0\.1:[1-9][0-9]{0,4}", endpoint) or int(endpoint.split(":")[1]) > 65535:

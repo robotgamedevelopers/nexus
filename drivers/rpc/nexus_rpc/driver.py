@@ -9,6 +9,7 @@ import re
 import signal
 import subprocess
 import sys
+import uuid
 from collections import deque
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -134,6 +135,32 @@ class Turn:
         self.number = number
         self.writing = False
         self.abandoned = False
+        self.mail = {}
+
+    async def send_mail(self, args):
+        def result(message, failed=False):
+            return {"isError": failed, "content": [{"type": "text", "text": message}]}
+        if (not isinstance(args, dict) or set(args) - {"to", "subject", "body", "reply_to"} or
+                not all(isinstance(args.get(k), str) for k in ("to", "subject", "body")) or
+                not isinstance(args.get("reply_to", ""), str) or
+                ("reply_to" in args and not re.fullmatch(r"nx-[1-9][0-9]*-[a-f0-9]{32}", args["reply_to"])) or
+                not args["subject"].strip() or len(args["subject"].encode()) > 4096 or
+                any(ord(c) < 32 for c in args["subject"]) or
+                not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}", args["to"])):
+            return result("Supply a recipient, a subject and a message body.", True)
+        nonce = uuid.uuid4().hex
+        msg = {"turn": self.number, "nonce": nonce, **args}
+        if len(json.dumps({"kind": "bus-send", **msg}, ensure_ascii=False).encode()) >= LIMIT:
+            return result("The message exceeds the Nexus driver line limit.", True)
+        reply = self.mail[nonce] = asyncio.get_running_loop().create_future()
+        try:
+            emit("bus-send", **msg)
+            answer = await asyncio.wait_for(reply, 30)
+            return result(answer["error"] or answer["receipt"], bool(answer["error"]))
+        except TimeoutError:
+            return result("Nexus did not confirm delivery before the timeout.", True)
+        finally:
+            self.mail.pop(nonce, None)
 
     def credential(self, plan):
         emit("credential", billing="subscription", plan=plan)
@@ -195,16 +222,24 @@ class Turn:
                     options["bus_sender"] = self.bus_sender
                 if getattr(self, "write_dir", []):
                     options["write_dirs"] = self.write_dir
-            if (self.harness == "antigravity" and self.limit and self.project_root
-                    and Path(self.cwd).resolve() == Path(self.project_root).resolve()):
+            project = (self.harness == "antigravity" and self.limit and self.project_root
+                       and Path(self.cwd).resolve() == Path(self.project_root).resolve())
+            native = getattr(self, "native_bus", False)
+            if project or native:
                 from .project_tools import project_tools
-                project = Path(self.cwd).resolve()
                 room, socket = await resources.enter_async_context(project_tools(
-                    home, self.cwd, self.keep_out, getattr(self, "bus_sender", None)))
+                    home, self.cwd if project else None, self.keep_out, getattr(self, "bus_sender", None),
+                    native_send=self.send_mail if native else None))
                 self.project_socket = socket
-                options["project_socket"] = socket
-                self.instructions += f"\nYour assigned project is {project}. Use the nexus_project project_shell tool there for files, Git, builds, tests and your project initialization."
-                self.cwd = str(room)
+                self.project_enabled = bool(project)
+                if self.harness != "muse":
+                    options["project_socket"] = socket
+                if project:
+                    self.instructions += f"\nYour assigned project is {self.cwd}. Use the nexus_project project_shell tool there for files, Git, builds, tests and your project initialization."
+                if self.harness == "antigravity":
+                    self.cwd = str(room)
+                if native:
+                    self.instructions += "\nUse nexus_bus_send to contact another configured Nexus AI. Include reply_to to reply to its original conversation."
             try:
                 command = await asyncio.to_thread(
                     self.provider.chat_command, self.binary, home, self.cwd, **options
@@ -334,6 +369,10 @@ async def serve(args):
             elif kind == "stop":
                 if turn_number(msg) == last and active:
                     active.cancel()
+            elif kind == "bus-result" and turn:
+                pending = turn.mail.get(msg.get("nonce"))
+                if pending and not pending.done() and all(isinstance(msg.get(k), str) for k in ("receipt", "error")):
+                    pending.set_result(msg)
             elif kind == "settings":
                 updates = {k: msg[k] for k in ("model", "effort") if msg.get(k) is not None}
                 if not updates or not all(isinstance(v, str) and v for v in updates.values()):
@@ -346,6 +385,8 @@ async def serve(args):
                 isinstance(msg.get("features"), list) and all(isinstance(f, str) for f in msg["features"])
             ):
                 raise ValueError("Invalid server features.")
+            elif kind == "server":
+                args.native_bus = "native-bus" in msg["features"]
             line = asyncio.create_task(reader.readline())
     except (ValueError, RecursionError):
         error("protocol", "The server sent an invalid driver message.", **invalid_turn)
@@ -363,7 +404,7 @@ def main():
     harness = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] in BACKENDS else "unknown"
     provider = importlib.import_module(f".{harness}_account", __package__) if harness in BACKENDS else None
     supports_limit = getattr(provider, "SUPPORTS_LIMIT", False)
-    emit("hello", protocol=1, harness=harness, features=["limit"] if supports_limit else [])
+    emit("hello", protocol=1, harness=harness, features=["native-bus", "limit"] if supports_limit else ["native-bus"])
     parser = argparse.ArgumentParser(exit_on_error=False, allow_abbrev=False)
     parser.add_argument("harness", choices=BACKENDS)
     parser.add_argument("--binary", required=True)

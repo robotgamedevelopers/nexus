@@ -60,7 +60,7 @@ _SANDBOX = """(version 1)
 """
 
 
-def _prepare(home: Path):
+def _prepare(home: Path, *, bus=False):
     fd = os.open(home, DIRECTORY)
     try:
         for name in (".grok", "room"):
@@ -74,8 +74,8 @@ def _prepare(home: Path):
         writer = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=fd)
         try:
             with os.fdopen(writer, "w") as f:
-                f.write(_AGENT)
-            os.replace(name, "nexus-agent.md", src_dir_fd=fd, dst_dir_fd=fd)
+                f.write(_AGENT.replace("mcpInheritance: none", "mcpInheritance:\n  named: [nexus_project]") if bus else _AGENT)
+            os.replace(name, "nexus-bus-agent.md" if bus else "nexus-agent.md", src_dir_fd=fd, dst_dir_fd=fd)
         finally:
             try:
                 os.unlink(name, dir_fd=fd)
@@ -85,19 +85,24 @@ def _prepare(home: Path):
         os.close(fd)
 
 
-def _command(binary, home):
+def _command(binary, home, project_socket=None):
     sandbox = Path("/usr/bin/sandbox-exec")
     if sys.platform != "darwin" or not sandbox.is_file():
         raise ValueError("Isolated Grok accounts require the macOS sandbox.")
-    _prepare(home)
+    _prepare(home, bus=bool(project_socket))
     home = home.resolve(strict=True)
     executable = Path(binary).resolve(strict=True)
     paths = {"BINARY": executable, "ACCOUNT": home, "ROOM": home / "room",
-             "DATA": home / ".grok", "AGENT": home / "nexus-agent.md"}
+             "DATA": home / ".grok", "AGENT": home / ("nexus-bus-agent.md" if project_socket else "nexus-agent.md")}
+    profile = _SANDBOX
+    if project_socket:
+        paths["SOCKET"] = project_socket
+        profile += '\n(allow process-exec file-read* file-map-executable (literal "/usr/bin/nc"))\n'
+        profile += '(allow network-outbound (literal (param "SOCKET")))\n'
     cmd = [str(sandbox)]
     for key, path in paths.items():
         cmd.extend(["-D", f"{key}={path}"])
-    return [*cmd, "-p", _SANDBOX, str(executable)]
+    return [*cmd, "-p", profile, str(executable)]
 
 
 def login_command(binary, home: Path) -> list[str]:
@@ -167,8 +172,8 @@ def grant_stamp(home: Path) -> str | None:
         raise
 
 
-def chat_command(binary, home: Path, cwd: str) -> list[str]:
-    cmd = _command(binary, home)
+def chat_command(binary, home: Path, cwd: str, *, project_socket=None) -> list[str]:
+    cmd = _command(binary, home, project_socket)
     # Grok can fall back to its built-in coding tools on unrecognized profile
     # fields. Permit releases whose native model-facing schema has been checked.
     version = subprocess.run(
@@ -179,4 +184,4 @@ def chat_command(binary, home: Path, cwd: str) -> list[str]:
     audited = b"grok 1.0.88 (2fe3608f7398)"
     if version.returncode or version.stdout.strip() not in (audited, audited + b" [stable]"):
         raise ValueError("This Grok build has not been verified for isolated conversations.")
-    return [*cmd, "agent", "--no-leader", "--agent-profile", str(home / "nexus-agent.md"), "stdio"]
+    return [*cmd, "agent", "--no-leader", "--agent-profile", str(home / ("nexus-bus-agent.md" if project_socket else "nexus-agent.md")), "stdio"]

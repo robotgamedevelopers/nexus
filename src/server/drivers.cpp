@@ -1161,6 +1161,14 @@ void Drivers::readSome(sync::SessionId id, Slot& t, Output& out, Millis now, std
         }
         const Phase before = t.sup.phase();
         const bool talking = before == Phase::Idle || before == Phase::Working || before == Phase::Stopping;
+        if (const auto* send = std::get_if<driver::BusSend>(&*item.message)) {
+            if (p.nativeBus && before == Phase::Working && t.sup.state().openTurn == send->turn) {
+                mail_.push_back({id, p.pid, *send});
+            } else {
+                tell(p, driver::encode(driver::BusResult{send->nonce, {}, "Send from an active Nexus turn."}).line, now);
+            }
+            continue;
+        }
         if (const driver::AskSecret* ask = std::get_if<driver::AskSecret>(&*item.message); ask != nullptr && talking) {
             if (options_.secrets) {
                 asks_.push_back(Ask{id, *ask});
@@ -1170,8 +1178,13 @@ void Drivers::readSome(sync::SessionId id, Slot& t, Output& out, Millis now, std
         append(out, t.sup.message(*item.message, now));
         const Phase after = t.sup.phase();
         // Its hello: what this server takes beyond version 1, before anything else it is told.
-        if (options_.secrets && before == Phase::Starting && (after == Phase::Idle || after == Phase::Working)) {
-            tell(p, driver::encode(driver::ServerInfo{{"secrets"}}).line, now);
+        if (before == Phase::Starting && (after == Phase::Idle || after == Phase::Working)) {
+            const auto* hello = std::get_if<driver::Hello>(&*item.message);
+            p.nativeBus = hello && std::find(hello->features.begin(), hello->features.end(), "native-bus") != hello->features.end();
+            driver::ServerInfo info;
+            if (options_.secrets) info.features.push_back("secrets");
+            if (p.nativeBus) info.features.push_back("native-bus");
+            if (!info.features.empty()) tell(p, driver::encode(info).line, now);
         }
     }
 }
@@ -1345,6 +1358,20 @@ bool Drivers::serve(Millis now, bool* changed) {
             }
         }
     }
+    // Receiving can start another driver. Finish traversing slots before admitting peer turns.
+    for (const auto& send : mail_) {
+        auto it = slots_.find(send.session);
+        if (!hub_ || it == slots_.end() || !it->second.proc || it->second.proc->pid != send.pid) continue;
+        const auto& m = send.message;
+        std::string why;
+        auto receipt = hub_->sendBus(send.session, m.nonce, m.to, m.subject, m.body, m.replyTo, why);
+        if (hub_->failed()) return false;
+        if (changed && !receipt.empty()) *changed = true;
+        auto sender = slots_.find(send.session);
+        if (sender != slots_.end() && sender->second.proc && sender->second.proc->pid == send.pid)
+            tell(*sender->second.proc, driver::encode(driver::BusResult{m.nonce, receipt, why}).line, now);
+    }
+    mail_.clear();
     // The drivers' asks for secrets: each opens a request, or is answered at once (busy, no-client); a malformed one
     // ends its driver as a line refused (docs/secrets.md). The answer goes back through tellSecret().
     const std::vector<Ask> asks = std::move(asks_);

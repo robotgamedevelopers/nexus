@@ -101,7 +101,12 @@ struct FollowUp {
     bool operator==(const FollowUp&) const = default;
 };
 
-using ServerMessage = std::variant<Send, Stop, Settings, ServerInfo, SecretAnswer, Steer, FollowUp, Unknown>;
+struct BusResult {
+    std::string nonce, receipt, error;
+    bool operator==(const BusResult&) const = default;
+};
+
+using ServerMessage = std::variant<Send, Stop, Settings, ServerInfo, SecretAnswer, BusResult, Steer, FollowUp, Unknown>;
 
 // ---- Driver to server ----
 
@@ -227,8 +232,14 @@ struct Settled {
     bool operator==(const Settled&) const = default;
 };
 
+struct BusSend {
+    std::uint64_t turn = 0;
+    std::string nonce, to, subject, body, replyTo;
+    bool operator==(const BusSend&) const = default;
+};
+
 using DriverMessage = std::variant<Hello, Credential, Session, Text, TextEnd, Tool, ChildAgents, Quota, Done, Error, AskSecret,
-    Queue, Settled, Unknown>;
+    BusSend, Queue, Settled, Unknown>;
 
 // ---- Encoding and decoding ----
 

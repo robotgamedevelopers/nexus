@@ -658,6 +658,50 @@ void test_bus_history() {
           stored->transcript[1]->text == otherAllowed);
 }
 
+void test_native_bus() {
+    class Driver final : public Responder {
+    public:
+        SessionInfo defaults(const std::string& name) const override { return {name, "driver", {}, {}, {}}; }
+        std::vector<SessionChange> prepareBus(SessionId, const std::string&, std::string&) override { return {}; }
+        std::vector<SessionChange> send(SessionId, const std::string&) override { return {}; }
+        std::vector<SessionChange> queue(SessionId, const std::string&) override { return {}; }
+        std::vector<SessionChange> stop(SessionId) override { return {}; }
+        void sent(SessionId, bool) override {}
+        void configured(SessionId, const SessionInfo&) override {}
+    } driver;
+    store::MemFs fs;
+    accounts::Registry registry;
+    for (const auto* name : {"ada", "bo"}) registry.ais.push_back({name, {}, {}, {}});
+    std::string why, receipt;
+    const std::string nonce(32, 'a'), replyNonce(32, 'b');
+    {
+        server::DurableStore ds;
+        CHECK(openOn(fs, ds));
+        Hub hub(ds, Limits{}, &driver);
+        hub.useAccounts(registry, nullptr);
+        CHECK(hub.apply(ensure(1, "ada"), &why, "w"));
+        CHECK(hub.apply(create(2, "ada", 1), &why, "w"));
+        receipt = hub.sendBus(2, nonce, "bo", "Review", "Please check.", {}, why);
+        CHECK(!receipt.empty() && why.empty());
+        CHECK(hub.sendBus(2, nonce, "bo", "Review", "Please check.", {}, why) == receipt);
+        const auto* recipient = ds.find(3);
+        CHECK(recipient && recipient->busPrompts.size() == 1);
+        CHECK(hub.state().init_diff().find("Please check.") != std::string::npos);
+    }
+    fs.crash(fs.plan_all(false));
+    server::DurableStore ds;
+    CHECK(openOn(fs, ds));
+    Hub hub(ds, Limits{}, &driver);
+    hub.useAccounts(registry, nullptr);
+    CHECK(hub.state().init_diff().find("Please check.") != std::string::npos);
+    CHECK(hub.sendBus(2, nonce, "bo", "Review", "Please check.", {}, why) == receipt);
+    CHECK(hub.apply(create(3, "bo", 3), &why, "w"));
+    CHECK(hub.sendBus(4, replyNonce, "ada", "Re", "Wrong conversation", receipt, why).empty());
+    CHECK(!hub.sendBus(3, replyNonce, "ada", "Re", "Finished.", receipt, why).empty());
+    CHECK(ds.find(2) && ds.find(2)->busPrompts.size() == 1);
+    CHECK(ds.find(1) && ds.find(1)->busPrompts.empty());
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -666,7 +710,7 @@ struct Group {
 const Group kGroups[] = {{"restart", test_restart}, {"resend", test_resend}, {"crash", test_crash},
                          {"batch", test_batch}, {"batch_flush", test_batch_flush}, {"take", test_take},
                          {"migrate", test_migrate}, {"kinds", test_kinds}, {"switch_notice_reconnect", test_switch_notice_reconnect},
-                         {"bus_reconnect", test_bus_reconnect}, {"bus_history", test_bus_history}};
+                         {"bus_reconnect", test_bus_reconnect}, {"bus_history", test_bus_history}, {"native_bus", test_native_bus}};
 
 } // namespace
 

@@ -8,6 +8,21 @@ import {z} from 'zod';
 const name = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/u;
 export const sendName = 'nexus_bus_send';
 
+export interface PeerMessage { to: string; subject: string; body: string; reply_to?: string | undefined }
+export type NativeSend = (args: PeerMessage) => Promise<{receipt: string; error: string}>;
+
+export function nativeBusTool(send: NativeSend, legacy?: ReturnType<typeof busSendTool>, supportsNative?: () => boolean) {
+    return tool(sendName, 'Send to another Nexus AI. Use the received message ID to reply into its original chat.',
+        {to: z.string().regex(name), subject: z.string().min(1).max(4096), body: z.string().max(1024 * 1024),
+            reply_to: z.string().regex(/^(?:nx-[1-9]\d*-[a-f0-9]{32}|\d+-\d+)$/u).optional()},
+        async (args, extra) => {
+            if (legacy && supportsNative && !supportsNative())
+                return legacy.handler(args, extra);
+            const {receipt, error} = await send(args);
+            return {isError: Boolean(error), content: [{type: 'text' as const, text: error || receipt}]};
+        });
+}
+
 export function busSendTool(grant: string) {
     const parts = grant.split('@');
     const [ai, endpoint] = parts;

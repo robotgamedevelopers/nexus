@@ -30,7 +30,7 @@ void test('start: hello first, then the credential and the session, before any p
     const host = new TestHost();
     const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [] });
     driver.start();
-    assert.deepEqual(host.out, [{ kind: 'hello', protocol: 1, harness: 'claude', features: ['limit'] }]);
+    assert.deepEqual(host.out, [{ kind: 'hello', protocol: 1, harness: 'claude', features: ['limit', 'native-bus'] }]);
     await settle();
     assert.deepEqual(host.take().slice(1), [
         { kind: 'credential', billing: 'subscription', plan: 'Claude Ultra' },
@@ -797,6 +797,34 @@ void test('toolSummary is one line of what the tool acts on', () => {
         'work oauth-token: login expired');
     assert.equal(toolSummary(kSecretMcpToolName, { account: 'work', what: 'oauth-token', why: '' }),
         'work oauth-token');
+});
+
+void test('native peer send through the SDK MCP server correlates the server receipt', async () => {
+    const {host, driver} = await started();
+    driver.feed(line({kind: 'server', features: ['native-bus']}));
+    const start = host.harness.start;
+    const mcp = secretMcpServer(start.askSecret, undefined, start.sendMail);
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await mcp.instance.connect(serverSide);
+    const client = new Client({name: 'bus-test', version: '1'});
+    await client.connect(clientSide);
+    try {
+        assert.ok((await client.listTools()).tools.some(t => t.name === 'nexus_bus_send'));
+        driver.feed(line({kind: 'send', turn: 1, prompt: 'Please ask Emma'}));
+        await settle();
+        const args = {to: 'emma', subject: 'Review', body: 'Ready?'};
+        const response = client.callTool({name: 'nexus_bus_send', arguments: args});
+        await settle();
+        const sent = host.take().find(m => m.kind === 'bus-send');
+        assert.ok(sent);
+        assert.deepEqual(sent, {kind: 'bus-send', turn: 1, nonce: sent.nonce, ...args});
+        const receipt = 'nx-1-' + sent.nonce;
+        driver.feed(line({kind: 'bus-result', nonce: sent.nonce, receipt, error: ''}));
+        assert.deepEqual((await response).content, [{type: 'text', text: receipt}]);
+    } finally {
+        await client.close();
+        await mcp.instance.close();
+    }
 });
 
 void test('nexus_ask_secret over the SDK MCP server: writes ask-secret after server secrets, returns stored or refused', async () => {
