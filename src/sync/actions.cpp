@@ -14,7 +14,7 @@ bool isSecret(ActionKind kind) {
 }
 
 bool isSignIn(ActionKind kind) {
-    return kind == ActionKind::SignInClaim || kind == ActionKind::SignInOpened || kind == ActionKind::SignInCallback || kind == ActionKind::SignInCancel;
+    return kind == ActionKind::SignInClaim || kind == ActionKind::SignInOpened || kind == ActionKind::SignInCallback || kind == ActionKind::SignInCancel || kind == ActionKind::SignInCode;
 }
 
 // A diff: the number of its first action and the actions from there, one unbroken run, in the link's format
@@ -49,6 +49,7 @@ const char* kindName(ActionKind kind) {
         case ActionKind::SignInOpened: return "sign-in-opened";
         case ActionKind::SignOut: return "sign-out";
         case ActionKind::SignInCallback: return "sign-in-callback";
+        case ActionKind::SignInCode: return "sign-in-code";
         case ActionKind::SignInCancel: return "sign-in-cancel";
         case ActionKind::ResolveLimit: return "resolve-limit";
     }

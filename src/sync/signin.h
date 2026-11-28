@@ -78,6 +78,11 @@ std::string_view urlHost(std::string_view url);
 // Accept a provider authorization URL with its redirect and state, or the exact local broker URL for a provider
 // using a private page. The latter sets only the private page's loopback port.
 bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarget* out);
+// Studio's pasted-code enrollment opens Google's account page directly on the claiming client.
+bool vendorCodePage(std::string_view provider, std::string_view url);
+bool parseOfferedSignInUrl(std::string_view provider, std::string_view url, SignInTarget* out);
+constexpr std::size_t kSignInCodeBytes = 2048;
+bool isSignInCode(const SecretValue& code);
 // Whether `a` and `b` hold the same bytes, in a time that depends on their lengths alone: for a state and a nonce.
 bool sameBytes(std::string_view a, std::string_view b);
 // Whether `query` holds only bytes a request line carries as they are: no space, CR, LF or other control byte.
@@ -104,6 +109,7 @@ struct SignInOffer {
     std::string host;           // the server's host name, for sameMachine
     SecretValue url{};          // with an opener, once the process gave it; else empty
     bool cancelSupported = false; // absent on older servers; never send an unsupported cancellation request
+    bool codeWanted = false;
     bool operator==(const SignInOffer&) const = default;
 };
 

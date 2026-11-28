@@ -143,6 +143,7 @@ table SignInOffer
     host     *string
     url      *bytes
     cancel_supported bool
+    code_wanted bool
 }
 
 // A dashboard the server offers (sync/dashboards.h): the tab's name and the page's http:// or https:// address.
@@ -198,7 +199,8 @@ enum ActionKind
     SignInCallback,
     SignOut,
     ResolveLimit,
-    SignInCancel
+    SignInCancel,
+    SignInCode
 }
 
 // One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's AI,
@@ -215,6 +217,7 @@ table Action
     account     *string
     request     uint64
     secret      *bytes
+    pastes_code bool
 }
 
 // An actions diff (Actions::diff_from): the number of its first action, and the actions from there, one unbroken run.

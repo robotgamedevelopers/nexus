@@ -351,6 +351,7 @@ void remoteSignInCardClaimsTheSelectedAccount() {
         w.link.state.phase = sync::LinkPhase::Connected;
         w.link.state.sessions = sync::Sessions({session});
         w.link.state.sessions.setAIs({{"chat", {{"personal", "Personal", true}}}});
+        w.link.state.sessions.setNextAction(1);
         w.link.changed = true;
         w.host.pollLink();
         w.host.signIn.forwardPage = [](const auto&, auto, auto) -> std::unique_ptr<SignInForward> {
@@ -361,8 +362,14 @@ void remoteSignInCardClaimsTheSelectedAccount() {
         w.link.sent.clear();
         w.view.accountAction("sign_in:personal");
         CHECK(w.link.sent.size() == 1 && w.link.sent.back().kind == sync::ActionKind::SignInClaim &&
-              w.link.sent.back().account == "personal" && w.link.sent.back().session == 10);
+              w.link.sent.back().pastesCode && w.link.sent.back().account == "personal" && w.link.sent.back().session == 10);
         CHECK(w.model.tab(w.model.active()).draft == "keep my draft");
+        // The server counted the claim without granting it. A second click must reach it.
+        w.link.state.sessions.setNextAction(w.link.sent.size() + 1);
+        w.link.changed = true;
+        w.host.pollLink();
+        w.view.accountAction("sign_in:personal");
+        CHECK(w.link.sent.size() == 2 && w.link.sent.back().kind == sync::ActionKind::SignInClaim);
     }
 }
 

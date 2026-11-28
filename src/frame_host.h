@@ -60,19 +60,27 @@ std::string loggable(std::string_view text);
 // alone while it is typed, then in the one action that carries it to the server, which the link's thread hands to mosh
 // and which is wiped once the server has acknowledged it. Nothing here waits: submit and cancel hand the action to the
 // port.
+class LinkSignIn;
+
 class LinkSecrets : public Secrets {
 public:
     LinkPort* port = nullptr;
     sync::SecretPrompt prompt;
+    LinkSignIn* signIn = nullptr;       // its code ask, when it has one, shows first
 
     const SecretAsk* showing() override;
-    std::string_view typed() override { return prompt.typed().bytes(); }
-    void type(std::string_view text) override { prompt.type(text); }
+    std::string_view typed() override;
+    void type(std::string_view text) override;
     void submit() override;
     void cancel() override;
 
+    // The bit a code ask's SecretAsk::id carries, so that it never equals a secret request's id (the dialog opens afresh
+    // on a new id).
+    static constexpr std::uint64_t kCodeAsk = std::uint64_t{1} << 63;
+
 private:
     SecretAsk shown_;
+    bool code_ = false;                 // what showing() last gave is the sign-in code's ask
 };
 
 // In-app sign-in over the link (docs/secrets.md "Sign-in"): the server offers each account that needs signing in, and a
@@ -96,7 +104,7 @@ public:
     std::string problem;                // the last gate's failure, for the view's problem line; cleared when shown
 
     // The state's offers as the link last brought them, or the link lost.
-    void received(const sync::Sessions& state) { opener.received(state.offers()); }
+    void received(const sync::Sessions& state);
     void lost();
     std::function<std::unique_ptr<SignInForward>(const std::string&, std::uint16_t, std::function<void()>)> forwardPage;
     bool canOpenPage(std::string_view provider) const {
@@ -106,7 +114,7 @@ public:
     void shown() { opener.shown(); }
     // The client lock locked the window (client_lock.h): the claim a show allowed is taken back, and no step runs (no
     // claim, no URL opened, no callback sent up) until it is unlocked; the owner's next show allows one again.
-    void lock() { locked = true; opener.hidden(); closeForward(); }
+    void lock() { locked = true; opener.hidden(); closeForward(); wipeCode(); }
     void unlock() { locked = false; }
     bool locked = false;
     // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open. None
@@ -116,10 +124,25 @@ public:
     void choose(const std::string& account);
     // Reopen an owned page on explicit retry. A page not opened yet is handled by step().
     std::string reopen(const sync::SignInOffer& offer);
+    const sync::SignInOffer* codeAsk() const;
+    const sync::SecretValue& typedCode() const { return typed_; }
+    void typeCode(std::string_view text);
+    void submitCode();
+    void dismissCode();
+    void askCodeAgain(std::uint64_t id);
+    bool codeSent(std::uint64_t id) const { return codeSent_.contains(id); }
+
+    std::function<std::pair<sync::SessionId, std::string>()> activeTab;
     bool gateOpen() const { return gate_ != nullptr; }
 
 private:
     void pollGate();
+    void wipeCode();
+    sync::SecretValue typed_;
+    std::uint64_t typedFor_ = 0;        // the flow the field's text was typed for
+    std::map<std::uint64_t, std::uint64_t> codeSent_;   // flow -> the action that sent its code; asked again only
+                                                        // after the server refused it (received)
+    std::set<std::uint64_t> codePutAway_;
     void pollForward();
     void closeForward();
     sync::SecretValue forwardUrl_;
@@ -257,7 +280,8 @@ private:
     std::map<sync::SessionId, LimitSelection> limitSelections_;
     LimitOffer currentLimit() const;
     std::optional<std::pair<sync::SessionId, std::string>> signInSelection_;
-    std::map<std::string, std::uint64_t> pendingClaims_; // until the offer changes or this link ends
+    struct PendingClaim { std::uint64_t flow, action; };
+    std::map<std::string, PendingClaim> pendingClaims_; // until the offer changes or this link ends
     // /login after preparation: the selected session/account waiting for verified enrollment.
     std::optional<std::pair<sync::SessionId, std::string>> pendingLogin_;
     std::uint64_t pendingLoginAction_ = 0;

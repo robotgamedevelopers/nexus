@@ -61,11 +61,12 @@ enum class ActionKind : std::uint8_t {
     SignInCallback = 19,// the window's gate took flow `request`'s callback: its query (`secret`), from `text`'s window
     SignOut = 20,       // Claude logout, only when session still selects the exact named account
     ResolveLimit = 21, // accept a paused turn's offered target (aiName) for account, request and choice kind (text)
+    SignInCode = 23, // a return code sent to the owning Studio enrollment
     SignInCancel = 22, // stop exactly one owned enrollment before its accepted callback is being verified
 };
 
 // The last kind this build knows.
-constexpr ActionKind kLastActionKind = ActionKind::SignInCancel;
+constexpr ActionKind kLastActionKind = ActionKind::SignInCode;
 
 struct Action {
     std::uint64_t num = 0;  // its place in the list, from 1, never reused
@@ -77,6 +78,7 @@ struct Action {
     std::uint64_t request = 0;  // a secret answer's or cancel's request id; 0 for the rest
     SecretValue secret{};   // a secret answer's value; empty for the rest. Wiped when the action is freed, which is
                             // when mosh's acknowledgement subtracts it (Actions::subtract)
+    bool pastesCode = false;
     bool operator==(const Action&) const = default;
 };
 

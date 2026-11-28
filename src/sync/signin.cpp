@@ -83,6 +83,14 @@ bool usesLocalSignInPage(std::string_view provider) {
     return provider == "codex" || provider == "antigravity" || provider == "grok" || provider == "muse";
 }
 
+bool isSignInCode(const SecretValue& code) {
+    const std::string& b = code.bytes();
+    return !b.empty() && b.size() <= kSignInCodeBytes && std::all_of(b.begin(), b.end(), [](char c) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        return u > 0x20 && u < 0x7f;
+    });
+}
+
 bool hasSignIn(const std::string& provider) {
     return provider == "claude" || usesLocalSignInPage(provider);
 }
@@ -180,6 +188,19 @@ bool isQueryBytes(std::string_view query) {
         const unsigned char u = static_cast<unsigned char>(c);
         return u > 0x20 && u < 0x7f;
     });
+}
+
+bool vendorCodePage(std::string_view provider, std::string_view url) {
+    return provider == "antigravity" && url.starts_with("https://accounts.google.com/") &&
+        url.size() <= kSignInUrlBytes && isQueryBytes(url) && url.find('\\') == url.npos;
+}
+
+bool parseOfferedSignInUrl(std::string_view provider, std::string_view url, SignInTarget* out) {
+    if (vendorCodePage(provider, url)) {
+        *out = {};
+        return true;
+    }
+    return parseSignInUrl(provider, url, out);
 }
 
 bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarget* out) {
@@ -689,7 +710,7 @@ SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const voi
         step.id = o.id;
         step.account = o.account;
         step.gate = gate;
-        if (!parseSignInUrl(o.provider, o.url.bytes(), &step.target)) {
+        if (!parseOfferedSignInUrl(o.provider, o.url.bytes(), &step.target)) {
             // Not a sign-in page of the account's provider: nothing is opened, and the window says so; the flow ends
             // at its deadline.
             step.kind = Step::Kind::Refused;
@@ -698,7 +719,7 @@ SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const voi
             return step;
         }
         step.kind = Step::Kind::Open;
-        step.privatePage = usesLocalSignInPage(o.provider);
+        step.privatePage = usesLocalSignInPage(o.provider) && step.target.port != 0;
         step.url = o.url;
         if (step.gate) {
             gate_ = o.id;

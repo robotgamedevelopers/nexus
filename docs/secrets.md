@@ -216,7 +216,9 @@ the helper's one-time local page in the user's browser. The provider's device li
 code or pasted response stays in that browser flow. The window claims a flow and
 opens its page through the existing sign-in protocol.
 
-On macOS and Linux, a remote Codex or Antigravity sign-in opens the same private page through SSH.
+When Studio offers a Google account page for Antigravity, the MacBook opens it directly in the default browser. Paste Google’s return code into the masked field on Emma’s tab. The field sends the code only to the enrollment the window owns.
+
+On macOS and Linux, a remote Codex or Antigravity sign-in offering a private helper page opens that page through SSH.
 The client uses its configured server destination and requires a trusted SSH host key. It binds only
 the matching IPv4 loopback port, waits for SSH to confirm the bind, and then opens the browser.
 The page path stays out of SSH arguments. Ending the flow, losing the connection, or locking the

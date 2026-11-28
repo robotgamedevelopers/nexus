@@ -232,6 +232,8 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
     if (action.kind == ActionKind::SignOut) {
         return signOutAction(action, why, client);
     }
+    if (action.kind == ActionKind::SignInCode)
+        return counted(action, "This server accepts the sign-in code on its private enrollment page.", why, client);
     if (action.kind == ActionKind::Unknown) {
         return counted(action, describe(action) + " is of a kind this server does not know: counted, not applied", why,
             client);
