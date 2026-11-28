@@ -257,6 +257,7 @@ struct View {
     PrTextShaper* windowShaper = nullptr; // borrowed from the window for measuring tab titles
     std::vector<TabWidth> tabWidths;
     std::vector<PrLayoutNode> tabNodes;
+    bool keyboardTabSelection = false; // suppress the stationary pointer highlight until it moves
     PrLayoutNode accountAnchor = kPrLayoutNodeNone;
     PrLayoutNode accountMenu = kPrLayoutNodeNone;
     std::vector<PrLayoutNode> accountRows;

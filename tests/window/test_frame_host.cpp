@@ -354,7 +354,7 @@ void remoteSignInCardClaimsTheSelectedAccount() {
         w.link.state.sessions.setNextAction(1);
         w.link.changed = true;
         w.host.pollLink();
-        w.host.signIn.forwardPage = [](const auto&, auto, auto) -> std::unique_ptr<SignInForward> {
+        w.host.signIn.forwardPage = [](const auto&, auto, bool, auto) -> std::unique_ptr<SignInForward> {
             CHECK(false); // A claim has no page or port yet.
             return {};
         };

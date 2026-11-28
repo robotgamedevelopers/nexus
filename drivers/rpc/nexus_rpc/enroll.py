@@ -66,6 +66,8 @@ def link_from(text, provider):
             url = urlsplit(candidate)
         except ValueError:
             continue
+        if provider == "codex" and url.path != "/oauth/authorize":
+            continue
         if url.netloc in PROVIDERS[provider][1] and url.path.startswith("/"):
             return candidate
     return ""
@@ -536,6 +538,10 @@ async function refresh() {{
   find('link').hidden = !s.url;
   if (s.url) {{
    find('link').href = s.url;
+   if ('{provider}' === 'Codex' && !offeredLink) {{
+    location.replace(s.url);
+    return;
+   }}
    if (!offeredLink && document.activeElement === document.body) find('link').focus();
    offeredLink = true;
   }}

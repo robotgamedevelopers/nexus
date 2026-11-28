@@ -370,7 +370,7 @@ std::string LinkSignIn::reopen(const sync::SignInOffer& offer) {
         problem.clear();
         auto& page = forwards_[offer.id];
         if (!page.connection || page.connection->poll() == SignInForward::State::Failed)
-            page.connection = forwardPage(serverArg, target.port, wake);
+            page.connection = forwardPage(serverArg, target.port, offer.provider == "codex", wake);
         page.pendingUrl = offer.url;
         pollForward();
         return problem;
@@ -397,7 +397,9 @@ void LinkSignIn::pollForward() {
             page.connection.reset();
             page.pendingUrl.clear();
             problemAccount = offer.account;
-            problem = "Nexus could not connect to the private sign-in page over SSH. Click the account to retry.";
+            problem = offer.provider == "codex"
+                ? "Nexus could not open the sign-in connection. Check SSH to the server and close any other Codex login using port 1455, then click your account again."
+                : "Nexus could not connect to the private sign-in page over SSH. Click the account to retry.";
         } else if (state == SignInForward::State::Ready && !page.pendingUrl.empty() &&
                    ownsActiveSession(offer.account) && (!activeAccount || *activeAccount == offer.account)) {
             if (openUrl) openUrl(page.pendingUrl.bytes());
@@ -436,7 +438,7 @@ void LinkSignIn::step() {
         if (!loopback && next.privatePage) {
             auto& page = forwards_[next.id];
             page.pendingUrl = std::move(next.url);
-            page.connection = forwardPage(serverArg, next.target.port, wake);
+            page.connection = forwardPage(serverArg, next.target.port, next.codexCallback, wake);
             pollForward();
             return;
         }
@@ -1714,6 +1716,8 @@ void FrameHost::watchTap(const PrAppEvent& e) {
 
 bool FrameHost::event(const PrAppEvent& e) {
     HitchScope scope(hitch, Phase::Input);
+    if (e.kind == PrAppEventKind_PointerMove || e.kind == PrAppEventKind_PointerDown)
+        view->keyboardTabSelection = false;
     // While locked (View::lockScreen) no input reaches anything but the lock screen: no key reaches a terminal's shell,
     // the Dashboard's page or the prompt, and nothing is pasted or dropped. What is not input (a resize, a timer) passes.
     if (view->lockScreen && isInputEvent(e)) return !lockScreenTakes(e);

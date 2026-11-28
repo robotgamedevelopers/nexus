@@ -719,6 +719,7 @@ SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const voi
             return step;
         }
         step.kind = Step::Kind::Open;
+        step.codexCallback = o.provider == "codex";
         step.privatePage = usesLocalSignInPage(o.provider) && step.target.port != 0;
         step.url = o.url;
         if (step.gate) {

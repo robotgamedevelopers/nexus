@@ -1,4 +1,4 @@
-"""Codex's ChatGPT device login and named permission profile for Nexus turns."""
+"""Codex's ChatGPT browser login and named permission profile for Nexus turns."""
 
 import base64
 import errno
@@ -21,7 +21,7 @@ _AUTH = (
 
 def login_command(binary, home):
     # The launcher supplies the account's private HOME and CODEX_HOME to both processes.
-    return [binary, "login", "--device-auth", *_AUTH]
+    return [binary, "login", *_AUTH]
 
 
 def chat_command(binary, home, cwd, *, keep_out=(), limited=False, write_dirs=(), bus_sender=None):

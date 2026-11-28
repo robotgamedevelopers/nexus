@@ -262,6 +262,7 @@ public:
         std::uint64_t id = 0;
         std::string account;
         SecretValue url;            // with Open
+        bool codexCallback = false;
         bool privatePage = false;   // with Open: a provider enrollment page on the server loopback
         bool gate = false;          // with Open: bind the gate first (the server is on another machine)
         SignInTarget target;        // with gate: where the gate listens and what it takes

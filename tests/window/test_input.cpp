@@ -3138,6 +3138,12 @@ void onlyTheActiveTabShowsSelected() {
     h.commandDigit(2);
     h.frame();
     CHECK(inks() == "-x-");
+    CHECK(h.view.keyboardTabSelection);
+    for (const auto node : {h.tabs().front(), h.tabs().back()}) {
+        auto style = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, node));
+        auto decoration = prLayoutDecorationStyleRecord(h.tree, style.groups[PrLayoutGroup_Decoration]);
+        CHECK(prColorFromColor16(decoration.background).a == 0);
+    }
     h.commandDigit(3);
     h.frame();
     CHECK(inks() == "--x");

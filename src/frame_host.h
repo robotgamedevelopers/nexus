@@ -112,7 +112,7 @@ public:
     // The state's offers as the link last brought them, or the link lost.
     void received(const sync::Sessions& state);
     void lost();
-    std::function<std::unique_ptr<SignInForward>(const std::string&, std::uint16_t, std::function<void()>)> forwardPage;
+    std::function<std::unique_ptr<SignInForward>(const std::string&, std::uint16_t, bool, std::function<void()>)> forwardPage;
     bool canOpenPage(std::string_view provider) const {
         return loopback || (forwardPage && (provider == "codex" || provider == "antigravity"));
     }

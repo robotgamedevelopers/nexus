@@ -16,7 +16,7 @@ public:
     virtual State poll() = 0;
 };
 
-std::unique_ptr<SignInForward> forwardSignInPage(const std::string& host, std::uint16_t port,
+std::unique_ptr<SignInForward> forwardSignInPage(const std::string& host, std::uint16_t port, bool codexCallback,
                                                 std::function<void()> wake);
 
 } // namespace nexus

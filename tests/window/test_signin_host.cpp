@@ -350,7 +350,8 @@ void privateSignInPages() {
                 State poll() override { return state; }
             };
             Forward* tunnel = nullptr;
-            remote.signIn.forwardPage = [&](const std::string& host, std::uint16_t port, std::function<void()>) {
+            remote.signIn.forwardPage = [&](const std::string& host, std::uint16_t port, bool codexCallback, std::function<void()>) {
+                CHECK(codexCallback == (std::string_view(provider) == "codex"));
                 CHECK(host == "localhost" && port == 54321);
                 auto result = std::make_unique<Forward>();
                 tunnel = result.get();

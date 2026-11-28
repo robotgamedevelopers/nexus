@@ -1197,18 +1197,22 @@ struct Builder {
         for (std::size_t i = first; i < end; ++i) {
             PrLayoutNode tab = prKitTab(kit, row, PrKitTab{.id = kitId(model.tab(i)), .disabled = false});
             const bool active = i == model.active();
-            if (active) {
+            if (active || view.keyboardTabSelection) {
                 auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, tab));
                 auto& decorationGroup = record.groups[PrLayoutGroup_Decoration];
                 auto decoration = prLayoutDecorationStyleRecord(tree, decorationGroup);
-                if (view.energyTab != model.tab(i).id) {
-                    view.tabEnergyTime = view.time;
-                    view.energyTab = model.tab(i).id;
-                    view.energyAccount.clear();
+                if (active) {
+                    if (view.energyTab != model.tab(i).id) {
+                        view.tabEnergyTime = view.time;
+                        view.energyTab = model.tab(i).id;
+                        view.energyAccount.clear();
+                    }
+                    decoration.background = prColor16FromColor(highlight(look.tabs.selectedFill, look.tabs.selectedOpacity, view.tabEnergyTime));
+                    radius(decoration, look.tabs.selectedRadius * k());
+                } else {
+                    decoration.background = {};
                 }
-                decoration.background = prColor16FromColor(highlight(look.tabs.selectedFill, look.tabs.selectedOpacity, view.tabEnergyTime));
                 decoration.borderStyle[PrRectSide_Bottom] = PrDrawBorderStyle_None;
-                radius(decoration, look.tabs.selectedRadius * k());
                 decorationGroup = prLayoutDecorationStyleIntern(tree, &decoration);
                 prLayoutTreeFrameSetStyle(tree, tab, prLayoutStyleIntern(tree, &record));
             }
@@ -3229,6 +3233,7 @@ struct Builder {
             }
             case WindowCommand::SelectTab: {
                 const auto index = static_cast<std::size_t>(key.argument);
+                if (index < model.tab_count() && index != model.active()) view.keyboardTabSelection = true;
                 select(index);
                 break;
             }

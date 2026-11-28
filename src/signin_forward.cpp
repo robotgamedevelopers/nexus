@@ -17,17 +17,26 @@ public:
         if (launcher) prProcessLauncherDestroy(launcher);
     }
 
-    void start(const std::string& host, std::uint16_t port) {
+    void start(const std::string& host, std::uint16_t port, bool codexCallback) {
         if (port < 1024 || host.empty() || host.front() == '-') return;
         const auto address = "127.0.0.1:" + std::to_string(port);
         // LocalCommand runs after authentication and successful listener setup. An occupied local
         // port must fail before the browser receives the one-time path. Only the port enters argv.
-        const std::vector<std::string> args{"-T", "-S", "none", "-o", "ControlMaster=no",
+        std::vector<std::string> args{"-T", "-S", "none", "-o", "ControlMaster=no",
             "-o", "ForkAfterAuthentication=no", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
             "-o", "ConnectTimeout=8", "-o", "GatewayPorts=no", "-o", "ExitOnForwardFailure=yes", "-o", "PermitLocalCommand=yes",
             "-o", "LocalCommand=echo ready", "-o", "StdinNull=no", "-o", "RemoteCommand=none",
             "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2",
-            "-L", address + ":" + address, "--", host, "exec cat >/dev/null"};
+            "-L", address + ":" + address};
+        if (codexCallback) {
+            // The unmodified Codex CLI owns this callback on the server. Its response also serves
+            // the browser's final success page. Bind both localhost families before opening Safari.
+            for (const auto* loopback : {"127.0.0.1", "[::1]"}) {
+                args.emplace_back("-L");
+                args.push_back(std::string(loopback) + ":1455:127.0.0.1:1455");
+            }
+        }
+        args.insert(args.end(), {"--", host, "exec cat >/dev/null"});
         // The SSH session ends on stdin EOF, including when the client process disappears.
         std::vector<PrStringView> words;
         for (const auto& arg : args) words.push_back({arg.data(), arg.size()});
@@ -66,10 +75,10 @@ private:
 
 } // namespace
 
-std::unique_ptr<SignInForward> forwardSignInPage(const std::string& host, std::uint16_t port,
+std::unique_ptr<SignInForward> forwardSignInPage(const std::string& host, std::uint16_t port, bool codexCallback,
                                                 std::function<void()> wake) {
     auto forward = std::make_unique<SshForward>(std::move(wake));
-    forward->start(host, port);
+    forward->start(host, port, codexCallback);
     return forward;
 }
 } // namespace nexus
