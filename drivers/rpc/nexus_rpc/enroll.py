@@ -26,6 +26,7 @@ from typing import NamedTuple
 from urllib.parse import parse_qs, urlsplit
 
 from .account_runtime import (
+    EnrollmentRefused,
     PENDING,
     enrolled,
     home_for,
@@ -274,6 +275,9 @@ def recover(home, provider, module, binary, *, promote=None, expected_pending=No
                     recovered_promote()
             else:
                 promote()
+        except EnrollmentRefused:
+            abandon()
+            raise
         except (ValueError, FileNotFoundError):
             return abandon()
     if module.grant_stamp(home) != record.stamp:
@@ -457,6 +461,8 @@ class Login:
                     self.retry_at = time.monotonic() + RETRY_DELAYS[self.retries]
                     self.retries += 1
                     return
+            except EnrollmentRefused as error:
+                self.result = error.code
             except (ValueError, RuntimeError):
                 pass
         self.finished = time.monotonic()

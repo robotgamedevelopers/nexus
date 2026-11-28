@@ -54,9 +54,9 @@ class Accounts(unittest.TestCase):
             (server / directory).mkdir(exist_ok=True)
             (server / directory / (name + ".json")).write_text(json.dumps(config))
         for email, plan, accept in [("me@example.com", "plus", True), ("me@example.com", "business", False),
-                                    ("someone@example.com", "pro", False)]:
+                                    ("someone@example.com", "pro", False), ("me@example.com", "free", False)]:
             with staged_login(self.home) as (stage, promote):
-                data = {"email": email, "https://api.openai.com/auth": {"chatgpt_plan_type": plan, "chatgpt_account_id": "example"}}
+                data = {"https://api.openai.com/profile": {"email": email}, "https://api.openai.com/auth": {"chatgpt_plan_type": plan, "chatgpt_account_id": "example"}}
                 token = "x." + base64.urlsafe_b64encode(json.dumps(data).encode()).decode() + ".x"
                 file = self.write_login(stage, token)
                 record = json.loads(file.read_text())
