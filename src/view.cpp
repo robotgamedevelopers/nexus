@@ -33,6 +33,53 @@ namespace {
 
 using namespace style;
 
+std::string_view lastPathComponent(std::string_view path) {
+    auto end = path.find_last_not_of("/\\");
+    if (end == path.npos || path.empty() || path.front() == '{' || path.front() == '[') return {};
+    path = path.substr(0, end + 1);
+    return path.substr(path.find_last_of("/\\") + 1);
+}
+
+// Read the filename from a simple tail command for display. Never interpret or run the command.
+std::string tailFilename(std::string_view command) {
+    if (!command.starts_with("tail ")) return {};
+    std::string word, file;
+    char quote = 0;
+    bool skipCount = false;
+    for (std::size_t i = 5; i <= command.size(); ++i) {
+        const char c = i < command.size() ? command[i] : ' ';
+        if (quote && c == quote) { quote = 0; continue; }
+        if (!quote && (c == '\'' || c == '"')) { quote = c; continue; }
+        if (c == '\\' && quote != '\'' && i + 1 < command.size()) { word += command[++i]; continue; }
+        const bool stop = !quote && (c == '|' || c == ';' || c == '&');
+        if (quote || (!stop && c != ' ' && c != '\t')) { word += c; continue; }
+        if (!word.empty()) {
+            if (skipCount) skipCount = false;
+            else if (word == "-n" || word == "-c") skipCount = true;
+            else if (word[0] != '-') {
+                if (!file.empty()) return {};
+                file = lastPathComponent(word);
+            }
+            word.clear();
+        }
+        if (stop) break;
+    }
+    return quote ? std::string{} : file;
+}
+
+std::string compactToolLabel(std::string_view format, std::string_view detail) {
+    const auto start = format.find('{');
+    if (start == format.npos) return std::string(format);
+    const auto field = format.substr(start);
+    std::string value;
+    if (field == "{filename}") value = lastPathComponent(detail);
+    else if (field == "{tail_file}") value = tailFilename(detail);
+    else if (field == "{selection}" && detail.starts_with("select:")) value = detail.substr(7);
+    auto label = std::string(format.substr(0, start));
+    if (value.empty() && label.ends_with(' ')) label.pop_back();
+    return label + value;
+}
+
 // Dedicated theme slots for independently configurable app text. Each uses the kit's UI font.
 constexpr PrKitTextRole kSelectedTabRole = PrKitTextRole_MonoStrong;
 constexpr PrKitTextRole kTabRole = PrKitTextRole_MonoNum;
@@ -1910,7 +1957,11 @@ struct Builder {
             const bool readPath = tool == "Read" && separator != summary.npos;
             auto shown = summary;
             if (customPrompt) shown.remove_prefix(separator + 2);
-            const auto full = customPrompt ? prompt->second + std::string(shown) : std::string(shown);
+            const auto& previews = look.transcriptStyle.toolPreviews;
+            const auto format = previews.find(tool);
+            const auto full = format != previews.end() && separator != summary.npos
+                ? compactToolLabel(format->second, summary.substr(separator + 2))
+                : customPrompt ? prompt->second + std::string(shown) : std::string(shown);
             const float panelPadding = look.transcriptStyle.conversationPanel ? 2 * look.ui.bubble_padding_x * k() : 0;
             const float chevron = look.transcriptStyle.toolChevron ?
                 (look.transcriptStyle.toolChevronSize + look.transcriptStyle.toolChevronGap) * k() : 0;

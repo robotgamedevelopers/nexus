@@ -285,7 +285,7 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
     for (auto i = prJsonFirst(d, obj); i != kPrJsonMissing; i = prJsonAfter(d, obj, i)) {
         const auto key = stringAt(d, i);
         if (key != "fill" && key != "ink" && key != "person_ink" && key != "bus_ink" && key != "message_inks" && key != "notice_ink" && key != "status_ink" && key != "switch_email_ink" &&
-                key != "idle_animations" && key != "battery_animation_idle_seconds" && key != "goal_outline_width" && key != "goal_gap" && key != "goal_max_height_percent" && key != "goal_min_height" && key != "caption_padding_x" && key != "caption_padding_y" && key != "tool_gap" && key != "tool_chevron" && key != "tool_chevron_size" && key != "tool_chevron_gap" && key != "tool_chevron_ink" && key != "goal_label" && key != "radius" && key != "show_notices" && key != "hidden_notice_fragments" && key != "show_tools" && key != "reply_width" && key != "markdown" && key != "conversation_panel" && key != "tool_prompts" && key != "tool_inks" && key != "list_gap_em" && key != "list_item_gap_lines" &&
+                key != "idle_animations" && key != "battery_animation_idle_seconds" && key != "goal_outline_width" && key != "goal_gap" && key != "goal_max_height_percent" && key != "goal_min_height" && key != "caption_padding_x" && key != "caption_padding_y" && key != "tool_gap" && key != "tool_chevron" && key != "tool_chevron_size" && key != "tool_chevron_gap" && key != "tool_chevron_ink" && key != "goal_label" && key != "radius" && key != "show_notices" && key != "hidden_notice_fragments" && key != "show_tools" && key != "reply_width" && key != "markdown" && key != "conversation_panel" && key != "tool_previews" && key != "tool_prompts" && key != "tool_inks" && key != "list_gap_em" && key != "list_item_gap_lines" &&
                 key != "panel_fill" && key != "link_ink" && key != "pending_text_pulse" && key != "pending_text_seconds" && key != "pending_dash_seconds" && key != "pending_outline_width" && key != "sent_outline_width" && key != "sent_outline_ink" && key != "read_path_ink" && key != "command_ink" && key != "code_ink" && key != "code_fill" &&
                 key != "code_background" && key != "code_padding" && key != "code_radius" && key != "code_size_offset" &&
                 key != "glyph_peak" && key != "glyph_seconds" && key != "glyph_stagger" &&
@@ -344,20 +344,22 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
             style.toolInks.emplace(name, color);
         }
     }
-    const auto prompts = prJsonMember(d, obj, {"tool_prompts", 12});
-    if (prompts != kPrJsonMissing) {
-        if (prJsonKind(d, prompts) != PrJsonKind_Object) {
-            why = "tool_prompts must map tool names to prompt strings";
+    for (const std::string_view key : {"tool_prompts", "tool_previews"}) {
+        const auto values = prJsonMember(d, obj, {key.data(), key.size()});
+        if (values == kPrJsonMissing) continue;
+        if (prJsonKind(d, values) != PrJsonKind_Object) {
+            why = std::string(key) + " must map tool names to strings";
             return false;
         }
-        for (auto i = prJsonFirst(d, prompts); i != kPrJsonMissing; i = prJsonAfter(d, prompts, i)) {
+        auto& target = key == "tool_prompts" ? style.toolPrompts : style.toolPreviews;
+        for (auto i = prJsonFirst(d, values); i != kPrJsonMissing; i = prJsonAfter(d, values, i)) {
             const auto name = stringAt(d, i);
-            const auto value = prJsonMember(d, prompts, {name.data(), name.size()});
+            const auto value = prJsonMember(d, values, {name.data(), name.size()});
             if (prJsonKind(d, value) != PrJsonKind_String) {
-                why = "tool_prompts needs a string for " + std::string(name);
+                why = std::string(key) + " needs a string for " + std::string(name);
                 return false;
             }
-            style.toolPrompts.emplace(name, stringAt(d, value));
+            target.emplace(name, stringAt(d, value));
         }
     }
     const bool valid =

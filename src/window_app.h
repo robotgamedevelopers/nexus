@@ -146,7 +146,7 @@ struct TranscriptStyle {
         return true;
     }
     bool showTools = true;
-    std::map<std::string, std::string, std::less<>> toolPrompts;
+    std::map<std::string, std::string, std::less<>> toolPrompts, toolPreviews;
     std::map<std::string, unsigned, std::less<>> toolInks;
     bool personBold = false;
     float glyphPeak = 1, glyphSeconds = 0.4f, glyphStagger = 0.055f;

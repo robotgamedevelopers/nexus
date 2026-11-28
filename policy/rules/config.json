@@ -213,6 +213,26 @@
       "delete_file": "#86c5ff",
       "create_directory": "#86c5ff"
     },
+    "tool_previews": {
+      "Read": "Read {filename}",
+      "read_file": "Read {filename}",
+      "Write": "Write {filename}",
+      "write_file": "Write {filename}",
+      "Edit": "Edit {filename}",
+      "MultiEdit": "Edit {filename}",
+      "NotebookEdit": "Edit {filename}",
+      "edit_file": "Edit {filename}",
+      "delete_file": "Delete {filename}",
+      "create_directory": "Create {filename}",
+      "ToolSearch": "Find tool {selection}",
+      "TaskStop": "Stop task",
+      "TaskGet": "Get task",
+      "TaskList": "List tasks",
+      "TaskOutput": "Read task output",
+      "TaskUpdate": "Update task",
+      "TaskCreate": "Create task",
+      "Monitor": "Monitor {tail_file}"
+    },
     "tool_prompts": {
       "Bash": "$ ",
       "Read": ""

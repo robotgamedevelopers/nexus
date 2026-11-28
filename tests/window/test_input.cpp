@@ -1991,6 +1991,22 @@ void stateCursorUnderTheLastText() {
     CHECK(h.entries().size() == 2 && !h.view.breathing);
 }
 
+void compactToolLabelsKeepTheirSourceEntries() {
+    for (const auto& [entry, label] : std::vector<std::pair<std::string, std::string>>{
+             {"Write: /Users/glenn/project/My Notes.md", "Write My Notes.md"},
+             {"ToolSearch: select:TaskStop", "Find tool TaskStop"},
+             {"TaskStop: {\"task_id\":\"b3462ejpk\"}", "Stop task"},
+             {"Monitor: tail -n 0 -F /Volumes/nova/rowan/bus-inbox/inbox.log | grep --line-buf", "Monitor inbox.log"},
+             {"Monitor: tail -F '/project/logs/build one.log' | grep done", "Monitor build one.log"},
+             {"Monitor: some-command --verbose", "Monitor"}}) {
+        Harness h;
+        h.model.append(0, {EntryKind::Tool, entry});
+        h.frame(); h.frame();
+        CHECK(h.hasText(h.window(), label));
+        CHECK(h.active().transcript.back().text == entry);
+    }
+}
+
 void nativeBusSendIsPrivateInHistory() {
     Harness h;
     h.model.append(0, Entry{EntryKind::Tool, "Read: before"});
@@ -3428,7 +3444,7 @@ void cleanNoticePresentation() {
     checkTextPaint(h, "model-a", 0xffffff, h.look.transcriptStyle.codeFill);
     CHECK(h.bounds(infoBubble).left < h.bounds(personBubble).left);
     CHECK(h.bounds(infoBubble).right - h.bounds(infoBubble).left < h.extent.x / 2);
-    checkTextPaint(h, "Edit: /tmp/example.cpp", 0x86c5ff, h.look.transcriptStyle.fill);
+    checkTextPaint(h, "Edit example.cpp", 0x86c5ff, h.look.transcriptStyle.fill);
     checkTextPaint(h, "$ build", 0x86c5ff, h.look.transcriptStyle.fill);
     h.type("/help"); h.enter(); h.frame();
     CHECK(h.view.helpTab == h.active().id && h.view.helpText.find("/goal <text>") != std::string::npos);
@@ -4173,6 +4189,7 @@ int main(int argc, char** argv) {
     toolLinesAreOneCompactLine();
     growingTextShowsAfterTheTranscript();
     stateCursorUnderTheLastText();
+    compactToolLabelsKeepTheirSourceEntries();
     nativeBusSendIsPrivateInHistory();
     scannerHasPromptPadding();
     sendingKeepsBubbleOnScannerRow();

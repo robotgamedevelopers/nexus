@@ -28,7 +28,7 @@ bubbles retain independently configurable fills. An ordinary window remains opaq
 App information is a compact left-aligned Markdown bubble with white text. Routine account/sign-in chatter is hidden
 by `transcript_style.hidden_notice_fragments`, without removing durable history. Actionable failures remain visible.
 File tools use `#aa79dd`, with almost the same OKLCH lightness as shell orange `#dc7334` (approximately 0.666).
-Tool names map to colors and prefix replacements through `tool_inks` and `tool_prompts`. Work bubbles have a
+`tool_previews` maps tool names to compact labels. A label can end in `{filename}` for a path, `{selection}` for a tool lookup, or `{tail_file}` for the file watched by a tail command. A literal label omits arguments. Tools without a preview use `tool_prompts` for prefix replacement. `tool_inks` sets their colors. Work bubbles have a
 noninteractive top-left chevron; `tool_chevron` turns it off and the size, gap and ink fields style it.
 
 The active goal has its own pinned bubble below the held message and above the prompt. Its label, outline width,
