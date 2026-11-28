@@ -49,6 +49,7 @@ _COMMAND_HELP = {
     "/help": "Show all commands and keyboard actions.",
     "/model": "Open the model selector. Use /model <model> [effort] to switch directly.",
     "/effort": "Open the effort selector. Use /effort <level> to switch directly.",
+    "/usage": "Show the last reported subscription usage across harnesses and accounts.",
     "/info": "Show the AI, account, model, effort, repository and working directories.",
     "/clear": "Clear the conversation and its context. When signed out, clear the local conversation.",
     "/goal": "Show the active goal for this session.",

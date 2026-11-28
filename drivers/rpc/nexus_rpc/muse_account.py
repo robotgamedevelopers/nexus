@@ -39,7 +39,7 @@ def chat_command(binary, home, cwd):
     ]
 
 
-async def subscription_tier(rpc):
+async def subscription_tier(rpc, report_usage=None):
     account = await rpc.call("account/read", {})
     if account.get("state") == "loggedOut":
         raise Failure("Muse reports this account is signed out.", "no-credential", revoked=True)
@@ -55,6 +55,8 @@ async def subscription_tier(rpc):
         raise Failure("Muse reports this account has no active subscription.", "no-credential", revoked=True)
     if result.get("subscriptionActive") is not True:
         raise Failure("Muse could not verify an active subscription.")
+    if report_usage:
+        report_usage(result.get("usage"))
     tier = result.get("tierName")
     return tier if isinstance(tier, str) and 0 < len(tier.strip()) <= 128 else "subscription"
 

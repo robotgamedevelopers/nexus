@@ -659,3 +659,8 @@ Remove the entry and relaunch the driver to revoke the routes.
 A Claude AI with `startup.no_sandbox: true` in nova-config runs commands with the operating-system access of the Nexus server login. This takes effect at driver launch. Omit the field or set it to false to use the sandbox. Claude and Codex AIs with a server-owned bus inbox can send directly with `nexus_bus_send` and supply `reply_to` to reply. The receiving AI sees the message in chat.
 
 Nexus checks the AI registry in the background (normally every 30 seconds). Changing a Claude AI’s startup.no_sandbox setting recycles that AI’s driver. Granting access lets the current turn finish. Revoking access stops the active turn. The next driver reads the current registry row and resumes the session.
+
+Run `/usage` from an AI conversation for a summary by harness and subscription account. The server shows each
+reported quota window and how long ago it was observed. Claude, Codex and Muse can report window percentages.
+Every adapter can report exhausted included usage. A subscription with no observation since the server started
+shows “usage unreported”. API-billed accounts are excluded. Reading the summary uses no model turn.

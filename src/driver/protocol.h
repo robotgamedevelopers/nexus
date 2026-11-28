@@ -145,6 +145,13 @@ struct TextEnd {
 };
 
 // The AI used a tool: its name and one line saying what it did.
+// Account-wide usage of an included quota window, measured by the harness.
+struct Quota {
+    unsigned minutes = 0;
+    unsigned usedPercent = 0;
+    bool operator==(const Quota&) const = default;
+};
+
 struct ChildAgents {
     std::uint32_t count;
     bool operator==(const ChildAgents&) const = default;
@@ -220,7 +227,7 @@ struct Settled {
     bool operator==(const Settled&) const = default;
 };
 
-using DriverMessage = std::variant<Hello, Credential, Session, Text, TextEnd, Tool, ChildAgents, Done, Error, AskSecret,
+using DriverMessage = std::variant<Hello, Credential, Session, Text, TextEnd, Tool, ChildAgents, Quota, Done, Error, AskSecret,
     Queue, Settled, Unknown>;
 
 // ---- Encoding and decoding ----

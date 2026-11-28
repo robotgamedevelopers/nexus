@@ -976,6 +976,16 @@ void conversation_commands() {
     CHECK(store.find(1)->info.contextEpoch == 1 && !store.find(1)->driver.summary);
     CHECK(store.find(1)->info.model == "m1" && store.find(1)->info.effort == "high");
     CHECK(store.find(2)->info.contextEpoch == 0 && store.find(2)->transcript.empty());
+    CHECK(send("/usage") && store.find(1)->transcript.back()->text.find("No subscription accounts") != std::string::npos);
+    nexus::accounts::Registry registry;
+    registry.accounts = {{"one", "codex"}, {"two", "muse"}, {"metered", "claude", nexus::accounts::Billing::Api}};
+    hub.useAccounts(registry, nullptr);
+    hub.reportQuota("one", 300, 27);
+    CHECK(send("/usage"));
+    const auto& summary = store.find(1)->transcript.back()->text;
+    CHECK(summary.find("**codex**") != std::string::npos && summary.find("5-hour window 27% used") != std::string::npos);
+    CHECK(summary.find("**muse**") != std::string::npos && summary.find("usage unreported") != std::string::npos);
+    CHECK(summary.find("metered") == std::string::npos);
 }
 
 void actions_stop_kind() {

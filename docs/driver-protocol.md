@@ -294,3 +294,7 @@ the server sends it as the next turn's prompt:
 ```
 
 A driver can emit `{"kind":"child-agents","count":2}` after hello to publish its current number of active child agents. This process-scoped snapshot excludes the parent. Send zero when the last child ends. The supervisor resets the count on driver exit.
+
+A driver may emit `{"kind":"quota","minutes":300,"used_percent":27}` after hello to report an account-wide
+included subscription window. Minutes (1–525600) and percent used (0–2147483647, including provider-reported overages) are integers. The server associates
+the sample with the account assigned to that driver. Older servers skip this event. It never triggers rotation.

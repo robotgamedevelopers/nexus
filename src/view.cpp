@@ -413,6 +413,8 @@ struct FlexRecipe {
                 flex.basis = px(0);
                 break;
             case Part::Conversation:
+                flex.grow = 1;
+                [[fallthrough]];
             case Part::PanelColumn:
             case Part::Column:
                 flex.direction = PrLayoutFlexDirection_Column;
@@ -1883,7 +1885,7 @@ struct Builder {
                 (look.transcriptStyle.toolChevronSize + look.transcriptStyle.toolChevronGap) * k() : 0;
             const float room = std::max(0.f, (items.width - panelPadding) * look.transcriptStyle.replyWidth / 100 -
                 2 * look.transcriptStyle.captionPaddingX * k() - chevron - 2);
-            const auto preview = ellipsize(full, room, [&](std::string_view text) { return menuTextWidth(text, PrKitTextRole_Mono); });
+            const auto preview = ellipsize(full, room, [&](std::string_view text) { return menuTextWidth(text, PrKitTextRole_Mono); }, "");
             const auto node = label(tools, preview, line);
             const auto& style = look.transcriptStyle;
             const auto toolInk = style.toolInks.find(tool);
@@ -1907,7 +1909,7 @@ struct Builder {
         const Tab& tab = model.tab(model.active());
         const std::string* growing = view.growing ? view.growing(tab.id) : nullptr;
         const bool sending = std::any_of(view.outgoing.begin(), view.outgoing.end(), [&](const auto& bubble) { return bubble.tab == tab.id; });
-        if (look.transcriptStyle.conversationPanel && (sending || !tab.transcript.empty() || !tab.held.empty() || !tab.queue.empty() || (growing && !growing->empty())))
+        if (look.transcriptStyle.conversationPanel)
             view.conversation = column = element(column, Part::Conversation);
         const bool switched = view.shown != tab.id;
         // Text was just cut to fit this tab's prompt: the transcript goes to its end, where the line saying so shows.

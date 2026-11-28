@@ -142,6 +142,10 @@ class Turn:
         self.args.resume = None
         error("session-not-found", "The harness could not find the saved conversation.", turn=self.number)
 
+    def quota(self, minutes, percent):
+        if type(minutes) is int and 1 <= minutes <= 525600 and type(percent) in (int, float) and 0 <= percent <= 2147483647:
+            emit("quota", minutes=minutes, used_percent=round(percent))
+
     def child_agents(self, count):
         emit("child-agents", count=count)
 

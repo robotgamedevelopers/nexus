@@ -169,6 +169,14 @@ async def codex(rpc, turn):
     failure_notice = None
     while True:
         method, params = await rpc.event()
+        if method == "account/rateLimits/updated":
+            limits = params.get("rateLimits")
+            if isinstance(limits, dict) and limits.get("limitId") in (None, "codex"):
+                for key in ("primary", "secondary"):
+                    window = limits.get(key)
+                    if isinstance(window, dict):
+                        turn.quota(window.get("windowDurationMins"), window.get("usedPercent"))
+            continue
         thread = params.get("threadId")
         if thread != sid:
             if thread in children and (method == "turn/completed" or method == "thread/closed"):
@@ -315,6 +323,17 @@ async def acp(rpc, turn):
         raise Failure("The ACP harness ended the turn before completion.")
 
 
+def muse_quota(turn, usage):
+    if not isinstance(usage, dict):
+        return
+    window = usage.get("window")
+    if isinstance(window, dict):
+        turn.quota(window.get("windowDurationMins"), window.get("usedPercent"))
+    weekly = usage.get("weekly")
+    if isinstance(weekly, dict):
+        turn.quota(10080, weekly.get("usedPercent"))
+
+
 async def muse(rpc, turn):
     await rpc.call("initialize", {
         "clientInfo": {"name": "nexus", "version": "1"}, "capabilities": {"experimentalApi": True},
@@ -322,7 +341,7 @@ async def muse(rpc, turn):
     await rpc.notify("initialized", {})
     first = await refresh_choices(rpc, "muse")
     turn.model = turn.model or first
-    turn.credential(await turn.provider.subscription_tier(rpc))
+    turn.credential(await turn.provider.subscription_tier(rpc, lambda usage: muse_quota(turn, usage)))
     opts = {"commandId": uuid7(), "workspaceRoot": turn.cwd, "approvalMode": "denyUnmatched"}
     if turn.model:
         opts["modelId"] = turn.model
@@ -354,6 +373,9 @@ async def muse(rpc, turn):
     }
     while True:
         method, params = await rpc.event()
+        if method == "usage/changed":
+            muse_quota(turn, params.get("usage"))
+            continue
         if params.get("sessionId") != sid:
             continue
         if method == "item/completed":

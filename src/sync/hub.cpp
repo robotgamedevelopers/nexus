@@ -475,6 +475,21 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
             state.loginState = signedIn_.contains(account->name) ? "signed in" :
                 (signsIn(account->name) ? "signed out" : "unconfirmed");
         }
+        const auto start = text->find_first_not_of(" \t\r\n");
+        if (accounts_ && start != std::string::npos && text->compare(start, 6, "/usage") == 0) {
+            const auto now = goalClock_();
+            for (const auto& row : accounts_->accounts) {
+                if (row.billing != accounts::Billing::Subscription) continue;
+                const auto sample = quota_.find(row.name);
+                if (sample == quota_.end()) {
+                    state.usage.push_back({row.provider, row.name, 0, -1, 0});
+                    continue;
+                }
+                for (const auto& [minutes, value] : sample->second)
+                    state.usage.push_back({row.provider, row.name, int(minutes), int(value.percent),
+                        (std::max(now, value.observedMs) - value.observedMs) / 60000});
+            }
+        }
         if (responder_ && text->find("/info") != std::string::npos) state.aiInfo = responder_->aiInfo(session.info.aiName);
         if (!policy::messagePlan(application_, bundlePath_(), false, kind == ActionKind::Queue ? "queue" : "send", state, plan, refused)) {
             refused = "Message application: " + refused;
@@ -1172,6 +1187,10 @@ void Hub::take(accounts::Registry next) {
         if (!account || account->provider != info.harness || account->billing != accounts::Billing::Subscription)
             clearPrimary();
     }
+    std::erase_if(quota_, [&](const auto& item) {
+        const auto* current = accounts_->account(item.first);
+        return !current || !was || !sameLogin(was->account(item.first), *current);
+    });
     for (auto it = signedIn_.begin(); it != signedIn_.end();) {
         const auto* current = accounts_->account(*it);
         const auto* previous = was ? was->account(*it) : nullptr;
@@ -1205,6 +1224,14 @@ bool Hub::needsVerifiedLogin(const accounts::Account& account) {
     if (signedIn_.contains(account.name) && probe_ && probe_(account)) return false;
     reportSignedIn(account.name, false);
     return true;
+}
+
+void Hub::reportQuota(const std::string& account, unsigned minutes, unsigned percent) {
+    const auto* row = accounts_ ? accounts_->account(account) : nullptr;
+    if (!row || row->billing != accounts::Billing::Subscription || percent > INT32_MAX) return;
+    auto& windows = quota_[account];
+    if (windows.size() < 16 || windows.contains(minutes))
+        windows[minutes] = {percent, goalClock_()};
 }
 
 void Hub::reportSignedIn(const std::string& account, bool signedIn) {

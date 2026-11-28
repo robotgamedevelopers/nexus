@@ -72,6 +72,10 @@ void append(Output& into, Output from) {
         into.signedIn = from.signedIn;
         into.account = from.account;
     }
+    for (const auto& [minutes, used] : from.quota) {
+        into.quota[minutes] = used;
+        into.account = from.account;
+    }
     if (from.usageLimit) {
         into.usageLimit = true;
         into.account = from.account;
@@ -1280,9 +1284,14 @@ bool Drivers::serve(Millis now, bool* changed) {
         }
         append(out, t.sup.tick(now));
         // A committed checkpoint also requests rotation after a server restart between the quota report and move.
+        if (hub_ && out.usageLimit) hub_->reportQuota(out.account, 0, 100);
         if (t.sup.awaitingRotation()) {
             out.account = t.sup.account();
             out.usageLimit = true;
+        }
+        if (hub_) {
+            for (const auto& [minutes, used] : out.quota)
+                hub_->reportQuota(out.account, minutes, used);
         }
         if ((out.signedIn || out.usageLimit) && !out.account.empty()) {
             reports.push_back(Report{id, out.account, out.signedIn, out.usageLimit});

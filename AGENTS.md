@@ -324,6 +324,6 @@ Tabs
 
 - Warning and notice bubbles are left-aligned and at most two-thirds of the column on desktop/laptop, using the same reply-width setting as AI text; mobile uses full width.
 
-- Work bubbles shorten long lines at whole UTF-8 character boundaries with an ellipsis, without wrapping, at two-thirds of the column from the left on desktop/laptop. Their text is bright scanner blue `#86c5ff` with no HDR gain.
+- Work bubbles shorten long lines at whole UTF-8 character boundaries without an ellipsis or wrapping, at two-thirds of the column from the left on desktop/laptop. Their text is bright scanner blue `#86c5ff` with no HDR gain.
 
 - While connecting, show one large white "Connecting to nexus" label with the prompt cursor's HDR pulse. Preserve actionable failure diagnostics. Terminal spacing is unchanged.

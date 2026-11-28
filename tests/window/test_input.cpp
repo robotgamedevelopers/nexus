@@ -1498,8 +1498,8 @@ void workLinesClipAtReplyWidth() {
         if (!leaf) continue;
         const auto raw = prLayoutNodeText(h.tree, leaf);
         const std::string preview(raw.data, raw.size);
-        CHECK(preview.ends_with("…"));
-        CHECK(("$ " + command).starts_with(preview.substr(0, preview.size() - 3)));
+        CHECK(!preview.empty() && !preview.ends_with("…"));
+        CHECK(("$ " + command).starts_with(preview));
         const auto text = h.bounds(leaf);
         const float padding = h.look.transcriptStyle.captionPaddingX * h.look.ui.scale(h.look.textSteps);
         CHECK(text.right <= bubble.right - padding + 1);
@@ -1528,9 +1528,22 @@ void warningsUseReplyWidthFromTheLeft() {
 
 void conversationBubblesAndSignInCard() {
     Harness h;
+    h.frame();
+    h.frame();
+    const auto viewport = h.bounds(h.view.transcript);
+    const auto emptyPanel = h.bounds(h.view.conversation);
+    CHECK(emptyPanel.top < viewport.top + (viewport.bottom - viewport.top) * 0.1f);
+    CHECK(near(emptyPanel.bottom, viewport.bottom));
+    h.model.append(0, Entry{EntryKind::Person, "Hello"});
+    h.frame();
+    h.frame();
+    CHECK(h.entries().size() == 1);
+    if (h.entries().size() == 1) {
+        const auto first = h.bounds(h.entries().front());
+        CHECK(first.bottom > viewport.bottom - (viewport.bottom - viewport.top) / 5);
+    }
     const std::string live = "Streaming reply";
     h.view.growing = [&](std::size_t) { return &live; };
-    h.model.append(0, Entry{EntryKind::Person, "Hello"});
     h.model.append(0, Entry{EntryKind::AI, "A reply."});
     h.model.append(0, Entry{EntryKind::Notice, "Usage limit reached."});
     h.frame();
@@ -1538,6 +1551,7 @@ void conversationBubblesAndSignInCard() {
     const auto entries = h.entries();
     CHECK(entries.size() == 4);
     if (entries.size() != 4) return;
+    CHECK(near(emptyPanel.top, h.bounds(h.view.conversation).top));
     const auto bubble = [&](std::size_t i) { return prLayoutNodeFirstChild(h.tree, entries[i]); };
     CHECK(colorMatches(fillOf(h, bubble(0)), h.look.transcriptStyle.fill));
     CHECK(colorMatches(fillOf(h, h.view.conversation), *h.look.transcriptStyle.panelFill));
@@ -1827,7 +1841,7 @@ void toolLinesAreOneCompactLine() {
     if (readLeaf) {
         const auto raw = prLayoutNodeText(h.tree, readLeaf);
         const std::string preview(raw.data, raw.size);
-        CHECK(preview.ends_with("…"));
+        CHECK(!preview.empty() && !preview.ends_with("…"));
         checkTextPaint(h, preview, shipped.toolInks.at("Read"), shipped.fill);
     }
     checkTextPaint(h, "Let me look.", shipped.ink, *shipped.panelFill);

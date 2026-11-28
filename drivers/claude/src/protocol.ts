@@ -71,6 +71,7 @@ export type DriverMessage =
     | { kind: 'credential'; billing: Billing; plan?: string }
     | { kind: 'session'; id: string }
     | { kind: 'text'; turn: number; delta: string }
+    | { kind: 'quota'; minutes: number; used_percent: number }
     | { kind: 'child-agents'; count: number }
     | { kind: 'text-end'; turn: number }
     | { kind: 'tool'; turn: number; name: string; summary: string }
