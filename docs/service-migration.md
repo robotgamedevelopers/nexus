@@ -1,5 +1,7 @@
 # Running Nova under nexus-server
 
+This procedure covers deployments that still run external services under Nexus supervision. The product target is one resident Nexus process per host, with storage, messaging and Sprint coordination embedded. The [installation acceptance test](plugins.md#built-in-tools-for-every-ai-planned) defines completion of that migration.
+
 The host starts one nexus-server at boot. The server supervises the long-running programs selected for that machine in nova-config. AIs and tools invoke one-shot commands on demand. macOS and Linux host the server directly. On Windows the host is WSL2. The iPad connects to that server.
 
 ## Studio migration

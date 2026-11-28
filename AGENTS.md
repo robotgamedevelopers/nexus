@@ -25,6 +25,8 @@ The rules for an AI working in this repository. Each one holds on every change.
    way to renew it, and the dialog says which (`docs/accounts.md`, "How long a login lasts"). A person may also
    explicitly sign out. A legacy Claude token needs a verified browser enrollment when the slot requires an email.
 
+The product target is one self-contained Nexus installation per host. Nexus is the sole required background executable. Build durable messaging, storage, scheduling and MCP service into its process. Scope provider and job subprocesses to active sessions and work. Track migration of the current external services in the roadmap.
+
 Implement the Nexus application in fork-owned Starlark and JSON. Keep the client and server processes, connection,
 mosh, durable operations, credential handling, driver I/O, rendering and validated host primitives native. A plugin
 may implement its Prax UI or server capability in native code, or compose available primitives entirely in Starlark.
