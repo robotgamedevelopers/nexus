@@ -1464,7 +1464,7 @@ void Hub::signInEnrolled(const std::string& account, const std::string& provider
 void Hub::signInExited(const std::string& account, std::uint64_t id, const std::string& why) {
     auto effects = signIns_.exited(account, id, why);
     const auto* a = accounts_ ? accounts_->account(account) : nullptr;
-    if (a && a->requiresVerifiedEmail() && !effects.notes.empty() && !why.empty()) {
+    if (a && (a->requiresVerifiedEmail() || (a->provider == "codex" && !a->email.empty())) && !effects.notes.empty() && !why.empty()) {
         effects.notes.front().text = "Could not sign in to " + a->email + ". " + why;
     }
     signInEffects(effects);
