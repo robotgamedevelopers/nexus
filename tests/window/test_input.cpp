@@ -1360,6 +1360,33 @@ void namedBusBubbles() {
     CHECK(h.bounds(h.findText(h.window(), "sage")).bottom <= h.bounds(h.findText(h.window(), "Build passed")).top + 1);
 }
 
+void markdownQuoteBubble() {
+    Harness h;
+    const std::string words = "iW This quote wraps within the bubble when the available width is used up. "
+                              "The following line stays inside the same bubble.";
+    h.model.append(0, {EntryKind::AI, "> " + words + "\n>\n> Second paragraph\n\n│ Literal bar"});
+    h.frame();
+    h.frame();
+    const auto first = h.findText(h.window(), words);
+    const auto second = h.findText(h.window(), "Second paragraph");
+    const auto literal = h.findText(h.window(), "│ Literal bar");
+    CHECK(first && second && literal);
+    if (!first || !second || !literal) return;
+    auto container = [&](PrLayoutNode leaf) {
+        const auto span = prLayoutNodeParent(h.tree, leaf);
+        return prLayoutNodeParent(h.tree, prLayoutNodeParent(h.tree, span));
+    };
+    const auto bubble = container(first);
+    CHECK(bubble == container(second) && bubble != container(literal));
+    CHECK(h.bounds(bubble).left < h.bounds(first).left);
+    PrLayoutRect narrow{}, wide{}, lines[16]{};
+    CHECK(prLayoutNodeTextRangeBoxes(h.tree, first, 0, 1, PrLayoutCoordinates_Viewport, &narrow, 1) == 1);
+    CHECK(prLayoutNodeTextRangeBoxes(h.tree, first, 1, 2, PrLayoutCoordinates_Viewport, &wide, 1) == 1);
+    CHECK(near(prLayoutUnitToPx(narrow.right - narrow.left), prLayoutUnitToPx(wide.right - wide.left)));
+    CHECK(prLayoutNodeTextRangeBoxes(h.tree, first, 0, static_cast<uint32_t>(words.size()),
+                                    PrLayoutCoordinates_Viewport, lines, 16) >= 2);
+}
+
 void markdownListsAndLinks() {
     Harness h;
     const std::string words = "First line wraps onto the next when several more words fill the available width and force it to wrap across the column.";
@@ -4190,6 +4217,7 @@ int main(int argc, char** argv) {
     switchNoticeBubble();
     namedBusBubbles();
     copyMarkdownConversation();
+    markdownQuoteBubble();
     markdownListsAndLinks();
     longInlineCommandWrapsInTheReply();
     personBubblesWrapFromTheRight();

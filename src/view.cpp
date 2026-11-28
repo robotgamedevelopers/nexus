@@ -1747,6 +1747,28 @@ struct Builder {
         });
     }
 
+    PrLayoutNode quoteBubble(PrLayoutNode parent) {
+        PrKitBoxStyle layout{};
+        layout.padding.top = layout.padding.bottom = look.ui.bubble_padding_y * k();
+        layout.padding.left = layout.padding.right = look.ui.bubble_padding_x * k();
+        layout.gap = look.ui.line_pitch * k() * look.transcriptStyle.listItemGapLines;
+        const auto node = prKitBox(kit, parent, {}, layout);
+        auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, node));
+        auto& group = record.groups[PrLayoutGroup_Decoration];
+        auto decoration = prLayoutDecorationStyleRecord(tree, group);
+        decoration.background = prColor16FromColor(rgb(look.transcriptStyle.codeFill));
+        radius(decoration, std::min(look.transcriptStyle.radius, look.ui.bubble_padding_x) * k());
+        decoration.borderStyle[PrRectSide_Left] = PrDrawBorderStyle_Solid;
+        auto& boxGroup = record.groups[PrLayoutGroup_Box];
+        auto box = prLayoutBoxStyleRecord(tree, boxGroup);
+        box.border[PrRectSide_Left] = prLayoutUnitFromPx(look.transcriptStyle.codePadding * k());
+        boxGroup = prLayoutBoxStyleIntern(tree, &box);
+        decoration.borderColor[PrRectSide_Left] = prColor16FromColor(rgb(look.tabs.selectedFill));
+        group = prLayoutDecorationStyleIntern(tree, &decoration);
+        prLayoutTreeFrameSetStyle(tree, node, prLayoutStyleIntern(tree, &record));
+        return node;
+    }
+
     void message(PrLayoutNode parent, std::string_view source, EntryKind speaker, double gain = 1,
             const View::GlyphTrail* trail = nullptr) {
         const auto& style = look.transcriptStyle;
@@ -1779,17 +1801,39 @@ struct Builder {
             return;
         }
         const auto column = element(parent, Part::Paragraphs);
+        // The shared Markdown parser prefixes each quoted paragraph with this display marker.
+        // If the source also contains literal bars, distinguish those from parser-inserted ones.
+        constexpr std::string_view quoteMark = "│ ";
+        const ChatMarkdown* classified = &paragraphs;
+        if (source.find('>') != source.npos && source.find(quoteMark) != source.npos) {
+            std::string literals(source);
+            for (auto i = literals.find(quoteMark); i != literals.npos; i = literals.find(quoteMark, i + 1))
+                literals.replace(i, quoteMark.size(), "┃ ");
+            const auto& marked = view.markdown.get(literals, speaker != EntryKind::AI);
+            if (marked.size() == paragraphs.size()) classified = &marked;
+        }
+        PrLayoutNode quote = kPrLayoutNodeNone;
         PrLayoutNode list = kPrLayoutNodeNone;
         size_t sourceOffset = 0;
-        for (const auto& paragraph : paragraphs) {
+        const bool hasQuote = source.find('>') != source.npos;
+        for (size_t i = 0; i < paragraphs.size(); ++i) {
+            const auto& paragraph = paragraphs[i];
+            const auto& runs = (*classified)[i].runs;
+            const bool quoted = hasQuote && !runs.empty() && runs.front().role == PrKitTextRole_Body &&
+                                runs.front().text.starts_with(quoteMark);
+            if (quoted != (quote != kPrLayoutNodeNone)) {
+                list = kPrLayoutNodeNone;
+                quote = quoted ? quoteBubble(column) : kPrLayoutNodeNone;
+            }
+            const auto container = quoted ? quote : column;
             const auto em = kit->theme.types[PrKitTextRole_Body].size;
-            auto row = column;
+            auto row = container;
             if (paragraph.depth) {
                 PrKitBoxStyle layout{.direction = PrKitDirection_Row, .align = PrKitAlign_Start};
                 layout.padding.left = em * (look.ui.list_column_em * paragraph.ancestorColumns +
                     (paragraph.depth - 1) * look.transcriptStyle.listGap);
                 if (list == kPrLayoutNodeNone)
-                    list = prKitBox(kit, column, {}, {.gap = look.ui.line_pitch * k() * look.transcriptStyle.listItemGapLines});
+                    list = prKitBox(kit, container, {}, {.gap = look.ui.line_pitch * k() * look.transcriptStyle.listItemGapLines});
                 row = prKitBox(kit, list, {}, layout);
                 const auto marker = plainLabel(label(row, paragraph.marker, body));
                 PrKitPlace gutter{};
@@ -1802,7 +1846,13 @@ struct Builder {
             const auto text = prKitText(kit, row, {}, body);
             const auto plain = sourceInk.value_or(tone == kPersonTone ? style.personInk : style.ink);
             for (const auto& run : paragraph.runs) {
-                auto runStyle = textStyle(static_cast<PrKitTextRole>(bold && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role), tone);
+                std::string_view content = run.text;
+                if (quoted && &run == &paragraph.runs.front() && content.starts_with(quoteMark))
+                    content.remove_prefix(quoteMark.size());
+                if (content.empty()) continue;
+                const auto role = quoted ? PrKitTextRole_Mono :
+                    bold && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role;
+                auto runStyle = textStyle(static_cast<PrKitTextRole>(role), tone);
                 // Keep Markdown in the paragraph's line flow. The kit's default monospace role is nonwrapping.
                 runStyle.wrap = PrKitWrap_Wrap;
                 const auto span = prKitText(kit, text, {}, runStyle);
@@ -1810,7 +1860,7 @@ struct Builder {
                 const auto color = speaker == EntryKind::Bus ? style.busInk :
                     run.href.empty() ? ordinary : style.linkInk.value_or(look.tabs.selectedFill);
                 ink(span, color, true, gain);
-                if (run.inlineCode) {
+                if (run.inlineCode && !quoted) {
                     auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, span));
                     auto& fontGroup = record.groups[PrLayoutGroup_Font];
                     auto font = prLayoutFontStyleRecord(tree, fontGroup);
@@ -1838,12 +1888,12 @@ struct Builder {
                     }
                     prLayoutTreeFrameSetStyle(tree, span, prLayoutStyleIntern(tree, &record));
                 }
-                const auto leaf = prLayoutTreeFrameText(tree, span, 0, sv(run.text));
+                const auto leaf = prLayoutTreeFrameText(tree, span, 0, sv(content));
                 if (trail) {
-                    const auto offset = source.find(run.text, sourceOffset);
+                    const auto offset = source.find(content, sourceOffset);
                     if (offset != source.npos) {
                         glyphLight(leaf, offset, *trail, color);
-                        sourceOffset = offset + run.text.size();
+                        sourceOffset = offset + content.size();
                     }
                 }
                 if (!run.href.empty()) view.selection.link(leaf, run.href);
