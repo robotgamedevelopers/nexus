@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlencode, urlsplit
 
-from nexus_rpc import codex_account, muse_account
+from nexus_rpc import antigravity_account, codex_account, muse_account
 from nexus_rpc.account_runtime import (
     PENDING,
     enrolled,
@@ -468,6 +468,23 @@ class PastedCodeFlow(unittest.TestCase):
             self.assertEqual(result, [24])
             self.assertEqual(until(2), [GOOGLE, CODE_ASK])
             self.assertIsNone(enrolled(home, "antigravity"))
+
+    def test_completed_vendor_stage_can_be_recovered_without_another_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            with antigravity_account.staged_login(home) as (stage, promote):
+                login = Login("antigravity", "fixture", home, [], {}, login_home=stage, promote=promote)
+                with self.assertRaisesRegex(ValueError, "not ready"):
+                    login.commit()
+            self.assertTrue(stage.is_dir())
+            self.assertIsNone(enrolled(home, "antigravity"))
+            private = stage / ".gemini/antigravity-cli"
+            private.mkdir(parents=True, mode=0o700)
+            (stage / ".gemini").chmod(0o700)
+            (private / "antigravity-oauth-token").write_text('{"access_token":"fixture"}')
+            self.assertTrue(recover(home, "antigravity", antigravity_account, None))
+            self.assertTrue(enrolled(home, "antigravity"))
+            self.assertFalse(stage.exists())
 
     def test_rejected_exchange_has_a_safe_exit_status(self):
         peer = PASTE_PEER.replace("print('That code was not accepted.')",

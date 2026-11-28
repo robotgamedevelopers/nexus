@@ -140,15 +140,21 @@ def _forget(home, encoded):
 class Pending(NamedTuple):
     provider: str
     prior: str | None
-    stamp: str
+    stamp: str | None
     stage: str | None
     stage_id: str | None
     phase: str
 
     def encode(self):
-        if self.provider not in PROVIDERS or self.phase not in ("approved", "checking"):
+        saving = self.phase == "saving" and self.provider == "antigravity" and self.stage is not None
+        if self.provider not in PROVIDERS or (not saving and self.phase not in ("approved", "checking")):
             raise ValueError("Invalid pending provider or phase")
-        for value in [self.stamp] if self.prior is None else [self.stamp, self.prior]:
+        if saving and self.stamp is not None:
+            raise ValueError("Unexpected stamp before qualification")
+        values = [] if saving else [self.stamp]
+        if self.prior is not None:
+            values.append(self.prior)
+        for value in values:
             if not isinstance(value, str) or not STAMP.fullmatch(value):
                 raise ValueError("Invalid provider grant stamp")
         if self.stage is None:
@@ -258,6 +264,15 @@ def recover(home, provider, module, binary, *, promote=None, expected_pending=No
         return False
 
     current = module.grant_stamp(home)
+    if record.phase == "saving":
+        if not staged or current != record.prior:
+            return abandon()
+        stamp = module.grant_stamp(stage)
+        if stamp is None:
+            raise ValueError("Antigravity finished but its private grant is not ready")
+        approved = record._replace(stamp=stamp, phase="approved")
+        _publish(home, approved.encode(), replaces=encoded)
+        record, encoded = approved, approved.encode()
     if record.phase == "checking":
         # Native Muse can obtain a browser grant before its subscription mint returns. A positive
         # mint rotates its private auth file. Resume that check only inside the *same* staging directory.
@@ -418,13 +433,14 @@ class Login:
             if self.pending is None:
                 stage = self.login_home if self.login_home != self.home else None
                 checking = hasattr(self.module, "check_grant")
+                saving = self.provider == "antigravity" and stage is not None
                 self.pending = Pending(
                     self.provider,
                     self.prior,
-                    self.module.grant_stamp(self.login_home),
+                    None if saving else self.module.grant_stamp(self.login_home),
                     stage.name if stage else None,
                     _identity(stage) if stage else None,
-                    "checking" if checking else "approved",
+                    "saving" if saving else ("checking" if checking else "approved"),
                 ).encode()
             _publish(self.home, self.pending)
             self.published = True
