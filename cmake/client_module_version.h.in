@@ -1,0 +1,3 @@
+#pragma once
+#define NEXUS_CLIENT_COMPATIBILITY "@nexus_client_abi@"
+#define NEXUS_CLIENT_REVISION "@revision@"

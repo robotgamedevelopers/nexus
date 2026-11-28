@@ -510,11 +510,7 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
     if(APPLE)
         add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm src/lock_mac.mm)
         set(NEXUS_MAC_SIGN_IDENTITY "" CACHE STRING "Signing identity for local nexus.app builds")
-        if(NEXUS_MAC_SIGN_IDENTITY)
-            add_custom_command(TARGET nexus POST_BUILD
-                COMMAND /usr/bin/codesign --force --sign "${NEXUS_MAC_SIGN_IDENTITY}" "$<TARGET_BUNDLE_DIR:nexus>"
-                VERBATIM)
-        endif()
+        include(cmake/client_module.cmake)
         set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         set_source_files_properties(src/lock_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         target_link_libraries(nexus PRIVATE "-framework AppKit" "-framework CoreGraphics" "-framework LocalAuthentication")

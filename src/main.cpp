@@ -140,6 +140,11 @@
 #include "sync/wire.h"
 #endif
 
+#if defined(__APPLE__)
+#include "client_reload.h"
+#include "pr/ui_records.h"
+#endif
+
 namespace {
 
 using namespace nexus;
@@ -192,6 +197,10 @@ struct App {
     // What the window does around the view each frame (frame_host.h): the kept preferences, the link, the terminals
     // and the board; and the hitch detector, always on, measuring each frame against the display's budget.
     FrameHost host;
+#if defined(__APPLE__)
+    ClientReload reload;
+    const ClientModule* module = nullptr;
+#endif
     HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
         HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
     // Only the explicit --locked screenshot fixture owns a lock. A live client uses the signed-in OS session.
@@ -566,6 +575,9 @@ bool open(void* context, PrStudioWindow* window) {
     }
     setBudget(a, prStudioWindowApp(window));
     a.wakeApp = prStudioWindowApp(window);
+#if defined(__APPLE__)
+    a.reload.start([&a] { if (auto* app = a.wakeApp.load()) prAppWake(app); });
+#endif
     prAppWake(prStudioWindowApp(window));   // a link that changed before the window opened
     // A window that is not an overlay shows from the start: it asks the owner now.
     if (!a.overlay) {
@@ -588,6 +600,9 @@ void closeWindow(void* context, PrStudioWindow*, PrStatus) {
         a.terminals->readDirectories();
     }
     a.host.keepTerminals();
+#if defined(__APPLE__)
+    a.reload.stop();
+#endif
     a.wakeApp = nullptr;
     a.window = nullptr;
     a.view.paste = nullptr;
@@ -625,7 +640,21 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     a.hitch.begin();
     // The idle check before the frame is built, so that a frame after the timeout is the lock screen's.
     if (a.lock) a.lock->tick(lockNow());
-    a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
+#if defined(__APPLE__)
+    if (const auto* next = a.reload.current(); next != a.module) {
+        a.module = next;
+        prUiForget(prStudioWindowKit(window)->ui, &a.look);
+        a.view.tabWidths.clear();
+        a.view.items.clear();
+        std::fprintf(stderr, "nexus: applied native client module %.12s\n", next->revision);
+    }
+    if (a.module) {
+        a.module->begin(a.host, prStudioWindowKit(window), a.fonts, f->time, f->display);
+    } else
+#endif
+    {
+        a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
+    }
     if (a.preparingReveal) {
         // A locked window shows the lock screen alone: it waits for no page.
         const bool sprint = !a.view.lockScreen && a.board && a.model->tab_count() &&
@@ -792,19 +821,32 @@ bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
     if (a.lock) a.lock->input(*e, lockNow());
     if (e->kind == PrAppEventKind_KeyDown || e->kind == PrAppEventKind_Text ||
             e->kind == PrAppEventKind_PointerDown) a.view.lastInput = e->time;
+#if defined(__APPLE__)
+    if (a.module) return a.module->event(a.host, *e);
+#endif
     return a.host.event(*e);
 }
 
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 extent) {
     App& a = appOf(context);
     a.view.extent = extent;
+#if defined(__APPLE__)
+    if (a.module) {
+        a.module->build(a.view, prStudioWindowKit(window), root);
+        return;
+    }
+#endif
     a.host.build(prStudioWindowKit(window), root);
 }
 
 bool laidOut(void* context, PrStudioWindow* window) {
     App& a = appOf(context);
-    if (a.bench == 0)
+    if (a.bench == 0) {
+#if defined(__APPLE__)
+        if (a.module) return a.module->wantsFrame(a.view);
+#endif
         return windowWantsFrame(a.view);
+    }
     if (a.stats.frames >= a.bench) {
         prAppStop(prStudioWindowApp(window));
         return false;

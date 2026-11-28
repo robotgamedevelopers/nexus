@@ -18,6 +18,22 @@ client installed in `~/Applications/nexus.app`, copy the [client LaunchAgent](..
 to `~/Library/LaunchAgents/`. It takes effect at the next GUI login. Opening nexus directly uses the same server as login launch. The client reads the
 `server` line in `~/.nexus/client/config` (for example, `server studio`) and defaults to `localhost`.
 
+To update a running macOS client from a local build, run the following in the checkout.
+
+~~~sh
+tools/nexus-update-client build/nexus.app ~/Applications/nexus.app
+~~~
+
+The installer verifies the staged application signature and atomically swaps the installed bundle.
+The open window watches that directory and takes a compatible native renderer on its next frame.
+Its session, selected tab and unsent draft stay in the running host. Updates that change the host,
+its C++ interfaces or its build configuration take effect on the next launch. Installing the first
+build with this support also takes one relaunch. A Developer ID build requires the replacement to
+meet its signing requirement. Local builds use ad-hoc signing by default.
+
+On a Mac with an active graphical login, `python3 tests/window/client_reload_mac.py build` exercises
+an isolated window and temporary app copies using a single-configuration Ninja build.
+
 The overlay is a see-through window over the whole screen, above other apps and their fullscreen
 Spaces, with no Dock icon.
 Escape hides it too, and so does switching away: Command-Tab, a click on another app, or Mission Control. With
