@@ -144,6 +144,7 @@ struct BoxRecipe {
     static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
     Part part;
     int16_t steps;
+    bool flushTop = false;
 
     void make(const Look& look, PrLayoutBoxStyle& box) const {
         const float k = look.ui.scale(steps);
@@ -162,7 +163,7 @@ struct BoxRecipe {
                 box.overflowY = PrLayoutOverflow_Scroll;
                 if (look.transcriptStyle.conversationPanel) {
                     box.width = prLayoutLengthPercent(look.prompt.width);
-                    box.margin[PrRectSide_Top] = px(look.ui.column_inset * k);
+                    if (!flushTop) box.margin[PrRectSide_Top] = px(look.ui.footer_padding * k);
                     box.margin[PrRectSide_Left] = box.margin[PrRectSide_Right] = prLayoutLengthAuto();
                 }
                 // At the end, the transcript follows it (prUiFollowEnd), and the items in sight slide as entries arrive:
@@ -179,6 +180,7 @@ struct BoxRecipe {
                 box.margin[PrRectSide_Left] = prLayoutLengthAuto();
                 box.margin[PrRectSide_Right] = prLayoutLengthAuto();
                 if (part == Part::Column) padding(box, look.ui.column_inset * k, 0, 0, 0);
+                if (flushTop) padding(box, look.ui.footer_padding * k, 0, 0, 0);
                 break;
             case Part::AssistantMessage:
                 box.display = PrLayoutDisplay_Block;
@@ -325,6 +327,7 @@ struct DecorationRecipe {
     static constexpr PrLayoutGroup kKind = PrLayoutGroup_Decoration;
     Part part;
     int16_t steps;
+    bool flushTop = false;
 
     void make(const Look& look, PrLayoutDecorationStyle& d) const {
         const float k = look.ui.scale(steps);
@@ -344,6 +347,7 @@ struct DecorationRecipe {
                     d.outlineWidth = prLayoutUnitFromPx(look.ui.output_border_width);
                     d.outlineOffset = prLayoutUnitFromPx(-look.ui.output_border_width);
                     radius(d, look.transcriptStyle.radius * k);
+                    if (flushTop) std::fill_n(d.radii, 4, px(0)); // Both axes of the two upper corners.
                 }
                 break;
             case Part::TabDivider:
@@ -503,7 +507,7 @@ struct StackLevel {
     void make(const Look&, PrLayoutEffectStyle& effect) const { effect.zIndex = level; }
 };
 
-PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
+PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p, bool flushTop = false) {
     int16_t s = static_cast<int16_t>(look.textSteps);
     if (p == Part::SelectorLayer)
         return pr::uiStyle(ui, look, BoxRecipe{p, s}, FlexRecipe{p, s}, StackLevel{2});
@@ -511,7 +515,7 @@ PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
         return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, StackLevel{-1});
     if (p == Part::PendingBubble || p == Part::Bubble || p == Part::PersonBubble)
         return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, StackLevel{1});
-    return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, FlexRecipe{p, s});
+    return pr::uiStyle(ui, look, BoxRecipe{p, s, flushTop}, DecorationRecipe{p, s, flushTop}, FlexRecipe{p, s});
 }
 
 // The state cursor's fill: its state's OKLCH colour (cursor.h) at a breath level, in sRGB for the layout. One record
@@ -1552,8 +1556,8 @@ struct Builder {
 
     // Declares the items from the scroll's `offset` (or the end) a screen either side of the `viewport`, the spacers
     // for the items before and after them, and keeps which items it declared for the next round to measure.
-    void declareItems(PrLayoutNode scroller, PrLayoutNode column, const Tab& tab, TranscriptItems& items, bool atEnd,
-            float offset, float viewport) {
+    void declareItems(PrLayoutNode column, const Tab& tab, TranscriptItems& items, bool atEnd,
+            float offset, float viewport, float columnInset) {
         const std::size_t n = items.first.size();
         if (n == 0)
             return;
@@ -1574,7 +1578,7 @@ struct Builder {
         } else {
             const float top = offset - viewport;
             const float bottom = offset + 2 * viewport;
-            float y = look.transcriptStyle.conversationPanel ? 0 : look.ui.column_inset * k();
+            float y = columnInset;
             first = n;
             end = n;
             for (std::size_t i = 0; i < n; ++i) {
@@ -1600,11 +1604,6 @@ struct Builder {
             for (std::size_t i = end; i < n; ++i)
                 below += heightOf(items, i, tab);
         }
-        // At the end, the items in sight slide as entries arrive, and the spacer above grows by what left them: the
-        // transcript follows its end there with scroll anchoring off (Part::TranscriptAtEnd), which would hold the view
-        // on what showed instead.
-        if (atEnd)
-            prLayoutTreeFrameSetStyle(tree, scroller, style(ui, look, Part::TranscriptAtEnd));
         const uint64_t base = uint64_t(tab.id) << 8;
         // A spacer is followed by the column's gap, as an item is: its own height leaves that out.
         if (first != 0)
@@ -1924,6 +1923,19 @@ struct Builder {
     void transcript(PrLayoutNode window) {
         PrLayoutNode scroller = element(window, Part::Transcript, PrUiFlag_Scrollable);
         PrLayoutNode column = element(scroller, look.transcriptStyle.conversationPanel ? Part::PanelColumn : Part::Column);
+        bool flushTop = false;
+        if (look.transcriptStyle.conversationPanel) {
+            // Prax repeats the round when either height changes. Moving the gap inside the scrolling
+            // column on overflow keeps the threshold stable and lets history reach the divider.
+            PrVec2 content{}, viewport{};
+            prUiExtent(ui, column, PrUiAxisFlag_Y, &content);
+            prUiExtent(ui, scroller, PrUiAxisFlag_Y, &viewport);
+            flushTop = content.y > viewport.y;
+            if (flushTop) {
+                prLayoutTreeFrameSetStyle(tree, scroller, style(ui, look, Part::Transcript, true));
+                prLayoutTreeFrameSetStyle(tree, column, style(ui, look, Part::PanelColumn, true));
+            }
+        }
         if (model.tab_count() == 0) {
             PrLayoutNode centered = element(column, Part::Centered);
             caption(centered, view.notice, textStyle(PrKitTextRole_Body, kStatusTone, PrKitTextAlign_Center));
@@ -1978,7 +1990,11 @@ struct Builder {
             reply.entry = tab.transcript.size();
             reply.bytes = growing ? growing->size() : 0;
         }
-        declareItems(scroller, column, tab, items, atEnd, offset, viewport);
+        if (atEnd)
+            prLayoutTreeFrameSetStyle(tree, scroller, style(ui, look, Part::TranscriptAtEnd, flushTop));
+        const float columnInset = look.transcriptStyle.conversationPanel ?
+            (flushTop ? look.ui.footer_padding * k() : 0) : look.ui.column_inset * k();
+        declareItems(column, tab, items, atEnd, offset, viewport, columnInset);
         // The AI's text still growing (the open entry), after the transcript, a label a paragraph: only its last
         // paragraph is set again as it grows. It joins the transcript, closed, when its block ends.
         if (growing != nullptr && !growing->empty()) {

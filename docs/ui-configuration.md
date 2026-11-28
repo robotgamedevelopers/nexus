@@ -359,4 +359,4 @@ The shipped outer canvas below the opaque black header is `#0c0f13` at 100% opac
 
 Shell-command and per-tool text colors default independently to `#86c5ff`, the scanner's bright blue without HDR gain.
 
-The output panel has a fixed rounded border. Set `ui_colors.output_border` (default `#282a2e`) and `ui_style.output_border_width` (default one logical point) to customize it. A width of zero hides the border.
+When the conversation fits, the output panel has rounded corners and the gap below the tab divider matches the gap above the prompt (`ui_style.footer_padding`). When the conversation overflows, the panel meets the divider with square top corners. The bottom corners stay rounded. Set `ui_colors.output_border` (default `#282a2e`) and `ui_style.output_border_width` (default one logical point) to customize it. A width of zero hides the border.

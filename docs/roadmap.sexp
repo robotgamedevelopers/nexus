@@ -332,7 +332,7 @@
   (:id "t-scanner-afterglow" :type :task :title "Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering" :state :todo
    :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Compare different decay settings at the same timestamps; preserve reduced-motion handling and independence from the prompt cursor pulse.")
   (:id "t-output-panel-outline" :type :task :title "Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color" :state :done
-   :evidence ("src/view.cpp: the fixed transcript viewport paints the configured rounded border" "tests/window/test_input.cpp: window_input checks the inset stroke and rounded clipping while scrolled"))
+   :evidence ("src/view.cpp: the fixed transcript viewport paints the configured rounded border" "tests/window/test_input.cpp: window_input checks the inset stroke, equal gaps for short history, and square upper corners at the divider on overflow"))
   (:id "t-native-markdown-tables" :type :task :title "Render Markdown tables with native Prax table layout, aligned columns, readable headers and preserved inline formatting and links" :state :todo
    :note "Partial implementation is preserved on codex/work-bubbles; it has not completed qualification or client deployment. Handle narrow displays and horizontal overflow; preserve selection and Markdown copying. Do not fork or patch Prax.")
   (:id "t-compact-header" :type :task :title "Reduce the header height by six points while preserving notch avoidance, clock alignment and tab hit targets" :state :todo

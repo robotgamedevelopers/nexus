@@ -925,14 +925,15 @@ void draftAndScrollStayWithTheirAI() {
     h.frame();
     const float scrolled = prLayoutUnitToPx(prLayoutNodeScroll(h.tree, h.view.transcript).y);
     CHECK(scrolled < -100 || scrolled > 100);
-    // In mid-history the fixed frame clips all four rounded corners.
+    // Overflow reaches the divider, including both upper corners. The bottom corners stay rounded.
+    CHECK(near(port.top, h.bounds(prLayoutNodeParent(h.tree, h.view.transcript)).top));
     auto hitsConversation = [&](float x, float y) {
         PrLayoutNode hits[64]{};
         auto count = prLayoutTreeHitTest(h.tree, {prLayoutUnitFromPx(x), prLayoutUnitFromPx(y)}, hits, 64);
         return std::find(hits, hits + std::min(count, 64u), h.view.conversation) != hits + std::min(count, 64u);
     };
-    CHECK(!hitsConversation(port.left + 1, port.top + 1));
-    CHECK(!hitsConversation(port.right - 2, port.top + 1));
+    CHECK(hitsConversation(port.left + 1, port.top + 1));
+    CHECK(hitsConversation(port.right - 2, port.top + 1));
     CHECK(hitsConversation(middle.x, port.bottom - 2));
     CHECK(!hitsConversation(port.left + 1, port.bottom - 2));
     CHECK(!hitsConversation(port.right - 2, port.bottom - 2));
@@ -1531,6 +1532,8 @@ void conversationBubblesAndSignInCard() {
     h.frame();
     h.frame();
     const auto viewport = h.bounds(h.view.transcript);
+    const auto panels = h.bounds(prLayoutNodeParent(h.tree, h.view.transcript));
+    CHECK(near(viewport.top - panels.top, h.bounds(h.view.promptBox).top - viewport.bottom));
     const auto emptyPanel = h.bounds(h.view.conversation);
     CHECK(emptyPanel.top < viewport.top + (viewport.bottom - viewport.top) * 0.1f);
     CHECK(near(emptyPanel.bottom, viewport.bottom));
@@ -2205,8 +2208,8 @@ void scrollPastTheEndCountsTheLastItemOnce() {
     }
     h.frame();
     h.frame();
-    PrLayoutNode column = prLayoutNodeFirstChild(h.tree, h.view.transcript);
-    const float whole = h.height(column);
+    // Measure the messages themselves. The outer column also holds the collapsible divider gap.
+    const float whole = h.height(h.view.conversation);
     CHECK(h.entries().size() == 8);        // every item declared, and measured
     h.commandDigit(2);
     h.frame();
@@ -2214,10 +2217,9 @@ void scrollPastTheEndCountsTheLastItemOnce() {
     h.rounds = 1;                           // the one round that declares from that scroll
     h.commandDigit(1);
     h.rounds = 8;
-    column = prLayoutNodeFirstChild(h.tree, h.view.transcript);
     std::vector<PrLayoutNode> e = h.entries();
     CHECK(e.size() == 2 && h.hasText(e.back(), "line 7"));     // the spacer, and the last item
-    const float shown = h.height(column);
+    const float shown = h.height(h.view.conversation);
     if (shown < whole - 0.5f || shown > whole + 0.5f) {
         std::fprintf(stderr, "  column %.1f px with every item, %.1f px from past the end\n", double(whole),
             double(shown));
