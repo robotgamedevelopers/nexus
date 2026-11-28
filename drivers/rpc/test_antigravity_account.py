@@ -107,6 +107,22 @@ int main(int argc, char **argv) {
         self.assertEqual((home / rel).read_text(), replacement)
         self.assertEqual((home / rel).stat().st_mode & 0o777, 0o600)
 
+    def test_enveloped_grant_is_promoted_without_rewriting_vendor_metadata(self):
+        home = self.home("wrapped")
+        path = Path(".gemini/antigravity-cli/antigravity-oauth-token")
+        with agy.staged_login(home) as (stage, promote):
+            agy.login_command("/bin/cat", stage)
+            for invalid in (None, {}, {"access_token": 42}):
+                (stage / path).write_text(json.dumps({"token": invalid}))
+                self.assertIsNone(agy.grant_stamp(stage))
+            data = b'{"token":{"access_token":"fixture","refresh_token":"fixture"},"version":1}'
+            (stage / path).write_bytes(data)
+            expected = agy.grant_stamp(stage)
+            self.assertTrue(expected)
+            promote()
+            self.assertEqual(agy.grant_stamp(home), expected)
+            self.assertEqual((home / path).read_bytes(), data)
+
     def test_promotion_retry_after_rename_and_grant_stamp(self):
         home = self.home("example")
         rel = Path(".gemini/antigravity-cli/antigravity-oauth-token")
