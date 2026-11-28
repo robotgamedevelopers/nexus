@@ -233,6 +233,8 @@ void LinkSignIn::submitCode() {
     const std::uint64_t id = ask->id;
     wipeCode();
     codeSent_[id] = port->send(std::move(action));
+    problemAccount = account;
+    problem = "Code submitted. Waiting for Antigravity to finish signing in…";
 }
 
 void LinkSignIn::received(const sync::Sessions& state) {
@@ -516,10 +518,16 @@ void FrameHost::pollLink() {
                         if (choice.name == name) return choice.needsSignIn;
                 return {};
             };
-            if (needed(accountState_) == true && needed(s.sessions) == false) {
-                const auto owner = signIn.claimSessions.find(name);
+            const auto owner = signIn.claimSessions.find(name);
+            const auto stillNeeded = needed(s.sessions);
+            if (needed(accountState_) == true && stillNeeded == false) {
                 if (owner != signIn.claimSessions.end()) signInFeedback_.erase(owner->second);
                 view->chirp(view->windowApp.surface.readyChirp);
+            } else if (owner != signIn.claimSessions.end() && stillNeeded == true && signIn.codeSent(claim.flow) &&
+                    std::none_of(s.sessions.offers().begin(), s.sessions.offers().end(),
+                        [&](const auto& offer) { return offer.id == claim.flow; })) {
+                signInFeedback_[owner->second] = "Antigravity did not complete sign-in after you submitted the code. "
+                    "Click your account to open a fresh Google sign-in page.";
             }
         }
         if (phase == sync::LinkPhase::Connected) {

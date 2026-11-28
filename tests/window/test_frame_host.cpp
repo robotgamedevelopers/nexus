@@ -395,6 +395,27 @@ void signInFeedbackStaysInItsSession() {
     w.round();
     CHECK(w.view.signInFeedback(w.model.tab(w.model.active()).id).empty() && w.view.problem.empty());
     CHECK(w.view.signInFeedback(owner).find("Waiting") != std::string_view::npos);
+
+    w.model.select_tab(w.tabOf("emma"));
+    auto& state = w.link.state.sessions;
+    const auto token = w.host.signIn.opener.token();
+    w.host.signIn.openUrl = [](const auto&) {};
+    state.setOffers({sync::SignInOffer{.id = 33, .account = "personal", .provider = "antigravity",
+        .opener = token, .host = "studio", .url = sync::SecretValue("https://accounts.google.com/o/oauth2/auth?test=1"),
+        .codeWanted = true}});
+    w.link.changed = true;
+    w.host.pollBackground();
+    CHECK(w.host.secrets.showing() != nullptr);
+    w.host.secrets.type("4/fixture-only");
+    w.host.secrets.submit();
+    w.host.pollBackground();
+    CHECK(w.view.signInFeedback(owner).find("Code submitted") != std::string_view::npos);
+    w.model.select_tab(w.tabOf("rowan"));
+    state.setOffers({sync::SignInOffer{.id = 34, .account = "personal", .provider = "antigravity"}});
+    w.link.changed = true;
+    w.host.pollBackground();
+    CHECK(w.view.signInFeedback(owner).find("fresh Google sign-in") != std::string_view::npos);
+    CHECK(w.view.signInFeedback(w.model.tab(w.model.active()).id).empty());
 }
 
 void enterDuringAccountSwitchWaitsForServerState() {
