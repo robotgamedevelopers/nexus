@@ -2420,9 +2420,27 @@ void accountPickerIsAnExplicitChoice() {
         return p.tab == tabId && p.session == 17 && p.current == current && p.highlighted < p.options.size() &&
                p.options[p.highlighted].name == wanted;
     };
-    // An opening chord (Down) opens the menu on the account in use, centred over the window and anchored to no
-    // tab; it sends nothing and keeps the draft.
+    // One paragraph spans several visual lines. Both arrows stay in the editor.
+    h.key(PrAppKey('A'), PrAppKeyCode_KeyA, style::kCommand);
+    std::string paragraph;
+    for (int i = 0; i < 40; ++i) paragraph += "wrapped prompt ";
+    h.type(paragraph.c_str());
+    h.frame();
+    CHECK(h.view.promptRows > 1 && h.active().draft == paragraph);
+    const auto end = prUiTextEditSelection(h.ui, h.view.prompt).caret;
+    arrow(false, 0);
+    const auto above = prUiTextEditSelection(h.ui, h.view.prompt).caret;
+    CHECK(above > 0 && above < end && !h.view.accountPicker);
     arrow(true, 0);
+    CHECK(prUiTextEditSelection(h.ui, h.view.prompt).caret == end && !h.view.accountPicker);
+    h.enter(PrAppModifierFlag_Shift);
+    h.type("next line");
+    CHECK(h.active().draft == paragraph + "\nnext line" && link.sent.empty());
+    h.key(PrAppKey('A'), PrAppKeyCode_KeyA, style::kCommand);
+    h.type("keep my draft");
+    // An opening chord (Command–Down) opens the menu on the account in use, centred over the window and anchored to no
+    // tab; it sends nothing and keeps the draft.
+    arrow(true, style::kCommand);
     CHECK(preview("b", "b"));
     CHECK(link.sent.empty() && signIns == 0 && h.active().id == tabId && h.active().draft == "keep my draft");
     CHECK(h.view.accountAnchor == kPrLayoutNodeNone && h.view.accountMenu != kPrLayoutNodeNone);
@@ -2432,23 +2450,23 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(menu.top >= h.bounds(h.tabs()[h.model.active()]).bottom);
     CHECK(h.view.accountRows.size() == 3);
     for (const char* label : {"Personal", "Work", "Archive"}) CHECK(h.hasText(h.view.accountMenu, label));
-    // Open, the plain arrows move the highlight, and only that.
-    arrow(true, 0);
+    // Open, the Command arrows move the highlight, and only that.
+    arrow(true, style::kCommand);
     CHECK(preview("c", "b"));
-    arrow(false, 0);
+    arrow(false, style::kCommand);
     CHECK(preview("b", "b"));
-    arrow(false, 0);
+    arrow(false, style::kCommand);
     CHECK(preview("a", "b") && link.sent.empty());
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     h.frame();
     CHECK(!h.view.accountPicker && h.view.accountMenu == kPrLayoutNodeNone && h.hides == 0);
     CHECK(h.active().draft == "keep my draft" && link.sent.empty());
 
-    // Down alone opens it too (account_picker_shortcuts); Enter chooses the highlighted account, and only then is
+    // Command–Down opens it again (account_picker_shortcuts); Enter chooses the highlighted account, and only then is
     // anything sent.
-    arrow(true, 0);
+    arrow(true, style::kCommand);
     CHECK(preview("b", "b") && link.sent.empty());
-    arrow(true, 0);
+    arrow(true, style::kCommand);
     CHECK(preview("c", "b") && link.sent.empty());
     h.enter();
     h.frame();
@@ -2465,7 +2483,7 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(link.sent.size() == 3 && link.sent[2].kind == sync::ActionKind::SignInClaim && link.sent[2].account == "c" &&
           link.sent[2].session == 17);
     CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.view.accountRows.size() == 3);
-    arrow(false, 0);
+    arrow(false, style::kCommand);
     CHECK(preview("b", "c"));
     h.commandDigit(3);
     h.frame();
@@ -2473,7 +2491,7 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(link.sent.size() == 3);
     h.commandDigit(2);
     CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.active().draft == "keep my draft");
-    arrow(true, 0);
+    arrow(true, style::kCommand);
     CHECK(preview("a", "c"));
     CHECK(h.view.accountRows.size() == 3);
     if (h.view.accountRows.size() != 3) return;
@@ -2493,7 +2511,7 @@ void accountPickerIsAnExplicitChoice() {
     CHECK(h.view.accountMenu == kPrLayoutNodeNone && link.sent.size() == 6);
     // The shipped menu lists the linked accounts only: automatic choice is the server's (auto_accounts), never a row.
     publish("a", true, true);
-    arrow(false, 0);
+    arrow(false, style::kCommand);
     CHECK(preview("a", "a") && h.view.accountRows.size() == 3);
     for (const auto row : h.view.accountRows) CHECK(!h.hasText(row, "auto"));
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
@@ -3716,7 +3734,7 @@ int main(int argc, char** argv) {
             h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown, mods);
             h.frame();
         };
-        down(0);
+        down(style::kCommand);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 1);
         CHECK(h.hasText(h.tabs()[h.model.active()], "F1") && h.view.accountAnchor == kPrLayoutNodeNone);
         CHECK(h.view.accountRows.size() == 3);
@@ -3727,7 +3745,7 @@ int main(int argc, char** argv) {
         CHECK(std::abs((menu.left + menu.right) / 2 - h.extent.x / 2) < 2);
         CHECK(std::abs((menu.top + menu.bottom - h.extent.y) / 2) < 2);
         CHECK(colorMatches(fillOf(h, h.view.accountMenu), h.look.messageCard.fill));
-        down(0);
+        down(style::kCommand);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 2 && link.sent.empty());
         CHECK(near(h.bounds(h.view.accountMenu).left, menu.left) && near(h.bounds(h.view.accountMenu).right, menu.right));
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
@@ -3832,7 +3850,7 @@ int main(int argc, char** argv) {
         h.frame();
         CHECK(link.sent.size() == sent && h.active().draft.empty() && h.active().transcript.empty());
         CHECK(h.view.accountMenu == kPrLayoutNodeNone && prUiFocus(h.ui) == h.view.prompt);
-        down(0);
+        down(style::kCommand);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 2);
         if (argc == 4) {
             std::filesystem::copy_file(argv[3], argv[2], std::filesystem::copy_options::overwrite_existing);

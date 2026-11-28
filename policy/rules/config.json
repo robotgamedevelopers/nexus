@@ -16,8 +16,8 @@
     "tab_move_threshold": 12
   },
   "account_picker_shortcuts": {
-    "ArrowDown": "next",
-    "ArrowUp": "previous"
+    "Command+ArrowDown": "next",
+    "Command+ArrowUp": "previous"
   },
   "auto_accounts": true,
   "centered_account_menu": true,

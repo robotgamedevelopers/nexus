@@ -93,7 +93,7 @@ end by default. Set `tab_navigation_wrap` to `true` in client `config.json` to w
 to signed offsets.
 
 On an AI tab, Command-Up and Command-Down open the linked-account picker and highlight the previous or next
-account. Up and Down continue through the list, wrapping at either end. Enter confirms the highlighted account.
+account. Keep holding Command to navigate the list, wrapping at either end. Enter confirms the highlighted account.
 Clicking a row confirms that account directly. Escape cancels and keeps the overlay and draft open. A change of
 AI, session, current account or connection dismisses the picker. If the server reorders its accounts, the
 highlight follows the same account ID. The server validates an exact account selection before applying it.
@@ -108,7 +108,7 @@ The stock Starlark window program reads two optional maps from the fork’s clie
 ```json
 {
   "account_picker_shortcuts": {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"},
-  "account_picker_keys": {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}
+  "account_picker_keys": {"Command+ArrowUp": "previous", "Command+ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}
 }
 ```
 

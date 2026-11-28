@@ -246,7 +246,7 @@ Sessions
 - Command-M opens a pop-up selector of the harness's models and Command-E one of its effort levels. Up/Down move, Enter picks, Escape closes it. Nothing shows the model or effort otherwise.
 
 Tabs
-- Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. Command-Up/Down on an AI tab jump to the top/bottom of history; plain Up/Down navigate its account menu.
+- Command-Left/Right select the tab to the left or right: navigation, on every tab. Command-Up/Down on an AI tab open and navigate its account menu. In the prompt, plain Up/Down move the caret by one displayed line, including soft wraps. Shift-Enter inserts a newline at the caret. Control-Up/Down jump to the top or bottom of history.
 
 ## Tests
 

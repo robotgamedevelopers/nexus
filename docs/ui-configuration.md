@@ -350,8 +350,7 @@ The dashboard page owns its polling cadence; no additional poll is triggered by 
 request window frames. Security lock screens retain their protected reveal.
 `opaque_history_backdrop` covers the complete history scroll viewport, including its top inset, so the underlying
 window's title-bar buttons do not show through. The outer margins retain the configured overlay transparency.
-The clock uses 28-point regular text, matching the tab size. Command–Up/Down scroll history to its top/bottom;
-plain Up/Down continue to navigate the account selector. Both are documented in `/help`.
+The clock uses 28-point regular text, matching the tab size. Command–Up/Down open and navigate the account picker. In the prompt, Up/Down move the caret between displayed lines, including soft wraps. Shift–Enter inserts a newline. Control–Up/Down scroll history to the top or bottom.
 
 `prompt_selection_shortcuts` maps chords to `start` or `end`, extending the current prompt selection with its anchor preserved. The shipped bindings are Command–Shift–Left/Right. `tab_reorder` defaults to Command–Shift–PageUp/PageDown.
 

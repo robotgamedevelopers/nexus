@@ -58,7 +58,7 @@ def describe(window, state, config):
         for chord, command in opening.items():
             bind(chord, command)
         if visible:
-            for chord, command in config.get("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}).items():
+            for chord, command in config.get("account_picker_keys", {"Command+ArrowUp": "previous", "Command+ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}).items():
                 if chord != "Enter" or not prompt_command or opened:
                     bind(chord, command)
         elif signed_out and not prompt_command:
