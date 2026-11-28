@@ -635,6 +635,24 @@ struct Builder {
         return prUiElement(ui, parent, key, style(ui, look, p), flags);
     }
 
+    PrLayoutNode personBubble(PrLayoutNode row, Part part) {
+        const auto bubble = element(row, part);
+#if NEXUS_PROCESSES  // Desktop clients, including windowed mode.
+        const PrLayoutCalcNode cap[] = {
+            prLayoutCalcOperation(PrLayoutCalcOp_Min, 2),
+            prLayoutCalcLeaf(PrLayoutCalcLeaf_Percent, look.ui.person_bubble_max_percent),
+            prLayoutCalcLeaf(PrLayoutCalcLeaf_Px, view.extent.x * look.ui.desktop_person_viewport_percent / 100),
+        };
+        auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, bubble));
+        auto& group = record.groups[PrLayoutGroup_Box];
+        auto box = prLayoutBoxStyleRecord(tree, group);
+        box.maxWidth = prLayoutLengthIntern(tree, cap, 3);
+        group = prLayoutBoxStyleIntern(tree, &box);
+        prLayoutTreeFrameSetStyle(tree, bubble, prLayoutStyleIntern(tree, &record));
+#endif
+        return bubble;
+    }
+
     PrLayoutNode label(PrLayoutNode parent, std::string_view text, PrKitTextStyle s) {
         return prKitLabel(kit, parent, PrKitLabel{.key = 0, .text = sv(text)}, s);
     }
@@ -1520,7 +1538,12 @@ struct Builder {
         // Characters of the body face are about half its size wide.
         const float perChar = 0.5f * look.ui.body_size * s;
         const float maxPercent = kind == EntryKind::Person ? look.ui.person_bubble_max_percent : look.ui.bubble_max_percent;
-        const float width = std::max(items.width * maxPercent / 100 - 2 * look.ui.bubble_padding_x * s, 1.0f);
+        float maxWidth = items.width * maxPercent / 100;
+#if NEXUS_PROCESSES
+        if (kind == EntryKind::Person)
+            maxWidth = std::min(maxWidth, view.extent.x * look.ui.desktop_person_viewport_percent / 100);
+#endif
+        const float width = std::max(maxWidth - 2 * look.ui.bubble_padding_x * s, 1.0f);
         const float pad = 2 * look.ui.bubble_padding_y * s;
         const float rows = float(items.lines[i]) + std::floor(float(items.chars[i]) * perChar / width);
         return rows * look.ui.line_pitch * s + pad + gap;
@@ -1823,7 +1846,7 @@ struct Builder {
             case EntryKind::Notice: {
                 PrLayoutNode entry = element(column, e.kind == EntryKind::Person ? Part::Entry : Part::ReplyRow, 0, key);
                 PrLayoutNode bubble = e.kind == EntryKind::AI ? assistantMessage(entry, tab) :
-                    e.kind == EntryKind::Person ? element(entry, Part::PersonBubble) : element(entry, Part::CaptionBubble);
+                    e.kind == EntryKind::Person ? personBubble(entry, Part::PersonBubble) : element(entry, Part::CaptionBubble);
                 if (e.kind == EntryKind::Notice && e.accountEmailEnd) {
                     switchLabel(bubble, e);
                 } else if (e.kind == EntryKind::Notice) {
@@ -2076,7 +2099,7 @@ struct Builder {
         }
         const auto pendingBubble = [&](const std::string& text) {
             const auto row = element(column, Part::Entry);
-            const auto bubble = element(row, Part::PendingBubble);
+            const auto bubble = personBubble(row, Part::PendingBubble);
             const auto& settings = look.transcriptStyle;
             const bool animate = idleAnimation(view.lastInput);
             const double wave = 0.5 - 0.5 * std::cos(view.time * 6.283185307179586 / settings.pendingTextSeconds);
@@ -2108,11 +2131,11 @@ struct Builder {
         };
         for (const auto& text : tab.queue) {
             const auto compact = view.attachmentLabels.find({tab.id, text});
-            message(element(element(column, Part::Entry), Part::PersonBubble),
+            message(personBubble(element(column, Part::Entry), Part::PersonBubble),
                 compact == view.attachmentLabels.end() ? text : compact->second, EntryKind::Person);
         }
         for (const auto& sendingBubble : view.outgoing)
-            if (sendingBubble.tab == tab.id) message(element(element(column, Part::Entry), Part::PersonBubble), sendingBubble.text, EntryKind::Person);
+            if (sendingBubble.tab == tab.id) message(personBubble(element(column, Part::Entry), Part::PersonBubble), sendingBubble.text, EntryKind::Person);
         if (!tab.held.empty()) pendingBubble(tab.held);
     }
 

@@ -1465,7 +1465,7 @@ void personBubblesWrapFromTheRight() {
         const auto row = h.bounds(entries.front());
         const auto bubble = h.bounds(prLayoutNodeFirstChild(h.tree, entries.front()));
         CHECK(near(bubble.right, row.right));
-        CHECK(std::abs((bubble.right - bubble.left) / (row.right - row.left) - 2.0f / 3.0f) < 0.01f);
+        CHECK(near(bubble.right - bubble.left, std::min(viewport / 2, (row.right - row.left) * 2 / 3)));
         CHECK(bubble.bottom - bubble.top > h.look.ui.line_pitch * 2);
         h.model.set_draft(0, text);
         h.model.hold_draft(0);
@@ -1473,7 +1473,7 @@ void personBubblesWrapFromTheRight() {
         const auto heldRow = h.bounds(h.entries().back());
         const auto held = h.bounds(prLayoutNodeFirstChild(h.tree, h.entries().back()));
         CHECK(near(held.right, heldRow.right));
-        CHECK(std::abs((held.right - held.left) / (heldRow.right - heldRow.left) - 2.0f / 3.0f) < 0.01f);
+        CHECK(near(held.right - held.left, std::min(viewport / 2, (heldRow.right - heldRow.left) * 2 / 3)));
     }
 }
 

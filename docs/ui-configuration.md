@@ -126,6 +126,7 @@ canonical, and `docs/policy.md` documents the existing style groups.
 | `bubble_padding_y` | `21` |
 | `bubble_max_percent` | `83` |
 | `person_bubble_max_percent` | `66.666667` |
+| `desktop_person_viewport_percent` | `50` |
 | `plus_size` | `36.4` |
 | `column_inset` | `16.8` |
 | `tool_size` | `21.84` |
@@ -331,7 +332,7 @@ marks a new client run. The last partial batch is flushed on normal shutdown. Re
 reported to inspect the preceding frames, rather than starting a profiler after it has passed. The native limits
 bound diagnostic memory/disk usage. Set the flag to false to stop collecting; existing recordings remain available.
 
-User messages, including held and sending messages, are right aligned and wrap at two-thirds of the conversation width. `ui_style.person_bubble_max_percent` controls this independently of tool and information bubbles. AI replies use `transcript_style.reply_width` from the left.
+User messages, including held and sending messages, are right aligned and wrap at two-thirds of the conversation width. On desktop and laptop their additional maximum is half the window width (`ui_style.desktop_person_viewport_percent`). `ui_style.person_bubble_max_percent` controls this independently of tool and information bubbles. AI replies use `transcript_style.reply_width` from the left.
 
 `ui_flags.protect_overlay_focus` protects an open desktop overlay against unsolicited focus changes. macOS attempts
 keyboard recovery before hide-on-blur; observed Command–Tab, clicks outside the overlay, sleep/session switching and
