@@ -7,6 +7,7 @@ import uuid
 import logging
 
 from .catalog import acp_catalog, discover
+from .codex_account import PERSONAL_PAID_PLANS
 from pathlib import Path
 
 
@@ -59,7 +60,7 @@ def turn_quota(provider, error):
 
 # Keep unknown or newly introduced plans out of the prompt path until their billing is known.
 PAID_PLANS = {
-    "codex": {"go", "plus", "pro", "prolite", "team", "selfservebusinessprolite", "business",
+    "codex": PERSONAL_PAID_PLANS | {"team", "selfservebusinessprolite", "business",
               "enterprise", "edu", "eduplus", "edupro"},
     "antigravity": {"googleaipro", "googleaiultra"},
     "grok": {"supergrok", "supergrokheavy", "supergrokpro", "premium", "xpremium+"},

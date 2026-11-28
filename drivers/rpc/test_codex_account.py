@@ -53,7 +53,7 @@ class Accounts(unittest.TestCase):
         ]:
             (server / directory).mkdir(exist_ok=True)
             (server / directory / (name + ".json")).write_text(json.dumps(config))
-        for email, plan, accept in [("me@example.com", "plus", True), ("me@example.com", "business", False),
+        for email, plan, accept in [("me@example.com", "plus", True), ("me@example.com", "promax", True), ("me@example.com", "business", False),
                                     ("someone@example.com", "pro", False), ("me@example.com", "free", False)]:
             with staged_login(self.home) as (stage, promote):
                 data = {"https://api.openai.com/profile": {"email": email}, "https://api.openai.com/auth": {"chatgpt_plan_type": plan, "chatgpt_account_id": "example"}}
@@ -69,6 +69,10 @@ class Accounts(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "Personal workspace"):
                         promote()
                     self.assertEqual(grant_stamp(self.home), before)
+
+    def test_pro_max_qualifies_for_the_first_turn(self):
+        from nexus_rpc.backends import subscription
+        self.assertEqual(subscription("codex", "promax"), "promax")
 
     def test_grant_stamp_requires_a_complete_private_chatgpt_login(self):
         self.assertIsNone(grant_stamp(self.home))

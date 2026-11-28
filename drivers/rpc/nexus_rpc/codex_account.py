@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .account_runtime import EnrollmentRefused
 
+PERSONAL_PAID_PLANS = frozenset({"go", "plus", "pro", "prolite", "promax"})
 PROFILE = "nexus-chat"
 SUPPORTS_LIMIT = sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file()
 _AUTH = (
@@ -155,7 +156,7 @@ def personal_email(account):
 
 def matches_personal(expected, email, plan):
     return (isinstance(email, str) and email.casefold() == expected.casefold()
-            and isinstance(plan, str) and plan.lower() in {"go", "plus", "pro", "prolite"})
+            and isinstance(plan, str) and plan.lower() in PERSONAL_PAID_PLANS)
 
 
 def _grant(directory, *, sync=False, expected_email=None):
