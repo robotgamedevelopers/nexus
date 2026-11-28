@@ -416,6 +416,14 @@ void signInFeedbackStaysInItsSession() {
     w.host.pollBackground();
     CHECK(w.view.signInFeedback(owner).find("fresh Google sign-in") != std::string_view::npos);
     CHECK(w.view.signInFeedback(w.model.tab(w.model.active()).id).empty());
+
+    // Recovery may finish on another link after the original claim has already ended.
+    state.setAIs({{"emma", {{"personal", "", false}}}, {"rowan", {{"other", "", false}}}});
+    state.setOffers({});
+    w.link.changed = true;
+    w.host.pollBackground();
+    CHECK(w.view.signInFeedback(owner).empty());
+
 }
 
 void enterDuringAccountSwitchWaitsForServerState() {

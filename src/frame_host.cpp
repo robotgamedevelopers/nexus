@@ -508,7 +508,7 @@ void FrameHost::pollLink() {
         board->offer(s.sessions.dashboards().empty() ? std::string() : s.sessions.dashboards().front().url);
     // The AIs first, so that an AI's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
-        for (const auto& [name, claim] : pendingClaims_) {
+        for (const auto& [name, owner] : signIn.claimSessions) {
             const auto needed = [&](const sync::Sessions& state) -> std::optional<bool> {
                 const auto* primary = state.first(kPrimaryChat);
                 if (primary && primary->info.primaryAccount && primary->info.primaryAccount->name == name)
@@ -518,15 +518,16 @@ void FrameHost::pollLink() {
                         if (choice.name == name) return choice.needsSignIn;
                 return {};
             };
-            const auto owner = signIn.claimSessions.find(name);
+            const auto claim = pendingClaims_.find(name);
             const auto stillNeeded = needed(s.sessions);
             if (needed(accountState_) == true && stillNeeded == false) {
-                if (owner != signIn.claimSessions.end()) signInFeedback_.erase(owner->second);
+                const auto* session = s.sessions.find(owner);
+                if (session && session->info.account == name) signInFeedback_.erase(owner);
                 view->chirp(view->windowApp.surface.readyChirp);
-            } else if (owner != signIn.claimSessions.end() && stillNeeded == true && signIn.codeSent(claim.flow) &&
+            } else if (claim != pendingClaims_.end() && stillNeeded == true && signIn.codeSent(claim->second.flow) &&
                     std::none_of(s.sessions.offers().begin(), s.sessions.offers().end(),
-                        [&](const auto& offer) { return offer.id == claim.flow; })) {
-                signInFeedback_[owner->second] = "Antigravity did not complete sign-in after you submitted the code. "
+                        [&](const auto& offer) { return offer.id == claim->second.flow; })) {
+                signInFeedback_[owner] = "Antigravity did not complete sign-in after you submitted the code. "
                     "Click your account to open a fresh Google sign-in page.";
             }
         }
