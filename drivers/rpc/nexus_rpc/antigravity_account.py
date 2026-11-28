@@ -151,6 +151,9 @@ def _grant(directory, *, seal=False):
             record = json.loads(raw)
         except (ValueError, UnicodeError, RecursionError):
             raise ValueError("Antigravity did not finish writing the Google login.") from None
+        # Current agy stores the OAuth token inside an envelope. Older versions wrote it directly.
+        if isinstance(record, dict) and "token" in record:
+            record = record["token"]
         token = record.get("access_token") if isinstance(record, dict) else None
         if not isinstance(token, str) or not token:
             raise ValueError("Antigravity did not finish writing the Google login.")
