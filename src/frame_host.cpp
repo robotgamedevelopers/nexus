@@ -565,16 +565,16 @@ void FrameHost::pollLink() {
                 if (offer && !it->second.flow) it->second.flow = offer->id;
                 const bool refused = it->second.action && s.sessions.nextAction() > it->second.action &&
                     (!offer || offer->opener.empty());
-                const auto* choice = activeChoice();
-                const bool login = pendingLogin_ && pendingLogin_->second == it->first;
-                if (refused || (offer && offer->id != it->second.flow) || (!offer && it->second.flow) ||
-                    (!offer && !login && (!choice || choice->name != it->first || !choice->needsSignIn)))
+                if (refused || (it->second.flow && (!offer || offer->id != it->second.flow)))
                     it = pendingClaims_.erase(it);
                 else
                     ++it;
             }
         } else {
             pendingClaims_.clear();
+            signInSelections_.clear();
+            pendingLogins_.clear();
+            loginPreparations_.clear();
             signInFeedback_.clear();
             signIn.lost();
         }
@@ -590,17 +590,6 @@ void FrameHost::pollLink() {
         }
     }
     phase = s.phase;
-    if (signInSelection_) {
-        const auto& [id, account] = *signInSelection_;
-        if (phase != sync::LinkPhase::Connected || !model->tab_count() ||
-                mirror.session(model->tab(model->active()).id) != id) {
-            signInSelection_.reset();
-        } else if (!accountSelections_.contains(id)) {
-            const auto* choice = activeChoice();
-            if (choice && choice->name == account && choice->needsSignIn) activateSignIn();
-            signInSelection_.reset();
-        }
-    }
     prepareLogin();
     settleLogin();
     refreshPicker();
@@ -713,9 +702,9 @@ void FrameHost::selectSignInAccount() {
 // The account whose sign-in page this window opens for the AI that shows: one /login signs in, else the account the
 // AI's session is on.
 std::optional<std::string> FrameHost::signInTarget() const {
-    if (loginPreparation_) return std::string{};
-    if (pendingLogin_ && model->tab_count() && mirror.session(model->tab(model->active()).id) == pendingLogin_->first)
-        return pendingLogin_->second;
+    if (loginPreparations_.contains(selectedSession())) return std::string{};
+    if (const auto it = pendingLogins_.find(selectedSession()); it != pendingLogins_.end())
+        return it->second.account;
     const auto* choice = activeChoice();
     if (!choice) return std::nullopt;
     return choice->name;
@@ -726,7 +715,7 @@ sync::SessionId FrameHost::selectedSession() const {
 }
 
 bool FrameHost::activateSignIn() {
-    if (loginPreparation_) {
+    if (loginPreparations_.contains(selectedSession())) {
         signInFeedback_[selectedSession()] = "Finish or cancel the account switch before signing in.";
         return true;
     }
@@ -823,7 +812,7 @@ void FrameHost::chooseAccount(std::string account) {
     if (selected && !accountSelections_.contains(session)) {
         setAccount(session, *selected);
         if (view->windowApp.signInOnSelect)
-            signInSelection_ = std::make_pair(session, *selected);
+            signInSelections_[session] = *selected;
     }
 }
 
@@ -850,7 +839,7 @@ void FrameHost::pickerCommand(const std::string& command) {
 }
 
 std::optional<AccountPicker> FrameHost::previewAccounts(int direction) const {
-    if (loginPreparation_) return std::nullopt;
+    if (loginPreparations_.contains(selectedSession())) return std::nullopt;
     if (phase != sync::LinkPhase::Connected || (view->secrets && view->secrets->showing())) return std::nullopt;
     const auto* roster = activeAccountRoster();
     if (!roster) return std::nullopt;
@@ -889,7 +878,7 @@ void FrameHost::startLogin(const std::string& account) {
         signInFeedback_[selectedSession()] = "Reconnect to the Nexus server to sign in.";
         return;
     }
-    if (loginPreparation_) {
+    if (loginPreparations_.contains(selectedSession())) {
         signInFeedback_[selectedSession()] = "Finish or cancel the current account switch first.";
         return;
     }
@@ -923,18 +912,19 @@ void FrameHost::startLogin(const std::string& account) {
             return;
         }
     }
-    pendingLogin_.reset();
-    signInSelection_.reset();
+    pendingLogins_.erase(session);
+    signInSelections_.erase(session);
     signIn.choose(""); // Preserve an accepted callback; otherwise cancel the previous browser flow.
-    loginPreparation_.emplace(LoginPreparationState{session, current->info.account, account,
+    loginPreparations_.emplace(session, LoginPreparationState{session, current->info.account, account,
         LoginPreparation(current->info.harness == "claude")});
     signInFeedback_[selectedSession()] = "Signing out before switching accounts…";
     prepareLogin();
 }
 
 void FrameHost::prepareLogin(bool browserConfirmed) {
-    if (!loginPreparation_) return;
-    auto& p = *loginPreparation_;
+    const auto preparation = loginPreparations_.find(selectedSession());
+    if (preparation == loginPreparations_.end()) return;
+    auto& p = preparation->second;
     using Phase = LoginPreparation::Phase;
     const auto* session = accountState_.find(p.session);
     const auto* roster = rosterOf(p.session);
@@ -969,7 +959,15 @@ void FrameHost::prepareLogin(bool browserConfirmed) {
         .selected = session && session->info.account == p.target,
         .confirmed = browserConfirmed,
     });
-    if (after == before) return;
+    if (after == before) {
+        if (after == Phase::Browser && (view->accounts.dialog != AccountMenuView::Dialog::BrowserLogout ||
+                view->accounts.dialogTab != model->tab(model->active()).id)) {
+            view->accounts.dialog = AccountMenuView::Dialog::BrowserLogout;
+            view->accounts.dialogTab = model->tab(model->active()).id;
+            view->accounts.dialogShown = false;
+        }
+        return;
+    }
     if (after == Phase::SigningOut) {
         if (p.previous.empty()) { prepareLogin(); return; }
         p.noticeFrom = session->total();
@@ -995,12 +993,12 @@ void FrameHost::prepareLogin(bool browserConfirmed) {
         if (view->openBrowserLogout) view->openBrowserLogout();
     } else if (after == Phase::Ready) {
         const auto account = p.target;
-        loginPreparation_.reset();
+        loginPreparations_.erase(preparation);
         view->accounts.dialog = AccountMenuView::Dialog::None;
         enrollSelected(account);
     } else if (after == Phase::Failed) {
         const auto owner = p.session;
-        loginPreparation_.reset();
+        loginPreparations_.erase(preparation);
         view->accounts.dialog = AccountMenuView::Dialog::None;
         signInFeedback_[owner] = "The account switch stopped because the server did not confirm it or the selection changed. "
                         "Check the latest notice, then retry /login.";
@@ -1030,7 +1028,8 @@ void FrameHost::enrollSelected(const std::string& account) {
         signInFeedback_[selectedSession()] = "This sign-in is open in another nexus window.";
         return;
     }
-    pendingLogin_ = std::make_pair(session, account);
+    auto& login = pendingLogins_[session];
+    login = {account};
     signIn.choose(account);
     signInFeedback_[selectedSession()] = "Signing in to " + accountShownAs(*it) + "…";
     if (offer && offer->opener == signIn.opener.token()) {
@@ -1038,14 +1037,16 @@ void FrameHost::enrollSelected(const std::string& account) {
         return;
     }
     if (pendingClaims_.contains(account)) return;
-    pendingLoginAction_ = claimAccount(session, account);
-    pendingClaims_[account] = {0, pendingLoginAction_};
+    login.action = claimAccount(session, account);
+    pendingClaims_[account] = {0, login.action};
 }
 
 // Enrollment completes only when the server confirms both the selected account and its verified login.
 void FrameHost::settleLogin() {
-    if (!pendingLogin_) return;
-    const auto [id, account] = *pendingLogin_;
+    const auto id = selectedSession();
+    const auto login = pendingLogins_.find(id);
+    if (login == pendingLogins_.end()) return;
+    const auto& account = login->second.account;
     const auto* roster = rosterOf(id);
     const auto* session = accountState_.find(id);
     const sync::AccountChoice* choice = nullptr;
@@ -1055,19 +1056,19 @@ void FrameHost::settleLogin() {
         if (it != roster->accounts.end()) choice = &*it;
     }
     if (phase != sync::LinkPhase::Connected || !session || !choice) {
-        pendingLogin_.reset();
+        pendingLogins_.erase(login);
         return;
     }
     if (session->info.account == account && !choice->needsSignIn) {
-        pendingLogin_.reset();
+        pendingLogins_.erase(login);
         signInFeedback_[id].clear();
         return;
     }
     const auto* offer = offerFor(account);
-    if (choice->needsSignIn && pendingLoginAction_ && accountState_.nextAction() > pendingLoginAction_ &&
+    if (choice->needsSignIn && login->second.action && accountState_.nextAction() > login->second.action &&
             (!offer || offer->opener != signIn.opener.token())) {
         pendingClaims_.erase(account);
-        pendingLogin_.reset();
+        pendingLogins_.erase(login);
         signInFeedback_[id] = "The sign-in to " + accountShownAs(*choice) + " did not finish. This account remains selected; retry /login.";
     }
 }
@@ -1085,7 +1086,7 @@ void FrameHost::wireAccountMenu() {
         return roster ? accountLoginRows(*roster) : std::vector<AccountMenuRow>{};
     };
     view->switchAccount = [this](const std::string& account) {
-        if (loginPreparation_) return;
+        if (loginPreparations_.contains(selectedSession())) return;
         if (phase != sync::LinkPhase::Connected || !model->tab_count()) return;
         const auto* roster = activeAccountRoster();
         const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id));
@@ -1100,9 +1101,8 @@ void FrameHost::wireAccountMenu() {
     view->loginAccount = [this](const std::string& account) { startLogin(account); };
     view->browserLogoutConfirmed = [this] { prepareLogin(true); };
     view->cancelLoginPreparation = [this] {
-        if (!loginPreparation_) return;
-        const auto owner = loginPreparation_->session;
-        loginPreparation_.reset();
+        const auto owner = selectedSession();
+        if (!loginPreparations_.erase(owner)) return;
         signInFeedback_[owner] = "Sign-in cancelled. The previous saved login is not restored.";
     };
     view->openBrowserLogout = [this] {
@@ -1321,7 +1321,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         return "No conversation with " + service + " is available on the server. The buffer is kept.";
     };
     view->accountCommand = [this](const std::string& command) {
-        if (loginPreparation_) return;
+        if (loginPreparations_.contains(selectedSession())) return;
         if (phase != sync::LinkPhase::Connected || !activeAccountRoster())
             return;
         const auto session = mirror.session(model->tab(model->active()).id);
@@ -1331,8 +1331,8 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         setAccount(session, "+" + command);
     };
     view->signOut = [this] {
-        if (loginPreparation_) {
-            view->problem = "Finish or cancel the current account switch first.";
+        if (loginPreparations_.contains(selectedSession())) {
+            signInFeedback_[selectedSession()] = "Finish or cancel the current account switch first.";
             return false;
         }
         if (!link || phase != sync::LinkPhase::Connected) {
@@ -1470,9 +1470,13 @@ void FrameHost::pollBackground() {
     if (!view || !model) return;
     pollLink();
     prepareLogin();
-    if (loginPreparation_ && loginPreparation_->machine.phase() == LoginPreparation::Phase::Browser &&
-            view->accounts.dialog != AccountMenuView::Dialog::BrowserLogout && view->cancelLoginPreparation)
-        view->cancelLoginPreparation();
+    settleLogin();
+    const auto id = selectedSession();
+    if (const auto it = signInSelections_.find(id); it != signInSelections_.end() && !accountSelections_.contains(id)) {
+        const auto* choice = activeChoice();
+        if (choice && choice->name == it->second && choice->needsSignIn) activateSignIn();
+        signInSelections_.erase(it);
+    }
     if (signIn.activeAccount) {
         const auto target = signInTarget();
         if (!target) signIn.activeAccount->clear();

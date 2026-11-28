@@ -285,14 +285,17 @@ private:
     struct LimitSelection { uint64_t request, action; };
     std::map<sync::SessionId, LimitSelection> limitSelections_;
     LimitOffer currentLimit() const;
-    std::optional<std::pair<sync::SessionId, std::string>> signInSelection_;
+    std::map<sync::SessionId, std::string> signInSelections_;
     struct PendingClaim { std::uint64_t flow, action; };
     sync::SessionId selectedSession() const;
     std::map<sync::SessionId, std::string> signInFeedback_;
     std::map<std::string, PendingClaim> pendingClaims_; // until the offer changes or this link ends
     // /login after preparation: the selected session/account waiting for verified enrollment.
-    std::optional<std::pair<sync::SessionId, std::string>> pendingLogin_;
-    std::uint64_t pendingLoginAction_ = 0;
+    struct PendingLogin {
+        std::string account;
+        std::uint64_t action = 0;
+    };
+    std::map<sync::SessionId, PendingLogin> pendingLogins_;
     struct LoginPreparationState {
         sync::SessionId session;
         std::string previous, target;
@@ -300,7 +303,7 @@ private:
         std::uint64_t action = 0, noticeFrom = 0;
         bool signedOut = false;
     };
-    std::optional<LoginPreparationState> loginPreparation_;
+    std::map<sync::SessionId, LoginPreparationState> loginPreparations_;
     void prepareLogin(bool browserConfirmed = false);
     void enrollSelected(const std::string& account);
     std::string logoutNext_;    // /logout: the account the AI moves to after, chosen as the dialog opened

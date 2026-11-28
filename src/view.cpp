@@ -2793,7 +2793,10 @@ struct Builder {
             prKitModal(kit, window, {.key = dialog.key}, typedDialogStyle().modal) :
             prKitDialog(kit, window, dialog, typedDialogStyle());
         if (body == kPrLayoutNodeNone) {
-            if (!fresh) menu.dialog = Dialog::None;
+            if (!fresh) {
+                if (menu.dialog == Dialog::BrowserLogout && view.cancelLoginPreparation) view.cancelLoginPreparation();
+                menu.dialog = Dialog::None;
+            }
             menu.dialogShown = false;
             return;
         }

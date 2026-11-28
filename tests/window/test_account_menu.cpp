@@ -661,6 +661,15 @@ void loginSignsOutThenSwitches() {
     w.frame();
     CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::BrowserLogout);
     CHECK((pages == std::vector<std::string>{"https://claude.ai/"}));
+    w.model.select_tab(w.tabOf("stella"));
+    w.frame(); w.frame();
+    CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::None);
+    w.view.cancelLoginPreparation();
+    w.view.browserLogoutConfirmed();
+    w.model.select_tab(w.tabOf("rowan"));
+    w.frame(); w.frame();
+    CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::BrowserLogout);
+    CHECK(pages.size() == 1);
     const auto selected = w.link.sent.size();
     w.view.activateSignIn();
     w.frame();
@@ -671,11 +680,11 @@ void loginSignsOutThenSwitches() {
     w.offers = {sync::SignInOffer{.id = 4, .account = "a3", .provider = "claude", .opener = w.host.signIn.opener.token()}};
     w.publish();
     w.frame();
-    CHECK(!w.view.problem.empty()); // Merely selecting a3 is not a completed login.
+    CHECK(!w.view.signInFeedback(w.model.tab(w.model.active()).id).empty()); // Merely selecting a3 is not a completed login.
     w.offers.clear();
     w.publish();
     w.frame();
-    CHECK(w.view.problem.find("did not finish") != std::string::npos);
+    CHECK(w.view.signInFeedback(w.model.tab(w.model.active()).id).find("did not finish") != std::string::npos);
     CHECK(w.current == "a3" && w.rowan[0].needsSignIn);
     CHECK(w.link.sent.back().kind == sync::ActionKind::SignInClaim); // Failure never requests a fallback.
 }
@@ -691,7 +700,7 @@ void refusedSignOutStopsLogin() {
         const auto count = w.link.sent.size();
         w.publish(); w.frame(); // Acknowledged but refused: no new success notice.
         CHECK(w.link.sent.size() == count && w.link.sent.back().kind == sync::ActionKind::SignOut);
-        CHECK(w.view.problem.find("switch stopped") != std::string::npos);
+        CHECK(w.view.signInFeedback(w.model.tab(w.model.active()).id).find("switch stopped") != std::string::npos);
         CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::None);
     }
 }
@@ -710,7 +719,7 @@ void cancelledBrowserLogoutNeverStartsEnrollment() {
     w.frame(); w.frame();
     CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::None);
     CHECK(w.link.sent.size() == count);
-    CHECK(w.view.problem.find("cancelled") != std::string::npos);
+    CHECK(w.view.signInFeedback(w.model.tab(w.model.active()).id).find("cancelled") != std::string::npos);
     w.view.browserLogoutConfirmed(); // A stale UI action cannot revive the cancelled preparation.
     CHECK(w.link.sent.size() == count);
 }

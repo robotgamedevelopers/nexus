@@ -57,6 +57,7 @@
 |---|:---:|
 | Let an AI see a display or window the human chooses with Screen Recording permission (later) | ❌ |
 | Let an AI click and type in other apps with separate Accessibility permission and a human stop control (later) | ❌ |
+| Audit session isolation across the client and server. Exercise two simultaneous sessions, including sessions on one account, and verify that messages, drafts, errors, prompts, actions and delayed replies stay with their originating session through tab switches and reconnects. | ❌ |
 | Finish v0.2.5: verify the remaining platform gates, deploy the matching client and policy, merge the release PR, then publish the source archive and checksums | ❌ |
 | Compact work groups: keep only the latest three unwrapped lines, cut at the last whole character with no ellipsis; click for the complete wrapped, scrollable text in an 80-percent-width and height popup; Escape dismisses the popup | ❌ |
 | AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text | ❌ |
@@ -81,7 +82,7 @@
 | Windows depth: close the trace binding gaps (ten of seventeen review plants escaped the trace): constrain ranWell by the relay's run time (RelayLife.tla:171); model the tells as a sequence with a no-repeat invariant; unit tests for the acked_+1 re-cut, acked going down, and ended() after stop(); widen the CI seeds | ❌ |
 | Windows depth: a watchdog for a hung relay; keep the NEXUS_WSL_RELAY test hook out of shipping builds; show a notice when history requests are dropped; show a bubble for a message sent when nextAction()==0 (frame_host.cpp:779-783) | ❌ |
 | Linux desktop window: waits on Prax's Wayland backend (asked of Patrick); until then the Linux build is the server only | ❌ |
-| complete | 15% |
+| complete | 14% |
 
 [Source data](roadmap.sexp)
 
