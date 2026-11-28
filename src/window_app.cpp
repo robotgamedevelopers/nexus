@@ -261,6 +261,7 @@ bool readMessageCard(const PrJson* d, Index obj, MessageCardStyle& card) {
         readColor(d, obj, {"email_ink", 9}, card.emailInk) &&
         readPoints(d, obj, {"text_size", 9}, card.textSize, 12, 72) &&
         readPoints(d, obj, {"selector_width_em", 17}, card.selectorWidthEm, 6, 80) &&
+        readPoints(d, obj, {"backdrop_opacity", 16}, card.backdropOpacity, 0, 1) &&
         readPoints(d, obj, {"vertical_extension", 18}, card.verticalExtension, 0, 50) &&
         readPoints(d, obj, {"side_extension", 14}, card.sideExtension, 0, 50) &&
         readPoints(d, obj, {"row_height", 10}, card.rowHeight, 1, 4) &&

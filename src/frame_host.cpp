@@ -1723,12 +1723,50 @@ bool FrameHost::event(const PrAppEvent& e) {
     if (view->lockScreen && isInputEvent(e)) return !lockScreenTakes(e);
     // A modal owns all input, including mouse presses over transcript text underneath it.
     // Let Prax route it before the transcript selection, composer, board or terminal can consume anything.
-    if (view->accounts.dialog != AccountMenuView::Dialog::None) return false;
+    auto& menu = view->accounts;
+    if (menu.dialog == AccountMenuView::Dialog::Login && !menu.dialogRows.empty() &&
+            (e.kind == PrAppEventKind_KeyDown || e.kind == PrAppEventKind_KeyUp)) {
+        const auto matches = [&](std::string_view chord) {
+            PrAppKey key{};
+            PrAppModifierFlags modifiers{};
+            return uiChord(chord, key, modifiers) && key == e.keyboard.key &&
+                    modifiers == (e.modifiers & ~PrAppModifierFlag_CapsLock);
+        };
+        const auto& keys = view->windowApp.surface.keys;
+        const bool previous = matches(keys.previous);
+        if (previous || matches(keys.next)) {
+            if (e.kind == PrAppEventKind_KeyDown) {
+                const auto count = menu.dialogRows.size();
+                menu.loginHighlighted = (menu.loginHighlighted + (previous ? count - 1 : 1)) % count;
+                if (ui) prUiRequestFrame(ui);
+            }
+            return true;
+        }
+    }
+    if (view->accounts.dialog != AccountMenuView::Dialog::None ||
+            (view->serverChoice && view->serverChoice->asking())) return false;
     watchTap(e);
     // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
     // reaches the sprint tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {
         return false;
+    }
+    if (view->selectorVisible() && isInputEvent(e)) {
+        // Only the picker and the tab strip accept pointer input. The registered keyboard
+        // shortcuts and focused row still go through Prax, including Escape and Enter.
+        if (e.kind == PrAppEventKind_PointerDown || e.kind == PrAppEventKind_PointerUp ||
+                e.kind == PrAppEventKind_PointerMove) {
+            return e.pointer.position.y >= view->headerHeight &&
+                   (!ui || !inside(prUiTree(ui), view->accountMenu, e.pointer.position));
+        }
+        if (e.kind == PrAppEventKind_Scroll)
+            return !ui || !inside(prUiTree(ui), view->accountMenu, e.scroll.position);
+        if (e.kind == PrAppEventKind_KeyDown || e.kind == PrAppEventKind_KeyUp) {
+            for (const auto& binding : view->windowApp.shortcuts)
+                if (binding.key == e.keyboard.key && binding.modifiers == (e.modifiers & ~PrAppModifierFlag_CapsLock))
+                    return false;
+        }
+        return true;
     }
     // The account menu under the active AI's tab takes its press, and every pointer event of that gesture.
     if (routeAccountMenu(*view, ui, e)) return true;

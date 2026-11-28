@@ -536,8 +536,13 @@ void loginCardUsesTheOriginalLayout() {
         w.rowan[1].needsSignIn = true;
         w.publish();
         w.frame();
+        // Leave the automatic sign-in picker before typing a command in the prompt.
+        w.send(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Escape, PrAppKeyCode_Escape));
+        w.send(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Escape, PrAppKeyCode_Escape));
+        w.frame();
         w.command("/login");
         w.frame();
+        CHECK(w.view.accounts.dialog == AccountMenuView::Dialog::Login);
         CHECK(w.view.accountMenu != kPrLayoutNodeNone);
         CHECK(w.view.accountRows.size() == 3);
         if (w.view.accountRows.size() != 3) continue;

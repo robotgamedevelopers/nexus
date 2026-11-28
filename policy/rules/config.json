@@ -23,6 +23,7 @@
   "centered_account_menu": true,
   "hold_on_enter": true,
   "message_card": {
+    "backdrop_opacity": 0.5,
     "email_ink": "#477fba",
     "email_weight": 700,
     "fill": "#303030",

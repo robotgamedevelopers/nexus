@@ -809,9 +809,32 @@ struct Builder {
         }
     }
 
+    void dimBackdrop(PrLayoutNode node) {
+        auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, node));
+        auto& group = record.groups[PrLayoutGroup_Decoration];
+        auto decoration = prLayoutDecorationStyleRecord(tree, group);
+        decoration.background = prColor16FromColor(faded(rgb(0), look.messageCard.backdropOpacity));
+        group = prLayoutDecorationStyleIntern(tree, &decoration);
+        prLayoutTreeFrameSetStyle(tree, node, prLayoutStyleIntern(tree, &record));
+    }
+
+    // Prax places an embedded dialog immediately after its input-blocking cover in the overlay.
+    void dimDialogBackdrop(PrLayoutNode body) {
+        if (body == kPrLayoutNodeNone || prUiNodeViewport(ui, body) != kPrUiViewportMain) return;
+        const auto overlay = prUiOverlay(ui);
+        auto portal = body;
+        while (portal != kPrLayoutNodeNone && prLayoutNodeParent(tree, portal) != overlay)
+            portal = prLayoutNodeParent(tree, portal);
+        if (portal != kPrLayoutNodeNone) {
+            const auto cover = prLayoutNodePreviousSibling(tree, portal);
+            if (cover != kPrLayoutNodeNone) dimBackdrop(cover);
+        }
+    }
+
     void accountSelector(PrLayoutNode parent, const std::vector<AccountItem>& items, bool modal = false) {
         if (items.empty()) return;
         const auto layer = modal ? parent : element(parent, Part::SelectorLayer);
+        if (!modal) dimBackdrop(layer);
         if (!modal && view.windowApp.surface.showTabs) {
             // Balance the strip above the panels while keeping its hit area free.
             auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, layer));
@@ -875,7 +898,7 @@ struct Builder {
                 ink.color = prColor16FromColor(rgb(look.messageCard.selectedInk));
                 colors = prLayoutColorStyleIntern(tree, &ink);
                 prLayoutTreeFrameSetStyle(tree, email, prLayoutStyleIntern(tree, &emailStyle));
-                if ((modal || view.accountPicker || !view.choiceKind.empty()) && view.lastHighlightedAccount != item.action) {
+                if (prUiFocus(ui) != row) {
                     prUiSetFocus(ui, row);
                     view.lastHighlightedAccount = item.action;
                 }
@@ -886,14 +909,7 @@ struct Builder {
 
     void signInFailure(PrLayoutNode parent, const SignInAccount& account) {
         if (account.name.empty() || !model.tab_count()) return;
-        const auto feedback = view.signInFeedback ? view.signInFeedback(model.tab(model.active()).id) : std::string_view{};
-        if (!feedback.empty()) {
-            auto appearance = textStyle(PrKitTextRole_BodySmall, kNoticeTone, PrKitTextAlign_Center);
-            appearance.wrap = PrKitWrap_Wrap;
-            caption(parent, feedback, appearance);
-            return;
-        }
-        if (account.email.empty() || !model.tab_count()) return;
+        std::string_view message = view.signInFeedback ? view.signInFeedback(model.tab(model.active()).id) : std::string_view{};
         const auto& entries = model.tab(model.active()).transcript;
         const auto needed = account.name + " needs signing in:";
         const auto failure = "Could not sign in to " + account.email + ". ";
@@ -901,12 +917,13 @@ struct Builder {
         for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
             if (it->kind != EntryKind::Notice) break;
             if (it->text.starts_with(needed)) continue;
-            if (it->text.starts_with(failure)) {
-                auto appearance = textStyle(PrKitTextRole_BodySmall, kNoticeTone, PrKitTextAlign_Center);
-                appearance.wrap = PrKitWrap_Wrap;
-                caption(parent, it->text, appearance);
-            }
+            if (!account.email.empty() && it->text.starts_with(failure)) message = it->text;
             break;
+        }
+        if (!message.empty()) {
+            auto appearance = textStyle(PrKitTextRole_BodySmall, kNoticeTone, PrKitTextAlign_Center);
+            appearance.wrap = PrKitWrap_Wrap;
+            caption(parent, message, appearance);
         }
     }
 
@@ -2614,6 +2631,7 @@ struct Builder {
         const std::string title = asking->account + ": " + asking->what;
         dialog.title = sv(title);
         const PrLayoutNode body = prKitDialog(kit, window, dialog, typedDialogStyle());
+        dimDialogBackdrop(body);
         if (body == kPrLayoutNodeNone) {
             // The person closed it (Escape, the close button, a press outside): the request is cancelled.
             view.secretField = kPrLayoutNodeNone;
@@ -2651,9 +2669,13 @@ struct Builder {
     void captureShortcuts(PrLayoutNode keys) {
         // A modal owns its keys. The signed-out page underneath also binds arrows, Enter and Escape;
         // capturing those first would move its hidden picker instead of the visible sign-in card.
-        if (view.accounts.dialog != AccountMenuView::Dialog::None) return;
+        if (view.accounts.dialog != AccountMenuView::Dialog::None || asking ||
+                (view.serverChoice && view.serverChoice->asking())) return;
         std::vector<Shortcut> pressed;
         for (const auto& binding : view.windowApp.shortcuts) {
+            if (view.selectorVisible() && binding.command != WindowCommand::SelectTab &&
+                    binding.command != WindowCommand::AccountAction && binding.command != WindowCommand::AccountPicker)
+                continue;
             if ((!view.secrets || !view.secrets->showing()) && prUiKeyCaptured(ui, keys, binding.key, binding.modifiers))
                 pressed.push_back(binding);
         }
@@ -2847,6 +2869,7 @@ struct Builder {
         const PrLayoutNode body = menu.dialog == Dialog::Login ?
             prKitModal(kit, window, {.key = dialog.key}, typedDialogStyle().modal) :
             prKitDialog(kit, window, dialog, typedDialogStyle());
+        dimDialogBackdrop(body);
         if (body == kPrLayoutNodeNone) {
             if (!fresh) {
                 if (menu.dialog == Dialog::BrowserLogout && view.cancelLoginPreparation) view.cancelLoginPreparation();
@@ -2894,13 +2917,7 @@ struct Builder {
         }
         if (menu.dialog == Dialog::Login) {
             const auto count = menu.dialogRows.size();
-            if (count) {
-                menu.loginHighlighted = std::min(menu.loginHighlighted, count - 1);
-                if (uiKey(body, view.windowApp.surface.keys.previous, false))
-                    menu.loginHighlighted = (menu.loginHighlighted + count - 1) % count;
-                if (uiKey(body, view.windowApp.surface.keys.next, false))
-                    menu.loginHighlighted = (menu.loginHighlighted + 1) % count;
-            }
+            if (count) menu.loginHighlighted = std::min(menu.loginHighlighted, count - 1);
             std::vector<AccountItem> items{{view.windowApp.signInHeading, "", false}};
             if (!count) items.push_back({look.words.no_linked_accounts, "", false});
             for (std::size_t i = 0; i < count; ++i) {
@@ -2969,10 +2986,11 @@ struct Builder {
         // prUiKeyCaptured), so they win in every tab, a terminal's included. That matters off macOS, where Command is
         // Alt and Prax's terminal claims every Alt chord for its shell (terminal.cpp claimKeys), which keeps Alt as
         // Meta for every other key. Inside the overlay nexus takes its keys (AGENTS.md).
+        asking = view.secrets ? view.secrets->showing() : nullptr;
         updateApplication();
-        pickerInput = view.accountPicker.has_value() || !view.choiceKind.empty();
+        pickerInput = view.selectorVisible() || view.accountPicker.has_value() || !view.choiceKind.empty();
         captureShortcuts(keys);
-        pickerInput = pickerInput || view.accountPicker.has_value() || !view.choiceKind.empty();
+        pickerInput = pickerInput || view.selectorVisible() || view.accountPicker.has_value() || !view.choiceKind.empty();
         serviceTerminals();
         // On a terminal tab Escape is not claimed: the terminal claims it for its shell. Command-Escape does nothing
         // there or on the sprint tab (it is captured below all the same). On the sprint tab Escape hides.
@@ -2986,7 +3004,6 @@ struct Builder {
         // routeKey), so during a drag Escape cancels it and hides nothing. While composing it is the input method's.
         // While the secret dialog shows, Escape is the dialog's (it cancels the request) and hides nothing.
         // So is it the account dialog's while that shows: Escape closes it, changes nothing and hides nothing.
-        asking = view.secrets != nullptr ? view.secrets->showing() : nullptr;
         if (hides && !pickerInput && asking == nullptr && view.accounts.dialog == AccountMenuView::Dialog::None &&
                 prUiDragging(ui) == nullptr &&
                 uiKey(keys, view.windowApp.surface.keys.dismiss, false) && !composing && view.hide)
@@ -3054,6 +3071,7 @@ struct Builder {
         dialog.key = prHashString(sv("server"), 0);
         dialog.title = sv(look.words.server_title);
         const PrLayoutNode body = prKitDialog(kit, window, dialog, typedDialogStyle());
+        dimDialogBackdrop(body);
         if (body == kPrLayoutNodeNone) {
             if (!fresh) choice->cancel();
             view.serverShown = false;
@@ -3352,6 +3370,11 @@ struct Builder {
         }
         if (std::find(panels.begin(), panels.end(), Panel::Prompt) == panels.end())
             promptGone();
+        if (view.selectorVisible() || asking || (view.serverChoice && view.serverChoice->asking()) ||
+                view.accounts.dialog != AccountMenuView::Dialog::None) {
+            view.selection.clear();
+            pickerInput = true;
+        }
         if (view.windowApp.surface.items && !asking) window = element(window, Part::AIPanels);
         for (const auto panel : panels) {
             switch (panel) {

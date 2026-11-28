@@ -1610,7 +1610,7 @@ void signInCardInTheShippedMenu() {
     publish(true);
     h.commandDigit(2);
     h.frame();
-    CHECK(h.view.transcript == kPrLayoutNodeNone && !h.hasText(h.window(), "A reply."));
+    CHECK(h.view.transcript != kPrLayoutNodeNone);
     CHECK(h.view.accountMenu != kPrLayoutNodeNone && h.view.accountAnchor == kPrLayoutNodeNone);
     if (h.view.accountMenu == kPrLayoutNodeNone) return;
     CHECK(h.hasText(h.view.accountMenu, "Please sign in to codex") && h.hasText(h.view.accountMenu, email));
@@ -1631,6 +1631,13 @@ void signInCardInTheShippedMenu() {
     CHECK(h.bounds(address).left >= narrow.left - 0.5f && h.bounds(address).right <= narrow.right + 0.5f);
     PrLayoutRect lines[8]{};
     CHECK(prLayoutNodeTextRangeBoxes(h.tree, address, 0, uint32_t(email.size()), PrLayoutCoordinates_Viewport, lines, 8) > 1);
+    h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown);
+    h.frame();
+    CHECK(h.view.accountPicker && h.view.accountPicker->options[h.view.accountPicker->highlighted].name == "home");
+    h.key(PrAppKey_Up, PrAppKeyCode_ArrowUp);
+    h.frame();
+    CHECK(h.view.accountPicker && h.view.accountPicker->options[h.view.accountPicker->highlighted].name == "work");
+    CHECK(link.sent.empty());
     // Enter, on the account in use, starts its sign-in: the window claims it from the server.
     h.enter();
     h.frame();
@@ -3689,6 +3696,10 @@ int main(int argc, char** argv) {
         h.enter();
         h.frame();
         CHECK(h.view.choiceKind == "model" && h.view.accountRows.size() == 2 && link.sent.size() == beforeChoices);
+        CHECK(near(fillOf(h, prLayoutNodeParent(h.tree, h.view.accountMenu)).a, 0.5f));
+        CHECK(prUiFocus(h.ui) == h.view.accountRows.front());
+        CHECK(host.event(textEvent(PrAppEventKind_Paste, {"stray text", 10})));
+        CHECK(h.active().draft.empty());
         h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown);
         h.frame();
         CHECK(h.view.choiceValue == "model-b");
@@ -3699,6 +3710,10 @@ int main(int argc, char** argv) {
         h.enter();
         h.frame();
         CHECK(h.view.choiceKind == "effort" && h.view.accountRows.size() == 2);
+        CHECK(near(fillOf(h, prLayoutNodeParent(h.tree, h.view.accountMenu)).a, 0.5f));
+        CHECK(prUiFocus(h.ui) == h.view.accountRows.front());
+        CHECK(host.event(textEvent(PrAppEventKind_Paste, {"stray text", 10})));
+        CHECK(h.active().draft.empty());
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
         h.frame();
         CHECK(h.view.choiceKind.empty() && h.hides == 0 && prUiFocus(h.ui) == h.view.prompt);
@@ -3786,7 +3801,7 @@ int main(int argc, char** argv) {
               link.sent.back().account == "c" && link.sent.back().session == 17);
         CHECK(!h.view.accountPicker && h.view.accountRows.size() == 3);
         CHECK(h.hasText(h.view.accountMenu, "Please sign in to ChatGPT"));
-        CHECK(h.view.transcript == kPrLayoutNodeNone);
+        CHECK(h.view.transcript != kPrLayoutNodeNone);
         CHECK(h.hasText(h.view.accountMenu, "c@example.test"));
         h.view.askedTextSteps = 3;
         h.frame();
@@ -3831,7 +3846,7 @@ int main(int argc, char** argv) {
         h.enter();
         h.frame();
         CHECK(h.hasText(h.view.accountMenu, "Please sign in to ChatGPT"));
-        CHECK(h.view.transcript == kPrLayoutNodeNone);
+        CHECK(h.view.transcript != kPrLayoutNodeNone);
         CHECK(link.sent.size() == sent && h.active().draft == "draft kept again");
         const std::string failure = "Could not sign in to c@example.test. The signed-in email differs.";
         h.model.append(h.model.active(), {EntryKind::Notice, failure});
@@ -3840,8 +3855,10 @@ int main(int argc, char** argv) {
         CHECK(h.hasText(h.view.accountMenu, failure));
         h.key(PrAppKey_Backspace, PrAppKeyCode_Backspace, style::kCommand);
         h.frame();
-        CHECK(h.active().draft.empty() && h.view.accountMenu != kPrLayoutNodeNone);
+        CHECK(h.active().draft == "draft kept again" && h.view.accountMenu != kPrLayoutNodeNone);
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+        h.frame();
+        h.key(PrAppKey_Backspace, PrAppKeyCode_Backspace, style::kCommand);
         h.frame();
         h.type("/login");
         h.enter();

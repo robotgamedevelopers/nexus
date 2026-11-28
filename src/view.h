@@ -323,6 +323,9 @@ struct View {
     std::function<LimitOffer()> limitOffer;
     std::function<void(const LimitOffer&, const std::string&)> resolveLimit;
     LimitOffer displayedLimit;
+    bool selectorVisible() const {
+        return windowApp.surface.items && !windowApp.surface.items->empty();
+    }
     std::optional<AccountPicker> accountPicker;
     std::optional<std::pair<std::size_t, std::string>> dismissedSignIn;
     std::function<std::optional<AccountPicker>(int)> previewAccounts;

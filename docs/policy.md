@@ -108,7 +108,7 @@ The stock Starlark window program reads two optional maps from the fork’s clie
 ```json
 {
   "account_picker_shortcuts": {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"},
-  "account_picker_keys": {"Command+ArrowUp": "previous", "Command+ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}
+  "account_picker_keys": {"ArrowUp": "previous", "ArrowDown": "next", "Command+ArrowUp": "previous", "Command+ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}
 }
 ```
 
@@ -181,6 +181,11 @@ window["panels"] = ["account", "prompt"]
 window["account_items"] = [{"text": "Continue", "action": action}]
 window["shortcuts"].append(["Command+K", "account_action", action])
 ```
+
+The account, model and effort selectors take focus within the active tab. The default
+`message_card.backdrop_opacity` is 0.5. Opening a selector clears the output selection
+and hides the prompt caret. Up and Down move the highlight, Enter confirms and Escape
+returns to the draft. The tab strip stays available while a selector is open.
 
 The returned `message_card` controls heading size, card fill, radius, `selected_fill`, `selected_ink`
 and `email_weight`. Set `row_height`, `row_gap` and `heading_gap` in multiples of the active body

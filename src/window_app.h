@@ -105,6 +105,7 @@ struct MessageCardStyle {
     unsigned emailInk = 0x477fba;
     float textSize = 34;
     float radius = 20;
+    float backdropOpacity = 0.5f;
     float sideExtension = 0, verticalExtension = 10, selectorWidthEm = 16;
     float rowHeight = 1.45f, rowGap = 0.15f, headingGap = 0.8f;
     float emailWeight = 700, unselectedWeight = 400, selectedRadius = 8, selectedOpacity = 0.5f;
