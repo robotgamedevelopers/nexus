@@ -198,7 +198,9 @@ def cli():
                 if args.harness != "claude":
                     raise ValueError("a driver-owned bus_listener requires a Claude AI")
                 extra.extend(["--bus-listener", args.ai + "@" + identity["bus_listener"]])
-            if identity["bus_owner"] == "nexus-server" and args.harness in ("claude", "codex"):
+            project_bus = (args.harness == "antigravity" and option("--limit") == "cwd"
+                           and option("--project-root") and option("--project-root") == option("--cwd"))
+            if identity["bus_owner"] == "nexus-server" and (args.harness in ("claude", "codex") or project_bus):
                 extra.extend(["--bus-sender", args.ai + "@" + identity["bus_listener"]])
             if not identity["no_sandbox"] and (identity["readable_dirs"] or identity["github_ssh_alias"]):
                 if args.harness != "claude":

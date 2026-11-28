@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 from collections import deque
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 from .account_runtime import enrolled, home_for, process_env, remove_receipt_if_current
@@ -43,6 +44,8 @@ def error(code, cause, *, account=None, **fields):
 class Rpc:
     def __init__(self, proc):
         self.proc = proc
+        self.project_methods = set()
+        self.project_session = None
         self.seq = 0
         self.interrupt = None
         self.events = deque()
@@ -61,9 +64,11 @@ class Rpc:
                 raise Failure("The harness closed its RPC stream.")
             msg = json.loads(line)
             if "id" in msg and "method" in msg:
-                # No interactive tool approval or filesystem delegation on this transport.
+                # Only the project tools registered for this turn may receive one-time approval.
                 if msg["method"] == "session/request_permission":
-                    reply = {"result": {"outcome": {"outcome": "cancelled"}}}
+                    from .project_tools import permission
+                    outcome = permission(msg.get("params", {}), self.project_session, self.project_methods)
+                    reply = {"result": {"outcome": outcome}}
                 else:
                     reply = {"error": {"code": -32601, "message": "Client capability unavailable"}}
                 await self.write({"id": msg["id"], **reply})
@@ -164,6 +169,7 @@ class Turn:
     async def run(self):
         home = self.account_home
         env = process_env(self.harness, home)
+        resources = AsyncExitStack()
         proc = None
         rpc = None
         outcome = "error"
@@ -182,6 +188,16 @@ class Turn:
                     options["bus_sender"] = self.bus_sender
                 if getattr(self, "write_dir", []):
                     options["write_dirs"] = self.write_dir
+            if (self.harness == "antigravity" and self.limit and self.project_root
+                    and Path(self.cwd).resolve() == Path(self.project_root).resolve()):
+                from .project_tools import project_tools
+                project = Path(self.cwd).resolve()
+                room, socket = await resources.enter_async_context(project_tools(
+                    home, self.cwd, self.keep_out, getattr(self, "bus_sender", None)))
+                self.project_socket = socket
+                options["project_socket"] = socket
+                self.instructions += f"\nYour assigned project is {project}. Use the nexus_project project_shell tool there for files, Git, builds, tests and your project initialization."
+                self.cwd = str(room)
             try:
                 command = await asyncio.to_thread(
                     self.provider.chat_command, self.binary, home, self.cwd, **options
@@ -191,7 +207,7 @@ class Turn:
                     "The isolated harness could not start. Check its installed version and workspace path.",
                     "other",
                 ) from err
-            if self.harness in {"antigravity", "grok", "muse"}:
+            if self.harness in {"grok", "muse"} or (self.harness == "antigravity" and not options):
                 self.cwd = str(home / "room")
             if self.harness == "grok":
                 env["GROK_AGENT"] = "nexus-conversation"
@@ -247,6 +263,7 @@ class Turn:
                     except ProcessLookupError:
                         pass
                     await proc.communicate()
+            await resources.aclose()
             if not self.abandoned:
                 self.end()
                 emit("done", turn=self.number, outcome=outcome)
@@ -345,6 +362,7 @@ def main():
     parser.add_argument("--binary", required=True)
     parser.add_argument("--account", required=True)
     parser.add_argument("--cwd", required=True)
+    parser.add_argument("--project-root", help="Enable Antigravity project tools for a matching limited workspace")
     parser.add_argument("--limit", choices=["cwd"])
     parser.add_argument("--write-dir", action="append", default=[])
     parser.add_argument("--keep-out", action="append", default=[])
