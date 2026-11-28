@@ -925,14 +925,14 @@ void draftAndScrollStayWithTheirAI() {
     h.frame();
     const float scrolled = prLayoutUnitToPx(prLayoutNodeScroll(h.tree, h.view.transcript).y);
     CHECK(scrolled < -100 || scrolled > 100);
-    // In mid-history the content extends past both edges. The viewport clips just the two bottom corners.
+    // In mid-history the fixed frame clips all four rounded corners.
     auto hitsConversation = [&](float x, float y) {
         PrLayoutNode hits[64]{};
         auto count = prLayoutTreeHitTest(h.tree, {prLayoutUnitFromPx(x), prLayoutUnitFromPx(y)}, hits, 64);
         return std::find(hits, hits + std::min(count, 64u), h.view.conversation) != hits + std::min(count, 64u);
     };
-    CHECK(hitsConversation(port.left + 1, port.top + 1));
-    CHECK(hitsConversation(port.right - 2, port.top + 1));
+    CHECK(!hitsConversation(port.left + 1, port.top + 1));
+    CHECK(!hitsConversation(port.right - 2, port.top + 1));
     CHECK(hitsConversation(middle.x, port.bottom - 2));
     CHECK(!hitsConversation(port.left + 1, port.bottom - 2));
     CHECK(!hitsConversation(port.right - 2, port.bottom - 2));
@@ -1534,6 +1534,12 @@ void conversationBubblesAndSignInCard() {
     const auto emptyPanel = h.bounds(h.view.conversation);
     CHECK(emptyPanel.top < viewport.top + (viewport.bottom - viewport.top) * 0.1f);
     CHECK(near(emptyPanel.bottom, viewport.bottom));
+    const auto style = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, h.view.transcript));
+    const auto frame = prLayoutDecorationStyleRecord(h.tree, style.groups[PrLayoutGroup_Decoration]);
+    CHECK(frame.outlineStyle == PrDrawBorderStyle_Solid);
+    CHECK(colorMatches(prColorFromColor16(frame.outlineColor), h.look.colors.output_border));
+    CHECK(frame.outlineWidth.raw == prLayoutUnitFromPx(h.look.ui.output_border_width).raw);
+    CHECK(frame.outlineOffset.raw == -frame.outlineWidth.raw);
     h.model.append(0, Entry{EntryKind::Person, "Hello"});
     h.frame();
     h.frame();
@@ -1554,7 +1560,7 @@ void conversationBubblesAndSignInCard() {
     CHECK(near(emptyPanel.top, h.bounds(h.view.conversation).top));
     const auto bubble = [&](std::size_t i) { return prLayoutNodeFirstChild(h.tree, entries[i]); };
     CHECK(colorMatches(fillOf(h, bubble(0)), h.look.transcriptStyle.fill));
-    CHECK(colorMatches(fillOf(h, h.view.conversation), *h.look.transcriptStyle.panelFill));
+    CHECK(colorMatches(fillOf(h, h.view.transcript), *h.look.transcriptStyle.panelFill));
     CHECK(fillOf(h, bubble(1)).a == 0 && fillOf(h, bubble(3)).a == 0);
     CHECK(h.bounds(bubble(0)).left > h.bounds(bubble(1)).left);
     CHECK(near(h.bounds(bubble(1)).left, h.bounds(bubble(3)).left));
@@ -3579,7 +3585,7 @@ void idlePulseAndConfiguration(const char* active, const char* disabled) {
     CHECK(h.look.colors.background == 0x102030 && h.look.transcriptStyle.panelFill == 0x304050);
     auto canvas = fillOf(h, h.window()); canvas.a = 1;
     CHECK(colorMatches(canvas, 0x102030));
-    CHECK(colorMatches(fillOf(h, h.view.conversation), 0x304050));
+    CHECK(colorMatches(fillOf(h, h.view.transcript), 0x304050));
     CHECK(near(fillOf(h, h.window()).a, 0.9f));
     CHECK(near(h.kit->theme.types[PrKitTextRole_Body].size, 30));
     CHECK(h.look.ui.bubble_padding_x == 12 && h.look.ui.entry_gap == 22);

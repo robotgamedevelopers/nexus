@@ -162,6 +162,7 @@ struct BoxRecipe {
                 box.overflowY = PrLayoutOverflow_Scroll;
                 if (look.transcriptStyle.conversationPanel) {
                     box.width = prLayoutLengthPercent(look.prompt.width);
+                    box.margin[PrRectSide_Top] = px(look.ui.column_inset * k);
                     box.margin[PrRectSide_Left] = box.margin[PrRectSide_Right] = prLayoutLengthAuto();
                 }
                 // At the end, the transcript follows it (prUiFollowEnd), and the items in sight slide as entries arrive:
@@ -177,7 +178,7 @@ struct BoxRecipe {
                 box.minHeight = prLayoutLengthPercent(100);
                 box.margin[PrRectSide_Left] = prLayoutLengthAuto();
                 box.margin[PrRectSide_Right] = prLayoutLengthAuto();
-                padding(box, look.ui.column_inset * k, 0, 0, 0);
+                if (part == Part::Column) padding(box, look.ui.column_inset * k, 0, 0, 0);
                 break;
             case Part::AssistantMessage:
                 box.display = PrLayoutDisplay_Block;
@@ -335,15 +336,15 @@ struct DecorationRecipe {
             case Part::TranscriptAtEnd:
                 if (look.flags.opaque_history_backdrop)
                     d.background = prColor16FromColor(rgb(look.colors.background));
-                // The lower edge stays in place while the top of the conversation scrolls with history.
+                // The viewport owns the border so all four edges stay visible while history scrolls.
                 if (look.transcriptStyle.conversationPanel) {
-                    for (const auto corner : {PrRectCorner_BottomLeft, PrRectCorner_BottomRight})
-                        d.radii[2 * corner] = d.radii[2 * corner + 1] = px(look.transcriptStyle.radius * k);
+                    d.background = prColor16FromColor(rgb(look.transcriptStyle.panelFill.value_or(look.tabs.fill)));
+                    d.outlineStyle = PrDrawBorderStyle_Solid;
+                    d.outlineColor = prColor16FromColor(rgb(look.colors.output_border));
+                    d.outlineWidth = prLayoutUnitFromPx(look.ui.output_border_width);
+                    d.outlineOffset = prLayoutUnitFromPx(-look.ui.output_border_width);
+                    radius(d, look.transcriptStyle.radius * k);
                 }
-                break;
-            case Part::Conversation:
-                d.background = prColor16FromColor(rgb(look.transcriptStyle.panelFill.value_or(look.tabs.fill)));
-                radius(d, look.transcriptStyle.radius * k);
                 break;
             case Part::TabDivider:
                 d.background = prColor16FromColor(rgb(look.tabs.divider));
@@ -1573,7 +1574,7 @@ struct Builder {
         } else {
             const float top = offset - viewport;
             const float bottom = offset + 2 * viewport;
-            float y = look.ui.column_inset * k();
+            float y = look.transcriptStyle.conversationPanel ? 0 : look.ui.column_inset * k();
             first = n;
             end = n;
             for (std::size_t i = 0; i < n; ++i) {

@@ -62,7 +62,7 @@
 | AI-only selection: double-click a paragraph to focus the output window; Shift-Up/Down extends or shrinks through natural AI output elements, skipping human and working text | ❌ |
 | Enter from a focused AI-output selection, or paste a copied AI selection, inserts a quoted block followed by two newlines; show a distinct quote in the editable prompt and the sent human bubble | ❌ |
 | Make the Knight Rider afterglow stronger and decay more slowly; wire scanner_decay_seconds into the actual rendering | ❌ |
-| Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color | ❌ |
+| Add a subtle outline to the output panel, matching the prompt outline relative to its different interior color | ✅ |
 | Render Markdown tables with native Prax table layout, aligned columns, readable headers and preserved inline formatting and links | ❌ |
 | Reduce the header height by six points while preserving notch avoidance, clock alignment and tab hit targets | ❌ |
 | Use full-width conversation bubbles and warnings on both phones and tablets | ❌ |
@@ -81,7 +81,7 @@
 | Windows depth: close the trace binding gaps (ten of seventeen review plants escaped the trace): constrain ranWell by the relay's run time (RelayLife.tla:171); model the tells as a sequence with a no-repeat invariant; unit tests for the acked_+1 re-cut, acked going down, and ended() after stop(); widen the CI seeds | ❌ |
 | Windows depth: a watchdog for a hung relay; keep the NEXUS_WSL_RELAY test hook out of shipping builds; show a notice when history requests are dropped; show a bubble for a message sent when nextAction()==0 (frame_host.cpp:779-783) | ❌ |
 | Linux desktop window: waits on Prax's Wayland backend (asked of Patrick); until then the Linux build is the server only | ❌ |
-| complete | 11% |
+| complete | 15% |
 
 [Source data](roadmap.sexp)
 
