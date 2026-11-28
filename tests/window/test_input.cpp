@@ -1376,19 +1376,22 @@ void markdownQuoteBubble() {
         const auto span = prLayoutNodeParent(h.tree, leaf);
         return prLayoutNodeParent(h.tree, prLayoutNodeParent(h.tree, span));
     };
-    const auto bubble = container(first);
+    const auto content = container(first);
+    const auto bubble = prLayoutNodeParent(h.tree, content);
     CHECK(h.hasText(bubble, "“") && h.hasText(bubble, "”"));
     const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, bubble));
     const auto decoration = prLayoutDecorationStyleRecord(h.tree, record.groups[PrLayoutGroup_Decoration]);
     CHECK(decoration.outlineStyle == PrDrawBorderStyle_Solid && prLayoutUnitToPx(decoration.outlineWidth) > 0);
-    CHECK(bubble == container(second) && bubble != container(literal));
-    CHECK(h.bounds(bubble).left < h.bounds(first).left);
+    CHECK(content == container(second) && content != container(literal));
+    CHECK(h.bounds(h.findText(bubble, "“")).right <= h.bounds(first).left + 1);
+    CHECK(near(h.bounds(second).left, h.bounds(first).left));
     PrLayoutRect narrow{}, wide{}, lines[16]{};
     CHECK(prLayoutNodeTextRangeBoxes(h.tree, first, 0, 1, PrLayoutCoordinates_Viewport, &narrow, 1) == 1);
     CHECK(prLayoutNodeTextRangeBoxes(h.tree, first, 1, 2, PrLayoutCoordinates_Viewport, &wide, 1) == 1);
     CHECK(near(prLayoutUnitToPx(narrow.right - narrow.left), prLayoutUnitToPx(wide.right - wide.left)));
     CHECK(prLayoutNodeTextRangeBoxes(h.tree, first, 0, static_cast<uint32_t>(words.size()),
                                     PrLayoutCoordinates_Viewport, lines, 16) >= 2);
+    CHECK(near(prLayoutUnitToPx(lines[0].left), prLayoutUnitToPx(lines[1].left)));
 }
 
 void markdownListsAndLinks() {

@@ -1751,7 +1751,9 @@ struct Builder {
         PrKitBoxStyle layout{};
         layout.padding.top = layout.padding.bottom = look.ui.bubble_padding_y * k();
         layout.padding.left = layout.padding.right = look.ui.bubble_padding_x * k();
-        layout.gap = look.ui.line_pitch * k() * look.transcriptStyle.listItemGapLines;
+        layout.direction = PrKitDirection_Row;
+        layout.align = PrKitAlign_Start;
+        layout.gap = look.transcriptStyle.codePadding * k() / 2;
         const auto node = prKitBox(kit, parent, {}, layout);
         auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, node));
         auto& group = record.groups[PrLayoutGroup_Decoration];
@@ -1759,7 +1761,7 @@ struct Builder {
         decoration.background = prColor16FromColor(rgb(look.transcriptStyle.codeFill));
         decoration.outlineStyle = PrDrawBorderStyle_Solid;
         decoration.outlineColor = prColor16FromColor(rgb(look.transcriptStyle.linkInk.value_or(look.tabs.selectedFill)));
-        decoration.outlineWidth = prLayoutUnitFromPx(look.transcriptStyle.pendingOutlineWidth * k());
+        decoration.outlineWidth = prLayoutUnitFromPx(look.ui.output_border_width * k());
         decoration.outlineOffset = -decoration.outlineWidth;
         radius(decoration, std::min(look.transcriptStyle.radius, look.ui.bubble_padding_x) * k());
         group = prLayoutDecorationStyleIntern(tree, &decoration);
@@ -1823,14 +1825,22 @@ struct Builder {
             const auto span = prKitText(kit, text, {}, textStyle(PrKitTextRole_Heading, tone));
             ink(span, style.linkInk.value_or(look.tabs.selectedFill), true, gain);
             prLayoutTreeFrameText(tree, span, 0, sv(mark));
+            return span;
         };
         for (size_t i = 0; i < paragraphs.size(); ++i) {
             const auto& paragraph = paragraphs[i];
             const bool quoted = isQuote(i);
-            const bool opening = quoted && quote == kPrLayoutNodeNone;
             if (quoted != (quote != kPrLayoutNodeNone)) {
                 list = kPrLayoutNodeNone;
-                quote = quoted ? quoteBubble(column) : kPrLayoutNodeNone;
+                quote = kPrLayoutNodeNone;
+                if (quoted) {
+                    const auto bubble = quoteBubble(column);
+                    const auto mark = punctuation(bubble, "“");
+                    prKitPlace(kit, mark, {.flex = PrKitFlex_Fixed});
+                    quote = prKitBox(kit, bubble, {}, {
+                        .gap = look.ui.line_pitch * k() * look.transcriptStyle.listItemGapLines,
+                        .place = {.minWidth = prKitPx(0), .flex = PrKitFlex_Fill}});
+                }
             }
             const auto container = quoted ? quote : column;
             const auto em = kit->theme.types[PrKitTextRole_Body].size;
@@ -1851,7 +1861,6 @@ struct Builder {
                 list = kPrLayoutNodeNone;
             }
             const auto text = prKitText(kit, row, {}, body);
-            if (opening) punctuation(text, "“");
             const auto plain = sourceInk.value_or(tone == kPersonTone ? style.personInk : style.ink);
             for (const auto& run : paragraph.runs) {
                 std::string_view content = run.text;
